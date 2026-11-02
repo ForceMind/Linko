@@ -1827,6 +1827,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "peerglide-actions"
+version = "0.1.0-dev"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "peerglide-core"
 version = "0.1.0-dev"
 dependencies = [

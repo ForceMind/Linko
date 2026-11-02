@@ -79,7 +79,8 @@ runtime evidence and historical failures are in VALIDATION.md.
 | C04 | implemented-unverified | #17 structured events/revoke CI passed; native interaction pending |
 | C05 | implementing | v4 reliable terminal cursor + cleanup/expiry regressions; physical fault acceptance pending |
 | C06 | blocked | No authorized physical Windows/macOS desktop pair in this environment |
-| G01/G02 | planned | Pure action/gesture logic may follow core correctness work; no gesture hook enabled |
+| G01 | implementing | Pure local action schema/capability/context preflight and tests; no native execution or gesture hook |
+| G02 | planned | Direction-preserving recognition and labelled trajectory acceptance remain pending |
 
 
 Protocol v5 is the current development baseline; both peers must update. The v3

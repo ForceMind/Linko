@@ -186,3 +186,21 @@ logs fill their queue and latest state overrides stale authentication. Probe
 success survives state coalescing. Native CI, real desktop input/network/suspend
 acceptance and resource/latency measurements are separate gates. No old lease or
 suppression state is resumed; no new pairing/discovery mechanism is claimed.
+
+
+P04 final candidate `3c5b82f8ead0a27b65cd5d5dc9b050ae466ba7e1` passed the complete
+Windows/macOS/Linux matrix in [run 41393650378](https://github.com/ForceMind/PeerGlide/actions/runs/41393650378),
+including reconnect/pin-replacement/stop smoke and platform package construction.
+Squash merge `f5c8505fe8f161a946e12f684e593037df525f3e` has the identical tested tree.
+This does not validate native physical input, interface changes or suspend.
+
+## G01 pure semantic action model
+
+`peerglide-actions` has closed schema-1 IDs, independent default-empty capabilities,
+explicit local consent, destructive confirmation, conservative replay metadata and
+frozen local context/deadline preflight. Tests reject changed target/device/focus/
+configuration/trigger, exact expiry, revoked consent/support, remote targets and
+unknown action/fields/schema. No binary integrates it; no OS action, gesture hook,
+remote action execution or configuration migration is implemented. See ACTIONS.md.
+Native CI for this new crate is a separate gate; pure tests do not establish native
+window/focus/permission correctness. G01 remains implementing; G02 remains planned.
