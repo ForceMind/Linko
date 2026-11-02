@@ -81,3 +81,7 @@ protocol change despite unchanged message shapes.
 Protocol v4 extends normal reliable Release with a terminal cursor snapshot.
 See [ADR-0003](ADR/0003-terminal-cursor-v4.md) for validation/cleanup order and
 mandatory two-peer upgrade. v3 source-ordered release semantics remain intact.
+
+
+Opt-in fixed-address trusted reconnect uses fresh endpoints/control state and a
+non-retryable native/security failure boundary. See [ADR-0005](ADR/0005-trusted-reconnect.md).

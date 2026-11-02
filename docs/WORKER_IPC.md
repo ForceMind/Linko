@@ -21,3 +21,14 @@ Tests cover version/size/schema rejection, stale worker events, diagnostics that
 look like old status messages, revocation persistence and real two-process
 managed probe lifecycle. Native GUI permission/revocation acceptance remains
 pending. C04 is not accepted as a complete real-desktop workflow yet.
+
+
+## Persistent-worker extension
+
+Lifecycle updates now use a fixed-size coalesced atomic snapshot per child;
+diagnostics retain the bounded 128-entry nonblocking queue. Thus dropped logs or
+a paused GUI cannot discard the newest disconnect/listen/retry state. Probe
+success survives coalescing into Stopped, and process exit/stop still wins.
+Reconnecting and Disconnected are finite IPC-v1 states; they never imply resumed
+control. Tests cover a live helper child, a full log queue, stale authentication
+after stop, probe retention and old-config defaults. See ADR-0005.

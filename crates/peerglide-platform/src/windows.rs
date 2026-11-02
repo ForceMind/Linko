@@ -365,7 +365,7 @@ const STARTUP_VK: u16 = 0x4000;
 fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: bool) -> bool {
     // Startup state is sampled as VKs; the first physical callback replaces that
     // sample with its unambiguous scan identity (including keypad Enter).
-    s.keys.remove(&(STARTUP_VK | vk));
+    let startup_held = s.keys.remove(&(STARTUP_VK | vk));
     let usage = if vk == VK_PAUSE || vk == VK_SNAPSHOT {
         None
     } else if vk == VK_NUMLOCK {
@@ -374,7 +374,12 @@ fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: boo
         from_scan(scan, extended)
     };
     match usage {
-        Some(usage) => s.key(usage, down),
+        Some(usage) => {
+            if startup_held && down {
+                s.keys.insert(usage);
+            }
+            s.key(usage, down)
+        }
         None => s.unsupported_key(vk, down),
     }
 }
@@ -445,6 +450,21 @@ mod tests {
         assert_eq!(from_scan(0x4f, true), Some(0x4d));
         assert_eq!(from_scan(0x1d, false), Some(0xe0));
         assert_eq!(from_scan(0x1d, true), Some(0xe4));
+    }
+    #[test]
+    fn startup_virtual_sample_repeat_is_not_a_fresh_switch_press() {
+        let (tx, _rx) = mpsc::channel(16);
+        let mut s = HookState {
+            tx,
+            gate: CaptureGate::default(),
+            keys: [STARTUP_VK | VK_RIGHT, 0xe0, 0xe2].into(),
+            buttons: Default::default(),
+            toggle_armed: false,
+            target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
+        };
+        s.update_held();
+        assert!(!physical_key(&mut s, VK_RIGHT, 0x4d, true, true));
+        assert!(!s.toggle_armed);
     }
     #[test]
     fn keypad_enter_release_clears_ambiguous_startup_sample() {

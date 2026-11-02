@@ -35,6 +35,7 @@ jobs:
           done
       - run: cargo build --release --workspace --locked
       - run: python tools/smoke.py
+      - run: python tools/reconnect_smoke.py
       - run: python tools/third_party.py
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'

@@ -87,3 +87,10 @@ source-ordered return safety remains, with a reliable terminal cursor added.
 [ADR-0003](ADR/0003-terminal-cursor-v4.md) records migration and failure semantics.
 
 P01 input capability slice is implemented; see ADR-0004. Discovery, interactive pairing, grants beyond input and reconnect are separate gates.
+
+
+P04 fixed-address trusted reconnect is implemented behind an opt-in setting.
+Fresh sessions/capabilities/control state, pin-change rejection and cancellable
+backoff have automatic tests. Real interface/suspend/input acceptance, address
+rediscovery and interactive pairing remain pending; see ADR-0005. G1/G2 remain
+planned and no gesture interception is enabled by this connection work.

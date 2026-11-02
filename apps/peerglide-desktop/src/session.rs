@@ -117,7 +117,7 @@ pub async fn run(
         "invalid session capabilities"
     );
     let (itx, mut input) = mpsc::channel(128);
-    let capture = if native {
+    let mut capture = if native {
         Some(platform::capture(itx, peer.clone())?)
     } else {
         None
@@ -154,9 +154,9 @@ pub async fn run(
     let mut last_pong = 0u64;
     let mut edge_gate = EdgeGate::default();
     let mut tick = tokio::time::interval(Duration::from_millis(200));
+    let result: Result<()> = async {
     loop {
         tokio::select! {
-            _=tokio::signal::ctrl_c()=>return Ok(()),
             _=c.closed()=>return Ok(()),
             _=tick.tick()=>{
                 let now=now_ms();
@@ -259,7 +259,16 @@ pub async fn run(
                 }
             }
         }
-    }
+    }    }.await;
+    // Network failure must not hide native cleanup failure from retry policy.
+    let cleanup = recovery.release();
+    let shutdown = capture
+        .as_mut()
+        .map(|capture| capture.shutdown())
+        .transpose();
+    cleanup?;
+    shutdown?;
+    result
 }
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
     distance(source_edge.opposite(), x, y) <= 0.001

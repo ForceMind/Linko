@@ -117,3 +117,10 @@ computers together; v3/v4 peers are rejected before input capture. Existing iden
 and enrolled certificates remain usable. See [ADR-0003](docs/ADR/0003-terminal-cursor-v4.md).
 
 Input capability negotiation and v5 migration are documented in [ADR-0004](docs/ADR/0004-input-capabilities-v5.md).
+
+
+Trusted reconnect is optional and off by default. Enable **Reconnect trusted peer
+automatically** in Settings, or add `--reconnect` to `listen`/`connect`. It retries
+the same enrolled identity with capped backoff; changing certificates, native
+cleanup errors or authorization failures stop it. Control stays local until you
+switch again. See [ADR-0005](docs/ADR/0005-trusted-reconnect.md) for limits.
