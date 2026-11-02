@@ -158,3 +158,14 @@ smoke passed; native matrix and physical dragging/DPI/fault acceptance remain
 separate. See ADR-0003 for the mandatory two-peer upgrade and unchanged trust.
 C02 physical-key candidate 84d06d2b05a19ccba2171881c4108700da435a1a passed all three
 platforms plus active Apple SDK constants in run 41329928375, merged via #19.
+
+
+## P01 input capability slice (protocol v5)
+
+Local workspace/strict clippy, Windows/macOS platform cross-clippy, Debug build
+and managed two-process smoke passed. Tests cover bounded metadata/reserved bits,
+required Hello metadata, real-session unsupported input rejection and diagnostic
+endpoint denial despite allow-control. Native hook tests cover local delivery of
+unsupported presses, button/wheel fail-open and unavailable-target hotkeys. Native
+CI and real OS/input/permission acceptance are separate. Full OEM/media, clipboard/
+file/action capabilities, pairing/discovery and reconnect are not completed here.

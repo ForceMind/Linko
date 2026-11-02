@@ -62,7 +62,11 @@ extern "C" {
 thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)};}
 static MODIFIERS: Mutex<u64> = Mutex::new(0);
 static BUTTONS: AtomicU64 = AtomicU64::new(0);
-pub fn capture(tx: mpsc::Sender<Captured>, gate: CaptureGate) -> Result<CaptureThread> {
+pub fn capture(
+    tx: mpsc::Sender<Captured>,
+    gate: CaptureGate,
+    target: InputCapabilities,
+) -> Result<CaptureThread> {
     ensure!(unsafe {AXIsProcessTrusted()},"grant Accessibility and Input Monitoring permissions in System Settings, then restart PeerGlide");
     let reservation = capture_thread::Reservation::acquire()?;
     let (ready, rx) = std::sync::mpsc::sync_channel(1);
@@ -74,6 +78,7 @@ pub fn capture(tx: mpsc::Sender<Captured>, gate: CaptureGate) -> Result<CaptureT
                 keys: initial_keys(),
                 buttons: initial_buttons(),
                 toggle_armed: false,
+                target,
             };
             state.update_held();
             STATE.set(Some(state));
@@ -174,10 +179,10 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 };
                 s.button(button, down);
             }
-            22 => s.emit(Captured::Input(Input::Scroll {
-                x: CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
-                y: CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
-            })),
+            22 => s.scroll(
+                CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
+                CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
+            ),
             _ => (),
         }
         active && s.gate.active()
@@ -376,6 +381,9 @@ const KEYS: &[(u16, u16)] = &[
     (0xe6, 61),
     (0xe7, 54),
 ];
+pub(super) fn key_usages() -> Vec<u16> {
+    KEYS.iter().map(|k| k.0).collect()
+}
 fn to_code(u: u16) -> Option<u16> {
     KEYS.iter().find(|p| p.0 == u).map(|p| p.1)
 }

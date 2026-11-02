@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_protocol::{
     worker::{WorkerEvent, WorkerState},
-    Edge, Message, VERSION,
+    Edge, InputCapabilities, Message, VERSION,
 };
 use peerglide_transport as transport;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
@@ -67,7 +67,7 @@ struct Options {
     /// Explicit consent to receive remote input (independent of connecting/listening).
     #[arg(long)]
     allow_control: bool,
-    /// Enable real OS capture/injection; without this flag input is validated but not injected.
+    /// Enable real OS capture/injection; without this flag the endpoint provides connection diagnostics only.
     #[arg(long)]
     native: bool,
     #[arg(long, value_enum, default_value = "right")]
@@ -164,12 +164,30 @@ async fn run_inner(o: Options, address: Option<SocketAddr>, probe: bool) -> Resu
         let (tx, rx) = tokio::time::timeout(Duration::from_secs(5), c.accept_bi()).await??;
         (c, tx, rx)
     };
-    transport::send(&mut tx, &Message::Hello { version: VERSION }).await?;
+    let local = if o.native {
+        peerglide_platform::input_capabilities()
+    } else {
+        InputCapabilities::default()
+    };
+    transport::send(
+        &mut tx,
+        &Message::Hello {
+            version: VERSION,
+            capabilities: local.clone(),
+        },
+    )
+    .await?;
     let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??;
-    anyhow::ensure!(
-        matches!(hello, Message::Hello { version: VERSION }),
-        "unsupported protocol version"
-    );
+    let peer_capabilities = match hello {
+        Message::Hello {
+            version: VERSION,
+            capabilities,
+        } if capabilities.valid() => capabilities,
+        _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
+    };
+    if !peer_capabilities.motion() {
+        eprintln!("Peer native input is unavailable; connection diagnostics remain available.");
+    }
     println!("Authenticated peer connected. Ctrl+C exits; Ctrl+Alt+Esc restores local input.");
     worker_event(o.managed, WorkerState::Authenticated);
     if probe {
@@ -187,7 +205,19 @@ async fn run_inner(o: Options, address: Option<SocketAddr>, probe: bool) -> Resu
         e.wait_idle().await;
         return Ok(());
     }
-    let result = session::run(c.clone(), tx, rx, o.allow_control, o.native, o.edge.into()).await;
+    let result = session::run(
+        c.clone(),
+        tx,
+        rx,
+        session::Policy {
+            allow: o.allow_control,
+            native: o.native,
+            edge: o.edge.into(),
+            local,
+            peer: peer_capabilities,
+        },
+    )
+    .await;
     c.close(0u8.into(), b"session ended");
     e.wait_idle().await;
     result

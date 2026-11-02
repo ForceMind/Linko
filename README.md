@@ -112,6 +112,8 @@ MIT licensed. GPL references are studied, not copied or linked. Dependency
 licenses are separate and must accompany distributions.
 
 
-Protocol migration: current development builds use `peerglide/4`. Update both
-computers together; v3 peers are rejected before input capture. Existing identity
+Protocol migration: current development builds use `peerglide/5`. Update both
+computers together; v3/v4 peers are rejected before input capture. Existing identity
 and enrolled certificates remain usable. See [ADR-0003](docs/ADR/0003-terminal-cursor-v4.md).
+
+Input capability negotiation and v5 migration are documented in [ADR-0004](docs/ADR/0004-input-capabilities-v5.md).

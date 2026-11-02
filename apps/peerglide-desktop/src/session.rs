@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
 use peerglide_platform::{self as platform, now_ms, Captured};
-use peerglide_protocol::{decode, encode, Edge, Input, Message, Motion};
+use peerglide_protocol::{decode, encode, Edge, Input, InputCapabilities, Message, Motion};
 use peerglide_transport as transport;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -92,17 +92,33 @@ async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
 fn normal_close(c: &quinn::Connection) -> bool {
     matches!(c.close_reason(),Some(quinn::ConnectionError::ApplicationClosed(closed)) if closed.error_code==0u8.into())
 }
+pub struct Policy {
+    pub allow: bool,
+    pub native: bool,
+    pub edge: Edge,
+    pub local: InputCapabilities,
+    pub peer: InputCapabilities,
+}
 pub async fn run(
     c: quinn::Connection,
     mut tx: quinn::SendStream,
     mut rx: quinn::RecvStream,
-    allow: bool,
-    native: bool,
-    edge: Edge,
+    policy: Policy,
 ) -> Result<()> {
+    let Policy {
+        allow,
+        native,
+        edge,
+        local,
+        peer,
+    } = policy;
+    anyhow::ensure!(
+        local.valid() && peer.valid(),
+        "invalid session capabilities"
+    );
     let (itx, mut input) = mpsc::channel(128);
     let capture = if native {
-        Some(platform::capture(itx)?)
+        Some(platform::capture(itx, peer.clone())?)
     } else {
         None
     };
@@ -161,7 +177,7 @@ pub async fn run(
                 let now=now_ms();
                 match m {
                     Message::Acquire{lease,edge:remote_edge,along}=>{
-                        let granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow);
+                        let granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow && local.motion());
                         if granted {
                             position=entry_position(remote_edge.opposite(),along);
                             recovery.pointer(position.0,position.1)?;
@@ -175,6 +191,7 @@ pub async fn run(
                     },
                     Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;}},
                     Message::Input{lease,event,cursor}=>{
+                        if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
                         if event.valid() && cursor.lease==lease && recovery.receiver.anchor(cursor,now) && recovery.receiver.input(lease,event,now) {
                             recovery.pointer(cursor.x,cursor.y)?;recovery.input(event)?;
                         }
@@ -200,8 +217,8 @@ pub async fn run(
                     if let Some(lease)=recovery.receiver.active(){recovery.release()?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                 }
                 match e {
-                    Captured::Emergency|Captured::UnsupportedKey=>{
-                        if matches!(e,Captured::UnsupportedKey) {eprintln!("Unsupported physical key: control returned locally; this key is not forwarded.");}
+                    Captured::Emergency|Captured::UnsupportedInput=>{
+                        if matches!(e,Captured::UnsupportedInput) {eprintln!("Unsupported input capability: control returned locally; input was not forwarded.");}
                         if let Some(cap)=&capture{cap.restore();}
                         pending=None; if let Some(lease)=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                         if let Some(lease)=recovery.receiver.active(){recovery.release()?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
@@ -210,7 +227,7 @@ pub async fn run(
                         size=(width.max(1.0),height.max(1.0));
                         let nx=(x/(size.0-1.0).max(1.0)).clamp(0.0,1.0);let ny=(y/(size.1-1.0).max(1.0)).clamp(0.0,1.0);
                         let cross=edge_gate.update(distance(edge,nx,ny)<=0.001,now_ms());
-                        if cross && capture.as_ref().is_some_and(|cap|cap.gate.idle()) && outgoing.is_none() && pending.is_none() && recovery.receiver.active().is_none(){
+                        if cross && peer.motion() && capture.as_ref().is_some_and(|cap|cap.gate.idle()) && outgoing.is_none() && pending.is_none() && recovery.receiver.active().is_none(){
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let along=match edge{Edge::Left|Edge::Right=>ny,_=>nx};position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
                             pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
@@ -218,7 +235,7 @@ pub async fn run(
                     },
                     Captured::Toggle=>{
                         if let Some(lease)=outgoing.take(){if let Some(cap)=&capture{cap.restore();}send(&mut tx,&Message::Release { lease, cursor: Some(Motion {lease,sequence,x:position.0,y:position.1}) }).await?;}
-                        else if pending.is_none() && recovery.receiver.active().is_none(){next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;}
+                        else if peer.motion() && pending.is_none() && recovery.receiver.active().is_none(){next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;}
                     },
                     Captured::Motion{dx,dy}=>{if let Some(lease)=outgoing {
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
@@ -235,6 +252,7 @@ pub async fn run(
                         }
                     }},
                     Captured::Input(event)=>{if let Some(lease)=outgoing{
+                        if !peer.supports(event) { if let Some(cap)=&capture{cap.restore();} outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let cursor=Motion{lease,sequence,x:position.0,y:position.1};
                         send(&mut tx,&Message::Input{lease,event,cursor}).await?;
                     }},
@@ -362,7 +380,19 @@ mod tests {
         let server = async {
             let c = eb.accept().await.unwrap().await?;
             let (tx, rx) = c.accept_bi().await?;
-            run(c, tx, rx, allow, false, Edge::Right).await
+            run(
+                c,
+                tx,
+                rx,
+                Policy {
+                    allow,
+                    native: false,
+                    edge: Edge::Right,
+                    local: InputCapabilities::new(&[0xe0], true, 1, true).unwrap(),
+                    peer: InputCapabilities::default(),
+                },
+            )
+            .await
         };
         let client = async {
             let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
@@ -524,6 +554,91 @@ mod tests {
         })
         .await??;
         Ok(())
+    }
+    async fn capability_case(motion: bool) -> Result<()> {
+        let a = Identity::generate()?;
+        let b = Identity::generate()?;
+        let ea = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
+        let eb = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
+        let server = async {
+            let c = eb.accept().await.unwrap().await?;
+            let (tx, rx) = c.accept_bi().await?;
+            let result = run(
+                c.clone(),
+                tx,
+                rx,
+                Policy {
+                    allow: true,
+                    native: false,
+                    edge: Edge::Right,
+                    local: InputCapabilities::new(&[4], motion, 1, true).unwrap(),
+                    peer: InputCapabilities::default(),
+                },
+            )
+            .await;
+            if motion {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("outside advertised"));
+            } else {
+                result?;
+            }
+            c.close(0u8.into(), b"test complete");
+            Ok::<_, anyhow::Error>(())
+        };
+        let client = async {
+            let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
+            let (mut tx, mut rx) = c.open_bi().await?;
+            send(
+                &mut tx,
+                &Message::Acquire {
+                    lease: 1,
+                    edge: Edge::Right,
+                    along: 0.5,
+                },
+            )
+            .await?;
+            let response = transport::receive(&mut rx).await?;
+            if motion {
+                assert!(matches!(response, Message::Granted { lease: 1 }));
+                send(
+                    &mut tx,
+                    &Message::Input {
+                        lease: 1,
+                        event: Input::Key {
+                            usage: 5,
+                            down: true,
+                        },
+                        cursor: Motion {
+                            lease: 1,
+                            sequence: 1,
+                            x: 0.5,
+                            y: 0.5,
+                        },
+                    },
+                )
+                .await?;
+                c.closed().await;
+            } else {
+                assert!(matches!(response, Message::Denied { lease: 1 }));
+                c.close(0u8.into(), b"done");
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(server, client)
+        })
+        .await??;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn unsupported_input_is_rejected_before_injection() -> Result<()> {
+        capability_case(true).await
+    }
+    #[tokio::test]
+    async fn allow_flag_does_not_make_diagnostic_endpoint_controllable() -> Result<()> {
+        capability_case(false).await
     }
     #[tokio::test]
     async fn default_denies_input() -> Result<()> {

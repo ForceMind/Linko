@@ -8,7 +8,7 @@ native tagged capture/injection and fail-open watchdog. `peerglide-desktop`:
 executable session orchestration, enrollment and probe.
 
 Both peers authenticate with explicitly exchanged certificates, TLS 1.3, ALPN
-`peerglide/4`. No 0-RTT input or insecure verifier. A fingerprint must be checked
+`peerglide/5`. No 0-RTT input or insecure verifier. A fingerprint must be checked
 over an independently trusted channel; the same untrusted channel is insufficient.
 
 The listener accepts one connection and the connector opens a reliable stream.

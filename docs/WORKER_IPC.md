@@ -1,7 +1,7 @@
 # C04 local worker state
 
 Local supervisor events have schema version 1 and a finite state enum. They are
-independent of network protocol (currently v4; originally v3). Only parsed stdout events may update GUI state;
+independent of network protocol (currently v5; originally v3). Only parsed stdout events may update GUI state;
 stderr/human logs are diagnostics. Unknown schemas/fields are ignored. There is
 no key, clipboard or file payload in these events. Each child has its own channel;
 old child channels are replaced, and process exit/stopping overrides status.

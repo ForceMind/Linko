@@ -74,7 +74,7 @@ runtime evidence and historical failures are in VALIDATION.md.
 | Task | Status | Evidence / remaining gate |
 |---|---|---|
 | C01 | implementing | #14 fixture isolation + macOS stress passed; historical root cause #10 still open |
-| C02 | implementing | #15 recovery + #19 physical/keypad mapping; full OEM/media/capabilities pending |
+| C02 | implementing | #15 recovery + #19 physical/keypad mapping; full OEM/media pending; input capability handshake added |
 | C03 | implemented-unverified | #16 stop/join/reservation CI passed; native resource counts/revocation pending |
 | C04 | implemented-unverified | #17 structured events/revoke CI passed; native interaction pending |
 | C05 | implementing | v4 reliable terminal cursor + cleanup/expiry regressions; physical fault acceptance pending |
@@ -82,6 +82,8 @@ runtime evidence and historical failures are in VALIDATION.md.
 | G01/G02 | planned | Pure action/gesture logic may follow core correctness work; no gesture hook enabled |
 
 
-Protocol v4 is the current development baseline; both peers must update. The v3
+Protocol v5 is the current development baseline; both peers must update. The v3
 source-ordered return safety remains, with a reliable terminal cursor added.
 [ADR-0003](ADR/0003-terminal-cursor-v4.md) records migration and failure semantics.
+
+P01 input capability slice is implemented; see ADR-0004. Discovery, interactive pairing, grants beyond input and reconnect are separate gates.
