@@ -57,7 +57,8 @@ Immediate work:
 Source pointers: `crates/peerglide-platform/src/lib.rs`, native adapters,
 `apps/peerglide-desktop/src/session.rs`, `apps/peerglide-gui/src/main.rs`,
 `peerglide-core`, `peerglide-protocol` and `peerglide-transport`.
-New `peerglide-gestures`/`peerglide-actions` crates are planned, not present.
+`peerglide-actions` now contains pure model/preflight logic (G01);
+`peerglide-gestures` is still planned. No action executor or gesture hook is enabled.
 
 Each development PR states task IDs, changed behavior, protocol impact,
 regression evidence, untested platforms and rollback. Keep physical acceptance
@@ -79,7 +80,8 @@ runtime evidence and historical failures are in VALIDATION.md.
 | C04 | implemented-unverified | #17 structured events/revoke CI passed; native interaction pending |
 | C05 | implementing | v4 reliable terminal cursor + cleanup/expiry regressions; physical fault acceptance pending |
 | C06 | blocked | No authorized physical Windows/macOS desktop pair in this environment |
-| G01/G02 | planned | Pure action/gesture logic may follow core correctness work; no gesture hook enabled |
+| G01 | implementing | Pure local action schema/capability/context preflight and tests; no native execution or gesture hook |
+| G02 | planned | Direction-preserving recognition and labelled trajectory acceptance remain pending |
 
 
 Protocol v5 is the current development baseline; both peers must update. The v3
@@ -92,5 +94,6 @@ P01 input capability slice is implemented; see ADR-0004. Discovery, interactive 
 P04 fixed-address trusted reconnect is implemented behind an opt-in setting.
 Fresh sessions/capabilities/control state, pin-change rejection and cancellable
 backoff have automatic tests. Real interface/suspend/input acceptance, address
-rediscovery and interactive pairing remain pending; see ADR-0005. G1/G2 remain
-planned and no gesture interception is enabled by this connection work.
+rediscovery and interactive pairing remain pending; see ADR-0005. G1 has only
+the isolated G01 model foundation; G2 remains planned. No gesture interception
+is enabled by this connection work.

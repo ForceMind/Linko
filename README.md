@@ -16,7 +16,7 @@ See [validation](docs/VALIDATION.md).
 
 Primary-display switching, basic HID keys, three mouse buttons and scrolling
 form the initial native prototype. Multi-monitor topology, IME composition,
-clipboard, files, mDNS, pairing codes, tray, reconnect and signed installers are
+clipboard, files, mDNS, pairing codes, tray and signed installers are
 not implemented in this milestone. A native eframe control panel provides
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
@@ -70,7 +70,8 @@ peerglide connect 192.168.1.10:24870 --peer-cert peer.crt.der --bind 0.0.0.0:0 -
 
 `--probe` checks mutual TLS, version negotiation and a reliable roundtrip without
 injecting input. Permit UDP 24870 for the process if the OS firewall prompts;
-do not disable the firewall. The CLI exits on disconnect; restart for a new session.
+do not disable the firewall. By default the CLI exits on disconnect; optional
+trusted reconnect is described below.
 
 ## Experimental native control
 
