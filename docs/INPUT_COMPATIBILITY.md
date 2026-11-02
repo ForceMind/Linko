@@ -47,3 +47,14 @@ Primary API references:
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-keybdinput
 - https://developer.apple.com/library/archive/technotes/tn2450/
 - Active Apple SDK HIToolbox Events.h, checked by tools/verify_macos_keycodes.py.
+
+
+## P01 input capabilities (v5)
+
+The authenticated Hello advertises the compiled receive map. Its bitmap never
+adds permission. Diagnostic/native-disabled/Linux endpoints advertise none.
+Unsupported target input is passed locally before the callback can swallow it;
+the old remote lease is released. The receiver independently enforces its map.
+Both peers must update to v5. See ADR-0004; full OEM/media and real layout/IME
+acceptance still remain pending. Capability negotiation does not create support
+for keys absent from the backend tables.

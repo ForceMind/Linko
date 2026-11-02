@@ -151,23 +151,25 @@ pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn protocol_v3_peer_is_rejected_before_input_session() -> Result<()> {
-        let a = Identity::generate()?;
-        let b = Identity::generate()?;
-        let old = endpoint_alpn("127.0.0.1:0".parse()?, &a, &b.certificate, b"peerglide/3")?;
-        let current = endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
-        let server = async { current.accept().await.unwrap().await.is_err() };
-        let client = async {
-            old.connect(current.local_addr().unwrap(), "peerglide.local")
-                .unwrap()
-                .await
-                .is_err()
-        };
-        let (server, client) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(server, client)
-        })
-        .await?;
-        assert!(server && client, "mixed v3/v4 must not silently downgrade");
+    async fn legacy_protocol_peers_are_rejected_before_input_session() -> Result<()> {
+        for alpn in [b"peerglide/3".as_slice(), b"peerglide/4".as_slice()] {
+            let a = Identity::generate()?;
+            let b = Identity::generate()?;
+            let old = endpoint_alpn("127.0.0.1:0".parse()?, &a, &b.certificate, alpn)?;
+            let current = endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
+            let server = async { current.accept().await.unwrap().await.is_err() };
+            let client = async {
+                old.connect(current.local_addr().unwrap(), "peerglide.local")
+                    .unwrap()
+                    .await
+                    .is_err()
+            };
+            let (server, client) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(server, client)
+            })
+            .await?;
+            assert!(server && client, "legacy peers must not silently downgrade");
+        }
         Ok(())
     }
     #[tokio::test]
@@ -184,7 +186,8 @@ mod tests {
             assert!(matches!(
                 receive(&mut rx).await?,
                 Message::Hello {
-                    version: peerglide_protocol::VERSION
+                    version: peerglide_protocol::VERSION,
+                    ..
                 }
             ));
             send(&mut tx, &Message::Granted { lease: 7 }).await?;
@@ -202,6 +205,7 @@ mod tests {
                 &mut tx,
                 &Message::Hello {
                     version: peerglide_protocol::VERSION,
+                    capabilities: Default::default(),
                 },
             )
             .await?;

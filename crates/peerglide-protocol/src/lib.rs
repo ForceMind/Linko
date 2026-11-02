@@ -1,8 +1,8 @@
 //! PeerGlide's independent, versioned wire protocol. Input payloads must never be logged.
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u16 = 4;
-pub const ALPN: &[u8] = b"peerglide/4";
+pub const VERSION: u16 = 5;
+pub const ALPN: &[u8] = b"peerglide/5";
 pub const MAX_FRAME: usize = 4096;
 pub const LEASE_MS: u64 = 1500;
 
@@ -46,6 +46,7 @@ impl Input {
 pub enum Message {
     Hello {
         version: u16,
+        capabilities: InputCapabilities,
     },
     Acquire {
         lease: u64,
@@ -122,6 +123,25 @@ mod tests {
         assert!(!Input::Scroll { x: i16::MIN, y: 0 }.valid());
     }
     #[test]
+    fn hello_requires_explicit_bounded_capabilities() {
+        let capabilities = InputCapabilities::new(&[4, 0xe0], true, 7, true).unwrap();
+        let hello = Message::Hello {
+            version: VERSION,
+            capabilities,
+        };
+        let Message::Hello { capabilities, .. } =
+            decode::<Message>(&encode(&hello).unwrap()).unwrap()
+        else {
+            panic!("not hello");
+        };
+        assert!(capabilities.valid());
+        assert!(capabilities.supports(Input::Key {
+            usage: 4,
+            down: true
+        }));
+        assert!(decode::<Message>(br#"{"Hello":{"version":5}}"#).is_err());
+    }
+    #[test]
     fn terminal_cursor_roundtrip() {
         let release = Message::Release {
             lease: 7,
@@ -166,3 +186,6 @@ mod tests {
 }
 
 pub mod worker;
+
+pub mod capabilities;
+pub use capabilities::InputCapabilities;

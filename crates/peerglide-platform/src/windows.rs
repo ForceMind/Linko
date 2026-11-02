@@ -9,7 +9,11 @@ use windows_sys::Win32::{
 const TAG: usize = 0x50474c44;
 thread_local! { static WHEEL:RefCell<[i32; 2]>=const {RefCell::new([0; 2])}; }
 thread_local! { static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)}; }
-pub fn capture(tx: mpsc::Sender<Captured>, gate: CaptureGate) -> Result<CaptureThread> {
+pub fn capture(
+    tx: mpsc::Sender<Captured>,
+    gate: CaptureGate,
+    target: InputCapabilities,
+) -> Result<CaptureThread> {
     let reservation = capture_thread::Reservation::acquire()?;
     let (ready, rx) = std::sync::mpsc::sync_channel(1);
     let thread = CaptureThread::spawn_owned(
@@ -21,6 +25,7 @@ pub fn capture(tx: mpsc::Sender<Captured>, gate: CaptureGate) -> Result<CaptureT
                 keys: initial_keys(),
                 buttons: initial_buttons(),
                 toggle_armed: false,
+                target,
             };
             state.update_held();
             STATE.set(Some(state));
@@ -136,18 +141,18 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                         };
                         s.button(button, down);
                     }
-                    WM_MOUSEWHEEL => s.emit(Captured::Input(Input::Scroll {
-                        x: 0,
-                        y: WHEEL.with_borrow_mut(|r| {
+                    WM_MOUSEWHEEL => s.scroll(
+                        0,
+                        WHEEL.with_borrow_mut(|r| {
                             wheel_steps(&mut r[1], (e.mouseData >> 16) as i16)
                         }),
-                    })),
-                    WM_MOUSEHWHEEL => s.emit(Captured::Input(Input::Scroll {
-                        x: WHEEL.with_borrow_mut(|r| {
+                    ),
+                    WM_MOUSEHWHEEL => s.scroll(
+                        WHEEL.with_borrow_mut(|r| {
                             wheel_steps(&mut r[0], (e.mouseData >> 16) as i16)
                         }),
-                        y: 0,
-                    })),
+                        0,
+                    ),
                     _ => (),
                 }
                 active && s.gate.active()
@@ -345,6 +350,9 @@ const KEYS: &[(u16, u16, bool)] = &[
     (0xe6, 0x38, true),
     (0xe7, 0x5c, true),
 ];
+pub(super) fn key_usages() -> Vec<u16> {
+    KEYS.iter().map(|k| k.0).collect()
+}
 fn to_scan(usage: u16) -> Option<(u16, bool)> {
     KEYS.iter().find(|k| k.0 == usage).map(|k| (k.1, k.2))
 }
@@ -447,6 +455,7 @@ mod tests {
             keys: [STARTUP_VK | VK_RETURN].into(),
             buttons: Default::default(),
             toggle_armed: false,
+            target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
         };
         s.update_held();
         assert!(!s.gate.try_activate());

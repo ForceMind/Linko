@@ -1,6 +1,6 @@
 //! Native adapters. Capture is disabled automatically when the network watchdog expires.
 use anyhow::Result;
-use peerglide_protocol::Input;
+use peerglide_protocol::{Input, InputCapabilities};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, OnceLock,
@@ -39,7 +39,7 @@ pub enum Captured {
     },
     Input(Input),
     Emergency,
-    UnsupportedKey,
+    UnsupportedInput,
     Toggle,
 }
 #[derive(Default)]
@@ -156,11 +156,23 @@ impl CaptureSession {
         }
     }
 }
-pub fn capture(tx: mpsc::Sender<Captured>) -> Result<CaptureSession> {
+/// Compiled backend support, independent of OS permissions and peer grants.
+pub fn input_capabilities() -> InputCapabilities {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        InputCapabilities::new(&native::key_usages(), true, 7, true)
+            .expect("static backend capabilities")
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        InputCapabilities::default()
+    }
+}
+pub fn capture(tx: mpsc::Sender<Captured>, target: InputCapabilities) -> Result<CaptureSession> {
     let gate = CaptureGate::default();
     #[cfg(any(windows, target_os = "macos"))]
     {
-        let thread = native::capture(tx, gate.clone())?;
+        let thread = native::capture(tx, gate.clone(), target)?;
         Ok(CaptureSession {
             gate,
             _thread: thread,
@@ -169,7 +181,7 @@ pub fn capture(tx: mpsc::Sender<Captured>) -> Result<CaptureSession> {
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (tx, gate);
+        let _ = (tx, gate, target);
         anyhow::bail!("native input currently requires Windows or macOS; use probe on Linux")
     }
 }
@@ -202,6 +214,7 @@ struct HookState {
     keys: std::collections::BTreeSet<u16>,
     buttons: std::collections::BTreeSet<u8>,
     toggle_armed: bool,
+    target: InputCapabilities,
 }
 #[cfg(any(windows, target_os = "macos"))]
 impl HookState {
@@ -212,7 +225,25 @@ impl HookState {
             self.buttons.remove(&button);
         }
         self.update_held();
+        if self.reject_target(Input::Button { button, down }) {
+            return;
+        }
         self.emit(Captured::Input(Input::Button { button, down }));
+    }
+    fn reject_target(&mut self, event: Input) -> bool {
+        if self.gate.active() && !self.target.supports(event) {
+            self.gate.disable();
+            self.toggle_armed = false;
+            self.emit(Captured::UnsupportedInput);
+            true
+        } else {
+            false
+        }
+    }
+    fn scroll(&mut self, x: i16, y: i16) {
+        if !self.reject_target(Input::Scroll { x, y }) {
+            self.emit(Captured::Input(Input::Scroll { x, y }));
+        }
     }
     fn update_held(&self) {
         self.gate
@@ -235,7 +266,7 @@ impl HookState {
         self.update_held();
         self.gate.disable();
         self.toggle_armed = false;
-        self.emit(Captured::UnsupportedKey);
+        self.emit(Captured::UnsupportedInput);
         false
     }
     fn key(&mut self, usage: u16, down: bool) -> bool {
@@ -253,11 +284,14 @@ impl HookState {
             self.emit(Captured::Emergency);
             return false;
         }
-        if ctrl && alt && down && usage == 0x4f {
+        if ctrl && alt && down && usage == 0x4f && self.target.motion() {
             self.toggle_armed = true;
         }
         let swallow_toggle = self.toggle_armed && usage == 0x4f;
         if !swallow_toggle {
+            if self.reject_target(Input::Key { usage, down }) {
+                return false;
+            }
             self.emit(Captured::Input(Input::Key { usage, down }));
         }
         if self.toggle_armed && self.keys.is_empty() {
@@ -271,6 +305,17 @@ impl HookState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compiled_backend_capabilities_are_valid_and_do_not_claim_linux_input() {
+        let caps = input_capabilities();
+        assert!(caps.valid());
+        assert_eq!(caps.motion(), cfg!(any(windows, target_os = "macos")));
+        #[cfg(any(windows, target_os = "macos"))]
+        for usage in native::key_usages() {
+            assert!(caps.supports(Input::Key { usage, down: true }));
+            assert!(caps.supports(Input::Key { usage, down: false }));
+        }
+    }
     #[test]
     fn watchdog_is_fail_open_and_explicitly_releasable() {
         let gate = CaptureGate::default();
@@ -298,9 +343,61 @@ mod hook_tests {
                 keys: Default::default(),
                 buttons: Default::default(),
                 toggle_armed: false,
+                target: InputCapabilities::new(
+                    &(4..=0x73).chain(0xe0..=0xe7).collect::<Vec<_>>(),
+                    true,
+                    7,
+                    true,
+                )
+                .unwrap(),
             },
             rx,
         )
+    }
+    #[test]
+    fn target_key_rejection_is_local_and_does_not_swallow_the_press() {
+        let (mut s, mut rx) = state(20);
+        s.target = InputCapabilities::new(&[], true, 7, true).unwrap();
+        assert!(s.gate.try_activate());
+        assert!(!s.key(4, true));
+        assert!(!s.gate.active());
+        assert!(matches!(rx.try_recv().unwrap(), Captured::UnsupportedInput));
+        assert!(!s.gate.try_activate());
+        assert!(!s.key(4, false));
+        assert!(s.gate.idle());
+    }
+    #[test]
+    fn target_button_and_scroll_rejections_fail_open() {
+        let (mut s, mut rx) = state(20);
+        s.target = InputCapabilities::new(&[], true, 0, false).unwrap();
+        assert!(s.gate.try_activate());
+        s.scroll(0, 1);
+        assert!(!s.gate.active());
+        assert!(matches!(rx.try_recv().unwrap(), Captured::UnsupportedInput));
+        assert!(s.gate.try_activate());
+        s.button(1, true);
+        assert!(!s.gate.active());
+        assert!(matches!(rx.try_recv().unwrap(), Captured::UnsupportedInput));
+        s.button(1, false);
+        assert!(s.gate.idle());
+    }
+    #[test]
+    fn unavailable_target_does_not_reserve_the_switch_arrow() {
+        let (mut s, mut rx) = state(20);
+        s.target = InputCapabilities::default();
+        for (usage, down) in [
+            (0xe0, true),
+            (0xe2, true),
+            (0x4f, true),
+            (0x4f, false),
+            (0xe0, false),
+            (0xe2, false),
+        ] {
+            assert!(!s.key(usage, down));
+        }
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(event, Captured::Toggle));
+        }
     }
     #[test]
     fn hotkey_waits_for_release_and_never_forwards_arrow() {
@@ -334,7 +431,7 @@ mod hook_tests {
         assert!(!s.unsupported_key(0x100, false));
         assert!(s.gate.try_activate());
         while let Ok(event) = rx.try_recv() {
-            assert!(matches!(event, Captured::UnsupportedKey));
+            assert!(matches!(event, Captured::UnsupportedInput));
         }
     }
     #[test]
