@@ -1,3 +1,4 @@
+mod reconnect;
 mod session;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -70,6 +71,9 @@ struct Options {
     /// Enable real OS capture/injection; without this flag the endpoint provides connection diagnostics only.
     #[arg(long)]
     native: bool,
+    /// Reconnect only the same enrolled peer with bounded backoff; disabled by default.
+    #[arg(long)]
+    reconnect: bool,
     #[arg(long, value_enum, default_value = "right")]
     edge: Side,
 }
@@ -117,9 +121,9 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
             }
             let _ = stop.send(());
         });
-        tokio::select! {result=run_inner(o,address,probe)=>result,_=stopped=>Ok(())}
+        tokio::select! {result=supervise(&o,address,probe)=>result,_=stopped=>Ok(()),_=tokio::signal::ctrl_c()=>Ok(())}
     } else {
-        run_inner(o, address, probe).await
+        tokio::select! { result=supervise(&o,address,probe)=>result, _=tokio::signal::ctrl_c()=>Ok(()) }
     };
     worker_event(
         managed,
@@ -131,19 +135,43 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
     );
     result
 }
-async fn run_inner(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
+async fn supervise(o: &Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     let id = transport::Identity::load(&o.identity)?;
     let peer = std::fs::read(&o.peer_cert)?;
     anyhow::ensure!(
         peer != id.certificate,
         "a peer must have a distinct identity"
     );
+    let mut backoff = reconnect::Backoff::default();
+    loop {
+        reconnect::verify_pins(&o.identity, &o.peer_cert, &id.certificate, &peer)?;
+        let result = run_inner(o, address, probe, &id, &peer).await;
+        if !o.reconnect || probe {
+            return result;
+        }
+        match result {
+            Ok(()) => (),
+            Err(error) if reconnect::retryable(&error) => (),
+            Err(error) => return Err(error),
+        }
+        worker_event(o.managed, WorkerState::Reconnecting);
+        eprintln!("Connection ended; retrying the same enrolled peer after backoff.");
+        tokio::time::sleep(backoff.next_delay()).await;
+    }
+}
+async fn run_inner(
+    o: &Options,
+    address: Option<SocketAddr>,
+    probe: bool,
+    id: &transport::Identity,
+    peer: &[u8],
+) -> Result<()> {
     println!(
         "Local fingerprint: {}\nEnrolled peer: {}",
         id.fingerprint(),
-        transport::fingerprint(&peer)
+        transport::fingerprint(peer)
     );
-    let e = transport::endpoint(o.bind, &id, &peer)?;
+    let e = transport::endpoint(o.bind, id, peer)?;
     println!(
         "Listening on {}. Incoming control: {}. Native input: {}.",
         e.local_addr()?,
@@ -154,13 +182,13 @@ async fn run_inner(o: Options, address: Option<SocketAddr>, probe: bool) -> Resu
     let (c, mut tx, mut rx) = if let Some(addr) = address {
         let c = tokio::time::timeout(Duration::from_secs(5), e.connect(addr, "peerglide.local")?)
             .await??;
-        transport::verify_peer(&c, &peer)?;
+        transport::verify_peer(&c, peer)?;
         let (tx, rx) = c.open_bi().await?;
         (c, tx, rx)
     } else {
-        let incoming = tokio::select! { i=e.accept()=>i.context("endpoint closed")?,_=tokio::signal::ctrl_c()=>return Ok(()) };
+        let incoming = e.accept().await.context("endpoint closed")?;
         let c = tokio::time::timeout(Duration::from_secs(5), incoming).await??;
-        transport::verify_peer(&c, &peer)?;
+        transport::verify_peer(&c, peer)?;
         let (tx, rx) = tokio::time::timeout(Duration::from_secs(5), c.accept_bi()).await??;
         (c, tx, rx)
     };
@@ -218,7 +246,16 @@ async fn run_inner(o: Options, address: Option<SocketAddr>, probe: bool) -> Resu
         },
     )
     .await;
+    worker_event(o.managed, WorkerState::Disconnected);
+    let reason = c.close_reason();
     c.close(0u8.into(), b"session ended");
     e.wait_idle().await;
-    result
+    result?;
+    if let Some(reason) = reason {
+        if !matches!(&reason, quinn::ConnectionError::ApplicationClosed(closed) if closed.error_code == 0u8.into())
+        {
+            return Err(reason.into());
+        }
+    }
+    Ok(())
 }

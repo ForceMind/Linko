@@ -9,7 +9,10 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicU16, Ordering},
+        mpsc, Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -21,6 +24,7 @@ struct Config {
     listen: bool,
     allow: bool,
     native: bool,
+    reconnect: bool,
     edge: String,
     dark: bool,
     fingerprint: Option<String>,
@@ -33,6 +37,7 @@ impl Default for Config {
             listen: true,
             allow: false,
             native: false,
+            reconnect: false,
             edge: "right".into(),
             dark: true,
             fingerprint: None,
@@ -47,9 +52,52 @@ enum Page {
     Transfers,
     Settings,
 }
-enum WorkerOutput {
-    State(WorkerState),
-    Diagnostic(String),
+/// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
+#[derive(Default)]
+struct WorkerSnapshot(AtomicU16);
+impl WorkerSnapshot {
+    fn publish(&self, state: WorkerState) {
+        let code = match state {
+            WorkerState::Listening => 1,
+            WorkerState::Reconnecting => 2,
+            WorkerState::Disconnected => 3,
+            WorkerState::Authenticated => 4,
+            WorkerState::ProbePassed => 5,
+            WorkerState::Stopped => 6,
+            WorkerState::Failed => 7,
+        };
+        let mut old = self.0.load(Ordering::Relaxed);
+        loop {
+            let next = (old & 0x100)
+                | code
+                | if state == WorkerState::ProbePassed {
+                    0x100
+                } else {
+                    0
+                };
+            match self
+                .0
+                .compare_exchange_weak(old, next, Ordering::Release, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(current) => old = current,
+            }
+        }
+    }
+    fn take(&self) -> (Option<WorkerState>, bool) {
+        let value = self.0.swap(0, Ordering::AcqRel);
+        let state = match value & 0xff {
+            1 => Some(WorkerState::Listening),
+            2 => Some(WorkerState::Reconnecting),
+            3 => Some(WorkerState::Disconnected),
+            4 => Some(WorkerState::Authenticated),
+            5 => Some(WorkerState::ProbePassed),
+            6 => Some(WorkerState::Stopped),
+            7 => Some(WorkerState::Failed),
+            _ => None,
+        };
+        (state, value & 0x100 != 0)
+    }
 }
 struct App {
     dir: PathBuf,
@@ -59,7 +107,8 @@ struct App {
     compared: bool,
     notice: String,
     child: Option<Child>,
-    events: Option<mpsc::Receiver<WorkerOutput>>,
+    events: Option<mpsc::Receiver<String>>,
+    worker_state: Option<Arc<WorkerSnapshot>>,
     status: String,
     connected: bool,
     logs: VecDeque<String>,
@@ -85,6 +134,7 @@ impl App {
             notice: String::new(),
             child: None,
             events: None,
+            worker_state: None,
             status: "Offline".into(),
             connected: false,
             logs: VecDeque::new(),
@@ -189,6 +239,9 @@ impl App {
             .arg("--edge")
             .arg(&self.config.edge)
             .arg("--managed");
+        if self.config.reconnect && !probe {
+            cmd.arg("--reconnect");
+        }
         if probe {
             cmd.arg("--probe");
         } else {
@@ -212,22 +265,25 @@ impl App {
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let output_tx = tx.clone();
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let output_state = snapshot.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let event = match WorkerEvent::parse(&line) {
-                    Some(event) => WorkerOutput::State(event.state),
-                    None => WorkerOutput::Diagnostic(line.chars().take(600).collect()),
-                };
-                let _ = output_tx.try_send(event);
+                if let Some(event) = WorkerEvent::parse(&line) {
+                    output_state.publish(event.state);
+                } else {
+                    let _ = output_tx.try_send(line.chars().take(600).collect());
+                }
             }
         });
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = tx.try_send(WorkerOutput::Diagnostic(line.chars().take(600).collect()));
+                let _ = tx.try_send(line.chars().take(600).collect());
             }
         });
         self.child = Some(child);
         self.events = Some(rx);
+        self.worker_state = Some(snapshot);
         self.logs.clear();
         self.connected = false;
         self.stopping = None;
@@ -259,32 +315,43 @@ impl App {
     }
     fn poll(&mut self) {
         if let Some(rx) = &self.events {
-            while let Ok(event) = rx.try_recv() {
-                match event {
-                    WorkerOutput::State(state)
-                        if self.child.is_some() && self.stopping.is_none() =>
-                    {
-                        match state {
-                            WorkerState::Listening => self.status = "Waiting for peer".into(),
-                            WorkerState::Authenticated => {
-                                self.connected = true;
-                                self.status = "Authenticated".into();
-                            }
-                            WorkerState::ProbePassed => {
-                                self.notice =
-                                    "Connection probe passed. No input was injected.".into()
-                            }
-                            WorkerState::Stopped | WorkerState::Failed => {
-                                self.connected = false;
-                                self.status = "Worker stopped".into();
-                            }
-                        }
+            while let Ok(line) = rx.try_recv() {
+                self.logs.push_back(line);
+                if self.logs.len() > 100 {
+                    self.logs.pop_front();
+                }
+            }
+        }
+        if let Some(snapshot) = &self.worker_state {
+            let (state, probe_passed) = snapshot.take();
+            if probe_passed {
+                self.notice = "Connection probe passed. No input was injected.".into();
+            }
+            if self.child.is_some() && self.stopping.is_none() {
+                match state {
+                    Some(WorkerState::Listening) => {
+                        self.connected = false;
+                        self.status = "Waiting for peer".into();
                     }
-                    WorkerOutput::Diagnostic(line) => {
-                        self.logs.push_back(line);
-                        if self.logs.len() > 100 {
-                            self.logs.pop_front();
-                        }
+                    Some(WorkerState::ProbePassed) => {
+                        self.connected = false;
+                        self.status = "Probe passed".into();
+                    }
+                    Some(WorkerState::Reconnecting) => {
+                        self.connected = false;
+                        self.status = "Reconnecting trusted peer".into();
+                    }
+                    Some(WorkerState::Disconnected) => {
+                        self.connected = false;
+                        self.status = "Disconnected".into();
+                    }
+                    Some(WorkerState::Authenticated) => {
+                        self.connected = true;
+                        self.status = "Authenticated".into();
+                    }
+                    Some(WorkerState::Stopped | WorkerState::Failed) => {
+                        self.connected = false;
+                        self.status = "Worker stopped".into();
                     }
                     _ => (),
                 }
@@ -568,6 +635,18 @@ impl App {
             self.theme(ctx);
             self.save();
         }
+        ui.add_enabled_ui(self.child.is_none(), |ui| {
+            if ui
+                .checkbox(
+                    &mut self.config.reconnect,
+                    "Reconnect trusted peer automatically",
+                )
+                .changed()
+            {
+                self.save();
+            }
+            ui.weak("Reconnect is optional. Control stays local until you switch again.");
+        });
         ui.add_space(18.0);
         ui.add_enabled_ui(self.child.is_none(), |ui| {
             if ui
@@ -839,6 +918,27 @@ mod tests {
 
 #[cfg(test)]
 mod lifecycle_tests {
+    fn set_state(app: &mut App, state: WorkerState) {
+        app.worker_state
+            .get_or_insert_with(|| Arc::new(WorkerSnapshot::default()))
+            .publish(state);
+    }
+    #[test]
+    fn coalescing_keeps_latest_state_and_completed_probe() {
+        let snapshot = WorkerSnapshot::default();
+        snapshot.publish(WorkerState::Authenticated);
+        for _ in 0..10000 {
+            snapshot.publish(WorkerState::Listening);
+            snapshot.publish(WorkerState::Reconnecting);
+        }
+        snapshot.publish(WorkerState::Disconnected);
+        assert_eq!(snapshot.take(), (Some(WorkerState::Disconnected), false));
+        snapshot.publish(WorkerState::ProbePassed);
+        snapshot.publish(WorkerState::Stopped);
+        assert_eq!(snapshot.take(), (Some(WorkerState::Stopped), true));
+        assert_eq!(snapshot.take(), (None, false));
+    }
+
     use super::*;
     #[test]
     fn revoke_clears_grants_and_stale_diagnostics_cannot_authenticate() -> Result<()> {
@@ -855,9 +955,7 @@ mod lifecycle_tests {
         drop(loaded);
         let (tx, rx) = mpsc::sync_channel(128);
         app.events = Some(rx);
-        tx.send(WorkerOutput::Diagnostic(
-            "Authenticated peer connected".into(),
-        ))?;
+        tx.send("Authenticated peer connected".into())?;
         app.poll();
         assert!(!app.connected);
         drop(app);
@@ -883,14 +981,66 @@ mod lifecycle_tests {
         Ok(())
     }
     #[test]
+    fn managed_test_child() -> Result<()> {
+        if std::env::var_os("PEERGLIDE_GUI_LIFECYCLE_HELPER").is_some() {
+            let mut command = String::new();
+            std::io::stdin().read_line(&mut command)?;
+        }
+        Ok(())
+    }
+    #[test]
+    fn retrying_child_cannot_remain_connected_or_override_stop() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.child = Some(
+            Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "lifecycle_tests::managed_test_child",
+                    "--nocapture",
+                ])
+                .env("PEERGLIDE_GUI_LIFECYCLE_HELPER", "1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
+        );
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send("queued diagnostic".into())?;
+        assert!(tx.try_send("dropped diagnostic".into()).is_err());
+        app.events = Some(rx);
+        app.connected = true;
+        set_state(&mut app, WorkerState::Authenticated);
+        set_state(&mut app, WorkerState::Disconnected);
+        set_state(&mut app, WorkerState::Reconnecting);
+        set_state(&mut app, WorkerState::Listening);
+        app.poll();
+        assert!(!app.connected);
+        assert_eq!(app.status, "Waiting for peer");
+        set_state(&mut app, WorkerState::Reconnecting);
+        app.poll();
+        assert_eq!(app.status, "Reconnecting trusted peer");
+        app.stop();
+        set_state(&mut app, WorkerState::Authenticated);
+        app.poll();
+        assert!(!app.connected);
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn old_configuration_never_enables_reconnect_implicitly() -> Result<()> {
+        let config: Config = serde_json::from_str(r#"{"allow":true,"native":true}"#)?;
+        assert!(!config.reconnect);
+        Ok(())
+    }
+    #[test]
     fn delayed_worker_output_cannot_report_a_dead_process_as_connected() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let dir = fixture.path.clone();
         {
             let mut app = App::load(dir.clone());
-            let (tx, rx) = mpsc::sync_channel(128);
-            app.events = Some(rx);
-            tx.send(WorkerOutput::State(WorkerState::Authenticated))?;
+            set_state(&mut app, WorkerState::Authenticated);
             app.poll();
             assert!(!app.connected);
             assert_eq!(app.status, "Offline");

@@ -270,11 +270,12 @@ impl HookState {
         false
     }
     fn key(&mut self, usage: u16, down: bool) -> bool {
-        if down {
-            self.keys.insert(usage);
+        let fresh_down = if down {
+            self.keys.insert(usage)
         } else {
             self.keys.remove(&usage);
-        }
+            false
+        };
         self.update_held();
         let ctrl = self.keys.contains(&0xe0) || self.keys.contains(&0xe4);
         let alt = self.keys.contains(&0xe2) || self.keys.contains(&0xe6);
@@ -284,7 +285,7 @@ impl HookState {
             self.emit(Captured::Emergency);
             return false;
         }
-        if ctrl && alt && down && usage == 0x4f && self.target.motion() {
+        if ctrl && alt && fresh_down && usage == 0x4f && self.target.motion() {
             self.toggle_armed = true;
         }
         let swallow_toggle = self.toggle_armed && usage == 0x4f;
@@ -398,6 +399,20 @@ mod hook_tests {
         while let Ok(event) = rx.try_recv() {
             assert!(!matches!(event, Captured::Toggle));
         }
+    }
+    #[test]
+    fn held_switch_chord_cannot_resume_control_on_autorepeat() {
+        let (mut s, mut rx) = state(20);
+        s.keys.extend([0xe0, 0xe2, 0x4f]);
+        s.update_held();
+        assert!(!s.key(0x4f, true));
+        for usage in [0x4f, 0xe0, 0xe2] {
+            s.key(usage, false);
+        }
+        while let Ok(event) = rx.try_recv() {
+            assert!(!matches!(event, Captured::Toggle));
+        }
+        assert!(s.gate.idle());
     }
     #[test]
     fn hotkey_waits_for_release_and_never_forwards_arrow() {

@@ -169,3 +169,20 @@ endpoint denial despite allow-control. Native hook tests cover local delivery of
 unsupported presses, button/wheel fail-open and unavailable-target hotkeys. Native
 CI and real OS/input/permission acceptance are separate. Full OEM/media, clipboard/
 file/action capabilities, pairing/discovery and reconnect are not completed here.
+
+
+P01 final candidate dfe53ce01f44c1e259318ea62cefb04d21c8c008 passed complete
+Windows/macOS/Linux CI run 41391030792 and merged via #21. This validates compiled
+metadata/callback policy, not real hardware or OS permission availability.
+
+## P04 fixed-address trusted reconnect
+
+Local tests cover capped backoff, non-retryable security/native failures, pin
+replacement/deletion, held-switch-repeat rejection and old-config default-off.
+Real loopback processes authenticate, lose the server, reconnect to the same
+identity, reject a different valid replacement identity despite a modified pin
+file, and stop during backoff. GUI tests keep a real helper child alive while
+logs fill their queue and latest state overrides stale authentication. Probe
+success survives state coalescing. Native CI, real desktop input/network/suspend
+acceptance and resource/latency measurements are separate gates. No old lease or
+suppression state is resumed; no new pairing/discovery mechanism is claimed.
