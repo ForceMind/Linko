@@ -57,7 +57,8 @@ Immediate work:
 Source pointers: `crates/peerglide-platform/src/lib.rs`, native adapters,
 `apps/peerglide-desktop/src/session.rs`, `apps/peerglide-gui/src/main.rs`,
 `peerglide-core`, `peerglide-protocol` and `peerglide-transport`.
-New `peerglide-gestures`/`peerglide-actions` crates are planned, not present.
+`peerglide-actions` now contains pure model/preflight logic (G01);
+`peerglide-gestures` is still planned. No action executor or gesture hook is enabled.
 
 Each development PR states task IDs, changed behavior, protocol impact,
 regression evidence, untested platforms and rollback. Keep physical acceptance
@@ -93,5 +94,6 @@ P01 input capability slice is implemented; see ADR-0004. Discovery, interactive 
 P04 fixed-address trusted reconnect is implemented behind an opt-in setting.
 Fresh sessions/capabilities/control state, pin-change rejection and cancellable
 backoff have automatic tests. Real interface/suspend/input acceptance, address
-rediscovery and interactive pairing remain pending; see ADR-0005. G1/G2 remain
-planned and no gesture interception is enabled by this connection work.
+rediscovery and interactive pairing remain pending; see ADR-0005. G1 has only
+the isolated G01 model foundation; G2 remains planned. No gesture interception
+is enabled by this connection work.

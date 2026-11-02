@@ -204,3 +204,8 @@ unknown action/fields/schema. No binary integrates it; no OS action, gesture hoo
 remote action execution or configuration migration is implemented. See ACTIONS.md.
 Native CI for this new crate is a separate gate; pure tests do not establish native
 window/focus/permission correctness. G01 remains implementing; G02 remains planned.
+
+G01 local fail-fast checks passed: fmt, 56 Linux workspace tests, strict workspace
+Clippy, Debug build, managed two-process smoke and reconnect/pin-swap/backoff-stop
+smoke. No new external dependency was added; Cargo.lock registers the new workspace
+crate using existing Serde dependencies.
