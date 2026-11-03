@@ -18,7 +18,8 @@ python tools/local_preflight.py
 只收集环境版本而不构建时用 `--inventory-only`。报告和日志位于新的
 `target/local-validation/preflight-…/`，脚本不安装工具、不修改系统权限、
 不捕获原生输入、不上传报告或清理既有文件。它运行格式化、严格 Clippy、
-测试、Debug 构建和无原生注入的真实进程通信/重连测试。失败即停止后续检查。
+测试、字体 notice 回归/许可筛查、Debug 构建和无原生注入的真实进程通信/重连测试。
+如已安装 cargo-audit，可加 `--audit` 要求严格依赖审计；缺少该工具则失败，不自动安装。失败即停止后续检查。
 `preflight_passed` 仅指代码/进程预检，报告中的原生桌面、蓝牙/USB/DPI/权限
 验收仍是 `not_run`。工具缺失时先说明所需安装，不擅自改动机器环境。
 

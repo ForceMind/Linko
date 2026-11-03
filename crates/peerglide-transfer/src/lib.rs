@@ -214,13 +214,13 @@ impl Receiver {
         };
         let bytes = serde_json::to_vec(&receipt).map_err(|_| invalid("receipt serialization"))?;
         let dir = root.join(format!(".peerglide-{}", blake3::hash(&bytes).to_hex()));
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
+            fs::DirBuilder::new().mode(0o700).create(&dir)?;
         }
-        builder.create(&dir)?;
+        #[cfg(not(unix))]
+        fs::create_dir(&dir)?;
         let mut receipt_file = exclusive(&dir.join("receipt.json"))?;
         receipt_file.write_all(&bytes)?;
         receipt_file.sync_all()?;

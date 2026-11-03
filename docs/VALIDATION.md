@@ -394,3 +394,15 @@ D03 local full preflight `preflight-20261103T072707329898Z-6` passed fmt, strict
 Clippy, 112 Rust tests, Debug build and real process probe/reconnect smokes.
 Windows excludes the Unix-only symlink test; final native candidate matrix is
 still required before merge. No native input/file RPC has been added.
+
+D03 initial candidate 2c05895c85e30c8e850d86c79148b7bc87eb6b9b failed Windows
+strict Clippy in run 41596675300: the directory builder was mutable only under
+cfg(unix). Replaced it with a cfg-specific builder expression; warnings remain
+denied, no test disabled. Added a real Rust 1.95.0 all-target workspace check to CI
+rather than inferring minimum-toolchain compatibility from metadata or stable.
+Final replacement candidate must pass the complete matrix.
+
+Local Rust 1.95.0 workspace/all-target locked check passed after the Windows cfg
+fix. The local preflight now includes the Python notice regressions and license
+screen; optional --audit requires an already installed cargo-audit and never installs
+one. Its final candidate full checks remain separate from physical acceptance.
