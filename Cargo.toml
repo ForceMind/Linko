@@ -23,6 +23,7 @@ peerglide-core = { path = "crates/peerglide-core" }
 peerglide-transport = { path = "crates/peerglide-transport" }
 peerglide-platform = { path = "crates/peerglide-platform" }
 peerglide-gestures = { path = "crates/peerglide-gestures" }
+peerglide-actions = { path = "crates/peerglide-actions" }
 
 [profile.release]
 lto = "thin"

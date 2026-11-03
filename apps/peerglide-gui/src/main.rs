@@ -1,5 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod config_store;
 mod gesture_lab;
+mod gesture_rules;
 use anyhow::{Context, Result};
 use eframe::egui::{self, Color32, RichText, Vec2};
 use peerglide_protocol::worker::{WorkerEvent, WorkerState};
@@ -18,7 +20,7 @@ use std::{
 };
 
 #[derive(Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct Config {
     peer_name: String,
     address: String,
@@ -53,6 +55,7 @@ enum Page {
     Transfers,
     Settings,
     GestureLab,
+    GestureRules,
 }
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
@@ -103,8 +106,11 @@ impl WorkerSnapshot {
 }
 struct App {
     gesture_lab: gesture_lab::GestureLab,
+    gesture_rules: gesture_rules::RuleEditor,
     dir: PathBuf,
     config: Config,
+    config_store: Option<config_store::Store>,
+    instance_lock: Option<config_store::Lock>,
     page: Page,
     import_path: String,
     confirmed_fingerprint: Option<String>,
@@ -124,18 +130,34 @@ impl App {
         app
     }
     fn load(dir: PathBuf) -> Self {
-        let config = std::fs::read(dir.join("settings.json"))
-            .ok()
-            .and_then(|v| serde_json::from_slice(&v).ok())
-            .unwrap_or_default();
+        let mut notice = String::new();
+        let instance_lock = std::fs::create_dir_all(&dir)
+            .map_err(anyhow::Error::from)
+            .and_then(|_| config_store::lock(&dir.join("gui-instance.lock")))
+            .map_err(|e| {
+                notice = format!("Read-only instance: {e:#}");
+                e
+            })
+            .ok();
+        let (config_store, config) =
+            match config_store::Store::open::<Config>(dir.join("settings.json")) {
+                Ok((store, config)) => (Some(store), config),
+                Err(e) => {
+                    notice = format!("Settings preserved; recovery required: {e:#}");
+                    (None, Config::default())
+                }
+            };
         let mut app = Self {
             gesture_lab: gesture_lab::GestureLab::new(&dir),
+            gesture_rules: gesture_rules::RuleEditor::new(&dir),
             dir,
             config,
+            config_store,
+            instance_lock,
             page: Page::Home,
             import_path: String::new(),
             confirmed_fingerprint: None,
-            notice: String::new(),
+            notice,
             child: None,
             events: None,
             worker_state: None,
@@ -161,14 +183,15 @@ impl App {
             self.notice = e.to_string();
         }
     }
-    fn save_config(&self) -> Result<()> {
-        let data = serde_json::to_vec_pretty(&self.config)?;
-        std::fs::write(self.dir.join("settings.tmp"), data)?;
-        std::fs::rename(
-            self.dir.join("settings.tmp"),
-            self.dir.join("settings.json"),
-        )?;
-        Ok(())
+    fn save_config(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.instance_lock.is_some(),
+            "another GUI instance owns this data folder"
+        );
+        self.config_store
+            .as_mut()
+            .context("settings recovery required; original file preserved")?
+            .save(&self.config)
     }
     fn identity_dir(&self) -> PathBuf {
         self.dir.join("identity")
@@ -182,6 +205,14 @@ impl App {
         transport::read_certificate(std::path::Path::new(self.import_path.trim()))
     }
     fn enroll(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.instance_lock.is_some() && self.config_store.is_some(),
+            "writable settings required before enrollment"
+        );
+        anyhow::ensure!(
+            self.child.is_none(),
+            "stop the device session before enrollment"
+        );
         let confirmed = self
             .confirmed_fingerprint
             .as_deref()
@@ -198,12 +229,20 @@ impl App {
             );
         }
         std::fs::write(self.dir.join("trusted-peer.crt.der"), &bytes)?;
-        self.config.fingerprint = Some(transport::fingerprint(&bytes));
+        let fingerprint = transport::fingerprint(&bytes);
+        if self.config.fingerprint.as_deref() != Some(fingerprint.as_str()) {
+            self.config.allow = false;
+        }
+        self.config.fingerprint = Some(fingerprint);
         self.save_config()?;
         self.confirmed_fingerprint = None;
         Ok(())
     }
     fn start(&mut self, probe: bool) -> Result<()> {
+        anyhow::ensure!(
+            self.instance_lock.is_some(),
+            "another GUI instance owns this data folder"
+        );
         anyhow::ensure!(self.child.is_none(), "a session is already running");
         Identity::load(&self.identity_dir())
             .context("create this computer's identity in Devices first")?;
@@ -307,6 +346,10 @@ impl App {
         }
     }
     fn revoke(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.instance_lock.is_some(),
+            "another GUI instance owns this data folder"
+        );
         self.stop();
         self.confirmed_fingerprint = None;
         self.connected = false;
@@ -442,7 +485,7 @@ impl App {
                 });
             });
         ui.add_space(22.0);
-        ui.add_enabled_ui(self.child.is_none(), |ui| {
+        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.config.listen, true, "Listen on this computer");
                 ui.selectable_value(&mut self.config.listen, false, "Connect to peer");
@@ -505,7 +548,13 @@ impl App {
             );
             ui.label("BLAKE3 fingerprint");
             ui.monospace(fp);
-        } else if ui.button("Create local identity").clicked() {
+        } else if ui
+            .add_enabled(
+                self.instance_lock.is_some(),
+                egui::Button::new("Create local identity"),
+            )
+            .clicked()
+        {
             let r = Identity::create(&self.identity_dir()).map(|_| ());
             self.feedback(
                 r,
@@ -515,7 +564,7 @@ impl App {
         ui.add_space(18.0);
         ui.separator();
         ui.add_space(18.0);
-        ui.add_enabled_ui(self.child.is_none(), |ui| {
+        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             ui.horizontal(|ui| {
                 ui.label("Peer name");
                 ui.text_edit_singleline(&mut self.config.peer_name);
@@ -583,7 +632,7 @@ impl App {
             "Arrange your displays",
             "Drag the peer around this computer to choose the switching edge.",
         );
-        ui.add_enabled_ui(self.child.is_none(), |ui| {
+        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             let (rect, _) = ui.allocate_exact_size(
                 Vec2::new(ui.available_width().min(700.0), 340.0),
                 egui::Sense::hover(),
@@ -655,6 +704,22 @@ impl App {
     }
     fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         Self::heading(ui, "Make it yours", "Input permissions and appearance.");
+        if self.config_store.is_none() && self.instance_lock.is_some() {
+            ui.label("The settings file was preserved. Reset makes a backup and disables grants; identities are kept.");
+            if ui.button("Back up and reset settings").clicked() {
+                match config_store::Store::reset::<Config>(self.dir.join("settings.json")) {
+                    Ok((store, config)) => {
+                        self.config_store = Some(store);
+                        self.config = config;
+                        self.notice = "Settings reset; previous bytes backed up".into();
+                    }
+                    Err(e) => self.notice = format!("Reset failed: {e:#}"),
+                }
+            }
+        }
+        if self.instance_lock.is_none() || self.config_store.is_none() {
+            ui.disable();
+        }
         if ui
             .checkbox(&mut self.config.dark, "Dark appearance")
             .changed()
@@ -662,7 +727,7 @@ impl App {
             self.theme(ctx);
             self.save();
         }
-        ui.add_enabled_ui(self.child.is_none(), |ui| {
+        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             if ui
                 .checkbox(
                     &mut self.config.reconnect,
@@ -675,7 +740,7 @@ impl App {
             ui.weak("Reconnect is optional. Control stays local until you switch again.");
         });
         ui.add_space(18.0);
-        ui.add_enabled_ui(self.child.is_none(), |ui| {
+        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             if ui
                 .checkbox(
                     &mut self.config.allow,
@@ -725,6 +790,7 @@ impl eframe::App for App {
                     (Page::Transfers, "Transfers"),
                     (Page::Settings, "Settings"),
                     (Page::GestureLab, "Gesture lab"),
+                    (Page::GestureRules, "Gesture rules"),
                 ] {
                     if ui
                         .selectable_label(self.page == page, RichText::new(label).size(18.0))
@@ -751,7 +817,8 @@ impl eframe::App for App {
         }
         egui::CentralPanel::default().show(ctx,|ui|{ui.add_space(20.0);egui::ScrollArea::vertical().show(ui,|ui|match self.page {
             Page::Home=>self.home(ui),Page::Devices=>self.devices(ui),Page::Displays=>self.displays(ui),Page::Settings=>self.settings(ui,ctx),
-            Page::GestureLab=>{self.gesture_lab.ui(ui,self.child.is_some());},
+            Page::GestureLab=>{self.gesture_lab.ui(ui,self.child.is_some());self.gesture_rules.preview_ui(ui,self.gesture_lab.matched_id());},
+            Page::GestureRules=>self.gesture_rules.ui(ui,&self.dir,self.instance_lock.is_some() && self.child.is_none()),
             Page::Transfers=>{Self::heading(ui,"File transfers","Coming in M4");ui.label("File sending, resumable chunks, clipboard sharing and native cross-screen drag are not available in this prototype.");},
         });});
     }
@@ -958,6 +1025,32 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn replacing_a_peer_never_inherits_its_control_grant_and_second_gui_cannot_write() -> Result<()>
+    {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        Identity::create(&app.identity_dir())?;
+        let candidate = fixture.path.join("candidate.der");
+        for _ in 0..2 {
+            let peer = Identity::generate()?;
+            std::fs::write(&candidate, &peer.certificate)?;
+            app.import_path = candidate.display().to_string();
+            app.confirmed_fingerprint = Some(peer.fingerprint());
+            app.config.allow = true;
+            app.enroll()?;
+            assert!(!app.config.allow);
+        }
+        let mut second = App::load(fixture.path.clone());
+        assert!(second.instance_lock.is_none());
+        assert!(second.save_config().is_err());
+        assert!(second.start(true).is_err());
+        drop(second);
+        drop(app);
+        let replacement = App::load(fixture.path.clone());
+        assert!(replacement.instance_lock.is_some());
+        Ok(())
+    }
+    #[test]
     fn all_configuration_pages_render_in_both_themes_without_a_display() -> Result<()> {
         let fixture = Fixture::new()?;
         let dir = fixture.path.clone();
@@ -973,6 +1066,7 @@ mod tests {
                     Page::Displays,
                     Page::Settings,
                     Page::GestureLab,
+                    Page::GestureRules,
                 ] {
                     let output = ctx.run(
                         egui::RawInput {
@@ -991,6 +1085,7 @@ mod tests {
                                 Page::GestureLab => {
                                     app.gesture_lab.ui(ui, false);
                                 }
+                                Page::GestureRules => app.gesture_rules.ui(ui, &app.dir, true),
                                 _ => (),
                             });
                         },
@@ -1056,7 +1151,7 @@ mod lifecycle_tests {
         let mut app = App::load(fixture.path.clone());
         app.config.fingerprint = Some("test".into());
         app.config.allow = true;
-        std::fs::create_dir(fixture.path.join("settings.tmp"))?;
+        std::fs::create_dir(fixture.path.join("settings.json"))?;
         assert!(app
             .revoke()
             .unwrap_err()

@@ -1,5 +1,8 @@
 # Architecture
 
+[Cloud foundations](CLOUD_FOUNDATION.md) specify the G03 ownership model, exact
+local rules and versioned GUI persistence. No native gesture hook/action is enabled.
+
 G01's isolated semantic preflight library is documented in [ACTIONS.md](ACTIONS.md).
 It is not wired into capture or desktop execution and introduces no wire protocol.
 

@@ -55,6 +55,12 @@ impl GestureLab {
             feedback: String::new(),
         }
     }
+    pub fn matched_id(&self) -> Option<u32> {
+        self.result
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .map(|m| m.id.0)
+    }
     pub fn cancel(&mut self) {
         if self.active.take().is_some() {
             self.result = Some(Err(Rejection::Cancelled));
