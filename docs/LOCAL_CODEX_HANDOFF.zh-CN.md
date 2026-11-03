@@ -8,7 +8,7 @@ run 41587053713，合并为 d8b6c54239da741e64a706fa087fa0f9a0fa7509，源码树
 
 ## 1. 先运行安全预检
 
-在仓库根目录，使用已有 stable Rust（GUI 最低 1.89）和 Python 3：
+在仓库根目录，使用已有 stable Rust（GUI 最低 1.95）和 Python 3：
 
 ```sh
 git status --short
@@ -128,3 +128,10 @@ cargo run -p peerglide-gestures --example evaluate --locked -- SAMPLE_FOLDER
 > 授权，不关闭系统安全。按现有依赖继续第7节未开发的软件任务，分 PR，运行
 > fmt/Clippy/测试/构建与对应平台CI，保护真实键内容/剪贴板/私钥。不要把提交、
 > 模拟测试、截图或无错误构建当成实机验收，不部署服务或更改仓库可见性。
+
+## 9. 字体依赖与审计约束
+
+GUI 已迁移到 eframe/egui 0.37，最低 Rust 1.95；核心协议仍为 v5。
+CI 的 cargo-audit 0.22.2 拒绝漏洞和 advisory warning；不要加通用忽略项。
+字体授权文件纳入包内 notices，Python 回归必须随构建运行。
+参见 ADR-0006；RustSec 的“停止维护”提示不是已发现可利用漏洞的证明。

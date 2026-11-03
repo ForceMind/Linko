@@ -36,7 +36,7 @@ native capture lifecycle; no OS input hook or permission is added by browsing.
 
 Uses `mdns-sd` exactly 0.21.7 with default features disabled (no library logging or
 async runtime dependency). Cargo metadata reports Apache-2.0 OR MIT, Rust 1.71.
-PeerGlide GUI still requires at least Rust 1.89. Existing notice collection includes
+PeerGlide GUI still requires at least Rust 1.95. Existing notice collection includes
 the crate and its dependencies; allowed-expression screening passes for 354 locked
 dependencies. This is not an independent license or security audit.
 

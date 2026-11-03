@@ -4,8 +4,7 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 
 | Package | Version | Declared expression | Selected terms |
 |---|---|---|---|
-| ab_glyph | 0.2.32 | Apache-2.0 | Apache-2.0 |
-| ab_glyph_rasterizer | 0.1.10 | Apache-2.0 | Apache-2.0 |
+| accesskit | 0.25.2 | MIT OR Apache-2.0 | MIT |
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 | 0BSD |
 | ahash | 0.8.12 | MIT OR Apache-2.0 | MIT |
 | android-activity | 0.6.1 | MIT OR Apache-2.0 | MIT |
@@ -22,12 +21,13 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT | Apache-2.0 |
 | autocfg | 1.5.1 | Apache-2.0 OR MIT | Apache-2.0 |
 | base64 | 0.22.1 | MIT OR Apache-2.0 | MIT |
-| bit-set | 0.8.0 | Apache-2.0 OR MIT | Apache-2.0 |
-| bit-vec | 0.8.0 | Apache-2.0 OR MIT | Apache-2.0 |
+| bit-set | 0.10.0 | Apache-2.0 OR MIT | Apache-2.0 |
+| bit-vec | 0.9.1 | Apache-2.0 OR MIT | Apache-2.0 |
 | bitflags | 1.3.2 | MIT/Apache-2.0 | MIT |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 | MIT |
 | blake3 | 1.8.7 | CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception | CC0-1.0 |
 | block2 | 0.5.1 | MIT | MIT |
+| block2 | 0.6.2 | MIT | MIT |
 | bumpalo | 3.20.3 | MIT OR Apache-2.0 | MIT |
 | bytemuck | 1.25.2 | Zlib OR Apache-2.0 OR MIT | Zlib |
 | bytemuck_derive | 1.12.1 | Zlib OR Apache-2.0 OR MIT | Zlib |
@@ -46,8 +46,9 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | clap_builder | 4.6.7 | MIT OR Apache-2.0 | MIT |
 | clap_derive | 4.6.7 | MIT OR Apache-2.0 | MIT |
 | clap_lex | 1.1.1 | MIT OR Apache-2.0 | MIT |
-| clipboard-win | 5.4.1 | BSL-1.0 | BSL-1.0 |
-| codespan-reporting | 0.12.0 | Apache-2.0 | Apache-2.0 |
+| clipboard-win | 5.4.3 | BSL-1.0 | BSL-1.0 |
+| codespan-reporting | 0.13.1 | Apache-2.0 | Apache-2.0 |
+| color | 0.3.3 | Apache-2.0 OR MIT | Apache-2.0 |
 | colorchoice | 1.0.5 | MIT OR Apache-2.0 | MIT |
 | combine | 4.6.9 | MIT | MIT |
 | concurrent-queue | 2.5.0 | Apache-2.0 OR MIT | Apache-2.0 |
@@ -64,32 +65,38 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | deranged | 0.5.9 | MIT OR Apache-2.0 | MIT |
 | dispatch | 0.2.0 | MIT | MIT |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT | Zlib |
-| displaydoc | 0.2.7 | MIT OR Apache-2.0 | MIT |
 | dlib | 0.5.3 | MIT | MIT |
 | document-features | 0.2.12 | MIT OR Apache-2.0 | MIT |
 | downcast-rs | 1.2.1 | MIT/Apache-2.0 | MIT |
 | dpi | 0.1.2 | Apache-2.0 AND MIT | Apache-2.0 AND MIT |
-| ecolor | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| eframe | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| egui | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| egui-wgpu | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| egui-winit | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| egui_glow | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| emath | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| epaint | 0.33.3 | MIT OR Apache-2.0 | MIT |
-| epaint_default_fonts | 0.33.3 | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 | MIT AND OFL-1.1 AND Ubuntu-font-1.0 |
+| ecolor | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| eframe | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| egui | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| egui-wgpu | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| egui-winit | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| egui_glow | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| either | 1.19.0 | MIT OR Apache-2.0 | MIT |
+| emath | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| epaint | 0.37.0 | MIT OR Apache-2.0 | MIT |
+| epaint_default_fonts | 0.37.0 | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 | MIT AND OFL-1.1 AND Ubuntu-font-1.0 |
 | equivalent | 1.0.3 | Apache-2.0 OR MIT | Apache-2.0 |
 | errno | 0.3.14 | MIT OR Apache-2.0 | MIT |
 | error-code | 3.4.0 | BSL-1.0 | BSL-1.0 |
+| euclid | 0.22.14 | MIT OR Apache-2.0 | MIT |
+| fastrand | 2.5.0 | Apache-2.0 OR MIT | Apache-2.0 |
 | fax | 0.2.7 | MIT | MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | MIT |
+| fearless_simd | 0.4.1 | Apache-2.0 OR MIT | Apache-2.0 |
 | find-msvc-tools | 0.1.15 | MIT OR Apache-2.0 | MIT |
+| fixedbitset | 0.5.7 | MIT OR Apache-2.0 | MIT |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 | MIT |
+| flume | 0.12.0 | Apache-2.0/MIT | Apache-2.0 |
+| foldhash | 0.1.5 | Zlib | Zlib |
 | foldhash | 0.2.0 | Zlib | Zlib |
+| font-types | 0.12.7 | MIT OR Apache-2.0 | MIT |
 | foreign-types | 0.5.0 | MIT/Apache-2.0 | MIT |
 | foreign-types-macros | 0.2.4 | MIT/Apache-2.0 | MIT |
 | foreign-types-shared | 0.3.1 | MIT/Apache-2.0 | MIT |
-| form_urlencoded | 1.2.2 | MIT OR Apache-2.0 | MIT |
 | futures-core | 0.3.34 | MIT OR Apache-2.0 | MIT |
 | futures-task | 0.3.34 | MIT OR Apache-2.0 | MIT |
 | futures-util | 0.3.34 | MIT OR Apache-2.0 | MIT |
@@ -98,30 +105,25 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | getrandom | 0.3.4 | MIT OR Apache-2.0 | MIT |
 | getrandom | 0.4.3 | MIT OR Apache-2.0 | MIT |
 | gl_generator | 0.14.0 | Apache-2.0 | Apache-2.0 |
-| glow | 0.16.0 | MIT OR Apache-2.0 OR Zlib | MIT |
+| glifo | 0.3.0 | Apache-2.0 OR MIT | Apache-2.0 |
+| glow | 0.17.0 | MIT OR Apache-2.0 OR Zlib | MIT |
 | glutin | 0.32.3 | Apache-2.0 | Apache-2.0 |
 | glutin-winit | 0.5.0 | MIT | MIT |
 | glutin_egl_sys | 0.7.1 | Apache-2.0 | Apache-2.0 |
 | glutin_glx_sys | 0.6.1 | Apache-2.0 | Apache-2.0 |
 | glutin_wgl_sys | 0.6.1 | Apache-2.0 | Apache-2.0 |
+| guillotiere | 0.7.0 | MIT/Apache-2.0 | MIT |
 | half | 2.7.1 | MIT OR Apache-2.0 | MIT |
-| hashbrown | 0.16.1 | MIT OR Apache-2.0 | MIT |
+| harfrust | 0.12.0 | MIT | MIT |
+| hashbrown | 0.15.5 | MIT OR Apache-2.0 | MIT |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 | MIT |
 | heck | 0.5.0 | MIT OR Apache-2.0 | MIT |
 | hermit-abi | 0.5.3 | MIT OR Apache-2.0 | MIT |
-| hexf-parse | 0.2.1 | CC0-1.0 | CC0-1.0 |
-| icu_collections | 2.3.0 | Unicode-3.0 | Unicode-3.0 |
-| icu_locale_core | 2.3.0 | Unicode-3.0 | Unicode-3.0 |
-| icu_normalizer | 2.3.0 | Unicode-3.0 | Unicode-3.0 |
-| icu_normalizer_data | 2.3.0 | Unicode-3.0 | Unicode-3.0 |
-| icu_properties | 2.3.0 | Unicode-3.0 | Unicode-3.0 |
-| icu_properties_data | 2.3.0 | Unicode-3.0 | Unicode-3.0 |
-| icu_provider | 2.3.1 | Unicode-3.0 | Unicode-3.0 |
-| idna | 1.1.0 | MIT OR Apache-2.0 | MIT |
-| idna_adapter | 1.2.2 | Apache-2.0 OR MIT | Apache-2.0 |
+| if-addrs | 0.15.0 | MIT OR BSD-3-Clause | MIT |
 | image | 0.25.10 | MIT OR Apache-2.0 | MIT |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT | Apache-2.0 |
 | is_terminal_polyfill | 1.70.2 | MIT OR Apache-2.0 | MIT |
+| itertools | 0.15.0 | MIT OR Apache-2.0 | MIT |
 | itoa | 1.0.18 | MIT OR Apache-2.0 | MIT |
 | jni | 0.22.4 | MIT OR Apache-2.0 | MIT |
 | jni-macros | 0.22.4 | MIT OR Apache-2.0 | MIT |
@@ -131,29 +133,32 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | jobserver | 0.1.35 | MIT OR Apache-2.0 | MIT |
 | js-sys | 0.3.106 | MIT OR Apache-2.0 | MIT |
 | khronos_api | 3.1.0 | Apache-2.0 | Apache-2.0 |
+| kurbo | 0.13.1 | Apache-2.0 OR MIT | Apache-2.0 |
 | libc | 0.2.191 | MIT OR Apache-2.0 | MIT |
 | libloading | 0.8.9 | ISC | ISC |
 | libm | 0.2.16 | MIT | MIT |
 | libredox | 0.1.25 | MIT | MIT |
+| linebender_resource_handle | 0.1.1 | Apache-2.0 OR MIT | Apache-2.0 |
 | linux-raw-sys | 0.12.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Apache-2.0 WITH LLVM-exception |
 | linux-raw-sys | 0.4.15 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Apache-2.0 WITH LLVM-exception |
-| litemap | 0.8.3 | Unicode-3.0 | Unicode-3.0 |
 | litrs | 1.0.1 | MIT OR Apache-2.0 | MIT |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 | MIT |
 | log | 0.4.34 | MIT OR Apache-2.0 | MIT |
 | lru-slab | 0.1.3 | MIT OR Apache-2.0 OR Zlib | MIT |
+| mdns-sd | 0.21.7 | Apache-2.0 OR MIT | Apache-2.0 |
 | memchr | 2.8.3 | Unlicense OR MIT | Unlicense |
 | memmap2 | 0.9.12 | MIT OR Apache-2.0 | MIT |
-| memoffset | 0.9.1 | MIT | MIT |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | MIT |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | MIT |
 | mio | 1.2.4 | MIT | MIT |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 | BSD-3-Clause |
-| naga | 27.0.3 | MIT OR Apache-2.0 | MIT |
+| naga | 30.0.1 | MIT OR Apache-2.0 | MIT |
+| naga-types | 30.0.1 | MIT OR Apache-2.0 | MIT |
 | ndk | 0.9.0 | MIT OR Apache-2.0 | MIT |
 | ndk-context | 0.1.1 | MIT OR Apache-2.0 | MIT |
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 | MIT |
 | nohash-hasher | 0.2.0 | Apache-2.0 OR MIT | Apache-2.0 |
+| nom | 8.0.0 | MIT | MIT |
 | num-conv | 0.2.2 | MIT OR Apache-2.0 | MIT |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 | MIT |
 | num_enum | 0.7.6 | BSD-3-Clause OR MIT OR Apache-2.0 | BSD-3-Clause |
@@ -179,16 +184,19 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | objc2-quartz-core | 0.2.2 | MIT | MIT |
 | objc2-symbols | 0.2.2 | MIT | MIT |
 | objc2-ui-kit | 0.2.2 | MIT | MIT |
+| objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | Zlib |
 | objc2-uniform-type-identifiers | 0.2.2 | MIT | MIT |
 | objc2-user-notifications | 0.2.2 | MIT | MIT |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 | MIT |
 | once_cell_polyfill | 1.70.2 | MIT OR Apache-2.0 | MIT |
 | orbclient | 0.3.55 | MIT | MIT |
-| owned_ttf_parser | 0.25.1 | Apache-2.0 | Apache-2.0 |
+| os_pipe | 1.2.3 | MIT | MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 | MIT |
 | parking_lot_core | 0.9.12 | MIT OR Apache-2.0 | MIT |
 | pem | 3.0.6 | MIT | MIT |
+| peniko | 0.6.1 | Apache-2.0 OR MIT | Apache-2.0 |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 | MIT |
+| petgraph | 0.8.3 | MIT OR Apache-2.0 | MIT |
 | pin-project | 1.1.13 | Apache-2.0 OR MIT | Apache-2.0 |
 | pin-project-internal | 1.1.13 | Apache-2.0 OR MIT | Apache-2.0 |
 | pin-project-lite | 0.2.17 | Apache-2.0 OR MIT | Apache-2.0 |
@@ -196,9 +204,9 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | plain | 0.2.3 | MIT/Apache-2.0 | MIT |
 | png | 0.18.1 | MIT OR Apache-2.0 | MIT |
 | polling | 3.11.0 | Apache-2.0 OR MIT | Apache-2.0 |
+| polycool | 0.4.0 | MIT OR Apache-2.0 | MIT |
 | portable-atomic | 1.15.0 | Apache-2.0 OR MIT | Apache-2.0 |
 | portable-atomic-util | 0.2.8 | Apache-2.0 OR MIT | Apache-2.0 |
-| potential_utf | 0.1.6 | Unicode-3.0 | Unicode-3.0 |
 | powerfmt | 0.2.1 | MIT OR Apache-2.0 | MIT |
 | proc-macro-crate | 3.5.0 | MIT OR Apache-2.0 | MIT |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 | MIT |
@@ -217,6 +225,7 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | rand_pcg | 0.10.2 | MIT OR Apache-2.0 | MIT |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | MIT |
 | rcgen | 0.13.2 | MIT OR Apache-2.0 | MIT |
+| read-fonts | 0.41.0 | MIT OR Apache-2.0 | MIT |
 | redox_syscall | 0.4.1 | MIT | MIT |
 | redox_syscall | 0.5.18 | MIT | MIT |
 | redox_syscall | 0.9.5 | MIT | MIT |
@@ -234,7 +243,9 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | same-file | 1.0.6 | Unlicense/MIT | Unlicense |
 | scoped-tls | 1.0.1 | MIT/Apache-2.0 | MIT |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 | MIT |
+| self_cell | 1.3.0 | Apache-2.0 OR GPL-2.0-only | Apache-2.0 |
 | semver | 1.0.28 | MIT OR Apache-2.0 | MIT |
+| send_wrapper | 0.6.0 | MIT/Apache-2.0 | MIT |
 | serde | 1.0.229 | MIT OR Apache-2.0 | MIT |
 | serde_core | 1.0.229 | MIT OR Apache-2.0 | MIT |
 | serde_derive | 1.0.229 | MIT OR Apache-2.0 | MIT |
@@ -244,6 +255,7 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | simd-adler32 | 0.3.10 | MIT | MIT |
 | simd_cesu8 | 1.2.0 | Apache-2.0 OR MIT | Apache-2.0 |
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 | MIT |
+| skrifa | 0.44.0 | MIT OR Apache-2.0 | MIT |
 | slab | 0.4.12 | MIT | MIT |
 | slotmap | 1.1.1 | Zlib | Zlib |
 | smallvec | 1.16.3 | MIT OR Apache-2.0 | MIT |
@@ -251,14 +263,14 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | smithay-client-toolkit | 0.20.0 | MIT | MIT |
 | smithay-clipboard | 0.7.3 | MIT | MIT |
 | smol_str | 0.2.2 | MIT OR Apache-2.0 | MIT |
+| socket-pktinfo | 0.4.1 | MIT | MIT |
 | socket2 | 0.6.5 | MIT OR Apache-2.0 | MIT |
-| stable_deref_trait | 1.2.1 | MIT OR Apache-2.0 | MIT |
+| spin | 0.9.9 | MIT | MIT |
 | static_assertions | 1.1.0 | MIT OR Apache-2.0 | MIT |
 | strsim | 0.11.1 | MIT | MIT |
 | subtle | 2.6.1 | BSD-3-Clause | BSD-3-Clause |
 | syn | 2.0.119 | MIT OR Apache-2.0 | MIT |
 | syn | 3.0.9 | MIT OR Apache-2.0 | MIT |
-| synstructure | 0.14.0 | MIT | MIT |
 | thiserror | 1.0.69 | MIT OR Apache-2.0 | MIT |
 | thiserror | 2.0.21 | MIT OR Apache-2.0 | MIT |
 | thiserror-impl | 1.0.69 | MIT OR Apache-2.0 | MIT |
@@ -266,7 +278,6 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | tiff | 0.11.3 | MIT | MIT |
 | time | 0.3.55 | MIT OR Apache-2.0 | MIT |
 | time-core | 0.1.9 | MIT OR Apache-2.0 | MIT |
-| tinystr | 0.8.4 | Unicode-3.0 | Unicode-3.0 |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT | Zlib |
 | tokio | 1.54.1 | MIT | MIT |
 | tokio-macros | 2.7.2 | MIT | MIT |
@@ -275,15 +286,18 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | toml_parser | 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | MIT |
 | tracing | 0.1.44 | MIT | MIT |
 | tracing-core | 0.1.36 | MIT | MIT |
-| ttf-parser | 0.25.1 | MIT OR Apache-2.0 | MIT |
+| tree_magic_mini | 3.2.2 | MIT | MIT |
 | type-map | 0.5.1 | MIT/Apache-2.0 | MIT |
+| unicode-general-category | 1.1.0 | Apache-2.0 | Apache-2.0 |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | MIT AND Unicode-3.0 |
+| unicode-properties | 0.1.5 | (MIT OR Apache-2.0) AND Unicode-3.0 | MIT AND Unicode-3.0 |
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 | MIT |
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 | MIT |
 | untrusted | 0.9.0 | ISC | ISC |
-| url | 2.5.8 | MIT OR Apache-2.0 | MIT |
-| utf8_iter | 1.0.4 | Apache-2.0 OR MIT | Apache-2.0 |
 | utf8parse | 0.2.2 | Apache-2.0 OR MIT | Apache-2.0 |
+| uuid | 1.29.0 | Apache-2.0 OR MIT | Apache-2.0 |
+| vello_common | 0.2.0 | Apache-2.0 OR MIT | Apache-2.0 |
+| vello_cpu | 0.2.0 | Apache-2.0 OR MIT | Apache-2.0 |
 | version_check | 0.9.5 | MIT/Apache-2.0 | MIT |
 | walkdir | 2.5.0 | Unlicense/MIT | Unlicense |
 | wasi | 0.11.1+wasi-snapshot-preview1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Apache-2.0 WITH LLVM-exception |
@@ -306,13 +320,13 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | wayland-sys | 0.31.11 | MIT | MIT |
 | web-sys | 0.3.106 | MIT OR Apache-2.0 | MIT |
 | web-time | 1.1.0 | MIT OR Apache-2.0 | MIT |
-| webbrowser | 1.2.4 | MIT OR Apache-2.0 | MIT |
 | weezl | 0.1.12 | MIT OR Apache-2.0 | MIT |
-| wgpu | 27.0.1 | MIT OR Apache-2.0 | MIT |
-| wgpu-core | 27.0.3 | MIT OR Apache-2.0 | MIT |
-| wgpu-core-deps-windows-linux-android | 27.0.0 | MIT OR Apache-2.0 | MIT |
-| wgpu-hal | 27.0.4 | MIT OR Apache-2.0 | MIT |
-| wgpu-types | 27.0.1 | MIT OR Apache-2.0 | MIT |
+| wgpu | 30.0.1 | MIT OR Apache-2.0 | MIT |
+| wgpu-core | 30.0.1 | MIT OR Apache-2.0 | MIT |
+| wgpu-core-deps-windows-linux-android | 30.0.1 | MIT OR Apache-2.0 | MIT |
+| wgpu-hal | 30.0.1 | MIT OR Apache-2.0 | MIT |
+| wgpu-naga-bridge | 30.0.1 | MIT OR Apache-2.0 | MIT |
+| wgpu-types | 30.0.1 | MIT OR Apache-2.0 | MIT |
 | winapi-util | 0.1.11 | Unlicense OR MIT | Unlicense |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 | MIT |
 | windows-sys | 0.52.0 | MIT OR Apache-2.0 | MIT |
@@ -329,7 +343,7 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | winit | 0.30.13 | Apache-2.0 | Apache-2.0 |
 | winnow | 1.0.4 | MIT | MIT |
 | wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | Apache-2.0 WITH LLVM-exception |
-| writeable | 0.6.4 | Unicode-3.0 | Unicode-3.0 |
+| wl-clipboard-rs | 0.9.5 | MIT OR Apache-2.0 | MIT |
 | x11-dl | 2.21.0 | MIT | MIT |
 | x11rb | 0.13.2 | MIT OR Apache-2.0 | MIT |
 | x11rb-protocol | 0.13.2 | MIT OR Apache-2.0 | MIT |
@@ -338,16 +352,9 @@ Generated from locked Cargo metadata. Includes platform-specific dependencies; n
 | xkeysym | 0.2.1 | MIT OR Apache-2.0 OR Zlib | MIT |
 | xml-rs | 0.8.29 | MIT | MIT |
 | yasna | 0.5.2 | MIT OR Apache-2.0 | MIT |
-| yoke | 0.8.3 | Unicode-3.0 | Unicode-3.0 |
-| yoke-derive | 0.8.4 | Unicode-3.0 | Unicode-3.0 |
 | zerocopy | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT | BSD-2-Clause |
 | zerocopy-derive | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT | BSD-2-Clause |
-| zerofrom | 0.1.8 | Unicode-3.0 | Unicode-3.0 |
-| zerofrom-derive | 0.1.8 | Unicode-3.0 | Unicode-3.0 |
 | zeroize | 1.9.1 | Apache-2.0 OR MIT | Apache-2.0 |
-| zerotrie | 0.2.5 | Unicode-3.0 | Unicode-3.0 |
-| zerovec | 0.11.8 | Unicode-3.0 | Unicode-3.0 |
-| zerovec-derive | 0.11.6 | Unicode-3.0 | Unicode-3.0 |
 | zlib-rs | 0.6.8 | Zlib | Zlib |
 | zmij | 1.0.23 | MIT | MIT |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | MIT |

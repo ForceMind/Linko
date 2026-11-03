@@ -3,7 +3,7 @@ name = "peerglide-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version = "1.89"
+rust-version = "1.95"
 [[bin]]
 name = "peerglide-gui"
 path = "src/main.rs"
@@ -17,4 +17,4 @@ peerglide-actions.workspace = true
 peerglide-discovery.workspace = true
 peerglide-transport.workspace = true
 peerglide-gestures.workspace = true
-eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "clipboard", "glow", "x11", "wayland"] }
