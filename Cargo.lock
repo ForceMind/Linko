@@ -1857,6 +1857,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "peerglide-gestures"
+version = "0.1.0-dev"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "peerglide-gui"
 version = "0.1.0-dev"
 dependencies = [

@@ -3,6 +3,9 @@
 G01's isolated semantic preflight library is documented in [ACTIONS.md](ACTIONS.md).
 It is not wired into capture or desktop execution and introduces no wire protocol.
 
+G02's isolated direction-preserving recognizer is documented in [GESTURES.md](GESTURES.md).
+Its bounded collector and synthetic corpus do not enable native interception.
+
 `peerglide-protocol`: messages, bounded decode, USB HID vocabulary.
 `peerglide-core`: receiver-authoritative lease, pressed input tracking, motion
 sequence filtering, edge gate. `peerglide-transport`: identities, QUIC/TLS, exact

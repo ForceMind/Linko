@@ -209,3 +209,26 @@ G01 local fail-fast checks passed: fmt, 56 Linux workspace tests, strict workspa
 Clippy, Debug build, managed two-process smoke and reconnect/pin-swap/backoff-stop
 smoke. No new external dependency was added; Cargo.lock registers the new workspace
 crate using existing Serde dependencies.
+
+
+## G02 bounded pure recognition (2026-11-03)
+
+G01 final candidate `23fee47002e59890e489730bf3eaa74b367325d3` passed three-platform
+run 41394743671, merged as `99245e3adf4830535b0852dd64d1352b599ea383` with identical
+tree; main run 41395302222 also passed. Native action execution remains absent.
+
+G02 adds direction/order-preserving arc-length matching, distinct-ID ambiguity
+rejection, finite configuration/coordinates, duration/length/sample/template bounds
+and a consuming collector that poisons cancelled/invalid/overflowed candidates.
+Its 9 regression tests plus the previous workspace tests passed locally (65 total),
+with fmt, strict Clippy, Debug build and real managed/reconnect/pin-swap/stop process
+smokes. A literal fixture has 8 synthetic positives and 8 negatives; fixed seed
+0x504720261103 adds 512 positives (512 correct, 0 wrong/rejected) and 512 selected
+negatives (0 matches). These are synthetic regression results, not human accuracy,
+physical mouse-rate/DPI acceptance or dangerous-action misexecution measurements.
+The straight-drag test deliberately matches: input intent needs G03 arbitration.
+
+Complete native CI on the final G02 candidate is a separate gate. No binary uses
+this recognizer, no input hook or action execution is added, network stays v5.
+The planned 800 human positive / 2,000 human negative recordings and real Win/Mac
+C06 acceptance remain pending. See GESTURES.md for scope, limits and reproduction.
