@@ -3,3 +3,6 @@
 *.key.der
 /identity/
 *.log
+
+__pycache__/
+*.py[cod]

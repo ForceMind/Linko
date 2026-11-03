@@ -406,3 +406,8 @@ Local Rust 1.95.0 workspace/all-target locked check passed after the Windows cfg
 fix. The local preflight now includes the Python notice regressions and license
 screen; optional --audit requires an already installed cargo-audit and never installs
 one. Its final candidate full checks remain separate from physical acceptance.
+
+Final handoff hygiene: ignore generated Python bytecode, disable it for local
+notice checks, and describe Cargo build/cache writes accurately in preflight help.
+ROADMAP now reflects #27–#30 and the isolated D03 foundation, preserving all
+physical gates and genuinely unimplemented product features.

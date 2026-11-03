@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local Codex preflight. No installs, native capture, privilege changes or uploads.
-Writes only a new run directory under --output-root (default: target/local-validation).
+Writes a new report under --output-root (default: target/local-validation);
+Cargo also writes its normal build/cache outputs. Python bytecode is disabled.
 Passing this script never implies real-desktop acceptance.
 """
 import argparse
@@ -48,8 +49,8 @@ def main():
         ("fmt", ["cargo", "fmt", "--all", "--", "--check"]),
         ("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]),
         ("tests", ["cargo", "test", "--workspace", "--locked"]),
-        ("notice_tests", [sys.executable, "-m", "unittest", "discover", "-s", "tools", "-p", "test_third_party.py"]),
-        ("license_screen", [sys.executable, "tools/third_party.py"]),
+        ("notice_tests", [sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools", "-p", "test_third_party.py"]),
+        ("license_screen", [sys.executable, "-B", "tools/third_party.py"]),
         ("build", ["cargo", "build", "--workspace", "--locked"]),
         ("probe_smoke", [sys.executable, "tools/smoke.py", str(binary)]),
         ("reconnect_smoke", [sys.executable, "tools/reconnect_smoke.py", str(binary)]),
