@@ -41,13 +41,20 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     folder = pathlib.Path(temporary) / "peerglide" / "gesture-samples"
                     assert not folder.exists(), "recording must not autosave"
                     subprocess.run(["xdotool", "mousemove", "--window", window, "240", "440", "click", "1"], check=True)
+                    sample = None
                     for _ in range(30):
                         files = list(folder.glob("*.json"))
-                        if files:
-                            break
+                        if len(files) == 1:
+                            # Wait for asynchronous GUI I/O completion, not just
+                            # directory entry creation. Persistent bad JSON fails.
+                            try:
+                                sample = json.loads(files[0].read_text())
+                                break
+                            except (FileNotFoundError, json.JSONDecodeError):
+                                pass
                         time.sleep(0.1)
                     assert len(files) == 1, "Save must create one labelled sample"
-                    sample = json.loads(files[0].read_text())
+                    assert sample is not None, "Save did not complete a valid JSON sample"
                     assert sample["source"] == "egui_canvas" and sample["schema_version"] == 1
                     assert sample["expected_id"] is None, "default label must not follow recognition"
                     points = sample["samples"]
