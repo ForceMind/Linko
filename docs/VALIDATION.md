@@ -293,3 +293,20 @@ and frame-clock elapsed time; they do not prove hardware polling/DPI acceptance.
 No human corpus was collected, and 800/2000 human and C06 gates remain pending.
 G04 overall is implementing: global offline worker, broker, overlays, app rules
 and config migration are not delivered. See GESTURE_LAB.md for user workflow.
+
+
+## Cloud foundation continuation (2026-11-03)
+
+Local fmt/strict Clippy, 90 workspace tests, Debug build and process smokes pass.
+G03 ownership is a worker/reference model; native callback integration is absent.
+Rules have exact-ID specificity/exclusions and compile-time conflict rejection.
+GUI rule editing/preview, versioned configuration, byte-exact backups, reset,
+cooperating-writer hash checks/OS locks and a single-GUI guard are implemented.
+Changing the peer clears the old input grant. See CLOUD_FOUNDATION.md for bounds.
+
+A parallel test exposed inherited/duplicated file descriptors retaining a lock
+after the original File dropped. Explicit unlock in RAII guard fixes it; the
+regression retains a cloned descriptor while reacquiring, without retries. The
+previous persistence-failure test now injects an invalid settings.json directory
+instead of obsolete fixed settings.tmp; the failure/denial contract is preserved.
+Native CI/real UI/focus and hardware remain separate gates; no root-cause claim #10.

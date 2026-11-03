@@ -196,6 +196,9 @@ impl Stroke<'_> {
 }
 
 impl Recognizer {
+    pub fn config(&self) -> Config {
+        self.config
+    }
     pub fn stroke(&self) -> Stroke<'_> {
         Stroke {
             recognizer: self,

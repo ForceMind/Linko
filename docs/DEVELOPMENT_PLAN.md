@@ -84,8 +84,8 @@ runtime evidence and historical failures are in VALIDATION.md.
 | P01 | implementing | Bounded material loads, key-pair and exact enrollment-intent checks; OS storage/ACL and independent grants pending |
 | G01 | implementing | Pure local action schema/capability/context preflight and tests; no native execution or gesture hook |
 | G02 | implementing | Bounded direction-preserving logic and synthetic corpus; human corpus/physical accuracy remain pending |
-| G03 | planned | Native interception remains gated by C06; no shared gesture broker enabled |
-| G04 | implementing | Independent offline canvas lab and opt-in labelled exports; global worker/overlay/rules/migration pending |
+| G03 | implementing | Pure ownership/cancellation/edge model tested; native callback/queue wiring and C06 remain pending |
+| G04 | implementing | Offline lab, exact app-rule editor/preview, versioned settings with backup/recovery; native app IDs/global worker/overlay pending |
 
 
 Protocol v5 is the current development baseline; both peers must update. The v3

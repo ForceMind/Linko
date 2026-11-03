@@ -532,3 +532,4 @@ mod terminal_cursor_tests {
         assert_eq!(r.finish(1, None, 3).unwrap().releases.len(), 1);
     }
 }
+pub mod gesture_broker;

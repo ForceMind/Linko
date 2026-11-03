@@ -3,6 +3,7 @@ name = "peerglide-gui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version = "1.89"
 [[bin]]
 name = "peerglide-gui"
 path = "src/main.rs"
@@ -11,6 +12,8 @@ peerglide-protocol.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+blake3.workspace = true
+peerglide-actions.workspace = true
 peerglide-transport.workspace = true
 peerglide-gestures.workspace = true
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
