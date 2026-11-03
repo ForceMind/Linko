@@ -3,6 +3,9 @@ name = "peerglide-gestures"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+[[example]]
+name = "evaluate"
+test = true
 
 [dev-dependencies]
 serde.workspace = true

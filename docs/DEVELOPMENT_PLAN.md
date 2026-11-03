@@ -82,7 +82,7 @@ runtime evidence and historical failures are in VALIDATION.md.
 | C05 | implementing | v4 reliable terminal cursor + cleanup/expiry regressions; physical fault acceptance pending |
 | C06 | blocked | No authorized physical Windows/macOS desktop pair in this environment |
 | P01 | implementing | Bounded material loads, key-pair and exact enrollment-intent checks; OS storage/ACL and independent grants pending |
-| G01 | implementing | Pure local action schema/capability/context preflight and tests; no native execution or gesture hook |
+| G01 | implementing | Local action/rule/preflight/result coordinator tested; native Backend and global capture remain absent |
 | G02 | implementing | Bounded direction-preserving logic and synthetic corpus; human corpus/physical accuracy remain pending |
 | G03 | implementing | Pure ownership/cancellation/edge model tested; native callback/queue wiring and C06 remain pending |
 | G04 | implementing | Offline lab, exact app-rule editor/preview, versioned settings with backup/recovery; native app IDs/global worker/overlay pending |

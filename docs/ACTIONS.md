@@ -63,3 +63,13 @@ two-computer acceptance. Physical acceptance #3 and historical macOS root cause
 
 G02 now has an isolated pure recognizer and synthetic corpus; see [GESTURES.md](GESTURES.md).
 It does not execute these actions or establish real-user gesture acceptance.
+
+`execution::Coordinator` now provides a bounded local request/result contract.
+It uses the same preflight, a maximum 5-second lifetime, up to 128 live retained
+results and no automatic replay. Same ID/body returns historical status; changed
+body rejects. UnknownOutcome remains unknown; Submitted is only OS submission,
+not application completion. Expired retention can be pruned, so this is not
+cross-process or remote exactly-once delivery. Backend is a trait with mock tests;
+no native backend is instantiated and remote requests still reject. Native
+implementations must revalidate the OS target/permissions at dispatch and clean
+up only their owned ActionInjected state. This is not a G2 protocol or grant.
