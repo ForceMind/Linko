@@ -16,7 +16,7 @@ See [validation](docs/VALIDATION.md).
 
 Primary-display switching, basic HID keys, three mouse buttons and scrolling
 form the initial native prototype. Multi-monitor topology, IME composition,
-clipboard, files, mDNS, pairing codes, tray and signed installers are
+clipboard, files, pairing codes, tray and signed installers are
 not implemented in this milestone. A native eframe control panel provides
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
@@ -26,6 +26,11 @@ recognition/rejection and explicitly save labelled samples. Open it in the sideb
 or run `peerglide-gui --gesture-lab`; no pairing or input permissions are needed.
 This is a test/recording page, not global mouse gestures or action execution.
 See [gesture lab](docs/GESTURE_LAB.md) for scope and privacy.
+
+Devices also offers opt-in IPv4 LAN discovery. Results are unauthenticated hints;
+selecting an address never grants trust/control. Public listener advertisement is
+explicit and separate. Actual multicast/permission acceptance is pending; see
+[discovery](docs/DISCOVERY.md).
 
 ## Build
 

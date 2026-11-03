@@ -1,5 +1,8 @@
 # Architecture
 
+[Discovery](DISCOVERY.md) is an opt-in untrusted-hint module, isolated from pinned
+TLS identity and input grants. It never authorizes or automatically connects.
+
 [Cloud foundations](CLOUD_FOUNDATION.md) specify the G03 ownership model, exact
 local rules and versioned GUI persistence. No native gesture hook/action is enabled.
 

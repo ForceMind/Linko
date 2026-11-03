@@ -63,3 +63,13 @@ cargo metadata. Rustls/Quinn/Tokio/Serde/rcgen, BLAKE3, clap and windows-sys do 
 inherit licenses from these reference apps. Transitive dependencies, bundled
 native code and their notices require separate distribution review. Dependency
 metadata is a screening aid, not a substitute for inspecting shipped notices.
+
+
+## mDNS implementation dependency
+
+`mdns-sd` 0.21.7 (https://github.com/keepsimple1/mdns-sd), licensed Apache-2.0 OR MIT
+per locked published Cargo metadata, is linked with default features disabled.
+API behavior reviewed at https://docs.rs/mdns-sd/0.21.7/mdns_sd/ and local published
+source; no reference GPL implementation was copied. Discovery hints never establish
+trust; collector/notice screening includes the dependency. See DISCOVERY.md for
+actual bounded hint policy and unresolved daemon-cache/network acceptance limits.

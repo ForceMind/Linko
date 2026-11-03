@@ -329,3 +329,21 @@ evaluates an explicitly saved canvas sample rather than only reading JSON.
 Final native CI/GUI smoke for this candidate is a separate gate. No real OS action
 backend, human corpus or full-product acceptance is claimed. See LOCAL_CODEX_HANDOFF.zh-CN.md
 for current verified work, native wiring, and genuinely unimplemented later software.
+
+
+Action/evaluator/preflight candidate d3875b8b8dfa473031bc396960fa868145eab32b passed
+complete three-platform CI run 41589355999, merged as
+7d79094cb9808b6fb9d434900bb656bec77b7800 with identical tested tree. Linux GUI smoke
+actually exported its canvas sample and the offline evaluator reported the expected
+negative-labelled false match. No human or native acceptance was inferred.
+
+## P02 opt-in untrusted discovery
+
+Local preflight (100 tests), strict Clippy, Debug build and real process smokes
+passed. Allowed-expression/notice screening passes for 354 locked dependencies.
+New source includes bounded IPv4 LAN hints, explicit public listener advertisement,
+async error/stop handling and GUI address-only selection without authority change.
+No-interface daemon lifecycle is tested without publication/query. macOS package
+contains Bonjour/local-network purpose keys; actual OS prompts are unverified.
+Cross-host multicast/NIC/firewall/sleep and daemon-cache flood acceptance remain
+pending. Final native matrix is a separate gate; see DISCOVERY.md.

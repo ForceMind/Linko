@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod config_store;
+mod discovery_panel;
 mod gesture_lab;
 mod gesture_rules;
 use anyhow::{Context, Result};
@@ -105,6 +106,7 @@ impl WorkerSnapshot {
     }
 }
 struct App {
+    discovery: discovery_panel::Panel,
     gesture_lab: gesture_lab::GestureLab,
     gesture_rules: gesture_rules::RuleEditor,
     dir: PathBuf,
@@ -148,6 +150,7 @@ impl App {
                 }
             };
         let mut app = Self {
+            discovery: discovery_panel::Panel::default(),
             gesture_lab: gesture_lab::GestureLab::new(&dir),
             gesture_rules: gesture_rules::RuleEditor::new(&dir),
             dir,
@@ -200,6 +203,15 @@ impl App {
         Identity::load(&self.identity_dir())
             .ok()
             .map(|i| i.fingerprint())
+    }
+    fn use_discovery_address(&mut self, address: std::net::SocketAddr) -> Result<()> {
+        anyhow::ensure!(
+            self.child.is_none() && self.instance_lock.is_some(),
+            "stop the session before changing its address"
+        );
+        self.config.address = address.to_string();
+        self.config.listen = false;
+        self.save_config()
     }
     fn candidate(&self) -> Result<Vec<u8>> {
         transport::read_certificate(std::path::Path::new(self.import_path.trim()))
@@ -363,6 +375,8 @@ impl App {
         self.save_config().context("persist revoked peer trust")
     }
     fn poll(&mut self) {
+        self.discovery
+            .poll(self.child.is_some() && self.stopping.is_none() && self.config.listen);
         if let Some(rx) = &self.events {
             while let Ok(line) = rx.try_recv() {
                 self.logs.push_back(line);
@@ -537,6 +551,20 @@ impl App {
             "Trusted devices",
             "Trust is explicit. Discovery and LAN access never authorize control.",
         );
+        let own = self.local_fingerprint();
+        if let Some(address) = self.discovery.ui(
+            ui,
+            own,
+            self.child.is_some() && self.stopping.is_none() && self.config.listen,
+            self.child.is_none(),
+            self.instance_lock.is_some(),
+        ) {
+            let result = self.use_discovery_address(address);
+            self.feedback(
+                result,
+                "Address selected only; certificate enrollment and input permission are unchanged",
+            );
+        }
         ui.strong("This computer");
         if let Some(fp) = self.local_fingerprint() {
             ui.label("Public certificate");
@@ -1095,6 +1123,22 @@ mod tests {
             }
         }
         fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn discovery_selection_changes_only_address_never_peer_authority() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.use_discovery_address("192.168.1.2:24870".parse()?)?;
+        assert!(!app.config.listen && !app.config.allow && app.config.fingerprint.is_none());
+        app.config.fingerprint = Some("existing pinned peer".into());
+        app.config.allow = true;
+        app.use_discovery_address("192.168.1.3:24870".parse()?)?;
+        assert_eq!(
+            app.config.fingerprint.as_deref(),
+            Some("existing pinned peer")
+        );
+        assert!(app.config.allow);
         Ok(())
     }
 }
