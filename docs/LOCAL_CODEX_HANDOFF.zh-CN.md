@@ -27,7 +27,7 @@ python tools/local_preflight.py
 | 边界 | 代码 / 已验证范围 | 不代表什么 |
 | --- | --- | --- |
 | KVM | platform 捕获/注入源码、desktop session、core 租约/恢复、protocol v5；三平台 CI | 未证明真实 Win/Mac 跨屏可用 |
-| 连接 | QUIC/TLS 双证书固定身份、能力协商、默认关闭的可信重连、结构化 worker 状态 | 无 mDNS/短码配对/多节点产品闭环 |
+| 连接 | QUIC/TLS 双证书固定身份、能力协商、默认关闭的可信重连、结构化 worker 状态 | 有默认关闭的未认证 IPv4 发现提示；无短码配对/多节点产品闭环 |
 | 手势 | gestures 8 种轨迹、拒识/分差、有界收集、合成回归 | 未完成真人数据和原生右键兼容 |
 | G03 | core::gesture_broker 的按键归属/取消/目标/时间/边缘模型，1024 次模式转换回归 | 不是可直接放进原生钩子的低延迟实现 |
 | 动作 | actions schema/风险/能力/上下文预检、local execution 协调器 | 没有 OS Backend，没有远程动作 RPC |
@@ -106,7 +106,7 @@ cargo run -p peerglide-gestures --example evaluate --locked -- SAMPLE_FOLDER
 
 | 后续范围 | 真实状态 / 依赖 |
 | --- | --- |
-| mDNS、短码配对、多设备闭环 | 尚未实现；按 P01–P03/C06 顺序，发现不等于信任，短码需经审查的认证方案 |
+| mDNS、短码配对、多设备闭环 | 已有默认关闭的 IPv4 mDNS 地址提示和显式广播；跨主机/网卡/权限未验收，短码与多节点闭环仍未实现，详见 DISCOVERY.md |
 | 剪贴板文本/图片和文件传输 | M4 尚未实现；独立授权、格式/尺寸限额、数据流隔离、完整性/续传、历史仍需研发 |
 | 远端语义动作 | G2 尚未实现；本地 Coordinator 不是远端协议，需独立权限、目标 token、顺序屏障和会话去重 |
 | 多显示器、Linux输入、签名安装 | 仍是后续任务；Linux目前为 GUI/通信诊断，签名/公证需凭据与发布授权 |

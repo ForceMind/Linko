@@ -20,7 +20,7 @@ work follows separately; current evidence belongs in VALIDATION.md.
 |---|---|---|
 | M0 workspace/protocol/security/state/CI | Implemented engineering foundation | Native matrix passes; historical macOS root cause #10 still open |
 | M1 two-machine input | Prototype implemented | Real Windows/macOS sessions, Bluetooth/USB, DPI, recovery #3 |
-| M2 peer collaboration | Partial: symmetric leases, input capabilities, opt-in fixed-address trusted reconnect | mDNS, interactive pairing, address/suspend/native acceptance, independent grants #4 |
+| M2 peer collaboration | Partial: symmetric leases, input capabilities, opt-in reconnect and untrusted IPv4 discovery hints | LAN/NIC discovery acceptance, interactive pairing, address/suspend/native acceptance, independent grants #4 |
 | M3 GUI | Basic eframe GUI implemented | Native runtime validation; pairing codes, discovery, tray, full topology #5 |
 | M4 clipboard/files | Planned | Unicode/images; resumable integrity-checked files; native drag separate #6 |
 | M5 release | Planned | Performance/endurance, installers, signing/notarization, Linux input #7 |

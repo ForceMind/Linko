@@ -1,0 +1,9 @@
+[package]
+name = "peerglide-discovery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+anyhow.workspace = true
+peerglide-protocol.workspace = true
+mdns-sd = { version = "=0.21.7", default-features = false }
