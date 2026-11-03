@@ -1,4 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod gesture_lab;
 use anyhow::{Context, Result};
 use eframe::egui::{self, Color32, RichText, Vec2};
 use peerglide_protocol::worker::{WorkerEvent, WorkerState};
@@ -51,6 +52,7 @@ enum Page {
     Displays,
     Transfers,
     Settings,
+    GestureLab,
 }
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
@@ -100,6 +102,7 @@ impl WorkerSnapshot {
     }
 }
 struct App {
+    gesture_lab: gesture_lab::GestureLab,
     dir: PathBuf,
     config: Config,
     page: Page,
@@ -126,6 +129,7 @@ impl App {
             .and_then(|v| serde_json::from_slice(&v).ok())
             .unwrap_or_default();
         let mut app = Self {
+            gesture_lab: gesture_lab::GestureLab::new(&dir),
             dir,
             config,
             page: Page::Home,
@@ -720,6 +724,7 @@ impl eframe::App for App {
                     (Page::Displays, "Displays"),
                     (Page::Transfers, "Transfers"),
                     (Page::Settings, "Settings"),
+                    (Page::GestureLab, "Gesture lab"),
                 ] {
                     if ui
                         .selectable_label(self.page == page, RichText::new(label).size(18.0))
@@ -741,8 +746,12 @@ impl eframe::App for App {
                 }
             });
         });
+        if self.page != Page::GestureLab || self.child.is_some() {
+            self.gesture_lab.cancel();
+        }
         egui::CentralPanel::default().show(ctx,|ui|{ui.add_space(20.0);egui::ScrollArea::vertical().show(ui,|ui|match self.page {
             Page::Home=>self.home(ui),Page::Devices=>self.devices(ui),Page::Displays=>self.displays(ui),Page::Settings=>self.settings(ui,ctx),
+            Page::GestureLab=>{self.gesture_lab.ui(ui,self.child.is_some());},
             Page::Transfers=>{Self::heading(ui,"File transfers","Coming in M4");ui.label("File sending, resumable chunks, clipboard sharing and native cross-screen drag are not available in this prototype.");},
         });});
     }
@@ -784,10 +793,19 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([860.0, 640.0]),
         ..Default::default()
     };
+    let gesture_lab = std::env::args_os()
+        .skip(1)
+        .any(|arg| arg == "--gesture-lab");
     eframe::run_native(
         "PeerGlide",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, dir)))),
+        Box::new(move |cc| {
+            let mut app = App::new(cc, dir);
+            if gesture_lab {
+                app.page = Page::GestureLab;
+            }
+            Ok(Box::new(app))
+        }),
     )
 }
 
@@ -949,7 +967,13 @@ mod tests {
             for dark in [true, false] {
                 app.config.dark = dark;
                 app.theme(&ctx);
-                for page in [Page::Home, Page::Devices, Page::Displays, Page::Settings] {
+                for page in [
+                    Page::Home,
+                    Page::Devices,
+                    Page::Displays,
+                    Page::Settings,
+                    Page::GestureLab,
+                ] {
                     let output = ctx.run(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
@@ -964,6 +988,9 @@ mod tests {
                                 Page::Devices => app.devices(ui),
                                 Page::Displays => app.displays(ui),
                                 Page::Settings => app.settings(ui, ctx),
+                                Page::GestureLab => {
+                                    app.gesture_lab.ui(ui, false);
+                                }
                                 _ => (),
                             });
                         },
