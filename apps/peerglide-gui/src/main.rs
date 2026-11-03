@@ -104,7 +104,7 @@ struct App {
     config: Config,
     page: Page,
     import_path: String,
-    compared: bool,
+    confirmed_fingerprint: Option<String>,
     notice: String,
     child: Option<Child>,
     events: Option<mpsc::Receiver<String>>,
@@ -130,7 +130,7 @@ impl App {
             config,
             page: Page::Home,
             import_path: String::new(),
-            compared: false,
+            confirmed_fingerprint: None,
             notice: String::new(),
             child: None,
             events: None,
@@ -175,17 +175,18 @@ impl App {
             .map(|i| i.fingerprint())
     }
     fn candidate(&self) -> Result<Vec<u8>> {
-        let bytes = std::fs::read(self.import_path.trim())?;
-        anyhow::ensure!(bytes.len() <= 16 * 1024, "certificate file too large");
-        transport::validate_certificate(&bytes)?;
-        Ok(bytes)
+        transport::read_certificate(std::path::Path::new(self.import_path.trim()))
     }
     fn enroll(&mut self) -> Result<()> {
-        anyhow::ensure!(
-            self.compared,
-            "compare the fingerprint on both computers first"
-        );
+        let confirmed = self
+            .confirmed_fingerprint
+            .as_deref()
+            .context("compare the fingerprint on both computers first")?;
         let bytes = self.candidate()?;
+        anyhow::ensure!(
+            transport::fingerprint(&bytes) == confirmed,
+            "certificate changed; compare the fingerprint again"
+        );
         if let Ok(local) = Identity::load(&self.identity_dir()) {
             anyhow::ensure!(
                 bytes != local.certificate,
@@ -195,7 +196,7 @@ impl App {
         std::fs::write(self.dir.join("trusted-peer.crt.der"), &bytes)?;
         self.config.fingerprint = Some(transport::fingerprint(&bytes));
         self.save_config()?;
-        self.compared = false;
+        self.confirmed_fingerprint = None;
         Ok(())
     }
     fn start(&mut self, probe: bool) -> Result<()> {
@@ -203,7 +204,7 @@ impl App {
         Identity::load(&self.identity_dir())
             .context("create this computer's identity in Devices first")?;
         let cert = self.dir.join("trusted-peer.crt.der");
-        let bytes = std::fs::read(&cert).context("enroll a peer in Devices first")?;
+        let bytes = transport::read_certificate(&cert).context("enroll a peer in Devices first")?;
         anyhow::ensure!(
             self.config.fingerprint.as_deref() == Some(transport::fingerprint(&bytes).as_str()),
             "enrolled certificate changed; explicitly re-enroll it"
@@ -516,17 +517,38 @@ impl App {
             });
             ui.label("Other computer's public certificate file");
             if ui.text_edit_singleline(&mut self.import_path).changed() {
-                self.compared = false;
+                self.confirmed_fingerprint = None;
             }
-            if let Ok(bytes) = self.candidate() {
-                ui.monospace(transport::fingerprint(&bytes));
+            let candidate_fingerprint = self
+                .candidate()
+                .ok()
+                .map(|bytes| transport::fingerprint(&bytes));
+            if let Some(fp) = &candidate_fingerprint {
+                ui.monospace(fp);
             }
-            ui.checkbox(
-                &mut self.compared,
-                "I independently compared this fingerprint on the other computer",
-            );
+            let mut compared = candidate_fingerprint.is_some()
+                && self.confirmed_fingerprint == candidate_fingerprint;
+            if !compared {
+                self.confirmed_fingerprint = None;
+            }
             if ui
-                .add_enabled(self.compared, egui::Button::new("Enroll trusted peer"))
+                .add_enabled(
+                    candidate_fingerprint.is_some(),
+                    egui::Checkbox::new(
+                        &mut compared,
+                        "I independently compared this fingerprint on the other computer",
+                    ),
+                )
+                .changed()
+            {
+                self.confirmed_fingerprint = if compared {
+                    candidate_fingerprint
+                } else {
+                    None
+                };
+            }
+            if ui
+                .add_enabled(compared, egui::Button::new("Enroll trusted peer"))
                 .clicked()
             {
                 let r = self.enroll();
@@ -853,7 +875,7 @@ mod tests {
                 .context("write peer candidate fixture")?;
             app.import_path = candidate.display().to_string();
             assert!(app.enroll().is_err());
-            app.compared = true;
+            app.confirmed_fingerprint = Some(peer.fingerprint());
             app.enroll()?;
             assert!(!app.config.allow);
             assert!(!app.config.native);
@@ -872,10 +894,40 @@ mod tests {
                 .join("node.crt.der")
                 .display()
                 .to_string();
-            app.compared = true;
+            app.confirmed_fingerprint = Some(local.fingerprint());
             assert!(app.enroll().is_err());
         }
         fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn enrollment_confirmation_cannot_follow_replaced_file_contents() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        Identity::create(&app.identity_dir())?;
+        let first = Identity::generate()?;
+        let replacement = Identity::generate()?;
+        let candidate = fixture.path.join("candidate.der");
+        std::fs::write(&candidate, &first.certificate)?;
+        app.import_path = candidate.display().to_string();
+        app.confirmed_fingerprint = Some(first.fingerprint());
+        std::fs::write(&candidate, &replacement.certificate)?;
+        assert!(
+            app.enroll().is_err(),
+            "confirmation followed a different certificate"
+        );
+        assert!(app.config.fingerprint.is_none());
+        assert!(!fixture.path.join("trusted-peer.crt.der").exists());
+        app.confirmed_fingerprint = Some(replacement.fingerprint());
+        app.enroll()?;
+        assert_eq!(app.config.fingerprint, Some(replacement.fingerprint()));
+        let enrolled = std::fs::read(fixture.path.join("trusted-peer.crt.der"))?;
+        assert!(enrolled == replacement.certificate);
+        std::fs::write(&candidate, vec![0; transport::MAX_CERTIFICATE_BYTES + 1])?;
+        app.confirmed_fingerprint = Some(replacement.fingerprint());
+        assert!(app.enroll().is_err());
+        assert_eq!(app.config.fingerprint, Some(replacement.fingerprint()));
+        assert!(std::fs::read(fixture.path.join("trusted-peer.crt.der"))? == enrolled);
         Ok(())
     }
     #[test]

@@ -137,7 +137,7 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
 }
 async fn supervise(o: &Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     let id = transport::Identity::load(&o.identity)?;
-    let peer = std::fs::read(&o.peer_cert)?;
+    let peer = transport::read_certificate(&o.peer_cert)?;
     anyhow::ensure!(
         peer != id.certificate,
         "a peer must have a distinct identity"

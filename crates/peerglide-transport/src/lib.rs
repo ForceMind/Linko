@@ -14,6 +14,34 @@ pub struct Identity {
     pub certificate: Vec<u8>,
     key: Vec<u8>,
 }
+pub const MAX_CERTIFICATE_BYTES: usize = 16 * 1024;
+const MAX_PRIVATE_KEY_BYTES: usize = 16 * 1024;
+
+// Bound both metadata-based fast rejection and the actual read, including files
+// that grow after stat. This is not protection against a hostile local filesystem.
+fn read_material(path: &Path, limit: usize, kind: &str) -> Result<Vec<u8>> {
+    let metadata = std::fs::metadata(path).with_context(|| format!("inspect {kind}"))?;
+    anyhow::ensure!(metadata.is_file(), "{kind} must be a regular file");
+    anyhow::ensure!(metadata.len() <= limit as u64, "{kind} file too large");
+    let file = std::fs::File::open(path).with_context(|| format!("open {kind}"))?;
+    anyhow::ensure!(file.metadata()?.is_file(), "{kind} must be a regular file");
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {kind}"))?;
+    anyhow::ensure!(bytes.len() <= limit, "{kind} file too large");
+    anyhow::ensure!(!bytes.is_empty(), "{kind} file is empty");
+    Ok(bytes)
+}
+
+/// Bounded DER parsing only. Callers still require explicit fingerprint enrollment
+/// and exact TLS leaf verification; reading a valid certificate grants no trust.
+pub fn read_certificate(path: &Path) -> Result<Vec<u8>> {
+    let bytes = read_material(path, MAX_CERTIFICATE_BYTES, "certificate")?;
+    validate_certificate(&bytes)?;
+    Ok(bytes)
+}
 impl Identity {
     pub fn generate() -> Result<Self> {
         let cert = rcgen::generate_simple_self_signed(vec!["peerglide.local".into()])?;
@@ -23,10 +51,23 @@ impl Identity {
         })
     }
     pub fn load(dir: &Path) -> Result<Self> {
-        Ok(Self {
-            certificate: std::fs::read(dir.join("node.crt.der"))?,
-            key: std::fs::read(dir.join("node.key.der"))?,
-        })
+        let id = Self {
+            certificate: read_certificate(&dir.join("node.crt.der"))?,
+            key: read_material(
+                &dir.join("node.key.der"),
+                MAX_PRIVATE_KEY_BYTES,
+                "private key",
+            )?,
+        };
+        let provider = rustls::crypto::ring::default_provider();
+        let certified = rustls::sign::CertifiedKey::from_der(vec![id.cert()], id.key(), &provider)
+            .context("invalid identity certificate/private key")?;
+        // from_der permits Unknown consistency for some providers; this path
+        // requires a positive SPKI match rather than assuming compatibility.
+        certified
+            .keys_match()
+            .context("identity certificate/private key mismatch")?;
+        Ok(id)
     }
     pub fn create(dir: &Path) -> Result<Self> {
         std::fs::create_dir_all(dir)?;
@@ -62,7 +103,117 @@ impl Identity {
 pub fn fingerprint(cert: &[u8]) -> String {
     blake3::hash(cert).to_hex().to_string()
 }
+
+#[cfg(test)]
+mod identity_file_tests {
+    use super::*;
+    struct Fixture(std::path::PathBuf);
+    impl Fixture {
+        fn new() -> Result<Self> {
+            let marker = Identity::generate()?;
+            let path =
+                std::env::temp_dir().join(format!("peerglide-identity-{}", marker.fingerprint()));
+            std::fs::create_dir(&path)?;
+            Ok(Self(path))
+        }
+        fn identity(&self) -> std::path::PathBuf {
+            self.0.join("identity")
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn mismatched_identity_is_rejected_at_load_before_gui_or_endpoint() -> Result<()> {
+        let fixture = Fixture::new()?;
+        Identity::create(&fixture.identity())?;
+        let other = Identity::generate()?;
+        std::fs::write(fixture.identity().join("node.key.der"), &other.key)?;
+        assert!(
+            Identity::load(&fixture.identity()).is_err(),
+            "mismatched key/certificate accepted"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_identity_roundtrips_and_existing_files_are_never_replaced() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let original = Identity::create(&fixture.identity())?;
+        let loaded = Identity::load(&fixture.identity())?;
+        assert!(original.certificate == loaded.certificate && original.key == loaded.key);
+        assert!(Identity::create(&fixture.identity()).is_err());
+        let unchanged = Identity::load(&fixture.identity())?;
+        assert!(original.certificate == unchanged.certificate && original.key == unchanged.key);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(fixture.identity().join("node.key.der"))?
+                .permissions()
+                .mode();
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "private key must not grant group/other access"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn certificate_import_rejects_empty_malformed_oversized_and_directory() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let file = fixture.0.join("import.der");
+        for bytes in [
+            vec![],
+            b"not DER".to_vec(),
+            vec![0; MAX_CERTIFICATE_BYTES + 1],
+        ] {
+            std::fs::write(&file, &bytes)?;
+            assert!(read_certificate(&file).is_err());
+            assert!(validate_certificate(&bytes).is_err());
+        }
+        assert!(read_certificate(&fixture.0).is_err());
+        let id = Identity::generate()?;
+        std::fs::write(&file, &id.certificate)?;
+        assert!(read_certificate(&file)? == id.certificate);
+        // Exact byte bound is allowed by the reader; DER parsing is a separate gate.
+        std::fs::write(&file, vec![0; MAX_CERTIFICATE_BYTES])?;
+        assert_eq!(
+            read_material(&file, MAX_CERTIFICATE_BYTES, "fixture")?.len(),
+            MAX_CERTIFICATE_BYTES
+        );
+        assert!(read_certificate(&file).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_or_oversized_private_key_does_not_load() -> Result<()> {
+        let fixture = Fixture::new()?;
+        Identity::create(&fixture.identity())?;
+        let file = fixture.identity().join("node.key.der");
+        for bytes in [
+            vec![],
+            b"not PKCS8".to_vec(),
+            vec![0; MAX_PRIVATE_KEY_BYTES + 1],
+        ] {
+            std::fs::write(&file, &bytes)?;
+            assert!(Identity::load(&fixture.identity()).is_err());
+        }
+        std::fs::remove_file(&file)?;
+        std::fs::create_dir(&file)?;
+        assert!(Identity::load(&fixture.identity()).is_err());
+        Ok(())
+    }
+}
 fn roots(peer: &[u8]) -> Result<rustls::RootCertStore> {
+    anyhow::ensure!(
+        !peer.is_empty() && peer.len() <= MAX_CERTIFICATE_BYTES,
+        "certificate size outside allowed bounds"
+    );
     let mut roots = rustls::RootCertStore::empty();
     roots.add(CertificateDer::from(peer.to_vec()))?;
     Ok(roots)

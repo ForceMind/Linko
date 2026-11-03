@@ -232,3 +232,32 @@ Complete native CI on the final G02 candidate is a separate gate. No binary uses
 this recognizer, no input hook or action execution is added, network stays v5.
 The planned 800 human positive / 2,000 human negative recordings and real Win/Mac
 C06 acceptance remain pending. See GESTURES.md for scope, limits and reproduction.
+
+
+G02 final candidate `36ee7e8dcf8c02b4c07c3d14133a198406e4b82e` passed complete
+Windows/macOS/Linux CI [41578198350](https://github.com/ForceMind/PeerGlide/actions/runs/41578198350),
+including explicit synthetic metrics, macOS GUI stress, process smokes and packages.
+Squash merge `e3656fe7d01cd5e815fb518d9139577b7be9ab6f` has the identical tested tree.
+This does not change any human/physical acceptance gate.
+
+## P01 bounded identity material and exact enrollment intent (2026-11-03)
+
+A new mismatched-key load regression failed on the existing implementation:
+Identity::load accepted a generated certificate paired with another generated
+identity's private key. It now passes with required positive rustls/ring SPKI
+consistency at load, before GUI identity display or endpoint construction.
+A second GUI regression failed before the confirmation fix: replacing valid
+certificate A with valid B at the same path after checkbox consent enrolled B.
+Confirmation now freezes A's fingerprint and enrollment independently re-reads
+bounded bytes, rejecting B until explicitly confirmed. Failed/oversized imports
+preserve the existing enrolled bytes/fingerprint; normal explicit reenrollment
+still works. Consent is process-local, not persisted or restored from config.
+
+Local fail-fast fmt, 70 Linux workspace tests, strict Clippy, Debug build and
+managed/reconnect/pin-swap/backoff-stop process smokes passed. Additional tests
+cover malformed/empty/oversized certificate/private key, directories, byte-limit
+boundary, legitimate identity roundtrip, non-overwrite and Unix private key mode.
+Complete native CI on the final P01 candidate remains a separate gate.
+Network stays v5; neither parsing nor matching keys grants control permissions.
+OS keystore/ACL, atomic identity-file transaction and malicious-local-filesystem
+hardening are still pending; see SECURITY.md. No hardware acceptance is claimed.

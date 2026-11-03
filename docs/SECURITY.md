@@ -17,6 +17,22 @@ Keys use exclusive file creation and Unix mode 0600. On Windows store identity
 files under a user-private directory with normal user ACLs; hardened ACL/keychain
 provisioning is pending. Never exchange private keys.
 
+Identity certificate/private-key loads and GUI/CLI peer-certificate reads are
+bounded to 16 KiB each before parsing (actual reads cap at limit + 1 to detect
+growth). Non-regular, empty, oversized and malformed material rejects. Identity
+loading requires a positive certificate/private-key SPKI match using rustls/ring;
+it no longer treats merely readable files as a usable local identity.
+GUI comparison confirmation is temporary and binds to the exact displayed
+fingerprint. Enrollment reads again and rejects replacement contents even at the
+same file path. Parsing a valid certificate never confers trust/input permission.
+
+These file checks do not defend a hostile local filesystem/privileged process or
+replace TLS validity/identity checks. Existing links to regular files can be read;
+symlink-race hardening, OS keystore/Windows ACL provisioning, atomic multi-file
+identity creation and key-memory zeroization remain pending. Failed identity
+creation can leave partial exclusive files; they are never silently overwritten
+or automatically deleted. Preserve existing identities during manual recovery.
+
 Recovery uses callback-level escape/watchdog and receiver lease expiry with
 tracked releases. OS-protected input is not bypassed. Process termination or OS
 injection failure may prevent synthetic key release and needs physical testing.
