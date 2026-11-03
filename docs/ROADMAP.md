@@ -11,20 +11,24 @@ These are plans, not implemented-feature claims.
 Historical planning baseline `56174387563ba6a087c7db35c9c5e1e1031e593c` failed
 macOS GUI test in run `41226383167`; release/smoke/package were skipped then.
 This evidence is retained; #10's historical root cause is still unconfirmed.
-The latest merged connection increment is #22 (`f5c8505fe8f161a946e12f684e593037df525f3e`),
-with complete Windows/macOS/Linux CI in run `41393650378`. G01 pure action-model
-work merged via #23 (`99245e3`); main run `41395302222` passed. G02 pure recognizer
-work follows separately; current evidence belongs in VALIDATION.md.
+Verified continuation #27–#30 delivers reference gesture arbitration, exact-ID
+rule editor/preview, versioned configuration recovery, local action results/corpus
+preflight, opt-in untrusted discovery and maintained fonts/advisory gates. Latest
+merged baseline #30 is `759e61a1b9296c1f6c0b1bf50b529e2e6167947c`, candidate
+run `41595532009` passed Windows/macOS/Linux and independent audit with identical
+merged source tree. Current detailed evidence belongs in VALIDATION.md and each PR.
+D03 offline storage follows as an independent foundation, without a network send UI.
+
 
 | Milestone | Implementation | Acceptance still required |
 |---|---|---|
 | M0 workspace/protocol/security/state/CI | Implemented engineering foundation | Native matrix passes; historical macOS root cause #10 still open |
 | M1 two-machine input | Prototype implemented | Real Windows/macOS sessions, Bluetooth/USB, DPI, recovery #3 |
 | M2 peer collaboration | Partial: symmetric leases, input capabilities, opt-in reconnect and untrusted IPv4 discovery hints | LAN/NIC discovery acceptance, interactive pairing, address/suspend/native acceptance, independent grants #4 |
-| M3 GUI | Basic eframe GUI implemented | Native runtime validation; pairing codes, discovery, tray, full topology #5 |
-| M4 clipboard/files | Planned | Unicode/images; resumable integrity-checked files; native drag separate #6 |
+| M3 GUI | eframe devices, untrusted discovery, rule preview/editor, versioned config recovery | Native runtime validation; pairing codes, tray, full topology #5 |
+| M4 clipboard/files | D03 offline chunk/storage/resume foundation; no network send or clipboard | Separate grants/data stream/consent/GUI/quotas; native drag separate #6 |
 | M5 release | Planned | Performance/endurance, installers, signing/notarization, Linux input #7 |
-| G1 optional local mouse enhancement | G01/G02 foundations + offline canvas lab; no global gestures/action execution | Human corpus, shared input broker, global offline worker, app rules and physical acceptance #11 |
+| G1 optional local mouse enhancement | G01/G02 models, reference G03, offline canvas and rule editor; no global gestures/action execution | Human corpus, native broker/context/Backend, global offline worker, overlay and physical acceptance #11 |
 | G2 cross-device semantic actions | Planned, after G1 and trusted sessions | Separate grants, target context, ordering, deduplication and Win/Mac acceptance #12 |
 
 The first supported release requires P0 real-machine acceptance. CI artifacts

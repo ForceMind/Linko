@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local Codex preflight. No installs, native capture, privilege changes or uploads.
-Writes only a new run directory under --output-root (default: target/local-validation).
+Writes a new report under --output-root (default: target/local-validation);
+Cargo also writes its normal build/cache outputs. Python bytecode is disabled.
 Passing this script never implies real-desktop acceptance.
 """
 import argparse
@@ -27,6 +28,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory-only", action="store_true", help="Collect versions only; all checks stay not_run")
     parser.add_argument("--output-root", type=pathlib.Path, default=ROOT / "target/local-validation")
+    parser.add_argument("--audit", action="store_true", help="Also require already installed cargo-audit; deny advisory warnings, never install it")
     args = parser.parse_args()
     now = datetime.datetime.now(datetime.timezone.utc)
     output = args.output_root / f"preflight-{now.strftime('%Y%m%dT%H%M%S%fZ')}-{os.getpid()}"
@@ -38,6 +40,7 @@ def main():
         "dirty_entries": None if dirty == "unavailable" else len(dirty.splitlines()),
         "system": platform.system(), "os_release": platform.release(), "architecture": platform.machine(),
         "rustc": inventory(["rustc", "-vV"]), "cargo": inventory(["cargo", "--version"]),
+        "dependency_audit_requested": args.audit,
         "native_desktop_acceptance": "not_run", "native_gui_interaction": "not_run",
         "bluetooth_usb_dpi_permissions": "not_run", "checks": [], "status": "inventory_only",
     }
@@ -46,10 +49,14 @@ def main():
         ("fmt", ["cargo", "fmt", "--all", "--", "--check"]),
         ("clippy", ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]),
         ("tests", ["cargo", "test", "--workspace", "--locked"]),
+        ("notice_tests", [sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools", "-p", "test_third_party.py"]),
+        ("license_screen", [sys.executable, "-B", "tools/third_party.py"]),
         ("build", ["cargo", "build", "--workspace", "--locked"]),
         ("probe_smoke", [sys.executable, "tools/smoke.py", str(binary)]),
         ("reconnect_smoke", [sys.executable, "tools/reconnect_smoke.py", str(binary)]),
     ]
+    if args.audit:
+        checks.append(("dependency_audit", ["cargo", "audit", "--deny", "warnings", "--json"]))
     def save():
         temporary = output / "report.tmp"
         temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

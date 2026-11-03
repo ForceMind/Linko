@@ -369,3 +369,45 @@ notice tests: 2 passed. Resolved license screening: 355 package expressions; act
 vulnerabilities and 0 warnings with advisory DB commit
 `263a4d951a0867d4bddc29dddd6d59427c78f9a7` (updated 2026-11-02). Full final
 cross-platform candidate validation and Linux rendering/export remain PR gates.
+
+## D03 isolated storage foundation
+
+`peerglide-transfer` implements bounded chunk manifests, source rechecks, disk-backed
+out-of-order receiving, exact peer/transfer/manifest resume binding, rehash-on-resume,
+non-overwriting full-hash commit and a crash terminal marker. Twelve local tests
+pass (eleven portable + one Unix symlink test); no QUIC/GUI/drag/drop path exists.
+These are actual temporary-file tests, not real hardware or network acceptance.
+The marker prevents resume mutating a previously hard-linked/moved final inode.
+Full workspace/candidate CI are separate gates; see TRANSFER_STORAGE.md for missing
+quotas/grants/disk-failure/native filesystem acceptance and partial cleanup limits.
+
+
+Font/audit final candidate 26377bce12a81d9ae4f846877092a717e4905448 passed all four
+CI jobs in run 41595532009, merged as 759e61a1b9296c1f6c0b1bf50b529e2e6167947c
+with identical tested tree. GUI screenshot artifact 13212840762 was inspected;
+Home and saved rightward canvas render correctly, export/evaluator smoke passed.
+Audit artifact 13212780715 reports 0 vulnerabilities/0 warnings with DB commit
+263a4d951a0867d4bddc29dddd6d59427c78f9a7. This supersedes the pending-candidate
+font checkpoint above; no hardware or historical #10 conclusion follows.
+
+D03 local full preflight `preflight-20261103T072707329898Z-6` passed fmt, strict
+Clippy, 112 Rust tests, Debug build and real process probe/reconnect smokes.
+Windows excludes the Unix-only symlink test; final native candidate matrix is
+still required before merge. No native input/file RPC has been added.
+
+D03 initial candidate 2c05895c85e30c8e850d86c79148b7bc87eb6b9b failed Windows
+strict Clippy in run 41596675300: the directory builder was mutable only under
+cfg(unix). Replaced it with a cfg-specific builder expression; warnings remain
+denied, no test disabled. Added a real Rust 1.95.0 all-target workspace check to CI
+rather than inferring minimum-toolchain compatibility from metadata or stable.
+Final replacement candidate must pass the complete matrix.
+
+Local Rust 1.95.0 workspace/all-target locked check passed after the Windows cfg
+fix. The local preflight now includes the Python notice regressions and license
+screen; optional --audit requires an already installed cargo-audit and never installs
+one. Its final candidate full checks remain separate from physical acceptance.
+
+Final handoff hygiene: ignore generated Python bytecode, disable it for local
+notice checks, and describe Cargo build/cache writes accurately in preflight help.
+ROADMAP now reflects #27–#30 and the isolated D03 foundation, preserving all
+physical gates and genuinely unimplemented product features.

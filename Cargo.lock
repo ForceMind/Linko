@@ -1972,6 +1972,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "peerglide-transfer"
+version = "0.1.0-dev"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "peerglide-transport"
 version = "0.1.0-dev"
 dependencies = [

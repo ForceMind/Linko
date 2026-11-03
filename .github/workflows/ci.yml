@@ -76,3 +76,10 @@ jobs:
           name: peerglide-dependency-audit
           path: dependency-audit.json
           if-no-files-found: error
+
+  minimum-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - run: cargo check --workspace --all-targets --locked

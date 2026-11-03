@@ -18,7 +18,8 @@ python tools/local_preflight.py
 只收集环境版本而不构建时用 `--inventory-only`。报告和日志位于新的
 `target/local-validation/preflight-…/`，脚本不安装工具、不修改系统权限、
 不捕获原生输入、不上传报告或清理既有文件。它运行格式化、严格 Clippy、
-测试、Debug 构建和无原生注入的真实进程通信/重连测试。失败即停止后续检查。
+测试、字体 notice 回归/许可筛查、Debug 构建和无原生注入的真实进程通信/重连测试。
+如已安装 cargo-audit，可加 `--audit` 要求严格依赖审计；缺少该工具则失败，不自动安装。失败即停止后续检查。
 `preflight_passed` 仅指代码/进程预检，报告中的原生桌面、蓝牙/USB/DPI/权限
 验收仍是 `not_run`。工具缺失时先说明所需安装，不擅自改动机器环境。
 
@@ -107,7 +108,7 @@ cargo run -p peerglide-gestures --example evaluate --locked -- SAMPLE_FOLDER
 | 后续范围 | 真实状态 / 依赖 |
 | --- | --- |
 | mDNS、短码配对、多设备闭环 | 已有默认关闭的 IPv4 mDNS 地址提示和显式广播；跨主机/网卡/权限未验收，短码与多节点闭环仍未实现，详见 DISCOVERY.md |
-| 剪贴板文本/图片和文件传输 | M4 尚未实现；独立授权、格式/尺寸限额、数据流隔离、完整性/续传、历史仍需研发 |
+| 剪贴板文本/图片和文件传输 | M4 产品未实现；已有 peerglide-transfer 离线存储基础（分块/完整性/重扫续传/非覆盖提交），但无网络、独立授权或 GUI 接线；剪贴板、流隔离、配额和历史仍需研发 |
 | 远端语义动作 | G2 尚未实现；本地 Coordinator 不是远端协议，需独立权限、目标 token、顺序屏障和会话去重 |
 | 多显示器、Linux输入、签名安装 | 仍是后续任务；Linux目前为 GUI/通信诊断，签名/公证需凭据与发布授权 |
 | OS 私钥库/ACL、身份文件事务 | 未完成；不要把 GUI 配置存储当成密钥存储或原子身份迁移 |
@@ -135,3 +136,5 @@ GUI 已迁移到 eframe/egui 0.37，最低 Rust 1.95；核心协议仍为 v5。
 CI 的 cargo-audit 0.22.2 拒绝漏洞和 advisory warning；不要加通用忽略项。
 字体授权文件纳入包内 notices，Python 回归必须随构建运行。
 参见 ADR-0006；RustSec 的“停止维护”提示不是已发现可利用漏洞的证明。
+
+离线文件存储契约及剩余安全边界见 TRANSFER_STORAGE.md；不要把 PeerBinding 或测试 fixture 当成认证/授权，不把该 crate 描述成跨机发送或原生拖拽。
