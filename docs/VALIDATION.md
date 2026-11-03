@@ -369,3 +369,28 @@ notice tests: 2 passed. Resolved license screening: 355 package expressions; act
 vulnerabilities and 0 warnings with advisory DB commit
 `263a4d951a0867d4bddc29dddd6d59427c78f9a7` (updated 2026-11-02). Full final
 cross-platform candidate validation and Linux rendering/export remain PR gates.
+
+## D03 isolated storage foundation
+
+`peerglide-transfer` implements bounded chunk manifests, source rechecks, disk-backed
+out-of-order receiving, exact peer/transfer/manifest resume binding, rehash-on-resume,
+non-overwriting full-hash commit and a crash terminal marker. Twelve local tests
+pass (eleven portable + one Unix symlink test); no QUIC/GUI/drag/drop path exists.
+These are actual temporary-file tests, not real hardware or network acceptance.
+The marker prevents resume mutating a previously hard-linked/moved final inode.
+Full workspace/candidate CI are separate gates; see TRANSFER_STORAGE.md for missing
+quotas/grants/disk-failure/native filesystem acceptance and partial cleanup limits.
+
+
+Font/audit final candidate 26377bce12a81d9ae4f846877092a717e4905448 passed all four
+CI jobs in run 41595532009, merged as 759e61a1b9296c1f6c0b1bf50b529e2e6167947c
+with identical tested tree. GUI screenshot artifact 13212840762 was inspected;
+Home and saved rightward canvas render correctly, export/evaluator smoke passed.
+Audit artifact 13212780715 reports 0 vulnerabilities/0 warnings with DB commit
+263a4d951a0867d4bddc29dddd6d59427c78f9a7. This supersedes the pending-candidate
+font checkpoint above; no hardware or historical #10 conclusion follows.
+
+D03 local full preflight `preflight-20261103T072707329898Z-6` passed fmt, strict
+Clippy, 112 Rust tests, Debug build and real process probe/reconnect smokes.
+Windows excludes the Unix-only symlink test; final native candidate matrix is
+still required before merge. No native input/file RPC has been added.
