@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
+pub const MAX_ACTION_LIFETIME: std::time::Duration = std::time::Duration::from_secs(5);
+pub mod execution;
 pub mod rules;
 
 pub const SCHEMA_VERSION: u16 = 1;
@@ -145,6 +147,7 @@ pub enum Rejection {
     ContextChanged,
     Expired,
     ConfirmationRequired,
+    InvalidLifetime,
 }
 
 /// Non-cloneable validation record; it does not assert an action was executed.
@@ -225,6 +228,9 @@ pub fn validate(
     }
     if now >= expires {
         return Err(Rejection::Expired);
+    }
+    if expires.duration_since(now) > MAX_ACTION_LIFETIME {
+        return Err(Rejection::InvalidLifetime);
     }
     if spec.action.risk() == Risk::Destructive && !policy.destructive_confirmed {
         return Err(Rejection::ConfirmationRequired);

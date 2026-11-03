@@ -59,3 +59,16 @@ Every configuration page renders in both themes, including this page.
 Linux CI launches both Home and `--gesture-lab` under isolated Xvfb and stores
 PNG screenshots. Windows/macOS window interaction and physical mouse acceptance
 remain separate from compile/test/package CI. See VALIDATION.md for actual runs.
+
+Saved samples can be evaluated offline:
+
+```sh
+cargo run -p peerglide-gestures --example evaluate --locked -- SAMPLE_FOLDER
+```
+
+The bounded, nonrecursive reader rejects invalid files instead of silently
+dropping them. JSON output includes the expected/predicted confusion matrix,
+positive recognition and negative false-match rates; denominators of zero yield
+null rates. It never infers human/participant/polling acceptance. Linux GUI smoke
+also replays its exported negative-labelled rightward stroke through this tool,
+checking it is reported as a false match rather than auto-relabelling it correct.

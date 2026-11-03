@@ -114,6 +114,7 @@ UAC/secure desktop. Keep OS security protections enabled.
 - [Roadmap](docs/ROADMAP.md) and [development plan](docs/DEVELOPMENT_PLAN.md)
 - [Research and licensing](docs/REFERENCE_RESEARCH.md)
 - [Security](docs/SECURITY.md) and [validation](docs/VALIDATION.md)
+- [Local Codex handoff](docs/LOCAL_CODEX_HANDOFF.zh-CN.md) and `python tools/local_preflight.py`
 
 MIT licensed. GPL references are studied, not copied or linked. Dependency
 licenses are separate and must accompany distributions.

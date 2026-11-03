@@ -310,3 +310,22 @@ regression retains a cloned descriptor while reacquiring, without retries. The
 previous persistence-failure test now injects an invalid settings.json directory
 instead of obsolete fixed settings.tmp; the failure/denial contract is preserved.
 Native CI/real UI/focus and hardware remain separate gates; no root-cause claim #10.
+
+
+Cloud foundation candidate 6ebeda55b22a3edba159c8f88f34f09784134fa8 passed complete
+Windows/macOS/Linux CI run 41587053713, merged as d8b6c54239da741e64a706fa087fa0f9a0fa7509
+with the identical tested tree. Original #10 root cause and physical #3 remain open.
+
+## Action results, corpus evaluation and local preflight
+
+Local fail-fast checks pass through tools/local_preflight.py: fmt, strict Clippy,
+96 workspace tests, Debug build, managed probe and reconnect/pin-swap/stop smokes.
+The local report explicitly leaves native desktop/GUI/Bluetooth/USB/DPI not_run;
+no raw input collection, installation, OS permission change or upload is performed.
+Action result tests cover unknown outcome/no replay, duplicate-ID conflicts,
+remote/stale/expired/destructive denial, 128-entry bounds and excessive lifetimes.
+Corpus tests keep independent labels and fail on bad input; the GUI CI smoke now
+evaluates an explicitly saved canvas sample rather than only reading JSON.
+Final native CI/GUI smoke for this candidate is a separate gate. No real OS action
+backend, human corpus or full-product acceptance is claimed. See LOCAL_CODEX_HANDOFF.zh-CN.md
+for current verified work, native wiring, and genuinely unimplemented later software.

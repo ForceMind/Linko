@@ -60,7 +60,15 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     points = sample["samples"]
                     assert 2 <= len(points) <= 2048
                     assert points[-1]["x"] - points[0]["x"] > 60
+                    evaluation = subprocess.run([
+                        "cargo", "run", "--quiet", "--locked", "-p", "peerglide-gestures",
+                        "--example", "evaluate", "--", str(folder)
+                    ], cwd=root, capture_output=True, text=True, timeout=60, check=True)
+                    report = json.loads(evaluation.stdout)
+                    assert report["samples"] == 1 and report["negative"] == 1
+                    assert report["false_matches"] == 1 and not report["human_acceptance"]
                     print("PASS: synthetic canvas drawing stayed in memory, then explicit Save exported one labelled sample")
+                    print("PASS: offline evaluator preserves the independent negative label and reports its false match")
                     time.sleep(0.2)
                 dest = root / "dist"
                 dest.mkdir(exist_ok=True)
