@@ -55,8 +55,11 @@ revocation after validation and destructive confirmation/replay distinctions.
 They contain no real OS execution or gesture recognition.
 
 Native action adapters, result reporting, application rule resolution, context
-minting, gesture recognition/dataset (G02), shared input arbitration (G03), GUI,
+minting, human gesture dataset acceptance, shared input arbitration (G03), GUI,
 offline worker and versioned rule migration (G04) are not implemented here.
 No native gesture interception may be considered releasable before C06 real
 two-computer acceptance. Physical acceptance #3 and historical macOS root cause
 #10 remain open; this foundation does not resolve either.
+
+G02 now has an isolated pure recognizer and synthetic corpus; see [GESTURES.md](GESTURES.md).
+It does not execute these actions or establish real-user gesture acceptance.

@@ -58,7 +58,8 @@ Source pointers: `crates/peerglide-platform/src/lib.rs`, native adapters,
 `apps/peerglide-desktop/src/session.rs`, `apps/peerglide-gui/src/main.rs`,
 `peerglide-core`, `peerglide-protocol` and `peerglide-transport`.
 `peerglide-actions` now contains pure model/preflight logic (G01);
-`peerglide-gestures` is still planned. No action executor or gesture hook is enabled.
+`peerglide-gestures` contains bounded trajectory recognition and synthetic regression
+tests (G02). No action executor or gesture hook is enabled.
 
 Each development PR states task IDs, changed behavior, protocol impact,
 regression evidence, untested platforms and rollback. Keep physical acceptance
@@ -67,7 +68,7 @@ hook stack, silently enable imported actions, or use a docs-only change to claim
 that a runtime failure is fixed. See [ADR-0002](ADR/0002-unified-input-actions.md).
 
 
-## Implementation checkpoint: 2026-11-02
+## Implementation checkpoint: 2026-11-03
 
 This table records engineering status; physical acceptance remains #3. Latest
 runtime evidence and historical failures are in VALIDATION.md.
@@ -81,7 +82,7 @@ runtime evidence and historical failures are in VALIDATION.md.
 | C05 | implementing | v4 reliable terminal cursor + cleanup/expiry regressions; physical fault acceptance pending |
 | C06 | blocked | No authorized physical Windows/macOS desktop pair in this environment |
 | G01 | implementing | Pure local action schema/capability/context preflight and tests; no native execution or gesture hook |
-| G02 | planned | Direction-preserving recognition and labelled trajectory acceptance remain pending |
+| G02 | implementing | Bounded direction-preserving logic and synthetic corpus; human corpus/physical accuracy remain pending |
 
 
 Protocol v5 is the current development baseline; both peers must update. The v3
@@ -94,6 +95,6 @@ P01 input capability slice is implemented; see ADR-0004. Discovery, interactive 
 P04 fixed-address trusted reconnect is implemented behind an opt-in setting.
 Fresh sessions/capabilities/control state, pin-change rejection and cancellable
 backoff have automatic tests. Real interface/suspend/input acceptance, address
-rediscovery and interactive pairing remain pending; see ADR-0005. G1 has only
-the isolated G01 model foundation; G2 remains planned. No gesture interception
+rediscovery and interactive pairing remain pending; see ADR-0005. G1 has isolated
+G01 action-model and G02 recognizer foundations; G2 remains planned. No gesture interception
 is enabled by this connection work.

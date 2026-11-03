@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "provenance": "hand-authored synthetic regression paths; no human recordings",
+  "cases": [
+    {"name":"left uneven", "expected":1, "points":[[200,80],[185,82],[150,79],[101,80]]},
+    {"name":"right uneven", "expected":2, "points":[[-85,-60],[-82,-59],[-40,-62],[16,-60]]},
+    {"name":"up uneven", "expected":3, "points":[[35,140],[37,95],[34,75],[35,34]]},
+    {"name":"down uneven", "expected":4, "points":[[5,5],[4,24],[7,77],[5,112]]},
+    {"name":"down right rounded", "expected":5, "points":[[4,5],[5,35],[6,85],[15,105],[45,108],[104,106]]},
+    {"name":"down left rounded", "expected":6, "points":[[4,5],[5,35],[3,85],[-5,105],[-45,108],[-96,106]]},
+    {"name":"up right rounded", "expected":7, "points":[[4,5],[5,-35],[6,-85],[15,-95],[45,-98],[104,-96]]},
+    {"name":"up left rounded", "expected":8, "points":[[4,5],[5,-35],[3,-85],[-5,-95],[-45,-98],[-96,-96]]},
+    {"name":"stationary", "expected":null, "points":[[50,50],[50,50],[50,50]]},
+    {"name":"tiny jitter", "expected":null, "points":[[50,50],[52,49],[49,51],[51,50],[50,50]]},
+    {"name":"diagonal", "expected":null, "points":[[0,0],[33,33],[66,66],[100,100]]},
+    {"name":"diagonal reverse", "expected":null, "points":[[100,100],[66,66],[33,33],[0,0]]},
+    {"name":"zigzag", "expected":null, "points":[[0,0],[100,50],[0,100],[100,150],[0,200]]},
+    {"name":"closed square", "expected":null, "points":[[0,0],[100,0],[100,100],[0,100],[0,0]]},
+    {"name":"out and back", "expected":null, "points":[[0,0],[100,0],[0,0]]},
+    {"name":"right then down not down then right", "expected":null, "points":[[0,0],[100,0],[100,100]]}
+  ]
+}

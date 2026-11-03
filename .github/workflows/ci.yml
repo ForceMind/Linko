@@ -20,6 +20,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      - name: Synthetic gesture corpus metrics (not human acceptance)
+        run: cargo test -p peerglide-gestures --test corpus --locked -- --nocapture
       - name: Verify macOS keycodes against active SDK
         if: runner.os == 'macOS'
         run: python tools/verify_macos_keycodes.py
