@@ -56,7 +56,7 @@ lock so a second GUI cannot start workers or write settings/trust. Lock guards
 explicitly unlock on drop, including when a duplicated/inherited descriptor still
 exists; the regression covers this case without retrying failed assertions.
 See [Rust File locking](https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock).
-GUI Rust minimum is 1.89. No stale-lock-file deletion is needed.
+GUI Rust minimum is 1.95. No stale-lock-file deletion is needed.
 
 Locks coordinate these GUI versions, not hostile local writers or manual CLI
 processes. Settings + certificate enrollment are not one filesystem transaction.

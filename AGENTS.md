@@ -26,3 +26,6 @@ work; do not reset the workspace, renumber milestones or change the MIT license.
   and obtain authorization for additional machine/environment changes as needed.
 - Use small branches/PRs, no force pushes, protected-branch bypass or visibility change.
   Record implemented/tested vs native-unverified vs planned work separately.
+
+- GUI minimum Rust is 1.95 (eframe 0.37). Audit advisory warnings are denied;
+  do not add blanket ignores. Bundled font licenses/notices accompany distributions.

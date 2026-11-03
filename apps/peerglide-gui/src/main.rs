@@ -674,7 +674,11 @@ impl App {
                 _ => Vec2::new(190.0, 0.0),
             };
             let peer = egui::Rect::from_center_size(center + offset, Vec2::new(170.0, 100.0));
-            let response = ui.interact(peer, ui.id().with("peer-display"), egui::Sense::drag());
+            let response = ui.interact(
+                peer,
+                ui.scope_id().with("peer-display"),
+                egui::Sense::drag(),
+            );
             let displayed = if response.dragged() {
                 peer.translate(response.drag_delta())
             } else {
@@ -801,12 +805,18 @@ impl App {
     }
 }
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll();
+        if ctx.input(|i| !i.focused || i.viewport().minimized.unwrap_or(false)) {
+            self.gesture_lab.cancel();
+        }
         ctx.request_repaint_after(Duration::from_millis(100));
-        egui::SidePanel::left("navigation")
-            .exact_width(180.0)
-            .show(ctx, |ui| {
+    }
+    fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+        let ctx = root.ctx().clone();
+        egui::Panel::left("navigation")
+            .exact_size(180.0)
+            .show(root, |ui| {
                 ui.add_space(24.0);
                 ui.heading(RichText::new("PeerGlide").size(25.0));
                 ui.weak("SCREEN TO SCREEN");
@@ -831,7 +841,7 @@ impl eframe::App for App {
                 ui.separator();
                 ui.weak("0.1.0-dev\nExperimental prototype");
             });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(&self.status);
                 if !self.notice.is_empty() {
@@ -843,8 +853,8 @@ impl eframe::App for App {
         if self.page != Page::GestureLab || self.child.is_some() {
             self.gesture_lab.cancel();
         }
-        egui::CentralPanel::default().show(ctx,|ui|{ui.add_space(20.0);egui::ScrollArea::vertical().show(ui,|ui|match self.page {
-            Page::Home=>self.home(ui),Page::Devices=>self.devices(ui),Page::Displays=>self.displays(ui),Page::Settings=>self.settings(ui,ctx),
+        egui::CentralPanel::default().show(root,|ui|{ui.add_space(20.0);egui::ScrollArea::vertical().show(ui,|ui|match self.page {
+            Page::Home=>self.home(ui),Page::Devices=>self.devices(ui),Page::Displays=>self.displays(ui),Page::Settings=>self.settings(ui,&ctx),
             Page::GestureLab=>{self.gesture_lab.ui(ui,self.child.is_some());self.gesture_rules.preview_ui(ui,self.gesture_lab.matched_id());},
             Page::GestureRules=>self.gesture_rules.ui(ui,&self.dir,self.instance_lock.is_some() && self.child.is_none()),
             Page::Transfers=>{Self::heading(ui,"File transfers","Coming in M4");ui.label("File sending, resumable chunks, clipboard sharing and native cross-screen drag are not available in this prototype.");},
@@ -1096,7 +1106,7 @@ mod tests {
                     Page::GestureLab,
                     Page::GestureRules,
                 ] {
-                    let output = ctx.run(
+                    let output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
                                 egui::Pos2::ZERO,
@@ -1104,12 +1114,13 @@ mod tests {
                             )),
                             ..Default::default()
                         },
-                        |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| match page {
+                        |root| {
+                            let ctx = root.ctx().clone();
+                            egui::CentralPanel::default().show(root, |ui| match page {
                                 Page::Home => app.home(ui),
                                 Page::Devices => app.devices(ui),
                                 Page::Displays => app.displays(ui),
-                                Page::Settings => app.settings(ui, ctx),
+                                Page::Settings => app.settings(ui, &ctx),
                                 Page::GestureLab => {
                                     app.gesture_lab.ui(ui, false);
                                 }
@@ -1119,6 +1130,7 @@ mod tests {
                         },
                     );
                     assert!(!output.shapes.is_empty());
+                    output.drop_without_applying_deltas();
                 }
             }
         }

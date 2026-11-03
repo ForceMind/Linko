@@ -347,3 +347,25 @@ No-interface daemon lifecycle is tested without publication/query. macOS package
 contains Bonjour/local-network purpose keys; actual OS prompts are unverified.
 Cross-host multicast/NIC/firewall/sleep and daemon-cache flood acceptance remain
 pending. Final native matrix is a separate gate; see DISCOVERY.md.
+
+## Maintained font stack and advisory/notice regression
+
+The eframe/egui 0.37 migration keeps the framework/rendering strategy and raises
+GUI Rust minimum to 1.95. App logic continues worker/discovery polling independently
+of visible UI. Headless tests explicitly consume unused texture deltas while keeping
+rendered-shape and interaction assertions; actual Linux GUI/export smoke stays on.
+
+A fixture reproduces omitted OFL/UFL/Hack/icons font notices when another license
+filename was present. Collector now includes bundled fonts/*.txt; two Python tests
+cover complete notices and SPDX AND/OR requirements. Native CI includes them.
+A separate pinned cargo-audit job denies advisory warnings and uploads JSON. Final
+candidate checks are recorded on its PR; an old local run is not a merge gate.
+No native hardware, human corpus, #10 root-cause or full release acceptance claimed.
+
+Restored upgrade worktree preflight `preflight-20261103T071701648399Z-3` passed
+fmt, strict Clippy, all 100 Rust tests, Debug build and both process smokes. Python
+notice tests: 2 passed. Resolved license screening: 355 package expressions; actual
+0.37 font notices include OFL/UFL/Hack/icons. Local cargo-audit found 0 known
+vulnerabilities and 0 warnings with advisory DB commit
+`263a4d951a0867d4bddc29dddd6d59427c78f9a7` (updated 2026-11-02). Full final
+cross-platform candidate validation and Linux rendering/export remain PR gates.

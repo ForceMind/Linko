@@ -38,6 +38,7 @@ jobs:
       - run: cargo build --release --workspace --locked
       - run: python tools/smoke.py
       - run: python tools/reconnect_smoke.py
+      - run: python -m unittest discover -s tools -p test_third_party.py
       - run: python tools/third_party.py
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
@@ -56,4 +57,22 @@ jobs:
         with:
           name: peerglide-prototype-${{ matrix.os }}
           path: dist/*
+          if-no-files-found: error
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned lockfile auditor
+        run: cargo install cargo-audit --version 0.22.2 --locked --no-default-features
+      - name: Deny known vulnerabilities and advisory warnings
+        run: cargo audit --deny warnings --json > dependency-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: peerglide-dependency-audit
+          path: dependency-audit.json
           if-no-files-found: error

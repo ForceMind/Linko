@@ -77,7 +77,10 @@ def main():
             (target / "LICENSE-SELECTION.txt").write_text(f"Declared: {expression}\nSelected: {chosen}\n", encoding="utf-8")
             copied = 0
             for file in source.rglob("*"):
-                if file.is_file() and any(word in file.name.lower() for word in ("license", "copying", "copyright", "notice", "unlicense")):
+                if file.is_file() and (
+                    any(word in file.name.lower() for word in ("license", "copying", "copyright", "notice", "unlicense"))
+                    or ("fonts" in file.relative_to(source).parts[:-1] and file.suffix.lower() == ".txt")
+                ):
                     dest = target / file.relative_to(source)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(file, dest)

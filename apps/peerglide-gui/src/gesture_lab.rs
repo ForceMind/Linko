@@ -305,7 +305,7 @@ mod tests {
         running: bool,
     ) -> Option<Rect> {
         let mut rect = None;
-        let _ = ctx.run(
+        let output = ctx.run_ui(
             egui::RawInput {
                 time: Some(time),
                 events,
@@ -316,12 +316,13 @@ mod tests {
                 )),
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     rect = lab.ui(ui, running);
                 });
             },
         );
+        output.drop_without_applying_deltas();
         rect
     }
     fn button(pos: egui::Pos2, pressed: bool) -> Event {

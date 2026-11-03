@@ -40,7 +40,7 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Use stable Rust. Run `cargo build --workspace --release --locked` to build both
+Use stable Rust (GUI requires at least 1.95). Run `cargo build --workspace --release --locked` to build both
 executables. Launch `peerglide-gui` with `peerglide` beside it. Devices creates
 an identity and enrolls the other computer's public certificate after fingerprint
 confirmation. Settings explicitly enables native input and receiving control;
