@@ -251,7 +251,8 @@ certificate A with valid B at the same path after checkbox consent enrolled B.
 Confirmation now freezes A's fingerprint and enrollment independently re-reads
 bounded bytes, rejecting B until explicitly confirmed. Failed/oversized imports
 preserve the existing enrolled bytes/fingerprint; normal explicit reenrollment
-still works. Consent is process-local, not persisted or restored from config.
+still works. Consent is process-local, not persisted or restored from config, and revocation
+invalidates any pending confirmation before filesystem changes.
 
 Local fail-fast fmt, 70 Linux workspace tests, strict Clippy, Debug build and
 managed/reconnect/pin-swap/backoff-stop process smokes passed. Additional tests

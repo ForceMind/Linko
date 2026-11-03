@@ -24,7 +24,8 @@ loading requires a positive certificate/private-key SPKI match using rustls/ring
 it no longer treats merely readable files as a usable local identity.
 GUI comparison confirmation is temporary and binds to the exact displayed
 fingerprint. Enrollment reads again and rejects replacement contents even at the
-same file path. Parsing a valid certificate never confers trust/input permission.
+same file path. Revoking peer trust also clears any pending confirmation. Parsing
+a valid certificate never confers trust/input permission.
 
 These file checks do not defend a hostile local filesystem/privileged process or
 replace TLS validity/identity checks. Existing links to regular files can be read;

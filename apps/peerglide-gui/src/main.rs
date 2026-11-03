@@ -304,6 +304,7 @@ impl App {
     }
     fn revoke(&mut self) -> Result<()> {
         self.stop();
+        self.confirmed_fingerprint = None;
         self.connected = false;
         self.config.fingerprint = None;
         self.config.allow = false;
@@ -928,6 +929,14 @@ mod tests {
         assert!(app.enroll().is_err());
         assert_eq!(app.config.fingerprint, Some(replacement.fingerprint()));
         assert!(std::fs::read(fixture.path.join("trusted-peer.crt.der"))? == enrolled);
+        std::fs::write(&candidate, &replacement.certificate)?;
+        app.confirmed_fingerprint = Some(replacement.fingerprint());
+        app.revoke()?;
+        assert!(app.confirmed_fingerprint.is_none());
+        assert!(
+            app.enroll().is_err(),
+            "revocation must invalidate pending confirmation"
+        );
         Ok(())
     }
     #[test]
