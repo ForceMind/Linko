@@ -21,6 +21,12 @@ not implemented in this milestone. A native eframe control panel provides
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
 
+An offline **Gesture lab** lets you draw on a window-local canvas, inspect
+recognition/rejection and explicitly save labelled samples. Open it in the sidebar
+or run `peerglide-gui --gesture-lab`; no pairing or input permissions are needed.
+This is a test/recording page, not global mouse gestures or action execution.
+See [gesture lab](docs/GESTURE_LAB.md) for scope and privacy.
+
 ## Build
 
 ```sh

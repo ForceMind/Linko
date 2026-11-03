@@ -1,8 +1,9 @@
 # G02 pure trajectory recognition
 
 `peerglide-gestures` is an independent Rust logic library under ADR-0002. No
-desktop binary uses it yet. It has no runtime dependencies, OS hooks, network,
-action mappings, mouse suppression or input injection. G02 remains implementing:
+native input path uses it yet. The GUI's [offline canvas lab](GESTURE_LAB.md)
+uses it without global interception. It has no runtime dependencies, OS hooks,
+network, action mappings, mouse suppression or input injection. G02 remains implementing:
 the recognizer and synthetic regression suite exist, human acceptance does not.
 
 ## Geometry and result

@@ -5,6 +5,8 @@ It is not wired into capture or desktop execution and introduces no wire protoco
 
 G02's isolated direction-preserving recognizer is documented in [GESTURES.md](GESTURES.md).
 Its bounded collector and synthetic corpus do not enable native interception.
+The GUI also has a [window-local gesture lab](GESTURE_LAB.md) for recognition and
+explicit labelled exports; it cannot dispatch actions or install an input hook.
 
 `peerglide-protocol`: messages, bounded decode, USB HID vocabulary.
 `peerglide-core`: receiver-authoritative lease, pressed input tracking, motion

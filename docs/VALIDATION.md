@@ -262,3 +262,34 @@ Complete native CI on the final P01 candidate remains a separate gate.
 Network stays v5; neither parsing nor matching keys grants control permissions.
 OS keystore/ACL, atomic identity-file transaction and malicious-local-filesystem
 hardening are still pending; see SECURITY.md. No hardware acceptance is claimed.
+
+
+P01 final candidate `c5b0fad08aa29fd00aa5ed72504544acf73dbaf0` passed complete
+Windows/macOS/Linux CI [41579175459](https://github.com/ForceMind/PeerGlide/actions/runs/41579175459).
+Squash merge `302cecee256696620844a2011d7ba21d7cb7695e` has the identical tested tree.
+This includes revoke invalidation of pending confirmation; OS keystore/ACL and
+physical acceptance remain separate.
+
+## G04 independent offline canvas lab (2026-11-03)
+
+The GUI now uses G02 inside its own explicit drawing canvas, with no pairing,
+identity, network or OS input-permission prerequisite. Right-button drawing
+recognizes/rejects; expected labels never bias recognition. Only Save creates a
+new labelled JSON file; cancelled/incomplete prefixes and repeated saves reject.
+No sample is automatically uploaded or written. Existing device sessions disable
+recording; focus/page/geometry/compound-input loss and no-motion timeout cancel.
+This adds no global hook, ordinary-right-click replay or OS action execution.
+
+Five new tests cover frame-delivered egui pointer events, recognition, focus/idle
+expiry/worker cancellation, geometry/late release, label independence and explicit
+nonduplicate exports. All pages render in both themes including Gesture lab.
+Local fail-fast fmt, 75 Linux workspace tests, strict Clippy, Debug build and
+managed/reconnect/pin-swap/stop smokes passed. Python GUI smoke syntax checks passed.
+Native matrix and Linux Xvfb launch/screenshot evidence for Home and --gesture-lab
+remain a separate gate. Windows/macOS real desktop drawing is not verified here.
+
+These GUI samples identify their source as egui_canvas with logical coordinates
+and frame-clock elapsed time; they do not prove hardware polling/DPI acceptance.
+No human corpus was collected, and 800/2000 human and C06 gates remain pending.
+G04 overall is implementing: global offline worker, broker, overlays, app rules
+and config migration are not delivered. See GESTURE_LAB.md for user workflow.
