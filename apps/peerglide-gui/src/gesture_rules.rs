@@ -2,10 +2,39 @@
 use super::config_store::Store;
 use eframe::egui;
 use peerglide_actions::{
-    rules::{CompiledRules, Resolution, Rule, RuleBook, Scope},
-    ActionSpec, ACTIONS,
+    rules::{CompiledRules, Resolution, Rule, RuleBook, RuleError, Scope},
+    Action, ActionSpec, ACTIONS,
 };
 use std::path::Path;
+
+fn action_label(action: Action) -> &'static str {
+    match action {
+        Action::Copy => "复制",
+        Action::Paste => "粘贴",
+        Action::Back => "后退",
+        Action::Forward => "前进",
+        Action::CloseTab => "关闭标签页",
+        Action::MinimizeWindow => "最小化窗口",
+        Action::MaximizeWindow => "最大化窗口",
+        Action::ToggleFullscreen => "切换全屏",
+        Action::CloseWindow => "关闭窗口",
+        Action::QuitApplication => "退出应用",
+        Action::ShowPeerGlide => "显示屏跃",
+    }
+}
+
+fn rule_error_label(error: RuleError) -> &'static str {
+    match error {
+        RuleError::Size => "规则文件过大",
+        RuleError::Json => "规则文件的 JSON 格式无效",
+        RuleError::Schema => "不支持此规则文件版本",
+        RuleError::Limit => "规则或排除项数量超出上限",
+        RuleError::Application => "应用标识或应用组无效",
+        RuleError::DuplicateId => "规则编号为零或重复",
+        RuleError::Action => "手势编号或动作版本无效",
+        RuleError::Conflict => "规则的适用范围和优先级存在冲突",
+    }
+}
 
 pub struct RuleEditor {
     draft: RuleBook,
@@ -19,7 +48,7 @@ impl RuleEditor {
             Ok((store, draft)) => {
                 let status = match CompiledRules::new(draft.clone()) {
                     Ok(_) => String::new(),
-                    Err(e) => format!("Rules need correction: {e:?}"),
+                    Err(e) => format!("规则需要修正：{}", rule_error_label(e)),
                 };
                 Self {
                     draft,
@@ -32,16 +61,16 @@ impl RuleEditor {
                 draft: RuleBook::default(),
                 store: None,
                 application: "app:example".into(),
-                status: format!("Rules preserved; recovery required: {e:#}"),
+                status: format!("已保留原规则文件，需要恢复：{e:#}"),
             },
         }
     }
     fn save(&mut self) -> anyhow::Result<()> {
         CompiledRules::new(self.draft.clone())
-            .map_err(|e| anyhow::anyhow!("invalid rules: {e:?}"))?;
+            .map_err(|e| anyhow::anyhow!("规则无效：{}", rule_error_label(e)))?;
         self.store
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("rule-file recovery required"))?
+            .ok_or_else(|| anyhow::anyhow!("需要先恢复规则文件"))?
             .save(&self.draft)
     }
     pub fn preview(&self, gesture: u32) -> Result<Resolution, peerglide_actions::rules::RuleError> {
@@ -52,39 +81,37 @@ impl RuleEditor {
     }
     pub fn preview_ui(&mut self, ui: &mut egui::Ui, gesture: Option<u32>) {
         ui.separator();
-        ui.label("Rule preview · no actions execute");
+        ui.label("规则预览 · 不执行动作");
         ui.horizontal(|ui| {
-            ui.label("Application ID");
+            ui.label("应用标识");
             ui.text_edit_singleline(&mut self.application);
         });
         if let Some(id) = gesture {
             ui.label(match self.preview(id) {
                 Ok(Resolution::Selected { rule_id, action }) => {
-                    format!("Rule {rule_id} → {:?} (preview only)", action.action)
+                    format!("规则 {rule_id} → {}（仅预览）", action_label(action.action))
                 }
-                Ok(Resolution::Excluded) => "Application excluded".into(),
-                Ok(Resolution::InvalidApplication) => "Enter a valid application ID".into(),
-                Ok(_) => "No matching rule".into(),
-                Err(e) => format!("Fix invalid rules before preview: {e:?}"),
+                Ok(Resolution::Excluded) => "此应用已被排除".into(),
+                Ok(Resolution::InvalidApplication) => "请输入有效的应用标识".into(),
+                Ok(_) => "没有匹配的规则".into(),
+                Err(e) => format!("请先修正规则再预览：{}", rule_error_label(e)),
             });
         } else {
-            ui.weak("Draw a recognized gesture to preview its rule for this application ID.");
+            ui.weak("请先绘制可识别的手势，以预览该应用标识对应的规则。");
         }
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, dir: &Path, writable: bool) {
-        ui.heading("Gesture rules");
-        ui.label("Configure typed mappings and exclusions. Preview does not capture input or execute actions.");
-        if self.store.is_none()
-            && writable
-            && ui.button("Back up and reset invalid rule file").clicked()
+        ui.heading("手势规则");
+        ui.label("配置手势动作映射和排除项。预览不会捕获输入或执行动作。");
+        if self.store.is_none() && writable && ui.button("备份并重置无效的规则文件").clicked()
         {
             match Store::reset::<RuleBook>(dir.join("gesture-rules.json")) {
                 Ok((store, draft)) => {
                     self.store = Some(store);
                     self.draft = draft;
-                    self.status = "Rules reset; previous bytes backed up".into();
+                    self.status = "规则已重置，原文件内容已备份".into();
                 }
-                Err(e) => self.status = format!("Reset failed: {e:#}"),
+                Err(e) => self.status = format!("重置失败：{e:#}"),
             }
         }
         ui.add_enabled_ui(writable, |ui| {
@@ -93,12 +120,12 @@ impl RuleEditor {
                 ui.push_id(rule.id, |ui| {
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
-                            ui.checkbox(&mut rule.enabled, format!("Rule {}", rule.id));
-                            ui.label("Gesture ID");
+                            ui.checkbox(&mut rule.enabled, format!("规则 {}", rule.id));
+                            ui.label("手势编号");
                             ui.add(egui::DragValue::new(&mut rule.gesture).range(1..=8));
-                            ui.label("Priority");
+                            ui.label("优先级");
                             ui.add(egui::DragValue::new(&mut rule.priority));
-                            if ui.button("Remove").clicked() {
+                            if ui.button("删除").clicked() {
                                 delete = Some(index);
                             }
                         });
@@ -109,11 +136,9 @@ impl RuleEditor {
                         };
                         let before = kind;
                         egui::ComboBox::from_id_salt("scope")
-                            .selected_text(["Global", "Application", "Application group"][kind])
+                            .selected_text(["全局", "应用", "应用组"][kind])
                             .show_ui(ui, |ui| {
-                                for (i, label) in ["Global", "Application", "Application group"]
-                                    .iter()
-                                    .enumerate()
+                                for (i, label) in ["全局", "应用", "应用组"].iter().enumerate()
                                 {
                                     ui.selectable_value(&mut kind, i, *label);
                                 }
@@ -130,7 +155,7 @@ impl RuleEditor {
                         match &mut rule.scope {
                             Scope::Application { id } => {
                                 ui.horizontal(|ui| {
-                                    ui.label("Exact application ID");
+                                    ui.label("精确应用标识");
                                     ui.text_edit_singleline(id);
                                 });
                             }
@@ -138,10 +163,10 @@ impl RuleEditor {
                                 for id in apps.iter_mut() {
                                     ui.text_edit_singleline(id);
                                 }
-                                if apps.len() < 32 && ui.button("Add application").clicked() {
+                                if apps.len() < 32 && ui.button("添加应用").clicked() {
                                     apps.push(String::new());
                                 }
-                                if apps.len() > 1 && ui.button("Remove last application").clicked()
+                                if apps.len() > 1 && ui.button("删除最后一个应用").clicked()
                                 {
                                     apps.pop();
                                 }
@@ -149,13 +174,13 @@ impl RuleEditor {
                             Scope::Global => (),
                         }
                         egui::ComboBox::from_id_salt("action")
-                            .selected_text(format!("{:?}", rule.action.action))
+                            .selected_text(action_label(rule.action.action))
                             .show_ui(ui, |ui| {
                                 for action in ACTIONS {
                                     ui.selectable_value(
                                         &mut rule.action.action,
                                         action,
-                                        format!("{action:?}"),
+                                        action_label(action),
                                     );
                                 }
                             });
@@ -165,7 +190,7 @@ impl RuleEditor {
             if let Some(index) = delete {
                 self.draft.rules.remove(index);
             }
-            if self.draft.rules.len() < 128 && ui.button("Add rule").clicked() {
+            if self.draft.rules.len() < 128 && ui.button("添加规则").clicked() {
                 if let Some(id) = self
                     .draft
                     .rules
@@ -186,41 +211,43 @@ impl RuleEditor {
                 }
             }
             ui.separator();
-            ui.label("Excluded application IDs (exact match, always take precedence)");
+            ui.label("排除的应用标识（精确匹配，始终优先）");
             for exclusion in &mut self.draft.exclusions {
                 ui.text_edit_singleline(exclusion);
             }
-            if self.draft.exclusions.len() < 128 && ui.button("Add exclusion").clicked() {
+            if self.draft.exclusions.len() < 128 && ui.button("添加排除项").clicked() {
                 self.draft.exclusions.push(String::new());
             }
-            if !self.draft.exclusions.is_empty() && ui.button("Remove last exclusion").clicked() {
+            if !self.draft.exclusions.is_empty() && ui.button("删除最后一个排除项").clicked()
+            {
                 self.draft.exclusions.pop();
             }
             let valid = CompiledRules::new(self.draft.clone());
             if let Err(e) = &valid {
                 ui.label(format!(
-                    "Cannot save: {e:?}. Resolve conflicts and empty IDs first."
+                    "无法保存：{}。请先解决冲突和空应用标识。",
+                    rule_error_label(*e)
                 ));
             }
             if ui
                 .add_enabled(
                     valid.is_ok() && self.store.is_some(),
-                    egui::Button::new("Save rules"),
+                    egui::Button::new("保存规则"),
                 )
                 .clicked()
             {
                 // Files never grant global input capture permission.
                 self.draft.enabled = false;
                 self.status = match self.save() {
-                    Ok(()) => "Rules saved. Global gestures remain disabled.".into(),
-                    Err(e) => format!("Save failed: {e:#}"),
+                    Ok(()) => "规则已保存，全局手势仍保持关闭。".into(),
+                    Err(e) => format!("保存失败：{e:#}"),
                 };
             }
         });
         if !self.status.is_empty() {
             ui.label(&self.status);
         }
-        ui.weak("Exact IDs are supplied by the future platform adapter; window titles and wildcard matching are not used.");
+        ui.weak("精确应用标识将由后续的平台适配器提供；不使用窗口标题或通配符匹配。");
     }
 }
 #[cfg(test)]

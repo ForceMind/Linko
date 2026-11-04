@@ -478,3 +478,131 @@ no Rust source, manifest, lockfile or workflow; its exact-head CI remains the PR
 gate. No C06/#10/M4 product checkbox is closed. Persisted aggregate inventory and
 cumulative admission quota are implemented; detailed persistent lifecycle history,
 explicit cleanup/reclamation, free-space policy and network/UI remain future work.
+
+
+## Explicit isolated GUI profile (2026-11-04, WIP)
+
+Local main preflight on Darwin 25.2.0 arm64 cannot execute Cargo because Rust is
+absent. The user explicitly declined installation; hosted CI remains the build
+path. Existing macOS GUI always uses the user's Application Support directory,
+so it cannot safely isolate native launch validation inside the approved workspace.
+
+Add `--data-dir DIRECTORY` using the workspace's existing Clap dependency, retain
+`--gesture-lab` and default profile behavior, and reject malformed/unknown options
+before opening the window. No identity, trust, grant, discovery or input permission
+is copied from another profile. A regression uses an isolated Unicode/space path
+and preserves a future-version original profile while asserting independent
+settings/default-deny permissions. Linux GUI smoke now passes and checks the
+explicit directory; canvas drawing remains synthetic isolated-display evidence.
+
+Candidate fmt/Clippy/workspace tests/build, native matrix and actual local launch
+remain pending. No toolchain installation, native capture, system clipboard,
+security-policy change or physical desktop acceptance is claimed.
+
+
+Native Mac process baseline (no Rust installation): downloaded macOS artifact
+13300483368 from main run 41784077840, package darwin-arm64, SHA256
+`da9f5a55aabd5848616006284df2bea1d0175b4363d928ddb559ed1b130caac7` verified
+against the bundled checksum. `file` reports a Mach-O ARM64 executable. The initial
+restricted execution failed loopback bind with Operation not permitted; rerunning
+with the authorized loopback capability passed both existing tools/smoke.py and
+tools/reconnect_smoke.py: independent identities/authenticated QUIC/probe/clean
+exit, managed worker stop, trusted reconnect after server loss/restart, pin-change
+refusal and stop during backoff. No --native/--allow-control, discovery, clipboard,
+user-profile access or security bypass was used. Local metadata report:
+target/local-validation/baseline-main-5d947637/report.json. These results test main
+5d947637's prebuilt worker, not a local source build or the new GUI candidate.
+
+GUI candidate cb9d2be passed Rust 1.95 check, but platform jobs stopped at one
+rustfmt difference in run 41789377283. Applied the exact emitted difference; final
+candidate full matrix and local GUI launch remain pending.
+
+
+Focused independent static review found the first Linux smoke used the same
+explicit path as XDG's default, so it could miss a disconnected main argument.
+The smoke now separates explicit-profile from default-data/peerglide, asserts the
+explicit instance lock and refuses any fallback profile creation. No production
+permission/isolation flaw was found by that review; execution CI remains required.
+
+
+### Joint candidate / real Mac isolated launch evidence
+
+Combined source candidate `c933ba2f32794223faff0fa2e912b97cbaeb1b4b` passed all
+five jobs in [41790024756](https://github.com/ForceMind/PeerGlide/actions/runs/41790024756),
+including strict workspace checks/tests, Release build/link, process smokes,
+Linux explicit-profile GUI/export smoke, macOS GUI stress, Rust 1.95 and strict
+audit. Storage-only final candidate `2d2bed5c42361f6c6ea940e2876a1fcad744648f`
+also passed all five jobs in run 41789889924. Neither PR has been merged.
+
+Downloaded exact-candidate macOS artifact 13302738707; verified inner ARM64 ZIP
+SHA256 `aee4eac05dcdbeff7a322e78c40340a13e36fd2addf066ee3fc8a850aeb313b4`
+against its bundled checksum. On macOS 26.2 (25C56), Darwin 25.2.0 arm64:
+
+- Candidate `--help` reports `--data-dir` and `--gesture-lab` without opening a window.
+- Both existing real-process smoke tools passed using this candidate's worker:
+  mutually authenticated probe, clean/managed stop, reconnect, changed-pin refusal
+  and cancellation during backoff. Loopback and disposable independent identities
+  only; no native capture or injection.
+- Actual candidate GUI launched with an absolute workspace-local --data-dir.
+  Its window/screenshot showed rendered Home, Offline, Create an identity,
+  No enrolled peer, and diagnostic native capture/injection off. Only this test
+  app window was inspected; no screenshot was saved/uploaded to the repository.
+- Closing the window ended the launch process with exit code 0. The profile
+  contained only gui-instance.lock: no identity, peer certificate or settings.
+
+One desktop-control getApp call stalled for about 51 minutes; subsequent scoped
+window observations returned normally. This is a tool limitation, not measured
+application startup latency, performance, resource or endurance acceptance.
+Report: target/local-validation/gui-c933ba2/report.json. Rust was not installed;
+source-build preflight remains blocked. Physical keys/buttons, Bluetooth/USB,
+DPI, permissions, network-interface/sleep faults and two-machine C06 remain not_run.
+No native clipboard, data network, global G1, or #10 root-cause claim is made.
+The final documentation-only follow-up preserves this tested source tree; its
+exact-head CI status is reported on PR #34.
+
+
+### Simplified Chinese GUI correction (2026-11-04, implementing)
+
+User requires the interface in Chinese. All current navigation, Home/Devices/
+Displays/Transfers/Settings, offline lab/rules/discovery, lifecycle/permission/
+configuration recovery labels now use Simplified Chinese. Stable configuration
+keys, action IDs, protocol v5, exported JSON and user-supplied names remain intact.
+Raw diagnostic details retain original text under a Chinese-labelled log view.
+
+Embeds the unmodified Google Fonts Noto Sans SC variable TTF from pinned commit
+a85815a42757630ce188fdad368c2dfc444d4773, verified Git blob
+fb0637bafbcd804fe32152370a1225990745b4bc (17,772,300 bytes). Its original OFL-1.1
+notice and provenance accompany every package; no system font loading/install is
+enabled. A headless glyph-coverage check exercises both proportional/monospace
+families, and page rendering uses the same bundled font. Python notice tests now
+include the non-Cargo font; all three pass locally. Source build remains blocked
+by the explicitly declined Rust installation. Earlier English GUI evidence does
+not verify this new Chinese rendering; final candidate CI/screenshots/native launch
+are pending. No physical input acceptance or global G1 enablement is claimed.
+
+
+Chinese source candidate `d3891c6108590bc438dda9723abfa27944547342` passed all
+five jobs in [41798545549](https://github.com/ForceMind/PeerGlide/actions/runs/41798545549):
+three-platform fmt/strict Clippy/workspace tests/Release build/process smokes/
+packages, Linux actual Chinese GUI/export smoke, macOS isolated/parallel GUI
+stress, Rust 1.95 and strict audit. Downloaded and inspected Home/lab screenshots
+from artifact 13306631744: Chinese navigation, headings, status, recognition and
+saved-sample feedback render without missing-glyph boxes. Sample export/evaluator
+and explicit-profile isolation checks passed. This is CI synthetic canvas evidence.
+
+Exact-candidate macOS artifact 13306104386 has verified inner ZIP SHA256
+`eb648b3e266ddfbff1a3dd56dfc84afcf39932efb922cdc652c413c09853be45`; the font OFL
+notice is present. On macOS 26.2 (25C56), ARM64, its actual native window titled
+“屏跃 · PeerGlide” displayed the Chinese Home/navigation correctly, Offline,
+no identity/peer and native capture/injection off. The process is deliberately
+left open for the user in a new workspace-local profile, containing only its
+instance lock. No system font/toolchain install, input grant or user identity
+change occurred. Report: target/local-validation/gui-zh-d3891c6/report.json.
+
+The focused static review confirmed stable keys/protocol/JSON/action IDs are
+unchanged, and corrected SampleCount's Chinese explanation to cover both too few
+and too many samples. The font's variable axis is explicitly Regular (400), not
+its upstream Thin default (100). Three Python notice regressions pass locally.
+Final documentation/README follow-up changes no runtime/build/test source; its
+exact-head candidate CI is reported on PR #34. Physical C06, global G1/actions,
+production data network, persistent detailed history and #10 remain open.

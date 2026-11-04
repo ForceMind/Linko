@@ -47,7 +47,7 @@ jobs:
           sudo apt-get install -y xvfb xdotool imagemagick libxkbcommon-x11-0 libegl1 libgl1-mesa-dri
           xvfb-run -a python tools/gui_smoke.py
       - uses: actions/upload-artifact@v4
-        if: runner.os == 'Linux'
+        if: always() && runner.os == 'Linux'
         with:
           name: peerglide-gui-screenshots
           path: dist/peerglide-*.png

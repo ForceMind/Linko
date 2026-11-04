@@ -17,11 +17,11 @@ See [validation](docs/VALIDATION.md).
 Primary-display switching, basic HID keys, three mouse buttons and scrolling
 form the initial native prototype. Multi-monitor topology, IME composition,
 clipboard, files, pairing codes, tray and signed installers are
-not implemented in this milestone. A native eframe control panel provides
+not implemented in this milestone. The desktop interface is Simplified Chinese, with an embedded OFL-licensed Noto Sans SC font; no system font installation is needed. A native eframe control panel provides
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
 
-An offline **Gesture lab** lets you draw on a window-local canvas, inspect
+An offline **手势实验室 (Gesture lab)** lets you draw on a window-local canvas, inspect
 recognition/rejection and explicitly save labelled samples. Open it in the sidebar
 or run `peerglide-gui --gesture-lab`; no pairing or input permissions are needed.
 This is a test/recording page, not global mouse gestures or action execution.
@@ -41,10 +41,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 Use stable Rust (GUI requires at least 1.95). Run `cargo build --workspace --release --locked` to build both
-executables. Launch `peerglide-gui` with `peerglide` beside it. Devices creates
+executables. Launch `peerglide-gui` with `peerglide` beside it. 设备 (Devices) creates
 an identity and enrolls the other computer's public certificate after fingerprint
-confirmation. Settings explicitly enables native input and receiving control;
-Home starts/listens/connects and can run a harmless transport probe. Displays
+confirmation. 设置 (Settings) explicitly enables native input and receiving control;
+主页 (Home) starts/listens/connects and can run a harmless transport probe. 显示器 (Displays)
 sets the switching side. No config file editing is required.
 
 CI artifacts contain an unsigned Windows portable ZIP, macOS app bundle or
@@ -53,6 +53,20 @@ include X11/XKB, EGL/OpenGL (or the corresponding Wayland stack). They are exper
 not stable installers. macOS signing/notarization and Windows code signing are
 pending; do not disable OS protections to open them. The Linux GUI can configure
 and probe connections, but Linux native input is not implemented.
+
+For an isolated local GUI check, use an explicitly selected directory:
+
+```sh
+peerglide-gui --data-dir /path/to/isolated-test-data
+peerglide-gui --data-dir /path/to/isolated-test-data --gesture-lab
+```
+
+This stores settings, new identities and manually exported gesture samples in that
+directory. It never copies existing trust or permissions from the usual profile.
+Keep the CLI beside the GUI. No system input permission is needed for the offline
+pages or transport probes. Without `--data-dir`, the existing user-profile location
+is unchanged. Unknown or incomplete command-line options reject before opening a
+window or creating configuration files.
 
 ## Explicit two-peer enrollment
 

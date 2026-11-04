@@ -8,6 +8,7 @@ rust-version = "1.95"
 name = "peerglide-gui"
 path = "src/main.rs"
 [dependencies]
+clap.workspace = true
 peerglide-protocol.workspace = true
 anyhow.workspace = true
 serde.workspace = true
