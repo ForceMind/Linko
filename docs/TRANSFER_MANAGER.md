@@ -41,7 +41,8 @@ failed Receiver creation keeps the durable reservation. No automatic refunds,
 record overwrites, cleanup, deletion, retry or grant restoration occur.
 
 Startup bounds the scan to 4096 root entries and 128 reservations, each at most
-2048 bytes. Existing receiver directories are validated against bounded receipts,
+2048 bytes. Admissions and publication recheck entry capacity so their own new
+files cannot push the root past its reopenable limit. Existing receiver directories are validated against bounded receipts,
 canonical directory binding, regular files, partial size and terminal markers.
 Old valid receipts are imported only after validating the full inventory. Malformed,
 future-version, conflicting, oversized, symlink or incomplete initialization data

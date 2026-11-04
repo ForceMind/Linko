@@ -1,8 +1,9 @@
 //! Offline file admission with durable root-wide cumulative reservations.
 //! No networking, automatic refunds, cleanup or filesystem free-space guarantee.
 use crate::{
+    admission::Ledger,
     data_policy::{Capability, DataSession, Denied, Permissions, Permit},
-    admission::Ledger, Manifest, PeerBinding, Progress, Receiver,
+    Manifest, PeerBinding, Progress, Receiver,
 };
 use std::{
     collections::BTreeMap,
@@ -64,9 +65,13 @@ pub struct Manager {
 }
 impl Manager {
     pub fn new(root: &Path, session: DataSession, budget: u64) -> io::Result<Self> {
-        let ledger = Ledger::open(root)?;
+        crate::require_dir(root)?;
+        // Freeze relative paths before locking; later cwd changes must never
+        // redirect disk effects into a different (unlocked) receive directory.
+        let root = std::fs::canonicalize(root)?;
+        let ledger = Ledger::open(&root)?;
         Ok(Self {
-            root: root.to_owned(),
+            root,
             session,
             budget,
             entries: BTreeMap::new(),
@@ -129,7 +134,10 @@ impl Manager {
             return Err(Error::Quota);
         }
         // Sync the durable reservation before creating or extending staged data.
-        if !self.ledger.reserve(binding.clone(), &manifest, resume, self.budget)? {
+        if !self
+            .ledger
+            .reserve(binding.clone(), &manifest, resume, self.budget)?
+        {
             return Err(Error::Quota);
         }
         let total_bytes = manifest.size();
@@ -213,6 +221,11 @@ impl Manager {
         let receiver = entry.receiver.as_ref().ok_or(Error::Inactive)?;
         if !receiver.progress().chunks_complete {
             return Err(Error::Incomplete);
+        }
+        // Publication adds a root entry. Refuse before consuming the Receiver
+        // if it could make our own bounded inventory impossible to reopen.
+        if !self.ledger.has_capacity(1)? {
+            return Err(Error::Quota);
         }
         let receiver = entry.receiver.take().ok_or(Error::Inactive)?;
         entry.summary.state = State::UnknownOutcome;
@@ -467,9 +480,13 @@ mod tests {
         let fixture = Fixture::new();
         let (mut manager, manifest) = fixture.setup(18);
         grant(&mut manager);
-        manager.accept(binding(1), manifest.clone(), false, 0).unwrap();
+        manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .unwrap();
         manager.cancel([1; 16]).unwrap();
-        manager.accept(binding(2), manifest.clone(), false, 0).unwrap();
+        manager
+            .accept(binding(2), manifest.clone(), false, 0)
+            .unwrap();
         manager.write_chunk([2; 16], 0, b"file data", 1).unwrap();
         let published = manager.commit([2; 16], || 2).unwrap();
         // Moving the user's published file must not refund admission credit.
@@ -482,9 +499,15 @@ mod tests {
         assert_eq!(manager.inventory().retained_partials, 1);
         assert_eq!(manager.inventory().terminal_records, 1);
         // A new session still starts without consent.
-        assert!(matches!(manager.accept(binding(1), manifest.clone(), true, 0), Err(Error::Permission(_))));
+        assert!(matches!(
+            manager.accept(binding(1), manifest.clone(), true, 0),
+            Err(Error::Permission(_))
+        ));
         grant(&mut manager);
-        assert!(matches!(manager.accept(binding(3), manifest.clone(), false, 0), Err(Error::Quota)));
+        assert!(matches!(
+            manager.accept(binding(3), manifest.clone(), false, 0),
+            Err(Error::Quota)
+        ));
         manager.accept(binding(1), manifest, true, 0).unwrap();
         assert_eq!(manager.admitted_bytes(), 18);
         assert_eq!(fs::read(fixture.0.join("moved.txt")).unwrap(), b"file data");
@@ -502,7 +525,10 @@ mod tests {
         let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 8).unwrap();
         assert_eq!(manager.admitted_bytes(), 9);
         grant(&mut manager);
-        assert!(matches!(manager.accept(binding(1), manifest.clone(), true, 0), Err(Error::Quota)));
+        assert!(matches!(
+            manager.accept(binding(1), manifest.clone(), true, 0),
+            Err(Error::Quota)
+        ));
         drop(manager);
         let mut manager = Manager::new(&root, DataSession::new([1; 32], [4; 32], 0), 9).unwrap();
         grant(&mut manager);
@@ -529,11 +555,17 @@ mod tests {
         let fixture = Fixture::new();
         let (mut manager, manifest) = fixture.setup(9);
         let root = manager.root.clone();
-        let receipt = serde_json::to_vec(&crate::Receipt { binding: binding(1), manifest: manifest.clone() }).unwrap();
+        let receipt = serde_json::to_vec(&crate::Receipt {
+            binding: binding(1),
+            manifest: manifest.clone(),
+        })
+        .unwrap();
         let staging = root.join(format!(".peerglide-{}", blake3::hash(&receipt).to_hex()));
         fs::create_dir(&staging).unwrap();
         grant(&mut manager);
-        assert!(manager.accept(binding(1), manifest.clone(), false, 0).is_err());
+        assert!(manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .is_err());
         assert_eq!(manager.admitted_bytes(), 9);
         drop(manager);
         // A partial initialization blocks reopening; the original is preserved.
@@ -544,7 +576,10 @@ mod tests {
         let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 9).unwrap();
         grant(&mut manager);
         assert_eq!(manager.admitted_bytes(), 9);
-        assert!(matches!(manager.accept(binding(2), manifest, false, 0), Err(Error::Quota)));
+        assert!(matches!(
+            manager.accept(binding(2), manifest, false, 0),
+            Err(Error::Quota)
+        ));
     }
 
     #[test]
@@ -555,7 +590,17 @@ mod tests {
         grant(&mut manager);
         manager.accept(binding(1), manifest, false, 0).unwrap();
         drop(manager);
-        let record = fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.file_name().unwrap().to_str().unwrap().starts_with(".peerglide-admission-")).unwrap();
+        let record = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with(".peerglide-admission-")
+            })
+            .unwrap();
         let original = fs::read(&record).unwrap();
         let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
         value["version"] = 2.into();
@@ -566,7 +611,12 @@ mod tests {
             assert_eq!(fs::read(&record).unwrap(), bytes);
         }
         fs::write(&record, original).unwrap();
-        assert_eq!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap().admitted_bytes(), 9);
+        assert_eq!(
+            Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100)
+                .unwrap()
+                .admitted_bytes(),
+            9
+        );
     }
 
     #[test]
@@ -575,15 +625,166 @@ mod tests {
         let (mut manager, manifest) = fixture.setup(100);
         let root = manager.root.clone();
         grant(&mut manager);
-        manager.accept(binding(1), manifest.clone(), false, 0).unwrap();
+        manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .unwrap();
         drop(manager);
         fs::write(fixture.0.join("source.txt"), b"different").unwrap();
         let changed = Manifest::from_file(&fixture.0.join("source.txt")).unwrap();
         let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
         grant(&mut manager);
         assert!(manager.accept(binding(1), changed, true, 0).is_err());
-        assert!(manager.accept(binding(1), manifest.clone(), false, 0).is_err());
+        assert!(manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .is_err());
         manager.accept(binding(1), manifest, true, 0).unwrap();
         assert_eq!(manager.admitted_bytes(), 9);
+    }
+
+    #[test]
+    fn incomplete_legacy_initialization_and_short_partial_fail_closed() {
+        let fixture = Fixture::new();
+        let (manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        drop(manager);
+        let receiver = Receiver::create(&root, binding(1), manifest).unwrap();
+        let staging = receiver.dir.clone();
+        drop(receiver);
+        let partial = staging.join("partial");
+        fs::OpenOptions::new().write(true).open(&partial).unwrap().set_len(1).unwrap();
+        assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
+        assert_eq!(fs::metadata(&partial).unwrap().len(), 1);
+        fs::remove_file(&partial).unwrap();
+        assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
+        assert!(staging.join("receipt.json").is_file());
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_str().unwrap().starts_with(".peerglide-admission-")));
+        // After publication, only the terminal marker and receipt may remain.
+        fs::write(staging.join("committing"), []).unwrap();
+        let manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
+        assert_eq!(manager.admitted_bytes(), 9);
+        assert_eq!(manager.inventory().retained_partials, 0);
+        assert_eq!(manager.inventory().terminal_records, 1);
+    }
+
+    #[test]
+    fn root_entry_limit_rejects_admission_without_breaking_reopen() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        for index in 0..4094 {
+            fs::write(root.join(format!("unrelated-{index}")), []).unwrap();
+        }
+        grant(&mut manager);
+        assert!(matches!(manager.accept(binding(1), manifest.clone(), false, 0), Err(Error::Quota)));
+        assert_eq!(manager.admitted_bytes(), 0);
+        drop(manager);
+        let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
+        // Only explicitly selected fixture files are removed; Manager never cleans.
+        fs::remove_file(root.join("unrelated-0")).unwrap();
+        fs::remove_file(root.join("unrelated-1")).unwrap();
+        grant(&mut manager);
+        manager.accept(binding(1), manifest, false, 0).unwrap();
+        manager.write_chunk([1; 16], 0, b"file data", 1).unwrap();
+        manager.commit([1; 16], || 2).unwrap();
+        drop(manager);
+        assert_eq!(Manager::new(&root, DataSession::new([1; 32], [4; 32], 0), 100).unwrap().admitted_bytes(), 9);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_receipt_partial_or_reservation_never_enters_inventory() {
+        use std::os::unix::fs::symlink;
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        grant(&mut manager);
+        manager.accept(binding(1), manifest, false, 0).unwrap();
+        let staging = manager.entries.get(&[1; 16]).unwrap().receiver.as_ref().unwrap().dir.clone();
+        drop(manager);
+        let record = fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.file_name().unwrap().to_str().unwrap().starts_with(".peerglide-admission-")).unwrap();
+        for path in [staging.join("receipt.json"), staging.join("partial"), record] {
+            let backup = fixture.0.join("backup");
+            fs::rename(&path, &backup).unwrap();
+            symlink(&backup, &path).unwrap();
+            assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
+            assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+            fs::remove_file(&path).unwrap();
+            fs::rename(backup, path).unwrap();
+        }
+        assert_eq!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap().admitted_bytes(), 9);
+    }
+
+    #[test]
+    fn relative_root_stays_locked_after_cwd_changes() {
+        const CHILD_ROOT: &str = "PEERGLIDE_TEST_CWD_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            // Only the dedicated child process changes its working directory.
+            std::env::set_current_dir(root).unwrap();
+            let manifest = Manifest::from_file(Path::new("source.txt")).unwrap();
+            let mut manager = Manager::new(
+                Path::new("received"),
+                DataSession::new([1; 32], [2; 32], 0),
+                100,
+            )
+            .unwrap();
+            std::env::set_current_dir("other").unwrap();
+            let _other = Manager::new(
+                Path::new("received"),
+                DataSession::new([1; 32], [3; 32], 0),
+                100,
+            )
+            .unwrap();
+            grant(&mut manager);
+            manager.accept(binding(1), manifest, false, 0).unwrap();
+            return;
+        }
+        let fixture = Fixture::new();
+        let (manager, _) = fixture.setup(100);
+        drop(manager);
+        fs::create_dir_all(fixture.0.join("other/received")).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "manager::tests::relative_root_stays_locked_after_cwd_changes",
+            ])
+            .env(CHILD_ROOT, &fixture.0)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let manager = Manager::new(
+            &fixture.0.join("received"),
+            DataSession::new([1; 32], [4; 32], 0),
+            100,
+        )
+        .unwrap();
+        assert_eq!(manager.admitted_bytes(), 9);
+        let other = Manager::new(
+            &fixture.0.join("other/received"),
+            DataSession::new([1; 32], [5; 32], 0),
+            100,
+        )
+        .unwrap();
+        assert_eq!(other.admitted_bytes(), 0);
+    }
+
+    #[test]
+    fn failed_reservation_poison_blocks_later_admissions() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(100);
+        let bytes = serde_json::to_vec(&binding(1)).unwrap();
+        let record = manager.root.join(format!(
+            ".peerglide-admission-{}",
+            blake3::hash(&bytes).to_hex()
+        ));
+        fs::create_dir(&record).unwrap();
+        grant(&mut manager);
+        assert!(manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .is_err());
+        // Removing the obstacle cannot revive an owner with uncertain persistence.
+        fs::remove_dir(&record).unwrap();
+        assert!(manager.accept(binding(2), manifest, false, 0).is_err());
+        assert_eq!(manager.admitted_bytes(), 0);
+        assert_eq!(fs::read_dir(&manager.root).unwrap().count(), 1);
     }
 }

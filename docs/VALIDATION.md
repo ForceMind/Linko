@@ -450,3 +450,13 @@ legacy receipt import, exact resume without double charge, consent reset, lower
 budget refusal, root-lock lifetime, failed staging, altered manifests and preserved
 malformed/future/oversized records. Candidate tests/CI are pending at this checkpoint;
 no new passing checks or persistent detailed-history claims are made yet.
+
+
+PR #33 initial candidate 1bd0f759a232af40ed47f4659cf00beb941db627 passed the
+Rust 1.95 all-target check in run 41788117975; three platform jobs stopped at
+rustfmt, before Clippy/tests/build. Those are failures, not completed validation.
+A focused independent read-only agent review found incomplete legacy storage,
+cwd-dependent root paths and root-entry capacity boundaries. Each is being fixed
+with filesystem/process regressions; this review is not an independent security
+audit or an automated repository review-quota workaround. User explicitly declined
+local Rust installation; continue source development and hosted CI only.

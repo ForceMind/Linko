@@ -164,7 +164,7 @@ GitHub 分支与 CI 验证，不在用户 Mac 安装工具或启用输入/剪贴
 最终候选 run 41783406794 均成功。`python` 不存在，使用已有 python3 运行
 预检，报告显示 rustc/cargo 不可用，fmt 无法启动，后续检查 not_run。
 没有安装工具、授予输入权限或读取系统剪贴板；真实 GUI/worker/C06 尚未运行。
-用户正在确认工具链安装的空间需求，未取得安装批准。
+用户明确暂不安装 Rust，继续代码和 GitHub CI；本机运行验证客观受阻。
 
 当前分支 persist-transfer-admission：接收根目录独占锁、跨会话/重启的持久
 预留、旧暂存盘点/导入和配额复用，见 TRANSFER_MANAGER.md。修复旧测试中重建
