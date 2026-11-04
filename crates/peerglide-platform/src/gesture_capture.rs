@@ -233,8 +233,8 @@ impl GestureControl {
         // Sample the relative clock FIRST. A pause before the later Instant
         // sample can only shorten admission; it must never renew its expiry.
         let now = now_ms();
-        let until = admission_expiry(frame.expires(), now, Instant::now())
-            .ok_or(CaptureError::Stopped)?;
+        let until =
+            admission_expiry(frame.expires(), now, Instant::now()).ok_or(CaptureError::Stopped)?;
         self.shared.publish_until(frame.key(), now, until, || {})
     }
     pub fn heartbeat(&mut self) {
@@ -347,6 +347,26 @@ struct Broker<S: TriggerProducer> {
     buttons: u8,
 }
 impl<S: TriggerProducer> Broker<S> {
+    fn initialize(
+        &mut self,
+        keys: impl IntoIterator<Item = u16>,
+        buttons: impl IntoIterator<Item = u8>,
+    ) {
+        for key in keys {
+            self.set_key(key, true);
+        }
+        for button in buttons {
+            self.buttons |= if (1..=5).contains(&button) {
+                1 << (button - 1)
+            } else {
+                0
+            };
+        }
+        self.update_held();
+        if self.buttons & 2 != 0 {
+            self.phase = Phase::BypassHeld;
+        }
+    }
     fn held(&self) -> u64 {
         self.key_count + u64::from(self.buttons.count_ones())
     }
@@ -612,26 +632,12 @@ impl<S: TriggerProducer> Broker<S> {
 pub(crate) struct CallbackBroker(Broker<ActionTriggerSource>);
 #[cfg(windows)]
 impl CallbackBroker {
-    #[cfg(windows)]
     pub(crate) fn initialize(
         &mut self,
         keys: impl IntoIterator<Item = u16>,
         buttons: impl IntoIterator<Item = u8>,
     ) {
-        for key in keys {
-            self.0.set_key(key, true);
-        }
-        for button in buttons {
-            self.0.buttons |= if (1..=5).contains(&button) {
-                1 << (button - 1)
-            } else {
-                0
-            };
-        }
-        self.0.update_held();
-        if self.0.buttons & 2 != 0 {
-            self.0.phase = Phase::BypassHeld;
-        }
+        self.0.initialize(keys, buttons);
     }
     pub(crate) fn clear_startup_key(&mut self, token: u16) {
         self.0.set_key(token, false);
@@ -914,6 +920,26 @@ mod tests {
             }),
             0
         );
+    }
+    #[test]
+    fn startup_held_right_and_extra_buttons_cannot_straddle_admission() {
+        let (mut b, _rx) = fixture(8);
+        b.initialize([0x4041], 1..=5);
+        assert_eq!(b.held(), 6);
+        assert_eq!(
+            b.shared.publish(b.source.frame(), now_ms()),
+            Err(CaptureError::Held)
+        );
+        assert!(!right(&mut b, true));
+        assert!(!right(&mut b, false));
+        b.set_key(0x4041, false);
+        for button in [1, 3, 4, 5] {
+            b.button(button, false);
+        }
+        assert_eq!(b.held(), 0);
+        arm(&b);
+        assert!(right(&mut b, true));
+        assert!(right(&mut b, false));
     }
     #[test]
     fn ordinary_pairs_pass_and_cannot_be_captured_halfway() {
