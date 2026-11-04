@@ -247,10 +247,25 @@ mod tests {
     #[test]
     fn bundle_identity_uses_case_preserving_ascii_not_titles_or_paths() {
         assert!(valid_bundle_id("com.Example.Editor"));
-        for invalid in ["", "com..Editor", "window title", "/Applications/Editor.app", "应用", "com.\u{fffd}"] {
+        for invalid in [
+            "",
+            "com..Editor",
+            "window title",
+            "/Applications/Editor.app",
+            "应用",
+            "com.\u{fffd}",
+        ] {
             assert!(!valid_bundle_id(invalid));
         }
-        assert_eq!(bounded_bundle_id(&NSString::from_str(&"a".repeat(245))).unwrap().len(), 256);
-        assert_eq!(bounded_bundle_id(&NSString::from_str(&"a".repeat(246))), Err(ContextError::IdentifierTooLong));
+        assert_eq!(
+            bounded_bundle_id(&NSString::from_str(&"a".repeat(245)))
+                .unwrap()
+                .len(),
+            256
+        );
+        assert_eq!(
+            bounded_bundle_id(&NSString::from_str(&"a".repeat(246))),
+            Err(ContextError::IdentifierTooLong)
+        );
     }
 }

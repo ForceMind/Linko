@@ -5,8 +5,8 @@ use super::{
 use std::mem::size_of;
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, FILETIME, HANDLE,
-        HWND,
+        CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_INSUFFICIENT_BUFFER, FILETIME,
+        HANDLE, HWND,
     },
     System::{
         StationsAndDesktops::{
@@ -353,7 +353,10 @@ mod tests {
     fn full_unicode_path_is_preserved_and_invalid_utf16_is_rejected() {
         let path = r"C:\应用\Editor.EXE";
         let encoded: Vec<_> = path.encode_utf16().collect();
-        assert_eq!(path_identifier(&encoded).unwrap(), format!("win-exe:{path}"));
+        assert_eq!(
+            path_identifier(&encoded).unwrap(),
+            format!("win-exe:{path}")
+        );
         assert_eq!(
             path_identifier(&[0xd800]),
             Err(ContextError::IdentifierUnavailable)
