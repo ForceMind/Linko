@@ -651,13 +651,23 @@ mod tests {
         let staging = receiver.dir.clone();
         drop(receiver);
         let partial = staging.join("partial");
-        fs::OpenOptions::new().write(true).open(&partial).unwrap().set_len(1).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&partial)
+            .unwrap()
+            .set_len(1)
+            .unwrap();
         assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
         assert_eq!(fs::metadata(&partial).unwrap().len(), 1);
         fs::remove_file(&partial).unwrap();
         assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
         assert!(staging.join("receipt.json").is_file());
-        assert!(!fs::read_dir(&root).unwrap().any(|entry| entry.unwrap().file_name().to_str().unwrap().starts_with(".peerglide-admission-")));
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_str()
+            .unwrap()
+            .starts_with(".peerglide-admission-")));
         // After publication, only the terminal marker and receipt may remain.
         fs::write(staging.join("committing"), []).unwrap();
         let manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
@@ -675,7 +685,10 @@ mod tests {
             fs::write(root.join(format!("unrelated-{index}")), []).unwrap();
         }
         grant(&mut manager);
-        assert!(matches!(manager.accept(binding(1), manifest.clone(), false, 0), Err(Error::Quota)));
+        assert!(matches!(
+            manager.accept(binding(1), manifest.clone(), false, 0),
+            Err(Error::Quota)
+        ));
         assert_eq!(manager.admitted_bytes(), 0);
         drop(manager);
         let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
@@ -687,7 +700,12 @@ mod tests {
         manager.write_chunk([1; 16], 0, b"file data", 1).unwrap();
         manager.commit([1; 16], || 2).unwrap();
         drop(manager);
-        assert_eq!(Manager::new(&root, DataSession::new([1; 32], [4; 32], 0), 100).unwrap().admitted_bytes(), 9);
+        assert_eq!(
+            Manager::new(&root, DataSession::new([1; 32], [4; 32], 0), 100)
+                .unwrap()
+                .admitted_bytes(),
+            9
+        );
     }
 
     #[cfg(unix)]
@@ -699,19 +717,49 @@ mod tests {
         let root = manager.root.clone();
         grant(&mut manager);
         manager.accept(binding(1), manifest, false, 0).unwrap();
-        let staging = manager.entries.get(&[1; 16]).unwrap().receiver.as_ref().unwrap().dir.clone();
+        let staging = manager
+            .entries
+            .get(&[1; 16])
+            .unwrap()
+            .receiver
+            .as_ref()
+            .unwrap()
+            .dir
+            .clone();
         drop(manager);
-        let record = fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.file_name().unwrap().to_str().unwrap().starts_with(".peerglide-admission-")).unwrap();
-        for path in [staging.join("receipt.json"), staging.join("partial"), record] {
+        let record = fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with(".peerglide-admission-")
+            })
+            .unwrap();
+        for path in [
+            staging.join("receipt.json"),
+            staging.join("partial"),
+            record,
+        ] {
             let backup = fixture.0.join("backup");
             fs::rename(&path, &backup).unwrap();
             symlink(&backup, &path).unwrap();
             assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
-            assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+            assert!(fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink());
             fs::remove_file(&path).unwrap();
             fs::rename(backup, path).unwrap();
         }
-        assert_eq!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap().admitted_bytes(), 9);
+        assert_eq!(
+            Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100)
+                .unwrap()
+                .admitted_bytes(),
+            9
+        );
     }
 
     #[test]

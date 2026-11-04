@@ -170,7 +170,9 @@ impl Ledger {
                     require_regular(&child.path())?;
                     let len = child.metadata()?.len();
                     if child.file_name() == "partial" {
-                        if len != record.bytes { return Err(invalid("partial size differs from reservation")); }
+                        if len != record.bytes {
+                            return Err(invalid("partial size differs from reservation"));
+                        }
                         partial_present = true;
                         ledger.inventory.retained_partials += 1;
                     } else if child.file_name() == "committing" {
@@ -181,7 +183,9 @@ impl Ledger {
                         ledger.inventory.terminal_records += 1;
                     }
                 }
-                if !partial_present && !terminal_present { return Err(invalid("incomplete retained initialization")); }
+                if !partial_present && !terminal_present {
+                    return Err(invalid("incomplete retained initialization"));
+                }
                 if legacy.len() >= super::manager::MAX_ATTEMPTS {
                     return Err(invalid("retained transfer limit"));
                 }
@@ -225,7 +229,9 @@ impl Ledger {
         Ok(())
     }
     fn persist(&mut self, record: Reservation) -> io::Result<()> {
-        if !self.has_capacity(1)? { return Err(invalid("receive root entry limit")); }
+        if !self.has_capacity(1)? {
+            return Err(invalid("receive root entry limit"));
+        }
         // Poison before I/O: any failed/uncertain persistence blocks this owner.
         self.healthy = false;
         let bytes =
@@ -262,8 +268,15 @@ impl Ledger {
                 Err(invalid("transfer ID already reserved"))
             };
         }
-        if resume { return Err(invalid("no retained reservation to resume")); }
-        if self.reservations.len() >= super::manager::MAX_ATTEMPTS || record.bytes > budget - self.inventory.reserved_bytes || !self.has_capacity(3)? { return Ok(false); }
+        if resume {
+            return Err(invalid("no retained reservation to resume"));
+        }
+        if self.reservations.len() >= super::manager::MAX_ATTEMPTS
+            || record.bytes > budget - self.inventory.reserved_bytes
+            || !self.has_capacity(3)?
+        {
+            return Ok(false);
+        }
         self.persist(record)?;
         Ok(true)
     }
@@ -272,7 +285,9 @@ impl Ledger {
         for entry in fs::read_dir(&self.root)? {
             entry?;
             count += 1;
-            if count > MAX_ROOT_ENTRIES { return Ok(false); }
+            if count > MAX_ROOT_ENTRIES {
+                return Ok(false);
+            }
         }
         Ok(true)
     }
