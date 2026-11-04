@@ -80,7 +80,9 @@ impl Signal {
         }
     }
     #[cfg(all(test, windows))]
-    pub(crate) fn new_for_test() -> Self { Self::new() }
+    pub(crate) fn new_for_test() -> Self {
+        Self::new()
+    }
     #[cfg(all(test, windows))]
     pub(crate) fn closed_for_test(&self) -> bool {
         self.state.load(Ordering::Acquire) & CLOSED != 0
@@ -429,7 +431,10 @@ impl LocalContexts {
             return Err(WatchError::Closed);
         }
         if let Err(error) = self.native.pump() {
-            if error == WatchError::CleanupFailed { self.store.close(); return Err(error); }
+            if error == WatchError::CleanupFailed {
+                self.store.close();
+                return Err(error);
+            }
             self.signal.notify();
             self.store.acknowledge(Instant::now())?;
             return Err(error);

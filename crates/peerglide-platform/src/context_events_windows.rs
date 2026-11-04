@@ -669,7 +669,11 @@ mod tests {
             signal: signal.clone(),
             thread: FAKE_THREAD,
             hooks: std::array::from_fn(|index| {
-                if index < hooks { fake_handle(index + 1) } else { null_mut() }
+                if index < hooks {
+                    fake_handle(index + 1)
+                } else {
+                    null_mut()
+                }
             }),
             window: if window { fake_handle(42) } else { null_mut() },
             instance: fake_handle(43),
@@ -685,15 +689,31 @@ mod tests {
             _thread: PhantomData,
         });
         watch.publish_callbacks();
-        let ops = FakeCleanup { signal, fail, calls: Vec::new(), thread_reads: 0 };
+        let ops = FakeCleanup {
+            signal,
+            fail,
+            calls: Vec::new(),
+            thread_reads: 0,
+        };
         (watch, restore, ops)
     }
 
-    fn expected_cleanup(hooks: usize, window: bool, session: bool, class: bool) -> Vec<CleanupStep> {
+    fn expected_cleanup(
+        hooks: usize,
+        window: bool,
+        session: bool,
+        class: bool,
+    ) -> Vec<CleanupStep> {
         let mut steps: Vec<_> = (1..=hooks).map(CleanupStep::Hook).collect();
-        if session { steps.push(CleanupStep::Session); }
-        if window { steps.push(CleanupStep::Window); }
-        if class { steps.push(CleanupStep::Class); }
+        if session {
+            steps.push(CleanupStep::Session);
+        }
+        if window {
+            steps.push(CleanupStep::Window);
+        }
+        if class {
+            steps.push(CleanupStep::Class);
+        }
         steps
     }
 
@@ -737,7 +757,10 @@ mod tests {
         let expected = expected_cleanup(4, true, true, true);
         for failure in expected.iter().copied() {
             let (mut watch, _restore, mut ops) = fake_watch(4, true, true, true, Some(failure));
-            assert_eq!(watch.shutdown_with(&mut ops), Err(WatchError::CleanupFailed));
+            assert_eq!(
+                watch.shutdown_with(&mut ops),
+                Err(WatchError::CleanupFailed)
+            );
             assert_eq!(ops.calls, expected);
             assert!(ops.signal.closed_for_test());
             assert!(watch.closed && watch.cleanup_failed && !watch.ready);
@@ -749,7 +772,10 @@ mod tests {
                 reserve_callbacks(&Arc::new(Signal::new_for_test())),
                 Err(WatchError::NativeUnavailable)
             );
-            assert_eq!(watch.shutdown_with(&mut ops), Err(WatchError::CleanupFailed));
+            assert_eq!(
+                watch.shutdown_with(&mut ops),
+                Err(WatchError::CleanupFailed)
+            );
             assert_eq!(ops.thread_reads, 1);
             assert_eq!(ops.calls, expected);
             drop(ManuallyDrop::into_inner(watch));
