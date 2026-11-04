@@ -21,7 +21,7 @@ not implemented in this milestone. The desktop interface is Simplified Chinese, 
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
 
-An offline **Gesture lab** lets you draw on a window-local canvas, inspect
+An offline **手势实验室 (Gesture lab)** lets you draw on a window-local canvas, inspect
 recognition/rejection and explicitly save labelled samples. Open it in the sidebar
 or run `peerglide-gui --gesture-lab`; no pairing or input permissions are needed.
 This is a test/recording page, not global mouse gestures or action execution.
@@ -41,10 +41,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 Use stable Rust (GUI requires at least 1.95). Run `cargo build --workspace --release --locked` to build both
-executables. Launch `peerglide-gui` with `peerglide` beside it. Devices creates
+executables. Launch `peerglide-gui` with `peerglide` beside it. 设备 (Devices) creates
 an identity and enrolls the other computer's public certificate after fingerprint
-confirmation. Settings explicitly enables native input and receiving control;
-Home starts/listens/connects and can run a harmless transport probe. Displays
+confirmation. 设置 (Settings) explicitly enables native input and receiving control;
+主页 (Home) starts/listens/connects and can run a harmless transport probe. 显示器 (Displays)
 sets the switching side. No config file editing is required.
 
 CI artifacts contain an unsigned Windows portable ZIP, macOS app bundle or

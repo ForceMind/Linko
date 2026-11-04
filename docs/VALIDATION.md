@@ -579,3 +579,30 @@ include the non-Cargo font; all three pass locally. Source build remains blocked
 by the explicitly declined Rust installation. Earlier English GUI evidence does
 not verify this new Chinese rendering; final candidate CI/screenshots/native launch
 are pending. No physical input acceptance or global G1 enablement is claimed.
+
+
+Chinese source candidate `d3891c6108590bc438dda9723abfa27944547342` passed all
+five jobs in [41798545549](https://github.com/ForceMind/PeerGlide/actions/runs/41798545549):
+three-platform fmt/strict Clippy/workspace tests/Release build/process smokes/
+packages, Linux actual Chinese GUI/export smoke, macOS isolated/parallel GUI
+stress, Rust 1.95 and strict audit. Downloaded and inspected Home/lab screenshots
+from artifact 13306631744: Chinese navigation, headings, status, recognition and
+saved-sample feedback render without missing-glyph boxes. Sample export/evaluator
+and explicit-profile isolation checks passed. This is CI synthetic canvas evidence.
+
+Exact-candidate macOS artifact 13306104386 has verified inner ZIP SHA256
+`eb648b3e266ddfbff1a3dd56dfc84afcf39932efb922cdc652c413c09853be45`; the font OFL
+notice is present. On macOS 26.2 (25C56), ARM64, its actual native window titled
+“屏跃 · PeerGlide” displayed the Chinese Home/navigation correctly, Offline,
+no identity/peer and native capture/injection off. The process is deliberately
+left open for the user in a new workspace-local profile, containing only its
+instance lock. No system font/toolchain install, input grant or user identity
+change occurred. Report: target/local-validation/gui-zh-d3891c6/report.json.
+
+The focused static review confirmed stable keys/protocol/JSON/action IDs are
+unchanged, and corrected SampleCount's Chinese explanation to cover both too few
+and too many samples. The font's variable axis is explicitly Regular (400), not
+its upstream Thin default (100). Three Python notice regressions pass locally.
+Final documentation/README follow-up changes no runtime/build/test source; its
+exact-head candidate CI is reported on PR #34. Physical C06, global G1/actions,
+production data network, persistent detailed history and #10 remain open.
