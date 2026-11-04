@@ -103,9 +103,7 @@ impl RuleEditor {
     pub fn ui(&mut self, ui: &mut egui::Ui, dir: &Path, writable: bool) {
         ui.heading("手势规则");
         ui.label("配置手势动作映射和排除项。预览不会捕获输入或执行动作。");
-        if self.store.is_none()
-            && writable
-            && ui.button("备份并重置无效的规则文件").clicked()
+        if self.store.is_none() && writable && ui.button("备份并重置无效的规则文件").clicked()
         {
             match Store::reset::<RuleBook>(dir.join("gesture-rules.json")) {
                 Ok((store, draft)) => {
@@ -140,9 +138,7 @@ impl RuleEditor {
                         egui::ComboBox::from_id_salt("scope")
                             .selected_text(["全局", "应用", "应用组"][kind])
                             .show_ui(ui, |ui| {
-                                for (i, label) in ["全局", "应用", "应用组"]
-                                    .iter()
-                                    .enumerate()
+                                for (i, label) in ["全局", "应用", "应用组"].iter().enumerate()
                                 {
                                     ui.selectable_value(&mut kind, i, *label);
                                 }
@@ -170,7 +166,8 @@ impl RuleEditor {
                                 if apps.len() < 32 && ui.button("添加应用").clicked() {
                                     apps.push(String::new());
                                 }
-                                if apps.len() > 1 && ui.button("删除最后一个应用").clicked() {
+                                if apps.len() > 1 && ui.button("删除最后一个应用").clicked()
+                                {
                                     apps.pop();
                                 }
                             }
@@ -221,7 +218,8 @@ impl RuleEditor {
             if self.draft.exclusions.len() < 128 && ui.button("添加排除项").clicked() {
                 self.draft.exclusions.push(String::new());
             }
-            if !self.draft.exclusions.is_empty() && ui.button("删除最后一个排除项").clicked() {
+            if !self.draft.exclusions.is_empty() && ui.button("删除最后一个排除项").clicked()
+            {
                 self.draft.exclusions.pop();
             }
             let valid = CompiledRules::new(self.draft.clone());

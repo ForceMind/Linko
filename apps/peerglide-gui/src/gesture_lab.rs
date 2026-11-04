@@ -27,7 +27,7 @@ const LABELS: [&str; 9] = [
 ];
 fn rejection_label(reason: Rejection) -> &'static str {
     match reason {
-        Rejection::SampleCount => "采样点数量超出上限",
+        Rejection::SampleCount => "采样点数量不足或超出上限",
         Rejection::InvalidCoordinate => "坐标无效",
         Rejection::NonMonotonicTime => "采样时间顺序无效",
         Rejection::Duration => "绘制时间超出上限",
@@ -136,10 +136,7 @@ impl GestureLab {
         }
     }
     fn export(&mut self) -> Result<PathBuf> {
-        anyhow::ensure!(
-            self.completed && !self.saved,
-            "请先重新绘制一条完整样本"
-        );
+        anyhow::ensure!(self.completed && !self.saved, "请先重新绘制一条完整样本");
         anyhow::ensure!(self.expected < LABELS.len() as u32, "样本标签无效");
         let directory = PathBuf::from(self.export_dir.trim());
         anyhow::ensure!(!directory.as_os_str().is_empty(), "请选择样本文件夹");
@@ -266,7 +263,9 @@ impl GestureLab {
                     ui.selectable_value(&mut self.expected, id as u32, *label);
                 }
             });
-        ui.weak("请选择预期手势标签，标签不会影响识别结果。画布样本不能证明原生鼠标采样率已通过验收。");
+        ui.weak(
+            "请选择预期手势标签，标签不会影响识别结果。画布样本不能证明原生鼠标采样率已通过验收。",
+        );
         ui.horizontal(|ui| {
             ui.label("样本文件夹");
             ui.text_edit_singleline(&mut self.export_dir);

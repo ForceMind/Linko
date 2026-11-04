@@ -69,18 +69,14 @@ impl Store {
         let data = match bytes {
             None => T::default(),
             Some(bytes) => {
-                let value: serde_json::Value = serde_json::from_slice(&bytes)
-                    .context("配置 JSON 无效，原文件已保留")?;
+                let value: serde_json::Value =
+                    serde_json::from_slice(&bytes).context("配置 JSON 无效，原文件已保留")?;
                 if value.get("store_version").is_some() {
                     let e: Envelope<T> = serde_json::from_value(value)?;
-                    anyhow::ensure!(
-                        e.store_version == 1,
-                        "暂不支持此配置版本，原文件已保留"
-                    );
+                    anyhow::ensure!(e.store_version == 1, "暂不支持此配置版本，原文件已保留");
                     e.data
                 } else {
-                    serde_json::from_value(value)
-                        .context("旧版配置无效，原文件已保留")?
+                    serde_json::from_value(value).context("旧版配置无效，原文件已保留")?
                 }
             }
         };

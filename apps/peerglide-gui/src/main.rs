@@ -22,11 +22,7 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(
-    name = "peerglide-gui",
-    version,
-    about = "屏跃桌面控制面板"
-)]
+#[command(name = "peerglide-gui", version, about = "屏跃桌面控制面板")]
 struct Options {
     /// 使用指定的配置与身份目录，不导入或迁移其他目录的数据与授权。
     #[arg(long, value_name = "DIRECTORY")]
@@ -39,12 +35,10 @@ struct Options {
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let name = "noto-sans-sc".to_owned();
-    fonts.font_data.insert(
-        name.clone(),
-        Arc::new(egui::FontData::from_static(include_bytes!(
-            "../assets/fonts/NotoSansSC.ttf"
-        ))),
-    );
+    let mut data = egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
+    // The upstream variable face defaults to Thin (100); use Regular for UI text.
+    data.tweak.coords.push(b"wght", 400.0);
+    fonts.font_data.insert(name.clone(), Arc::new(data));
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts.families.entry(family).or_default().push(name.clone());
     }
@@ -229,10 +223,7 @@ impl App {
         }
     }
     fn save_config(&mut self) -> Result<()> {
-        anyhow::ensure!(
-            self.instance_lock.is_some(),
-            "另一窗口正在使用此数据目录"
-        );
+        anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         self.config_store
             .as_mut()
             .context("设置需要恢复，原文件已保留")?
@@ -263,10 +254,7 @@ impl App {
             self.instance_lock.is_some() && self.config_store.is_some(),
             "登记设备前需要可写入的设置"
         );
-        anyhow::ensure!(
-            self.child.is_none(),
-            "登记设备前请先停止当前会话"
-        );
+        anyhow::ensure!(self.child.is_none(), "登记设备前请先停止当前会话");
         let confirmed = self
             .confirmed_fingerprint
             .as_deref()
@@ -277,10 +265,7 @@ impl App {
             "证书已变化，请重新核对指纹"
         );
         if let Ok(local) = Identity::load(&self.identity_dir()) {
-            anyhow::ensure!(
-                bytes != local.certificate,
-                "请选择另一台电脑的证书"
-            );
+            anyhow::ensure!(bytes != local.certificate, "请选择另一台电脑的证书");
         }
         std::fs::write(self.dir.join("trusted-peer.crt.der"), &bytes)?;
         let fingerprint = transport::fingerprint(&bytes);
@@ -293,13 +278,9 @@ impl App {
         Ok(())
     }
     fn start(&mut self, probe: bool) -> Result<()> {
-        anyhow::ensure!(
-            self.instance_lock.is_some(),
-            "另一窗口正在使用此数据目录"
-        );
+        anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         anyhow::ensure!(self.child.is_none(), "已有会话正在运行");
-        Identity::load(&self.identity_dir())
-            .context("请先在“设备”页创建本机身份")?;
+        Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
         let cert = self.dir.join("trusted-peer.crt.der");
         let bytes = transport::read_certificate(&cert).context("请先在“设备”页登记可信设备")?;
         anyhow::ensure!(
@@ -400,10 +381,7 @@ impl App {
         }
     }
     fn revoke(&mut self) -> Result<()> {
-        anyhow::ensure!(
-            self.instance_lock.is_some(),
-            "另一窗口正在使用此数据目录"
-        );
+        anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         self.stop();
         self.confirmed_fingerprint = None;
         self.connected = false;
@@ -501,11 +479,7 @@ impl App {
         ui.add_space(24.0);
     }
     fn home(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "多台电脑，一种体验。",
-            "连接设备，让键鼠协作更连贯。",
-        );
+        Self::heading(ui, "多台电脑，一种体验。", "连接设备，让键鼠协作更连贯。");
         egui::Frame::group(ui.style())
             .inner_margin(20.0)
             .show(ui, |ui| {
@@ -553,19 +527,13 @@ impl App {
                 });
             }
             ui.add_space(12.0);
-            if ui
-                .button(RichText::new("启动会话").size(18.0))
-                .clicked()
-            {
+            if ui.button(RichText::new("启动会话").size(18.0)).clicked() {
                 let r = self.start(false);
                 self.feedback(r, "会话工作进程已启动。");
             }
             if ui.button("运行通信探针").clicked() {
                 let r = self.start(true);
-                self.feedback(
-                    r,
-                    "正在探测对端地址，请先在对端启动监听。",
-                );
+                self.feedback(r, "正在探测对端地址，请先在对端启动监听。");
             }
         });
         if self.child.is_some() && ui.button("断开连接并恢复本机控制").clicked() {
@@ -602,10 +570,7 @@ impl App {
             self.instance_lock.is_some(),
         ) {
             let result = self.use_discovery_address(address);
-            self.feedback(
-                result,
-                "仅已选择地址，证书登记和输入授权未改变",
-            );
+            self.feedback(result, "仅已选择地址，证书登记和输入授权未改变");
         }
         ui.strong("本机");
         if let Some(fp) = self.local_fingerprint() {
@@ -626,10 +591,7 @@ impl App {
             .clicked()
         {
             let r = Identity::create(&self.identity_dir()).map(|_| ());
-            self.feedback(
-                r,
-                "身份已创建。仅交换 node.crt.der，私钥请保留在本机。",
-            );
+            self.feedback(r, "身份已创建。仅交换 node.crt.der，私钥请保留在本机。");
         }
         ui.add_space(18.0);
         ui.separator();
@@ -658,10 +620,7 @@ impl App {
             if ui
                 .add_enabled(
                     candidate_fingerprint.is_some(),
-                    egui::Checkbox::new(
-                        &mut compared,
-                        "我已在另一台电脑上独立核对该指纹",
-                    ),
+                    egui::Checkbox::new(&mut compared, "我已在另一台电脑上独立核对该指纹"),
                 )
                 .changed()
             {
@@ -676,10 +635,7 @@ impl App {
                 .clicked()
             {
                 let r = self.enroll();
-                self.feedback(
-                    r,
-                    "设备已登记，输入权限仍需单独设置。",
-                );
+                self.feedback(r, "设备已登记，输入权限仍需单独设置。");
             }
             if let Some(fp) = &self.config.fingerprint {
                 ui.add_space(14.0);
@@ -687,8 +643,7 @@ impl App {
                 ui.monospace(fp);
             }
         });
-        if self.config.fingerprint.is_some()
-            && ui.button("断开连接并撤销设备信任").clicked()
+        if self.config.fingerprint.is_some() && ui.button("断开连接并撤销设备信任").clicked()
         {
             let result = self.revoke();
             self.feedback(result, "设备信任已撤销，正在停止活动工作进程。");
@@ -697,11 +652,7 @@ impl App {
         ui.weak("可手动查找局域网设备；发现结果不可信。当前使用公钥证书登记，配对码尚未实现。");
     }
     fn displays(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "排列屏幕",
-            "拖动对端屏幕，选择从本机哪一侧切换。",
-        );
+        Self::heading(ui, "排列屏幕", "拖动对端屏幕，选择从本机哪一侧切换。");
         ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             let (rect, _) = ui.allocate_exact_size(
                 Vec2::new(ui.available_width().min(700.0), 340.0),
@@ -794,19 +745,13 @@ impl App {
         if self.instance_lock.is_none() || self.config_store.is_none() {
             ui.disable();
         }
-        if ui
-            .checkbox(&mut self.config.dark, "深色外观")
-            .changed()
-        {
+        if ui.checkbox(&mut self.config.dark, "深色外观").changed() {
             self.theme(ctx);
             self.save();
         }
         ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             if ui
-                .checkbox(
-                    &mut self.config.reconnect,
-                    "自动重连可信设备",
-                )
+                .checkbox(&mut self.config.reconnect, "自动重连可信设备")
                 .changed()
             {
                 self.save();
@@ -816,20 +761,14 @@ impl App {
         ui.add_space(18.0);
         ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
             if ui
-                .checkbox(
-                    &mut self.config.allow,
-                    "允许已登记的对端控制本机",
-                )
+                .checkbox(&mut self.config.allow, "允许已登记的对端控制本机")
                 .changed()
             {
                 self.save();
             }
             ui.add_enabled_ui(cfg!(any(windows, target_os = "macos")), |ui| {
                 if ui
-                    .checkbox(
-                        &mut self.config.native,
-                        "启用原生键鼠捕获与注入",
-                    )
+                    .checkbox(&mut self.config.native, "启用原生键鼠捕获与注入")
                     .changed()
                 {
                     self.save();
@@ -895,12 +834,29 @@ impl eframe::App for App {
         if self.page != Page::GestureLab || self.child.is_some() {
             self.gesture_lab.cancel();
         }
-        egui::CentralPanel::default().show(root,|ui|{ui.add_space(20.0);egui::ScrollArea::vertical().show(ui,|ui|match self.page {
-            Page::Home=>self.home(ui),Page::Devices=>self.devices(ui),Page::Displays=>self.displays(ui),Page::Settings=>self.settings(ui,&ctx),
-            Page::GestureLab=>{self.gesture_lab.ui(ui,self.child.is_some());self.gesture_rules.preview_ui(ui,self.gesture_lab.matched_id());},
-            Page::GestureRules=>self.gesture_rules.ui(ui,&self.dir,self.instance_lock.is_some() && self.child.is_none()),
-            Page::Transfers=>{Self::heading(ui,"文件传输","后续 M4 阶段提供");ui.label("当前原型尚不支持文件发送、断点续传、剪贴板共享或原生跨屏拖拽。");},
-        });});
+        egui::CentralPanel::default().show(root, |ui| {
+            ui.add_space(20.0);
+            egui::ScrollArea::vertical().show(ui, |ui| match self.page {
+                Page::Home => self.home(ui),
+                Page::Devices => self.devices(ui),
+                Page::Displays => self.displays(ui),
+                Page::Settings => self.settings(ui, &ctx),
+                Page::GestureLab => {
+                    self.gesture_lab.ui(ui, self.child.is_some());
+                    self.gesture_rules
+                        .preview_ui(ui, self.gesture_lab.matched_id());
+                }
+                Page::GestureRules => self.gesture_rules.ui(
+                    ui,
+                    &self.dir,
+                    self.instance_lock.is_some() && self.child.is_none(),
+                ),
+                Page::Transfers => {
+                    Self::heading(ui, "文件传输", "后续 M4 阶段提供");
+                    ui.label("当前原型尚不支持文件发送、断点续传、剪贴板共享或原生跨屏拖拽。");
+                }
+            });
+        });
     }
 }
 impl Drop for App {
@@ -1107,11 +1063,7 @@ mod tests {
             drop(loaded);
             std::fs::write(dir.join("trusted-peer.crt.der"), &local.certificate)
                 .context("replace pinned certificate fixture")?;
-            assert!(app
-                .start(false)
-                .unwrap_err()
-                .to_string()
-                .contains("变化"));
+            assert!(app.start(false).unwrap_err().to_string().contains("变化"));
             app.import_path = app
                 .identity_dir()
                 .join("node.crt.der")
@@ -1308,11 +1260,7 @@ mod lifecycle_tests {
         app.config.fingerprint = Some("test".into());
         app.config.allow = true;
         std::fs::create_dir(fixture.path.join("settings.json"))?;
-        assert!(app
-            .revoke()
-            .unwrap_err()
-            .to_string()
-            .contains("信任撤销"));
+        assert!(app.revoke().unwrap_err().to_string().contains("信任撤销"));
         assert!(!app.config.allow);
         assert!(app.config.fingerprint.is_none());
         drop(app);
