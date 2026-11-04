@@ -1,4 +1,7 @@
 //! Read-only foreground queries. No hooks, injection, focus changes or prompts.
+#[path = "context_actions_windows.rs"]
+mod actions;
+pub(super) use actions::{action_capabilities, submit_window_action};
 #[path = "context_events_windows.rs"]
 mod events;
 use super::{

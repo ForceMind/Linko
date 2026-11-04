@@ -298,3 +298,18 @@ Git ref传输服务曾失败，已用有expected SHA的非强制API快进恢复�
 同意和原生交付验收。现有通知API是异步的，pump不是全量屏障，不能用本批逻辑
 回归代替C06或宣称G1已经全局可用；UI继续简体中文。数据网络/详细持久历史等
 原路线任务继续保留，#10旧根因仍未知。
+
+
+## 16. 本机窗口动作Backend（local-window-actions，开发中）
+
+基于已通过且未合并的#36/c6bc593。实现platform/context/actions的真实本机
+Backend+既有Coordinator流程，独立默认关闭动作同意（原始trigger前后固定代次），
+使用真实上下文消费/晚期权限/期限复查。仅Win最小化/最大化/关闭窗口，Mac公开
+AX最小化/关闭；不猜AXFullScreen、不用Zoom冒充最大化、CloseTab/Quit不alias。
+键盘动作/owned injection账本仍未实现。所有OS成功仅Submitted，未知结果不重放。
+
+代码和注入式回归正在实现，完整CI及独立静态审查尚待；没有二进制启用/派发
+G1，没有实际操作用户窗口，不改OS权限/装Rust。Native action测试只能在明确
+授权的隔离测试目标上做，缺权限的正向路径与C06必须如实保留未验收。所有界面
+继续中文；G03唯一捕获接线、本机worker独立同意界面和后续数据协作仍需继续。
+契约见LOCAL_WINDOW_ACTIONS.md，不把源码Native Backend描述成全局手势可用。

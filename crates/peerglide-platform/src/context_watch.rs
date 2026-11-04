@@ -392,6 +392,7 @@ impl TargetLease {
     pub fn application_id(&self) -> &str {
         self.entry.target.application_id()
     }
+    pub(in crate::context) fn native_target(&self) -> &native::Target { &self.entry.target.target }
     pub fn recheck(&self, owner: &mut LocalContexts) -> Result<(), WatchError> {
         if !Arc::ptr_eq(&self.signal, &owner.signal) {
             return Err(WatchError::Stale);

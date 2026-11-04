@@ -5,6 +5,8 @@
 
 #[path = "context_watch.rs"]
 pub mod watch;
+#[path = "context_actions.rs"]
+pub mod actions;
 
 #[cfg(target_os = "macos")]
 #[path = "context_macos.rs"]
@@ -183,6 +185,10 @@ mod native {
         pub(super) fn shutdown(&mut self) -> Result<(), WatchError> {
             Ok(())
         }
+    }
+    pub(super) fn action_capabilities() -> peerglide_actions::Capabilities { peerglide_actions::Capabilities::default() }
+    pub(super) fn submit_window_action(_: &Target, _: peerglide_actions::Action, _: &mut dyn FnMut() -> Result<(), peerglide_actions::execution::NativeFailure>) -> Result<(), peerglide_actions::execution::NativeFailure> {
+        Err(peerglide_actions::execution::NativeFailure::BeforeSubmission)
     }
     pub(super) struct Target;
     pub(super) fn permissions() -> PermissionReport {

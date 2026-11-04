@@ -745,3 +745,33 @@ new cancel API/test still require final exact-head CI. Actual callback delivery,
 Windows interactive suspend/session/fault recovery and granted/revoked AX paths
 remain unverified. Independent static review is not full security audit. Global
 G1, Backend/owned injection, shared G03 input wiring and C06 remain open.
+
+
+## Local native window Backend (WIP)
+
+local-window-actions branches from verified/unmerged #36/c6bc593 after rechecking
+main5d947637 and a clean worktree. Adds a real peerglide-actions::execution::Backend
+adapter using the existing Coordinator/native context bindings and independent
+process-local default-off consent. Consent revision is fixed before context mark;
+revocation/replacement cannot revive a queued trigger. Native effects are only
+Windows min/max/close and macOS public AX min/close; unsupported semantics stay
+unsupported, with no keys, focus override, process kill, input hook or network.
+
+Injected tests cover policy/target/deadline/dedup/one-attempt and native preflight/
+late guard/failure mapping, without operating any OS windows. Apple SDK review
+confirmed AXFullScreen is not an established public attribute, so fullscreen is
+not claimed or emulated with Zoom. Original deadlines and uncertain effects are
+preserved; successful OS calls are Submitted, never app execution completion.
+
+Rust/native compilation, final CI and further static review are pending. Local
+Rust installation/OS permissions and global G1 remain unchanged; no actual window
+action has been attempted on the user's Mac. Positive effects/AX access, C06 and
+independent security review remain unverified. See LOCAL_WINDOW_ACTIONS.md.
+
+
+Independent static review found that style/close-button identity alone did not
+respect disabled native close controls. Windows now requires the borrowed system
+menu's SC_CLOSE to be present and enabled; macOS requires a typed AXEnabled=true
+and owning AXWindow match. Missing/unknown/disabled/query errors reject before
+the late guard/effect; injected regressions assert zero effects. CF parameters are
+prepared before the late guard, so no allocation/query is inserted after it.
