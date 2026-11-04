@@ -182,7 +182,7 @@ PR #34 独立交付。当前 main 的已校验 ARM64 开发包也已在本机通
 probe/managed-stop/reconnect/pin-change/backoff-stop；无 native/control/权限改动。
 
 
-## 12. 本机接管：隔离 GUI 验证入口（2026-11-04，开发中）
+## 12. 本机接管：隔离 GUI 验证入口（2026-11-04，PR #34）
 
 已重新核验 main 5d947637、无开放 PR，以及 main run 41784077840 成功。
 本机无 Rust/Cargo，python3 预检在启动 fmt 时失败；用户明确暂不安装工具链，
@@ -201,3 +201,14 @@ probe/managed-stop/reconnect/pin-change/backoff-stop；无 native/control/权限
 reconnect_smoke.py 在本机回环真实进程通过：认证 probe、受管停止、服务重启
 重连、证书替换拒绝、退避中停止。未开启 native/control，未接触用户 GUI 配置。
 这是 main 预编译 worker 的证据，不是本地编译或新 GUI 入口的验收。
+
+
+最终代码候选 c933ba2 已通过完整五项 run 41790024756；同一候选 macOS ARM64
+包在本机 macOS 26.2 (25C56) 通过真实 probe/停止/重连/换证拒绝/退避停止。
+GUI 显式指向仓库内独立目录，实际窗口已渲染离线主页、无身份/无对端、native
+关闭；关闭窗口进程退出0。目录仅实例锁，未创建身份/证书/设置。未安装 Rust，
+未做原生输入或系统权限变更；C06、G1原生接线和后续数据软件依旧未完成。
+一次桌面控制调用异常耗时约51分钟，不作为应用延迟或耐久证据。详见 VALIDATION。
+PR #33 最终 2d2bed5 完整矩阵通过，已可审阅；PR #34 叠加其上，最终文档
+跟进提交仍以 exact-head CI 为准。两者未合并，main 未改变；不可把已受测候选
+自动描述成合并主线，后续合并须核对源码树。继续不要自动安装工具链。

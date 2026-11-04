@@ -523,3 +523,39 @@ explicit path as XDG's default, so it could miss a disconnected main argument.
 The smoke now separates explicit-profile from default-data/peerglide, asserts the
 explicit instance lock and refuses any fallback profile creation. No production
 permission/isolation flaw was found by that review; execution CI remains required.
+
+
+### Joint candidate / real Mac isolated launch evidence
+
+Combined source candidate `c933ba2f32794223faff0fa2e912b97cbaeb1b4b` passed all
+five jobs in [41790024756](https://github.com/ForceMind/PeerGlide/actions/runs/41790024756),
+including strict workspace checks/tests, Release build/link, process smokes,
+Linux explicit-profile GUI/export smoke, macOS GUI stress, Rust 1.95 and strict
+audit. Storage-only final candidate `2d2bed5c42361f6c6ea940e2876a1fcad744648f`
+also passed all five jobs in run 41789889924. Neither PR has been merged.
+
+Downloaded exact-candidate macOS artifact 13302738707; verified inner ARM64 ZIP
+SHA256 `aee4eac05dcdbeff7a322e78c40340a13e36fd2addf066ee3fc8a850aeb313b4`
+against its bundled checksum. On macOS 26.2 (25C56), Darwin 25.2.0 arm64:
+
+- Candidate `--help` reports `--data-dir` and `--gesture-lab` without opening a window.
+- Both existing real-process smoke tools passed using this candidate's worker:
+  mutually authenticated probe, clean/managed stop, reconnect, changed-pin refusal
+  and cancellation during backoff. Loopback and disposable independent identities
+  only; no native capture or injection.
+- Actual candidate GUI launched with an absolute workspace-local --data-dir.
+  Its window/screenshot showed rendered Home, Offline, Create an identity,
+  No enrolled peer, and diagnostic native capture/injection off. Only this test
+  app window was inspected; no screenshot was saved/uploaded to the repository.
+- Closing the window ended the launch process with exit code 0. The profile
+  contained only gui-instance.lock: no identity, peer certificate or settings.
+
+One desktop-control getApp call stalled for about 51 minutes; subsequent scoped
+window observations returned normally. This is a tool limitation, not measured
+application startup latency, performance, resource or endurance acceptance.
+Report: target/local-validation/gui-c933ba2/report.json. Rust was not installed;
+source-build preflight remains blocked. Physical keys/buttons, Bluetooth/USB,
+DPI, permissions, network-interface/sleep faults and two-machine C06 remain not_run.
+No native clipboard, data network, global G1, or #10 root-cause claim is made.
+The final documentation-only follow-up preserves this tested source tree; its
+exact-head CI status is reported on PR #34.
