@@ -124,11 +124,11 @@ impl Manager {
             .values()
             .filter(|entry| entry.receiver.is_some())
             .count();
-        let admitted = self.admitted.checked_add(manifest.size()).ok_or(Error::Quota)?;
-        if active >= MAX_ACTIVE
-            || self.entries.len() >= MAX_ATTEMPTS
-            || admitted > self.budget
-        {
+        let admitted = self
+            .admitted
+            .checked_add(manifest.size())
+            .ok_or(Error::Quota)?;
+        if active >= MAX_ACTIVE || self.entries.len() >= MAX_ATTEMPTS || admitted > self.budget {
             return Err(Error::Quota);
         }
         // Reserve before filesystem work: an I/O failure may leave partial data.
@@ -151,7 +151,10 @@ impl Manager {
                 total_bytes,
             },
         };
-        let failure = result.as_ref().err().map(|e| io::Error::new(e.kind(), "file admission failed"));
+        let failure = result
+            .as_ref()
+            .err()
+            .map(|e| io::Error::new(e.kind(), "file admission failed"));
         self.entries.insert(
             id,
             Entry {
@@ -174,7 +177,10 @@ impl Manager {
         now: u64,
     ) -> Result<Progress, Error> {
         let entry = self.entries.get_mut(&id).ok_or(Error::UnknownId)?;
-        if let Err(error) = self.session.validate(&entry.permit, Capability::FileReceive, now) {
+        if let Err(error) = self
+            .session
+            .validate(&entry.permit, Capability::FileReceive, now)
+        {
             entry.receiver.take();
             if entry.summary.state == State::Receiving {
                 entry.summary.state = State::Suspended;
@@ -241,7 +247,10 @@ impl Manager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, sync::atomic::{AtomicU64, Ordering}};
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
     struct Fixture(PathBuf);
@@ -250,7 +259,10 @@ mod tests {
             let root = std::env::temp_dir().join(format!(
                 "peerglide-manager-{}-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&root).unwrap();
@@ -262,7 +274,8 @@ mod tests {
             let manifest = Manifest::from_file(&source).unwrap();
             let root = self.0.join("received");
             fs::create_dir(&root).unwrap();
-            let manager = Manager::new(&root, DataSession::new([1; 32], [2; 32], 0), budget).unwrap();
+            let manager =
+                Manager::new(&root, DataSession::new([1; 32], [2; 32], 0), budget).unwrap();
             (manager, manifest)
         }
     }
@@ -272,10 +285,16 @@ mod tests {
         }
     }
     fn grant(manager: &mut Manager) {
-        manager.consent(Permissions {
-            file_receive: true,
-            ..Permissions::default()
-        }, 1000, 0).unwrap();
+        manager
+            .consent(
+                Permissions {
+                    file_receive: true,
+                    ..Permissions::default()
+                },
+                1000,
+                0,
+            )
+            .unwrap();
     }
     fn binding(id: u8) -> PeerBinding {
         PeerBinding::new([1; 32], [id; 16])
@@ -285,16 +304,33 @@ mod tests {
     fn grant_binding_and_budget_precede_disk_admission() {
         let fixture = Fixture::new();
         let (mut manager, manifest) = fixture.setup(9);
-        assert!(manager.accept(binding(1), manifest.clone(), false, 0).is_err());
+        assert!(manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .is_err());
         assert_eq!(fs::read_dir(&manager.root).unwrap().count(), 0);
         grant(&mut manager);
-        assert!(manager.accept(PeerBinding::new([9; 32], [1; 16]), manifest.clone(), false, 0).is_err());
+        assert!(manager
+            .accept(
+                PeerBinding::new([9; 32], [1; 16]),
+                manifest.clone(),
+                false,
+                0
+            )
+            .is_err());
         assert_eq!(fs::read_dir(&manager.root).unwrap().count(), 0);
-        manager.accept(binding(1), manifest.clone(), false, 0).unwrap();
-        assert!(matches!(manager.accept(binding(1), manifest.clone(), false, 0), Err(Error::Duplicate)));
+        manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .unwrap();
+        assert!(matches!(
+            manager.accept(binding(1), manifest.clone(), false, 0),
+            Err(Error::Duplicate)
+        ));
         manager.cancel([1; 16]).unwrap();
         assert_eq!(manager.admitted_bytes(), 9);
-        assert!(matches!(manager.accept(binding(2), manifest, false, 0), Err(Error::Quota)));
+        assert!(matches!(
+            manager.accept(binding(2), manifest, false, 0),
+            Err(Error::Quota)
+        ));
     }
 
     #[test]
@@ -302,8 +338,13 @@ mod tests {
         let fixture = Fixture::new();
         let (mut manager, manifest) = fixture.setup(100);
         grant(&mut manager);
-        manager.accept(binding(1), manifest.clone(), false, 0).unwrap();
-        assert!(matches!(manager.commit([1; 16], || 1), Err(Error::Incomplete)));
+        manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .unwrap();
+        assert!(matches!(
+            manager.commit([1; 16], || 1),
+            Err(Error::Incomplete)
+        ));
         manager.write_chunk([1; 16], 0, b"file data", 1).unwrap();
         let path = manager.commit([1; 16], || 2).unwrap();
         assert_eq!(fs::read(path).unwrap(), b"file data");
@@ -323,12 +364,21 @@ mod tests {
         manager.accept(binding(1), manifest, false, 0).unwrap();
         manager.write_chunk([1; 16], 0, b"file data", 1).unwrap();
         let mut checks = 0;
-        assert!(manager.commit([1; 16], || {
-            checks += 1;
-            if checks < 3 { 2 } else { 1000 }
-        }).is_err());
+        assert!(manager
+            .commit([1; 16], || {
+                checks += 1;
+                if checks < 3 {
+                    2
+                } else {
+                    1000
+                }
+            })
+            .is_err());
         assert!(!manager.root.join("source.txt").exists());
-        assert_eq!(manager.summary([1; 16]).unwrap().state, State::UnknownOutcome);
+        assert_eq!(
+            manager.summary([1; 16]).unwrap().state,
+            State::UnknownOutcome
+        );
         assert!(manager.commit([1; 16], || 1001).is_err());
     }
 
@@ -338,12 +388,19 @@ mod tests {
         let (mut manager, manifest) = fixture.setup(100);
         grant(&mut manager);
         for id in 1..=4 {
-            manager.accept(binding(id), manifest.clone(), false, 0).unwrap();
+            manager
+                .accept(binding(id), manifest.clone(), false, 0)
+                .unwrap();
         }
-        assert!(matches!(manager.accept(binding(5), manifest.clone(), false, 0), Err(Error::Quota)));
+        assert!(matches!(
+            manager.accept(binding(5), manifest.clone(), false, 0),
+            Err(Error::Quota)
+        ));
         manager.write_chunk([1; 16], 0, b"file data", 1).unwrap();
         manager.cancel([1; 16]).unwrap();
-        manager.accept(binding(5), manifest.clone(), false, 1).unwrap();
+        manager
+            .accept(binding(5), manifest.clone(), false, 1)
+            .unwrap();
         let root = manager.root.clone();
         manager.close();
         let mut resumed = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 9).unwrap();

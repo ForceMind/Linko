@@ -147,15 +147,15 @@ impl Clipboard {
         if origin == Origin::Imported {
             return Err(Error::Echo);
         }
+        if Self::recent(self.last_send, now) {
+            return Err(Error::RateLimited);
+        }
         Self::valid_text(text)?;
         let digest = *blake3::hash(text.as_bytes()).as_bytes();
         self.echoes
             .retain(|(_, at)| now.saturating_sub(*at) < ECHO_MS);
         if self.echoes.iter().any(|(seen, _)| *seen == digest) {
             return Err(Error::Echo);
-        }
-        if Self::recent(self.last_send, now) {
-            return Err(Error::RateLimited);
         }
         self.sent = self.sent.checked_add(1).ok_or(Error::SequenceExhausted)?;
         self.last_send = Some(now);
@@ -193,14 +193,14 @@ impl Clipboard {
         if bytes.len() > MAX_TEXT_BYTES {
             return Err(Error::InvalidText);
         }
-        let text = std::str::from_utf8(bytes).map_err(|_| Error::InvalidText)?;
-        Self::valid_text(text)?;
         if sequence == 0 || sequence <= self.received {
             return Err(Error::Replay);
         }
         if Self::recent(self.last_receive, now) {
             return Err(Error::RateLimited);
         }
+        let text = std::str::from_utf8(bytes).map_err(|_| Error::InvalidText)?;
+        Self::valid_text(text)?;
         self.session
             .validate(&permit, Capability::TextReceive, now)
             .map_err(Error::Permission)?;
