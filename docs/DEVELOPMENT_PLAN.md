@@ -83,7 +83,7 @@ runtime evidence and historical failures are in VALIDATION.md.
 | C06 | blocked | No authorized physical Windows/macOS desktop pair in this environment |
 | P01 | implementing | Bounded material loads, key-pair and exact enrollment-intent checks; OS storage/ACL and independent grants pending |
 | P02 | implementing | Opt-in untrusted IPv4 mDNS hints and explicit listener publication; actual LAN/multiple NIC/permission acceptance pending |
-| G01 | implementing | Local action/rule/preflight/result coordinator tested; native Backend and global capture remain absent |
+| G01 | implementing | Local action/rule/preflight/result coordinator plus independently consented native window Backend (#37); keyboard owned injection/global capture and real effects remain absent or unverified |
 | G02 | implementing | Bounded direction-preserving logic and synthetic corpus; human corpus/physical accuracy remain pending |
 | G03 | implementing | Pure ownership/cancellation/edge model tested; native callback/queue wiring and C06 remain pending |
 | G04 | implementing | Offline lab, exact app-rule editor/preview, versioned settings with backup/recovery; native app-ID/focus sampler and on-click permission diagnostics implemented (#35); continuous target invalidation/global worker/overlay pending |

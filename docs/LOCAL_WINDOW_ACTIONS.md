@@ -87,3 +87,9 @@ Primary sources:
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-postmessagew
 - Apple SDK AXAttributeConstants.h / AXActionConstants.h / AXUIElement.h and CFNumber.h
 - https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction
+
+
+Runtime candidate 86b4e71 passed complete five-job run41826266699, including
+standalone CLI dependency features, both native platforms, logical fake effects
+and unchanged process/GUI baseline. No actual user/native window effect was run.
+Final exact-head and remaining acceptance are in VALIDATION.md and PR #37.

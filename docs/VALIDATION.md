@@ -775,3 +775,34 @@ menu's SC_CLOSE to be present and enabled; macOS requires a typed AXEnabled=true
 and owning AXWindow match. Missing/unknown/disabled/query errors reject before
 the late guard/effect; injected regressions assert zero effects. CF parameters are
 prepared before the late guard, so no allocation/query is inserted after it.
+
+
+### Native window action candidate results
+
+Initial dfa96a2 passed minimum Rust but failed formatting; applied the exact
+complete runner rustfmt patch including parent modules. Final runtime candidate
+`86b4e7175e02df293bc642e7b643a860113fda75` passed all five jobs in
+[41826266699](https://github.com/ForceMind/PeerGlide/actions/runs/41826266699):
+Windows/macOS/Linux format, standalone CLI features, strict Clippy, workspace
+regressions, Release builds, probe/reconnect/readonly observer smoke, GUI/packages,
+minimum Rust 1.95 and strict audit. All declared native bindings compile/link.
+
+Independent static review's disabled-close defect was fixed and rechecked:
+Windows SC_CLOSE must be present/enabled, macOS AXEnabled typed true with matching
+AXWindow. No later native query/allocation occurs between the final guard and
+submission. Tests use injected drivers/WindowOps; no host or runner-native window
+was minimized/maximized/closed for this increment. Successful native effects,
+application semantics, modal/privilege boundaries and latency remain unverified.
+
+Existing CLI/GUI binaries do not create/enable/dispatch LocalActions. Context
+observer/privacy/transport baseline stayed intact in CI. Default-off consent,
+trigger revision races/replacement/revocation/overflow, late original deadlines,
+destructive/remote/stale/unsupported rejection, consumed-target one-attempt and
+cached UnknownOutcome/no replay are automatically verified. These are logical
+and native compilation results, not C06 or physical right-click acceptance.
+
+Final docs-only follow-up preserves runtime/build/test source; its exact-head CI
+is reported on PR #37. Global G1, keyboard owned injection, G03 input wiring/local
+worker consent UI, native positive effects, C06 and #10 remain open. No local
+Rust/system font/permission installation/change, actual action or stable release
+was performed. Protocol v5/MIT and data permission separation remain unchanged.
