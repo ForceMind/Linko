@@ -120,7 +120,8 @@ impl Clipboard {
     }
 
     fn remember(&mut self, digest: Digest, now: u64) {
-        self.echoes.retain(|(_, at)| now.saturating_sub(*at) < ECHO_MS);
+        self.echoes
+            .retain(|(_, at)| now.saturating_sub(*at) < ECHO_MS);
         if self.echoes.len() == ECHO_ENTRIES {
             self.echoes.pop_front();
         }
@@ -148,7 +149,8 @@ impl Clipboard {
         }
         Self::valid_text(text)?;
         let digest = *blake3::hash(text.as_bytes()).as_bytes();
-        self.echoes.retain(|(_, at)| now.saturating_sub(*at) < ECHO_MS);
+        self.echoes
+            .retain(|(_, at)| now.saturating_sub(*at) < ECHO_MS);
         if self.echoes.iter().any(|(seen, _)| *seen == digest) {
             return Err(Error::Echo);
         }
@@ -276,7 +278,12 @@ mod tests {
             Err(Error::Echo)
         ));
         let outbound = clipboard
-            .export("new local", Classification::ShareableText, Origin::Local, 6000)
+            .export(
+                "new local",
+                Classification::ShareableText,
+                Origin::Local,
+                6000,
+            )
             .unwrap();
         assert_eq!(outbound.text(), "new local");
         assert_eq!(outbound.sequence(), 1);
@@ -284,11 +291,18 @@ mod tests {
 
     #[test]
     fn local_change_and_uncertain_failure_are_never_replayed() {
-        for outcome in [WriteResult::Changed, WriteResult::Failed, WriteResult::UnknownOutcome] {
+        for outcome in [
+            WriteResult::Changed,
+            WriteResult::Failed,
+            WriteResult::UnknownOutcome,
+        ] {
             let mut clipboard = engine();
             let mut backend = memory();
             backend.result = outcome;
-            assert_eq!(clipboard.receive(8, b"remote", 7, 0, &mut backend), Ok(outcome));
+            assert_eq!(
+                clipboard.receive(8, b"remote", 7, 0, &mut backend),
+                Ok(outcome)
+            );
             assert_eq!(
                 clipboard.receive(8, b"remote", 7, 100, &mut backend),
                 Err(Error::Replay)
@@ -345,7 +359,9 @@ mod tests {
             Err(Error::LocalOnly)
         ));
         let mut expired = engine();
-        assert!(expired.receive(1, b"text", 7, 100_000, &mut backend).is_err());
+        assert!(expired
+            .receive(1, b"text", 7, 100_000, &mut backend)
+            .is_err());
         assert_eq!(backend.calls, 0);
     }
 

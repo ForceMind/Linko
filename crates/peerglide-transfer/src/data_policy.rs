@@ -105,7 +105,9 @@ impl DataSession {
         if lifetime_ms == 0 || lifetime_ms > MAX_GRANT_MS {
             return Err(Denied::InvalidLifetime);
         }
-        let deadline = now.checked_add(lifetime_ms).ok_or(Denied::InvalidLifetime)?;
+        let deadline = now
+            .checked_add(lifetime_ms)
+            .ok_or(Denied::InvalidLifetime)?;
         self.permissions = permissions;
         self.deadline = deadline;
         Ok(())
@@ -186,7 +188,10 @@ mod tests {
         assert!(session.authorize(Capability::TextSend, 2).is_err());
         assert!(session.authorize(Capability::FileReceive, 2).is_err());
         let permit = session.authorize(Capability::TextReceive, 2).unwrap();
-        assert_eq!(session.validate(&permit, Capability::TextReceive, 10), Ok(()));
+        assert_eq!(
+            session.validate(&permit, Capability::TextReceive, 10),
+            Ok(())
+        );
         assert_eq!(
             session.validate(&permit, Capability::TextReceive, 11),
             Err(Denied::Expired)
@@ -226,8 +231,13 @@ mod tests {
         let mut session = DataSession::new([1; 32], [2; 32], 0);
         session.consent(receive(), 10, 0).unwrap();
         let permit = session.authorize(Capability::TextReceive, 0).unwrap();
-        assert_eq!(session.consent(receive(), 0, 1), Err(Denied::InvalidLifetime));
-        assert!(session.validate(&permit, Capability::TextReceive, 1).is_err());
+        assert_eq!(
+            session.consent(receive(), 0, 1),
+            Err(Denied::InvalidLifetime)
+        );
+        assert!(session
+            .validate(&permit, Capability::TextReceive, 1)
+            .is_err());
         let mut end = DataSession::new([1; 32], [2; 32], u64::MAX - 1);
         assert_eq!(
             end.consent(receive(), 10, u64::MAX - 1),
