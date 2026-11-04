@@ -1,10 +1,10 @@
 //! Read-only foreground queries. No hooks, injection, focus changes or prompts.
 #[path = "context_events_windows.rs"]
 mod events;
-pub(super) use events::Watch;
 use super::{
     identifier, ContextError, FocusStatus, PermissionReport, PermissionStatus, SecureInput,
 };
+pub(super) use events::Watch;
 use std::mem::size_of;
 use windows_sys::Win32::{
     Foundation::{

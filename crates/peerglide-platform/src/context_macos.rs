@@ -1,10 +1,10 @@
 //! NSWorkspace/AX reads only. Never asks for trust or creates an event tap.
 #[path = "context_events_macos.rs"]
 mod events;
-pub(super) use events::Watch;
 use super::{
     identifier, ContextError, FocusStatus, PermissionReport, PermissionStatus, SecureInput,
 };
+pub(super) use events::Watch;
 use objc2::rc::{autoreleasepool, Retained};
 use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 use objc2_foundation::NSString;

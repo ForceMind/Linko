@@ -700,3 +700,13 @@ checks are local; Rust/native compilation, whole-workspace checks, real observer
 smoke, final five-job candidate CI and local observer outcome are pending. No
 system permission/toolchain change or new local native observation has been run.
 Input v5 and global G1 remain disabled; C06 and #10 remain open.
+
+
+Initial d4b6db2 passed minimum Rust but failed formatting; 6bbfcce still omitted
+format-only changes in two parent modules. Those parent changes are included in
+the next candidate. Windows lifecycle validation now uses injected cleanup calls
+through the actual shutdown path: partial installations, each cleanup failure,
+repeated shutdown, signal closure/TLS detach before native cleanup, and permanent
+thread poison after failure. Fake handles never reach OS functions, even if a test
+assertion fails. CleanupFailed is distinct from environment unavailable and is a
+failing smoke outcome; constructor/pump cleanup failures preserve that result.

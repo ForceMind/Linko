@@ -84,6 +84,46 @@ fn reservation(occupied: bool, poisoned: bool) -> Result<(), WatchError> {
     }
 }
 
+fn reserve_callbacks(signal: &Arc<Signal>) -> Result<(), WatchError> {
+    CALLBACKS.with(|cell| {
+        let current = cell.get();
+        reservation(current.occupied, current.poisoned)?;
+        cell.set(Callbacks {
+            signal: Arc::as_ptr(signal),
+            occupied: true,
+            ..Callbacks::EMPTY
+        });
+        Ok(())
+    })
+}
+
+trait CleanupOps {
+    fn current_thread(&mut self) -> u32;
+    fn unhook(&mut self, hook: HWINEVENTHOOK) -> bool;
+    fn unregister_session(&mut self, window: HWND) -> bool;
+    fn destroy_window(&mut self, window: HWND) -> bool;
+    fn unregister_class(&mut self, class: &[u16], instance: HINSTANCE) -> bool;
+}
+
+struct NativeCleanup;
+impl CleanupOps for NativeCleanup {
+    fn current_thread(&mut self) -> u32 {
+        unsafe { GetCurrentThreadId() }
+    }
+    fn unhook(&mut self, hook: HWINEVENTHOOK) -> bool {
+        unsafe { UnhookWinEvent(hook) != 0 }
+    }
+    fn unregister_session(&mut self, window: HWND) -> bool {
+        unsafe { WTSUnRegisterSessionNotification(window) != 0 }
+    }
+    fn destroy_window(&mut self, window: HWND) -> bool {
+        unsafe { DestroyWindow(window) != 0 }
+    }
+    fn unregister_class(&mut self, class: &[u16], instance: HINSTANCE) -> bool {
+        unsafe { UnregisterClassW(class.as_ptr(), instance) != 0 }
+    }
+}
+
 unsafe extern "system" fn event_callback(
     hook: HWINEVENTHOOK,
     _event: u32,
@@ -249,16 +289,7 @@ pub(in crate::context) struct Watch {
 }
 impl Watch {
     pub(in crate::context) fn new(signal: Arc<Signal>) -> Result<Self, WatchError> {
-        CALLBACKS.with(|cell| {
-            let current = cell.get();
-            reservation(current.occupied, current.poisoned)?;
-            cell.set(Callbacks {
-                signal: Arc::as_ptr(&signal),
-                occupied: true,
-                ..Callbacks::EMPTY
-            });
-            Ok::<(), WatchError>(())
-        })?;
+        reserve_callbacks(&signal)?;
         let mut watch = Self {
             signal,
             thread: unsafe { GetCurrentThreadId() },
@@ -476,9 +507,13 @@ impl Watch {
     }
 
     pub(in crate::context) fn shutdown(&mut self) -> Result<(), WatchError> {
+        self.shutdown_with(&mut NativeCleanup)
+    }
+
+    fn shutdown_with(&mut self, ops: &mut impl CleanupOps) -> Result<(), WatchError> {
         if self.closed {
             return if self.cleanup_failed {
-                Err(WatchError::NativeUnavailable)
+                Err(WatchError::CleanupFailed)
             } else {
                 Ok(())
             };
@@ -487,7 +522,7 @@ impl Watch {
         self.ready = false;
         self.cached = None;
         self.observed = None;
-        if unsafe { GetCurrentThreadId() } != self.thread {
+        if ops.current_thread() != self.thread {
             // !Send forbids this in safe Rust. If violated by unsafe callers,
             // keep the callback allocation alive and its original slot occupied.
             std::mem::forget(self.signal.clone());
@@ -502,26 +537,26 @@ impl Watch {
         let mut failed = false;
         for hook in &mut self.hooks {
             if !hook.is_null() {
-                if unsafe { UnhookWinEvent(*hook) } == 0 {
+                if !ops.unhook(*hook) {
                     failed = true;
                 }
                 *hook = null_mut();
             }
         }
         if self.session_registered {
-            if unsafe { WTSUnRegisterSessionNotification(self.window) } == 0 {
+            if !ops.unregister_session(self.window) {
                 failed = true;
             }
             self.session_registered = false;
         }
         if !self.window.is_null() {
-            if unsafe { DestroyWindow(self.window) } == 0 {
+            if !ops.destroy_window(self.window) {
                 failed = true;
             }
             self.window = null_mut();
         }
         if self.class_registered {
-            if unsafe { UnregisterClassW(self.class.as_ptr(), self.instance) } == 0 {
+            if !ops.unregister_class(&self.class, self.instance) {
                 failed = true;
             }
             self.class_registered = false;
@@ -535,7 +570,7 @@ impl Watch {
         self.closed = true;
         self.cleanup_failed = failed;
         if failed {
-            Err(WatchError::NativeUnavailable)
+            Err(WatchError::CleanupFailed)
         } else {
             Ok(())
         }
@@ -550,6 +585,176 @@ impl Drop for Watch {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::mem::ManuallyDrop;
+
+    const FAKE_THREAD: u32 = 17;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum CleanupStep {
+        Hook(usize),
+        Session,
+        Window,
+        Class,
+    }
+
+    struct FakeCleanup {
+        signal: Arc<Signal>,
+        fail: Option<CleanupStep>,
+        calls: Vec<CleanupStep>,
+        thread_reads: usize,
+    }
+    impl FakeCleanup {
+        fn record(&mut self, step: CleanupStep) -> bool {
+            assert!(self.signal.closed_for_test());
+            CALLBACKS.with(|cell| {
+                let state = cell.get();
+                assert!(state.signal.is_null());
+                assert!(state.hooks.iter().all(|hook| hook.is_null()));
+                assert!(state.window.is_null());
+                assert!(state.occupied);
+            });
+            self.calls.push(step);
+            self.fail != Some(step)
+        }
+    }
+    impl CleanupOps for FakeCleanup {
+        fn current_thread(&mut self) -> u32 {
+            assert!(self.signal.closed_for_test());
+            self.thread_reads += 1;
+            FAKE_THREAD
+        }
+        fn unhook(&mut self, hook: HWINEVENTHOOK) -> bool {
+            self.record(CleanupStep::Hook(hook.addr()))
+        }
+        fn unregister_session(&mut self, window: HWND) -> bool {
+            assert_eq!(window, fake_handle(42));
+            self.record(CleanupStep::Session)
+        }
+        fn destroy_window(&mut self, window: HWND) -> bool {
+            assert_eq!(window, fake_handle(42));
+            self.record(CleanupStep::Window)
+        }
+        fn unregister_class(&mut self, class: &[u16], instance: HINSTANCE) -> bool {
+            assert_eq!(class.last(), Some(&0));
+            assert_eq!(instance, fake_handle(43));
+            self.record(CleanupStep::Class)
+        }
+    }
+
+    struct RestoreCallbacks(Callbacks);
+    impl Drop for RestoreCallbacks {
+        fn drop(&mut self) {
+            CALLBACKS.with(|cell| cell.set(self.0));
+        }
+    }
+
+    // Test-only opaque values are never dereferenced, passed to native APIs or
+    // used as application identities/authentication. ManuallyDrop also prevents
+    // accidental NativeCleanup if an assertion panics before fake shutdown.
+    fn fake_handle(value: usize) -> *mut c_void {
+        std::ptr::without_provenance_mut(value)
+    }
+
+    fn fake_watch(
+        hooks: usize,
+        window: bool,
+        session: bool,
+        class: bool,
+        fail: Option<CleanupStep>,
+    ) -> (ManuallyDrop<Watch>, RestoreCallbacks, FakeCleanup) {
+        let restore = RestoreCallbacks(CALLBACKS.with(|cell| cell.replace(Callbacks::EMPTY)));
+        let signal = Arc::new(Signal::new_for_test());
+        reserve_callbacks(&signal).unwrap();
+        let watch = ManuallyDrop::new(Watch {
+            signal: signal.clone(),
+            thread: FAKE_THREAD,
+            hooks: std::array::from_fn(|index| {
+                if index < hooks { fake_handle(index + 1) } else { null_mut() }
+            }),
+            window: if window { fake_handle(42) } else { null_mut() },
+            instance: fake_handle(43),
+            class: "test-only".encode_utf16().chain(Some(0)).collect(),
+            class_registered: class,
+            session_registered: session,
+            reserved: true,
+            closed: false,
+            cleanup_failed: false,
+            ready: true,
+            observed: None,
+            cached: None,
+            _thread: PhantomData,
+        });
+        watch.publish_callbacks();
+        let ops = FakeCleanup { signal, fail, calls: Vec::new(), thread_reads: 0 };
+        (watch, restore, ops)
+    }
+
+    fn expected_cleanup(hooks: usize, window: bool, session: bool, class: bool) -> Vec<CleanupStep> {
+        let mut steps: Vec<_> = (1..=hooks).map(CleanupStep::Hook).collect();
+        if session { steps.push(CleanupStep::Session); }
+        if window { steps.push(CleanupStep::Window); }
+        if class { steps.push(CleanupStep::Class); }
+        steps
+    }
+
+    #[test]
+    fn shutdown_cleans_every_partial_install_once_without_native_apis() {
+        for (hooks, window, session, class) in [
+            (0, false, false, false),
+            (0, false, false, true),
+            (0, true, false, true),
+            (0, true, true, true),
+            (1, true, true, true),
+            (2, true, true, true),
+            (3, true, true, true),
+            (4, true, true, true),
+        ] {
+            let (mut watch, _restore, mut ops) = fake_watch(hooks, window, session, class, None);
+            assert_eq!(
+                reserve_callbacks(&Arc::new(Signal::new_for_test())),
+                Err(WatchError::Busy)
+            );
+            assert_eq!(watch.shutdown_with(&mut ops), Ok(()));
+            assert_eq!(ops.calls, expected_cleanup(hooks, window, session, class));
+            assert!(ops.signal.closed_for_test());
+            assert!(watch.closed && !watch.cleanup_failed && !watch.ready);
+            assert!(watch.hooks.iter().all(|hook| hook.is_null()));
+            assert!(watch.window.is_null());
+            assert!(!watch.session_registered && !watch.class_registered && !watch.reserved);
+            assert_eq!(watch.shutdown_with(&mut ops), Ok(()));
+            assert_eq!(ops.thread_reads, 1);
+            assert_eq!(ops.calls, expected_cleanup(hooks, window, session, class));
+            let next_signal = Arc::new(Signal::new_for_test());
+            assert_eq!(reserve_callbacks(&next_signal), Ok(()));
+            CALLBACKS.with(|cell| cell.set(Callbacks::EMPTY));
+            // Closed Drop returns before even asking NativeCleanup for a thread.
+            drop(ManuallyDrop::into_inner(watch));
+        }
+    }
+
+    #[test]
+    fn shutdown_attempts_all_resources_and_poison_blocks_reopen_on_each_failure() {
+        let expected = expected_cleanup(4, true, true, true);
+        for failure in expected.iter().copied() {
+            let (mut watch, _restore, mut ops) = fake_watch(4, true, true, true, Some(failure));
+            assert_eq!(watch.shutdown_with(&mut ops), Err(WatchError::CleanupFailed));
+            assert_eq!(ops.calls, expected);
+            assert!(ops.signal.closed_for_test());
+            assert!(watch.closed && watch.cleanup_failed && !watch.ready);
+            CALLBACKS.with(|cell| {
+                let state = cell.get();
+                assert!(state.poisoned && !state.occupied && state.signal.is_null());
+            });
+            assert_eq!(
+                reserve_callbacks(&Arc::new(Signal::new_for_test())),
+                Err(WatchError::NativeUnavailable)
+            );
+            assert_eq!(watch.shutdown_with(&mut ops), Err(WatchError::CleanupFailed));
+            assert_eq!(ops.thread_reads, 1);
+            assert_eq!(ops.calls, expected);
+            drop(ManuallyDrop::into_inner(watch));
+        }
+    }
 
     #[test]
     fn cached_binding_detects_window_focus_owner_and_instance_changes() {

@@ -23,6 +23,7 @@ pub enum WatchError {
     Busy,
     WrongThread,
     NativeUnavailable,
+    CleanupFailed,
     Backlog,
     Closed,
     Entropy,
@@ -43,6 +44,7 @@ impl WatchError {
             Self::Busy => "busy",
             Self::WrongThread => "wrong_thread",
             Self::NativeUnavailable => "native_unavailable",
+            Self::CleanupFailed => "cleanup_failed",
             Self::Backlog => "backlog",
             Self::Closed => "closed",
             Self::Entropy => "entropy_unavailable",
@@ -76,6 +78,12 @@ impl Signal {
         Self {
             state: AtomicU64::new(DIRTY | 1),
         }
+    }
+    #[cfg(all(test, windows))]
+    pub(crate) fn new_for_test() -> Self { Self::new() }
+    #[cfg(all(test, windows))]
+    pub(crate) fn closed_for_test(&self) -> bool {
+        self.state.load(Ordering::Acquire) & CLOSED != 0
     }
     pub(crate) fn notify(&self) {
         self.state.fetch_or(DIRTY, Ordering::Release);
@@ -398,7 +406,7 @@ impl LocalContexts {
             Ok(store) => store,
             Err(error) => {
                 signal.close();
-                let _ = native.shutdown();
+                native.shutdown()?;
                 return Err(error);
             }
         };
@@ -408,7 +416,10 @@ impl LocalContexts {
             signal,
             _thread: PhantomData,
         };
-        contexts.poll()?;
+        if let Err(error) = contexts.poll() {
+            contexts.shutdown()?;
+            return Err(error);
+        }
         Ok(contexts)
     }
     pub fn poll(&mut self) -> Result<(), WatchError> {
@@ -418,6 +429,7 @@ impl LocalContexts {
             return Err(WatchError::Closed);
         }
         if let Err(error) = self.native.pump() {
+            if error == WatchError::CleanupFailed { self.store.close(); return Err(error); }
             self.signal.notify();
             self.store.acknowledge(Instant::now())?;
             return Err(error);
