@@ -468,3 +468,10 @@ target/local-validation/baseline-main-5d947637/report.json. These results test m
 GUI candidate cb9d2be passed Rust 1.95 check, but platform jobs stopped at one
 rustfmt difference in run 41789377283. Applied the exact emitted difference; final
 candidate full matrix and local GUI launch remain pending.
+
+
+Focused independent static review found the first Linux smoke used the same
+explicit path as XDG's default, so it could miss a disconnected main argument.
+The smoke now separates explicit-profile from default-data/peerglide, asserts the
+explicit instance lock and refuses any fallback profile creation. No production
+permission/isolation flaw was found by that review; execution CI remains required.

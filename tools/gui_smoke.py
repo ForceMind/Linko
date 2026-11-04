@@ -9,12 +9,14 @@ import time
 
 root = pathlib.Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
+    profile = pathlib.Path(temporary) / "explicit-profile"
+    fallback = pathlib.Path(temporary) / "default-data"
     env = os.environ.copy()
-    env.update(XDG_DATA_HOME=temporary, LIBGL_ALWAYS_SOFTWARE="1", WINIT_X11_SCALE_FACTOR="1")
+    env.update(XDG_DATA_HOME=str(fallback), LIBGL_ALWAYS_SOFTWARE="1", WINIT_X11_SCALE_FACTOR="1")
     def capture(arguments, name):
         log = pathlib.Path(temporary) / f"{name}.log"
         with log.open("w") as output:
-            gui = subprocess.Popen([str(root / "target/release/peerglide-gui"), "--data-dir", str(pathlib.Path(temporary) / "peerglide"), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
+            gui = subprocess.Popen([str(root / "target/release/peerglide-gui"), "--data-dir", str(profile), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
             try:
                 for _ in range(100):
                     if gui.poll() is not None:
@@ -26,7 +28,8 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     time.sleep(0.1)
                 else:
                     raise TimeoutError("GUI window did not appear")
-                assert (pathlib.Path(temporary) / "peerglide" / "gui-instance.lock").is_file(), "explicit data directory must own the GUI configuration"
+                assert (profile / "gui-instance.lock").is_file(), "explicit data directory must own the GUI configuration"
+                assert not (fallback / "peerglide").exists(), "explicit directory must not touch the default profile"
                 time.sleep(1)
                 subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
                 if name == "gesture-lab":
@@ -39,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                         time.sleep(0.06)
                     subprocess.run(["xdotool", "mouseup", "3"], check=True)
                     time.sleep(0.3)
-                    folder = pathlib.Path(temporary) / "peerglide" / "gesture-samples"
+                    folder = profile / "gesture-samples"
                     assert not folder.exists(), "recording must not autosave"
                     subprocess.run(["xdotool", "mousemove", "--window", window, "240", "440", "click", "1"], check=True)
                     sample = None
