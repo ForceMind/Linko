@@ -22,13 +22,13 @@ const WATCHDOG_MS: u64 = 1000;
 const BUSY: u64 = 1;
 const PUBLISHING: u64 = 2;
 const ARMED: u64 = 4;
-const RECOVERING:u64=8;
+const RECOVERING: u64 = 8;
 const EVENT_STEP: u64 = 16;
 const MAX_HOLD: Duration = Duration::from_millis(2500);
-#[path="gesture_recovery.rs"]
+#[path = "gesture_recovery.rs"]
 mod recovery;
-pub use recovery::{RecoveryOutcome,RecoveryReceipt};
 pub(crate) use recovery::RecoveryCleanup;
+pub use recovery::{RecoveryOutcome, RecoveryReceipt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoordinateUnits {
@@ -66,7 +66,7 @@ pub enum Event<T> {
         sequence: u64,
         point: RawPoint,
         at: Instant,
-        recovery:RecoveryReceipt,
+        recovery: RecoveryReceipt,
     },
 }
 impl<T> Event<T> {
@@ -81,8 +81,8 @@ impl<T> Event<T> {
 pub type GestureEvent = Event<ActionTrigger>;
 
 struct Shared {
-    recovery:recovery::RecoveryState,
-    dpi:AtomicU64,
+    recovery: recovery::RecoveryState,
+    dpi: AtomicU64,
     latch: AtomicU64,
     admission: [AtomicU64; ADMISSION_WORDS],
     deadline: AtomicU64,
@@ -99,8 +99,8 @@ struct Shared {
 impl Shared {
     fn new() -> Self {
         Self {
-            recovery:recovery::RecoveryState::new(),
-            dpi:AtomicU64::new(96),
+            recovery: recovery::RecoveryState::new(),
+            dpi: AtomicU64::new(96),
             admission_deadline: AtomicU64::new(0),
             latch: AtomicU64::new(0),
             admission: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -133,7 +133,7 @@ impl Shared {
         }
         EventGuard(self.clone())
     }
-    fn admission(&self, now: u64) -> Option<(AdmissionKey, u64,u32)> {
+    fn admission(&self, now: u64) -> Option<(AdmissionKey, u64, u32)> {
         if self.stop.load(Ordering::Acquire)
             || self.deadline.load(Ordering::Acquire) <= now
             || self.admission_deadline.load(Ordering::Acquire) <= now
@@ -148,7 +148,11 @@ impl Shared {
         if self.latch.load(Ordering::Acquire) != state {
             return None;
         }
-        Some((AdmissionKey(words), state,self.dpi.load(Ordering::Relaxed) as u32))
+        Some((
+            AdmissionKey(words),
+            state,
+            self.dpi.load(Ordering::Relaxed) as u32,
+        ))
     }
     #[cfg(test)]
     fn publish(&self, key: AdmissionKey, now: u64) -> Result<(), CaptureError> {
@@ -164,13 +168,21 @@ impl Shared {
         self.publish_until(key, now, now.saturating_add(5000), interleave)
     }
     #[cfg(test)]
-    fn publish_until(&self,key:AdmissionKey,now:u64,until:u64,interleave:impl FnOnce())->Result<(),CaptureError>{self.publish_frame(key,now,until,96,interleave)}
+    fn publish_until(
+        &self,
+        key: AdmissionKey,
+        now: u64,
+        until: u64,
+        interleave: impl FnOnce(),
+    ) -> Result<(), CaptureError> {
+        self.publish_frame(key, now, until, 96, interleave)
+    }
     fn publish_frame(
         &self,
         key: AdmissionKey,
         now: u64,
         until: u64,
-        dpi:u32,
+        dpi: u32,
         interleave: impl FnOnce(),
     ) -> Result<(), CaptureError> {
         if self.stop.load(Ordering::Acquire) || self.lost.load(Ordering::Acquire) {
@@ -194,7 +206,7 @@ impl Shared {
         self.deadline
             .store(now.saturating_add(WATCHDOG_MS), Ordering::Release);
         self.admission_deadline.store(until, Ordering::Release);
-        self.dpi.store(u64::from(dpi),Ordering::Relaxed);
+        self.dpi.store(u64::from(dpi), Ordering::Relaxed);
         interleave();
         // Any callback during publication changes the epoch, even if it ended.
         // No completed callback can let this old publish reopen the one-use gate.
@@ -249,7 +261,8 @@ impl GestureControl {
         let now = now_ms();
         let until =
             admission_expiry(frame.expires(), now, Instant::now()).ok_or(CaptureError::Stopped)?;
-        self.shared.publish_frame(frame.key(), now, until, frame.dpi(),|| {})
+        self.shared
+            .publish_frame(frame.key(), now, until, frame.dpi(), || {})
     }
     pub fn heartbeat(&mut self) {
         if !self.shared.stop.load(Ordering::Acquire) {
@@ -357,9 +370,9 @@ struct Broker<S: TriggerProducer> {
     sequence: u64,
     key: Option<AdmissionKey>,
     started: Option<Instant>,
-    first:Option<RawPoint>,
-    max_distance_sq:f64,
-    dpi:u32,
+    first: Option<RawPoint>,
+    max_distance_sq: f64,
+    dpi: u32,
     keys: [u64; 1024],
     key_count: u64,
     buttons: u8,
@@ -385,24 +398,53 @@ impl<S: TriggerProducer> Broker<S> {
             self.phase = Phase::BypassHeld;
         }
     }
-    fn tagged_right(&mut self,tag:usize,down:Option<bool>,point:RawPoint)->Option<bool>{
-        if !self.shared.recovery.matches_tag(tag){return None;}
-        let eligible=self.shared.recovery.point_matches(point)&&!self.shared.stop.load(Ordering::Acquire)&&!self.shared.lost.load(Ordering::Acquire)&&self.shared.deadline.load(Ordering::Acquire)>now_ms()&&self.shared.recovery.deadline()>now_ms()&&self.held()==0&&!self.shared.debt.load(Ordering::Acquire)&&self.shared.cancelled.load(Ordering::Acquire)<self.shared.recovery.sequence()&&self.source.current(self.shared.recovery.key());
-        let result=self.shared.recovery.tagged(tag,down,eligible);
-        if self.shared.recovery.faulted(){self.shared.lost.store(true,Ordering::Release);self.shared.stop.store(true,Ordering::Release);self.shared.recovery.uncertain();self.source.invalidate();}
+    fn tagged_right(&mut self, tag: usize, down: Option<bool>, point: RawPoint) -> Option<bool> {
+        if !self.shared.recovery.matches_tag(tag) {
+            return None;
+        }
+        let eligible = self.shared.recovery.point_matches(point)
+            && !self.shared.stop.load(Ordering::Acquire)
+            && !self.shared.lost.load(Ordering::Acquire)
+            && self.shared.deadline.load(Ordering::Acquire) > now_ms()
+            && self.shared.recovery.deadline() > now_ms()
+            && self.held() == 0
+            && !self.shared.debt.load(Ordering::Acquire)
+            && self.shared.cancelled.load(Ordering::Acquire) < self.shared.recovery.sequence()
+            && self.source.current(self.shared.recovery.key());
+        let result = self.shared.recovery.tagged(tag, down, eligible);
+        if self.shared.recovery.faulted() {
+            self.shared.lost.store(true, Ordering::Release);
+            self.shared.stop.store(true, Ordering::Release);
+            self.shared.recovery.uncertain();
+            self.source.invalidate();
+        }
         result
     }
-    fn foreign_input(&mut self,right:bool,motion:bool)->bool{
-        let owns=self.shared.recovery.owns_down();
-        if right&&owns {self.shared.lost.store(true,Ordering::Release);self.shared.stop.store(true,Ordering::Release);self.shared.recovery.uncertain();self.cancel();return false;}
-        self.other();
-        motion&&owns&&!self.shared.lost.load(Ordering::Acquire)
-    }
-    fn cleanup_request(&mut self)->Option<RecoveryCleanup>{
-        if let Some((sequence,_))=self.shared.recovery.finish(){
-            self.shared.cancelled.fetch_max(sequence,Ordering::AcqRel);self.shared.retired.fetch_max(sequence,Ordering::AcqRel);self.shared.latch.fetch_and(!RECOVERING,Ordering::AcqRel);self.shared.rearm.store(true,Ordering::Release);self.source.invalidate();
+    fn foreign_input(&mut self, right: bool, motion: bool) -> bool {
+        let owns = self.shared.recovery.owns_down();
+        if right && owns {
+            self.shared.lost.store(true, Ordering::Release);
+            self.shared.stop.store(true, Ordering::Release);
+            self.shared.recovery.uncertain();
+            self.cancel();
+            return false;
         }
-        if self.shared.lost.load(Ordering::Acquire){None}else{self.shared.recovery.cleanup_request()}
+        self.other();
+        motion && owns && !self.shared.lost.load(Ordering::Acquire)
+    }
+    fn cleanup_request(&mut self) -> Option<RecoveryCleanup> {
+        if let Some((sequence, _)) = self.shared.recovery.finish() {
+            self.shared.cancelled.fetch_max(sequence, Ordering::AcqRel);
+            self.shared.retired.fetch_max(sequence, Ordering::AcqRel);
+            self.shared.latch.fetch_and(!RECOVERING, Ordering::AcqRel);
+            self.shared.rearm.store(true, Ordering::Release);
+            self.source.invalidate();
+        }
+        if self.shared.lost.load(Ordering::Acquire) {
+            None
+        } else {
+            self.shared.recovery.cleanup_request()
+        }
     }
     fn held(&self) -> u64 {
         self.key_count + u64::from(self.buttons.count_ones())
@@ -507,8 +549,15 @@ impl<S: TriggerProducer> Broker<S> {
         // A physical down arriving before our injected down is passed and then
         // makes that injected down ineligible. After an allowed owned down the
         // overlapping physical pair is suppressed, retaining its owed up.
-        if down&&self.phase==Phase::Idle&&!self.shared.lost.load(Ordering::Acquire)&&self.shared.recovery.owns_down(){
-            self.cancel();self.phase=Phase::CancelledHeld;self.shared.debt.store(true,Ordering::Release);return true;
+        if down
+            && self.phase == Phase::Idle
+            && !self.shared.lost.load(Ordering::Acquire)
+            && self.shared.recovery.owns_down()
+        {
+            self.cancel();
+            self.phase = Phase::CancelledHeld;
+            self.shared.debt.store(true, Ordering::Release);
+            return true;
         }
         // Pair ownership is resolved before eligibility, stop or admission.
         match self.phase {
@@ -531,7 +580,16 @@ impl<S: TriggerProducer> Broker<S> {
                 }
                 let sequence = self.sequence;
                 self.measure(point);
-                let receipt=RecoveryReceipt{shared:self.shared.clone(),sequence,key:self.key.expect("candidate frame"),started:self.started.expect("candidate clock"),ended:now,point,max_distance_sq:self.max_distance_sq,dpi:self.dpi};
+                let receipt = RecoveryReceipt {
+                    shared: self.shared.clone(),
+                    sequence,
+                    key: self.key.expect("candidate frame"),
+                    started: self.started.expect("candidate clock"),
+                    ended: now,
+                    point,
+                    max_distance_sq: self.max_distance_sq,
+                    dpi: self.dpi,
+                };
                 if !point.valid()
                     || remote
                     || self
@@ -540,7 +598,7 @@ impl<S: TriggerProducer> Broker<S> {
                             sequence,
                             point,
                             at: now,
-                            recovery:receipt,
+                            recovery: receipt,
                         })
                         .is_err()
                 {
@@ -574,7 +632,7 @@ impl<S: TriggerProducer> Broker<S> {
             self.phase = Phase::BypassHeld;
             return false;
         }
-        let Some((admission, state,dpi)) = admission else {
+        let Some((admission, state, dpi)) = admission else {
             self.phase = Phase::BypassHeld;
             return false;
         };
@@ -614,7 +672,9 @@ impl<S: TriggerProducer> Broker<S> {
             self.phase = Phase::BypassHeld;
             return false;
         }
-        self.first=Some(point);self.max_distance_sq=0.0;self.dpi=dpi;
+        self.first = Some(point);
+        self.max_distance_sq = 0.0;
+        self.dpi = dpi;
         self.sequence = sequence;
         self.key = Some(key);
         self.started = Some(started);
@@ -623,19 +683,27 @@ impl<S: TriggerProducer> Broker<S> {
         self.shared.edges.store(true, Ordering::Release);
         true
     }
-    fn measure(&mut self,point:RawPoint){
-        if let Some(first)=self.first {let dx=point.x-first.x;let dy=point.y-first.y;self.max_distance_sq=self.max_distance_sq.max(dx*dx+dy*dy);}
+    fn measure(&mut self, point: RawPoint) {
+        if let Some(first) = self.first {
+            let dx = point.x - first.x;
+            let dy = point.y - first.y;
+            self.max_distance_sq = self.max_distance_sq.max(dx * dx + dy * dy);
+        }
     }
-    fn motion(&mut self, point: RawPoint, now: Instant, clock: u64)->bool {
+    fn motion(&mut self, point: RawPoint, now: Instant, clock: u64) -> bool {
         let _event = self.shared.event();
         self.tick(now, clock);
         if self.phase == Phase::Idle && self.sequence > self.shared.retired.load(Ordering::Acquire)
         {
             self.other();
         }
-        let block=self.shared.recovery.owns_down()&&!self.shared.lost.load(Ordering::Acquire);
-        if block {self.shared.recovery.cancel();}
-        if self.phase==Phase::Candidate {self.measure(point);}
+        let block = self.shared.recovery.owns_down() && !self.shared.lost.load(Ordering::Acquire);
+        if block {
+            self.shared.recovery.cancel();
+        }
+        if self.phase == Phase::Candidate {
+            self.measure(point);
+        }
         if self.phase == Phase::Candidate
             && (!point.valid()
                 || self
@@ -682,7 +750,13 @@ impl<S: TriggerProducer> Broker<S> {
             self.stop();
         }
         self.tick(Instant::now(), now_ms());
-        if self.shared.lost.load(Ordering::Acquire){self.shared.debt.load(Ordering::Acquire)||!self.shared.recovery.quiescent()}else{self.shared.debt.load(Ordering::Acquire) || self.shared.recovery.is_active() || !self.shared.stop.load(Ordering::Acquire)}
+        if self.shared.lost.load(Ordering::Acquire) {
+            self.shared.debt.load(Ordering::Acquire) || !self.shared.recovery.quiescent()
+        } else {
+            self.shared.debt.load(Ordering::Acquire)
+                || self.shared.recovery.is_active()
+                || !self.shared.stop.load(Ordering::Acquire)
+        }
     }
 }
 
@@ -697,10 +771,23 @@ impl CallbackBroker {
     ) {
         self.0.initialize(keys, buttons);
     }
-    pub(crate) fn tagged_right(&mut self,tag:usize,down:Option<bool>,point:RawPoint)->Option<bool>{self.0.tagged_right(tag,down,point)}
-    pub(crate) fn foreign_input(&mut self,right:bool,motion:bool)->bool{self.0.foreign_input(right,motion)}
-    pub(crate) fn cleanup_request(&mut self)->Option<RecoveryCleanup>{self.0.cleanup_request()}
-    pub(crate) fn cleanup_result(&mut self,request:RecoveryCleanup,count:u32){self.0.shared.recovery.cleanup_submitted(request,count);}
+    pub(crate) fn tagged_right(
+        &mut self,
+        tag: usize,
+        down: Option<bool>,
+        point: RawPoint,
+    ) -> Option<bool> {
+        self.0.tagged_right(tag, down, point)
+    }
+    pub(crate) fn foreign_input(&mut self, right: bool, motion: bool) -> bool {
+        self.0.foreign_input(right, motion)
+    }
+    pub(crate) fn cleanup_request(&mut self) -> Option<RecoveryCleanup> {
+        self.0.cleanup_request()
+    }
+    pub(crate) fn cleanup_result(&mut self, request: RecoveryCleanup, count: u32) {
+        self.0.shared.recovery.cleanup_submitted(request, count);
+    }
     pub(crate) fn clear_startup_key(&mut self, token: u16) {
         self.0.set_key(token, false);
     }
@@ -717,7 +804,7 @@ impl CallbackBroker {
         self.0.button(button, down);
     }
     #[cfg(windows)]
-    pub(crate) fn motion(&mut self, point: RawPoint)->bool {
+    pub(crate) fn motion(&mut self, point: RawPoint) -> bool {
         self.0.motion(point, Instant::now(), now_ms())
     }
     #[cfg(windows)]
@@ -748,7 +835,9 @@ pub(crate) fn channel(
         sequence: 0,
         key: None,
         started: None,
-        first:None,max_distance_sq:0.0,dpi:96,
+        first: None,
+        max_distance_sq: 0.0,
+        dpi: 96,
         keys: [0; 1024],
         key_count: 0,
         buttons: 0,
@@ -881,8 +970,10 @@ mod tests {
             sequence: 0,
             key: None,
             started: None,
-            first:None,max_distance_sq:0.0,dpi:96,
-        keys: [0; 1024],
+            first: None,
+            max_distance_sq: 0.0,
+            dpi: 96,
+            keys: [0; 1024],
             key_count: 0,
             buttons: 0,
         };
@@ -901,95 +992,185 @@ mod tests {
     fn right(b: &mut Broker<Source>, down: bool) -> bool {
         b.right(down, point(), Instant::now(), now_ms(), false)
     }
-    fn completed_receipt(b:&mut Broker<Source>,rx:&mut Consumer<Event<u64>>)->RecoveryReceipt {
-        arm(b);assert!(right(b,true));assert!(right(b,false));
-        loop {if let Event::End{recovery,..}=rx.try_pop().unwrap(){return recovery;}}
+    fn completed_receipt(b: &mut Broker<Source>, rx: &mut Consumer<Event<u64>>) -> RecoveryReceipt {
+        arm(b);
+        assert!(right(b, true));
+        assert!(right(b, false));
+        loop {
+            if let Event::End { recovery, .. } = rx.try_pop().unwrap() {
+                return recovery;
+            }
+        }
     }
-    fn begin_test_recovery(b:&Broker<Source>,receipt:&RecoveryReceipt){
-        b.shared.latch.fetch_or(RECOVERING,Ordering::AcqRel);
-        assert!(b.shared.recovery.begin(receipt.sequence,receipt.key,now_ms()+1000,(11,12),(10,20)));
-    }
-    #[test]
-    fn sealed_receipt_preserves_full_geometry_start_and_original_expiry(){
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);
-        assert!(Arc::ptr_eq(&receipt.shared,&b.shared));assert!(receipt.origin().0==b.source.frame());
-        assert_eq!(receipt.point(),(10,20,96));
-        let original=receipt.ended+Duration::from_millis(100);
-        assert_eq!(receipt.deadline(original),Some(original));
-        assert_eq!(receipt.deadline(original+Duration::from_secs(1)),Some(receipt.ended+Duration::from_millis(250)));
-        let (mut b,mut rx)=fixture(8);arm(&b);assert!(right(&mut b,true));
-        b.motion(RawPoint{x:50.,..point()},Instant::now(),now_ms());assert!(right(&mut b,false));
-        let receipt=loop{if let Event::End{recovery,..}=rx.try_pop().unwrap(){break recovery;}};
-        assert!(receipt.deadline(Instant::now()+Duration::from_secs(1)).is_none());
-    }
-    #[test]
-    fn physical_down_before_injected_down_passes_its_pair_and_blocks_recovery(){
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-        assert!(!right(&mut b,true));
-        assert_eq!(b.tagged_right(11,Some(true),point()),Some(true));
-        assert_eq!(b.tagged_right(12,Some(false),point()),Some(true));
-        b.shared.recovery.submitted(2);assert!(!right(&mut b,false));
-        assert!(b.cleanup_request().is_none());assert!(!b.shared.recovery.is_active());
-        assert_eq!(b.shared.recovery.completed(1),Some(RecoveryOutcome::Cancelled));
+    fn begin_test_recovery(b: &Broker<Source>, receipt: &RecoveryReceipt) {
+        b.shared.latch.fetch_or(RECOVERING, Ordering::AcqRel);
+        assert!(b.shared.recovery.begin(
+            receipt.sequence,
+            receipt.key,
+            now_ms() + 1000,
+            (11, 12),
+            (10, 20)
+        ));
     }
     #[test]
-    fn physical_down_after_allowed_owned_down_retains_its_suppressed_up(){
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-        assert_eq!(b.tagged_right(11,Some(true),point()),Some(false));assert!(right(&mut b,true));
+    fn sealed_receipt_preserves_full_geometry_start_and_original_expiry() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        assert!(Arc::ptr_eq(&receipt.shared, &b.shared));
+        assert!(receipt.origin().0 == b.source.frame());
+        assert_eq!(receipt.point(), (10, 20, 96));
+        let original = receipt.ended + Duration::from_millis(100);
+        assert_eq!(receipt.deadline(original), Some(original));
+        assert_eq!(
+            receipt.deadline(original + Duration::from_secs(1)),
+            Some(receipt.ended + Duration::from_millis(250))
+        );
+        let (mut b, mut rx) = fixture(8);
+        arm(&b);
+        assert!(right(&mut b, true));
+        b.motion(RawPoint { x: 50., ..point() }, Instant::now(), now_ms());
+        assert!(right(&mut b, false));
+        let receipt = loop {
+            if let Event::End { recovery, .. } = rx.try_pop().unwrap() {
+                break recovery;
+            }
+        };
+        assert!(receipt
+            .deadline(Instant::now() + Duration::from_secs(1))
+            .is_none());
+    }
+    #[test]
+    fn physical_down_before_injected_down_passes_its_pair_and_blocks_recovery() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        begin_test_recovery(&b, &receipt);
+        assert!(!right(&mut b, true));
+        assert_eq!(b.tagged_right(11, Some(true), point()), Some(true));
+        assert_eq!(b.tagged_right(12, Some(false), point()), Some(true));
+        b.shared.recovery.submitted(2);
+        assert!(!right(&mut b, false));
+        assert!(b.cleanup_request().is_none());
+        assert!(!b.shared.recovery.is_active());
+        assert_eq!(
+            b.shared.recovery.completed(1),
+            Some(RecoveryOutcome::Cancelled)
+        );
+    }
+    #[test]
+    fn physical_down_after_allowed_owned_down_retains_its_suppressed_up() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        begin_test_recovery(&b, &receipt);
+        assert_eq!(b.tagged_right(11, Some(true), point()), Some(false));
+        assert!(right(&mut b, true));
         assert!(b.shared.debt.load(Ordering::Acquire));
-        assert!(b.motion(point(),Instant::now(),now_ms()));
-        b.shared.recovery.submitted(1);let request=b.cleanup_request().unwrap();
-        assert_eq!(b.tagged_right(12,Some(false),point()),Some(false));b.shared.recovery.cleanup_submitted(request,1);
-        b.cleanup_request();assert!(!b.shared.recovery.is_active());
-        assert!(right(&mut b,false));assert!(!b.shared.debt.load(Ordering::Acquire));
-        assert!(!b.motion(point(),Instant::now(),now_ms()));
-        assert_eq!(b.shared.recovery.completed(1),Some(RecoveryOutcome::UnknownOutcome));
+        assert!(b.motion(point(), Instant::now(), now_ms()));
+        b.shared.recovery.submitted(1);
+        let request = b.cleanup_request().unwrap();
+        assert_eq!(b.tagged_right(12, Some(false), point()), Some(false));
+        b.shared.recovery.cleanup_submitted(request, 1);
+        b.cleanup_request();
+        assert!(!b.shared.recovery.is_active());
+        assert!(right(&mut b, false));
+        assert!(!b.shared.debt.load(Ordering::Acquire));
+        assert!(!b.motion(point(), Instant::now(), now_ms()));
+        assert_eq!(
+            b.shared.recovery.completed(1),
+            Some(RecoveryOutcome::UnknownOutcome)
+        );
     }
     #[test]
-    fn wrong_owned_point_or_foreign_move_cancels_before_click(){
-        for foreign in [false,true] {
-            let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-            let mut at=point();if foreign{assert!(!b.foreign_input(false,true));}else{at.x+=1.0;}
-            assert_eq!(b.tagged_right(11,Some(true),at),Some(true));assert_eq!(b.tagged_right(12,Some(false),point()),Some(true));
-            b.shared.recovery.submitted(2);b.cleanup_request();assert_eq!(b.shared.recovery.completed(1),Some(RecoveryOutcome::Cancelled));
+    fn wrong_owned_point_or_foreign_move_cancels_before_click() {
+        for foreign in [false, true] {
+            let (mut b, mut rx) = fixture(8);
+            let receipt = completed_receipt(&mut b, &mut rx);
+            begin_test_recovery(&b, &receipt);
+            let mut at = point();
+            if foreign {
+                assert!(!b.foreign_input(false, true));
+            } else {
+                at.x += 1.0;
+            }
+            assert_eq!(b.tagged_right(11, Some(true), at), Some(true));
+            assert_eq!(b.tagged_right(12, Some(false), point()), Some(true));
+            b.shared.recovery.submitted(2);
+            b.cleanup_request();
+            assert_eq!(
+                b.shared.recovery.completed(1),
+                Some(RecoveryOutcome::Cancelled)
+            );
         }
     }
     #[test]
-    fn foreign_motion_is_frozen_during_owned_down_and_foreign_right_is_uncertain(){
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-        assert_eq!(b.tagged_right(11,Some(true),point()),Some(false));b.shared.recovery.submitted(1);
-        assert!(b.foreign_input(false,true));assert!(b.shared.recovery.owns_down());
-        assert!(!b.foreign_input(true,false));assert!(b.shared.lost.load(Ordering::Acquire));
-        assert!(b.cleanup_request().is_none());assert!(!b.keep_running(false));assert!(b.shared.recovery.is_active());
+    fn foreign_motion_is_frozen_during_owned_down_and_foreign_right_is_uncertain() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        begin_test_recovery(&b, &receipt);
+        assert_eq!(b.tagged_right(11, Some(true), point()), Some(false));
+        b.shared.recovery.submitted(1);
+        assert!(b.foreign_input(false, true));
+        assert!(b.shared.recovery.owns_down());
+        assert!(!b.foreign_input(true, false));
+        assert!(b.shared.lost.load(Ordering::Acquire));
+        assert!(b.cleanup_request().is_none());
+        assert!(!b.keep_running(false));
+        assert!(b.shared.recovery.is_active());
     }
     #[test]
-    fn already_queued_cleanup_is_blocked_after_foreign_right_takes_ownership(){
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-        assert_eq!(b.tagged_right(11,Some(true),point()),Some(false));b.shared.recovery.submitted(1);
-        let request=b.cleanup_request().unwrap();b.shared.recovery.cleanup_submitted(request,1);
-        assert!(!b.foreign_input(true,false));assert!(b.keep_running(false));
-        assert_eq!(b.tagged_right(12,Some(false),point()),Some(true));
-        assert!(!b.keep_running(false));assert!(b.shared.recovery.owns_down());assert!(b.shared.lost.load(Ordering::Acquire));
+    fn already_queued_cleanup_is_blocked_after_foreign_right_takes_ownership() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        begin_test_recovery(&b, &receipt);
+        assert_eq!(b.tagged_right(11, Some(true), point()), Some(false));
+        b.shared.recovery.submitted(1);
+        let request = b.cleanup_request().unwrap();
+        b.shared.recovery.cleanup_submitted(request, 1);
+        assert!(!b.foreign_input(true, false));
+        assert!(b.keep_running(false));
+        assert_eq!(b.tagged_right(12, Some(false), point()), Some(true));
+        assert!(!b.keep_running(false));
+        assert!(b.shared.recovery.owns_down());
+        assert!(b.shared.lost.load(Ordering::Acquire));
     }
     #[test]
-    fn owned_receipt_and_cleanup_short_paths_allocate_nothing(){
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-        assert_eq!(crate::allocation_checks::count(||{
-            assert_eq!(b.tagged_right(11,Some(true),point()),Some(false));b.shared.recovery.submitted(1);
-            assert!(b.motion(point(),Instant::now(),now_ms()));
-            let request=b.cleanup_request().unwrap();assert_eq!(b.tagged_right(12,Some(false),point()),Some(false));
-            b.shared.recovery.cleanup_submitted(request,1);assert!(b.cleanup_request().is_none());
-        }),0);
+    fn owned_receipt_and_cleanup_short_paths_allocate_nothing() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        begin_test_recovery(&b, &receipt);
+        assert_eq!(
+            crate::allocation_checks::count(|| {
+                assert_eq!(b.tagged_right(11, Some(true), point()), Some(false));
+                b.shared.recovery.submitted(1);
+                assert!(b.motion(point(), Instant::now(), now_ms()));
+                let request = b.cleanup_request().unwrap();
+                assert_eq!(b.tagged_right(12, Some(false), point()), Some(false));
+                b.shared.recovery.cleanup_submitted(request, 1);
+                assert!(b.cleanup_request().is_none());
+            }),
+            0
+        );
     }
     #[test]
-    fn stop_waits_for_original_batch_receipts_and_lost_never_blindly_cleans(){
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-        b.shared.recovery.submitted(2);assert!(b.keep_running(true));assert!(b.cleanup_request().is_none());
-        assert_eq!(b.tagged_right(11,Some(true),point()),Some(true));assert_eq!(b.tagged_right(12,Some(false),point()),Some(true));
-        b.cleanup_request();assert!(!b.keep_running(true));
-        let (mut b,mut rx)=fixture(8);let receipt=completed_receipt(&mut b,&mut rx);begin_test_recovery(&b,&receipt);
-        b.tagged_right(11,Some(true),point());b.shared.recovery.submitted(1);b.lost();
-        assert!(b.cleanup_request().is_none());assert!(b.shared.recovery.owns_down());assert!(b.shared.lost.load(Ordering::Acquire));
+    fn stop_waits_for_original_batch_receipts_and_lost_never_blindly_cleans() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        begin_test_recovery(&b, &receipt);
+        b.shared.recovery.submitted(2);
+        assert!(b.keep_running(true));
+        assert!(b.cleanup_request().is_none());
+        assert_eq!(b.tagged_right(11, Some(true), point()), Some(true));
+        assert_eq!(b.tagged_right(12, Some(false), point()), Some(true));
+        b.cleanup_request();
+        assert!(!b.keep_running(true));
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        begin_test_recovery(&b, &receipt);
+        b.tagged_right(11, Some(true), point());
+        b.shared.recovery.submitted(1);
+        b.lost();
+        assert!(b.cleanup_request().is_none());
+        assert!(b.shared.recovery.owns_down());
+        assert!(b.shared.lost.load(Ordering::Acquire));
     }
     #[test]
     fn callback_during_publication_cannot_reopen_a_held_or_already_completed_pair() {
