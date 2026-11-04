@@ -409,4 +409,31 @@ mod tests {
         assert_eq!(resumed.summary([1; 16]).unwrap().verified_bytes, 9);
         assert!(resumed.commit([1; 16], || 1).is_ok());
     }
+
+    #[test]
+    fn codec_offer_and_chunk_flow_to_verified_disk_commit() {
+        use crate::codec::Frame;
+        use std::io::Cursor;
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(100);
+        grant(&mut manager);
+        let mut wire = Vec::new();
+        Frame::Offer { id: [1; 16], manifest }.write(&mut wire).unwrap();
+        Frame::Chunk { id: [1; 16], index: 0, bytes: b"file data".to_vec() }.write(&mut wire).unwrap();
+        let mut input = Cursor::new(wire);
+        match Frame::read(&mut input).unwrap() {
+            Frame::Offer { id, manifest } => manager.accept(
+                PeerBinding::new([1; 32], id), manifest, false, 0
+            ).unwrap(),
+            _ => panic!("wrong offer"),
+        }
+        match Frame::read(&mut input).unwrap() {
+            Frame::Chunk { id, index, bytes } => {
+                manager.write_chunk(id, index as usize, &bytes, 1).unwrap();
+            }
+            _ => panic!("wrong chunk"),
+        }
+        let path = manager.commit([1; 16], || 2).unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"file data");
+    }
 }

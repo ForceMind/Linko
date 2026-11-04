@@ -723,3 +723,4 @@ mod commit_regressions {
 pub mod clipboard;
 pub mod data_policy;
 pub mod manager;
+pub mod codec;
