@@ -70,7 +70,7 @@ pub fn capture(
     ensure!(unsafe {AXIsProcessTrusted()},"grant Accessibility and Input Monitoring permissions in System Settings, then restart PeerGlide");
     let reservation = capture_thread::Reservation::acquire()?;
     let (ready, rx) = std::sync::mpsc::sync_channel(1);
-    let thread = CaptureThread::spawn_owned(
+    let thread = CaptureThread::spawn_reserved(
         move |stop| unsafe {
             let state = HookState {
                 tx,

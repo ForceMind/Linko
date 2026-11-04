@@ -10,6 +10,10 @@ use tokio::sync::mpsc;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+#[cfg(any(windows, test))]
+mod gesture_queue;
+#[cfg(any(windows, test))]
+pub mod gesture_capture;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
 
@@ -173,6 +177,9 @@ pub fn capture(tx: mpsc::Sender<Captured>, target: InputCapabilities) -> Result<
     let gate = CaptureGate::default();
     #[cfg(any(windows, target_os = "macos"))]
     {
+        #[cfg(windows)]
+        let thread = native::capture(tx, gate.clone(), target, None)?;
+        #[cfg(target_os = "macos")]
         let thread = native::capture(tx, gate.clone(), target)?;
         Ok(CaptureSession {
             gate,
@@ -210,6 +217,8 @@ pub fn pointer(x: f64, y: f64) -> Result<()> {
 }
 #[cfg(any(windows, target_os = "macos"))]
 struct HookState {
+    #[cfg(windows)]
+    local_gestures: Option<gesture_capture::CallbackBroker>,
     tx: mpsc::Sender<Captured>,
     gate: CaptureGate,
     keys: std::collections::BTreeSet<u16>,
@@ -258,6 +267,11 @@ impl HookState {
     // Unsupported physical keys remain local and cancel control. Track their
     // held state in a disjoint namespace so they cannot straddle acquisition.
     fn unsupported_key(&mut self, code: u16, down: bool) -> bool {
+        #[cfg(windows)]
+        if let Some(broker) = self.local_gestures.as_mut() {
+            broker.key(0x8000 | (code & 0x7fff), down);
+            return false;
+        }
         let token = 0x8000 | (code & 0x7fff);
         if down {
             self.keys.insert(token);
@@ -271,6 +285,11 @@ impl HookState {
         false
     }
     fn key(&mut self, usage: u16, down: bool) -> bool {
+        #[cfg(windows)]
+        if let Some(broker) = self.local_gestures.as_mut() {
+            broker.key(usage, down);
+            return false;
+        }
         let fresh_down = if down {
             self.keys.insert(usage)
         } else {
@@ -340,6 +359,8 @@ mod hook_tests {
         let (tx, rx) = mpsc::channel(capacity);
         (
             HookState {
+                #[cfg(windows)]
+                local_gestures: None,
                 tx,
                 gate: CaptureGate::default(),
                 keys: Default::default(),
@@ -493,5 +514,31 @@ mod handoff_tests {
         assert!(!gate.active());
         gate.refresh();
         assert!(!gate.active());
+    }
+}
+
+#[cfg(test)]
+mod allocation_checks {
+    use std::{alloc::{GlobalAlloc,Layout,System},cell::Cell};
+    struct Counting;
+    thread_local! {static COUNT:Cell<Option<usize>>=const {Cell::new(None)};}
+    #[global_allocator]
+    static ALLOCATOR:Counting=Counting;
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self,layout:Layout)->*mut u8 {
+            COUNT.with(|count|{if let Some(n)=count.get(){count.set(Some(n+1));}});
+            System.alloc(layout)
+        }
+        unsafe fn dealloc(&self,ptr:*mut u8,layout:Layout){System.dealloc(ptr,layout);}
+        unsafe fn realloc(&self,ptr:*mut u8,layout:Layout,new_size:usize)->*mut u8 {
+            COUNT.with(|count|{if let Some(n)=count.get(){count.set(Some(n+1));}});
+            System.realloc(ptr,layout,new_size)
+        }
+    }
+    pub(crate) fn count(f:impl FnOnce())->usize {
+        struct Reset;
+        impl Drop for Reset {fn drop(&mut self){COUNT.with(|count|count.set(None));}}
+        COUNT.with(|count|{assert!(count.get().is_none());count.set(Some(0));});
+        let _reset=Reset;f();COUNT.with(|count|count.get().unwrap())
     }
 }

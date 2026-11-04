@@ -331,3 +331,28 @@ Native Backend真实路径复用Coordinator和上下文Lease，但没有二进�
 后续按原目标接G03共享捕获短路径、键盘动作owned ledger、本地worker独立
 同意与中文界面，再做明确隔离目标/授权环境下原生动作验收。不要用本批源码/
 绿色CI/fake effect次数冒充全局手势、物理输入或真实Native效果已经可用。
+
+## 17. 唯一捕获内的Windows G03短路径（native-gesture-broker）
+
+基于未合并#37/84745a7，main核对仍5d947637。新增platform/gesture_capture、
+预分配SPSC队列并接入现有Windows capture的可选分支，原KVM传None；无新增
+全局钩子、无产品二进制入口。回调不识别/分配/查询目标/IO，用固定键位图和
+五键状态、帧绑定准入与原子一次领取。独立同意、随机身份、焦点/权限/配置
+代次继续约束旧trigger。发布/领取竞争由单一带事件代次的latch和交错回归保护。
+
+普通放行down/up不被中途接管；抑制down后取消/停机仍抑制对应物理up，停机
+超时保留原线程/reaper预约。已知源丢失单独锁存，不能说右键已经恢复。
+跨进程OS文件锁协调相同用户临时目录的合作进程，保留旧Atomic及真实TLS join
+边界，不删/截断用户文件；不防恶意本机替换或不同TMPDIR。详见CAPTURE_LIFECYCLE。
+
+Mac G1尚未接：CGEvent PID/state不能证明物理来源，不用PID0/HID1猜测，不改
+原Mac KVM tap。Windows入口仅库API，手势worker/识别/规则dispatch、owned
+injection账本、普通短右键一次恢复、独立中文同意界面/覆盖层仍未实现；因此
+不能把本批编译/逻辑测试称为全局手势可用。界面中文保持，没有安装Rust或
+更改宿主权限，没有启动宿主捕获/操作用户窗口。正向原生效果/物理C06未运行。
+
+本批验证要求完整三平台、最低1.95与审计五项CI；当前进展和exact-head结果以
+本分支PR为准。合成回归覆盖pair/cancel/full/stop/watchdog、准入并发、零分配、
+SPSC真实双线程非Copy清理，以及跨进程锁/TLS析构，不替代原生事件验收。
+后续继续本机worker和owned recovery、Mac可靠来源，再推进原计划数据网络等；
+#10历史根因仍未确认，主线未合并，不把CI当独立安全审计或稳定版交付。

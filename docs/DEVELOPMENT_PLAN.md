@@ -85,7 +85,7 @@ runtime evidence and historical failures are in VALIDATION.md.
 | P02 | implementing | Opt-in untrusted IPv4 mDNS hints and explicit listener publication; actual LAN/multiple NIC/permission acceptance pending |
 | G01 | implementing | Local action/rule/preflight/result coordinator plus independently consented native window Backend (#37); keyboard owned injection/global capture and real effects remain absent or unverified |
 | G02 | implementing | Bounded direction-preserving logic and synthetic corpus; human corpus/physical accuracy remain pending |
-| G03 | implementing | Pure ownership/cancellation/edge model tested; native callback/queue wiring and C06 remain pending |
+| G03 | implementing | Pure model plus optional Windows shared-capture short path/SPSC wiring (product disabled); worker/right-click recovery, macOS physical provenance and C06 remain pending |
 | G04 | implementing | Offline lab, exact app-rule editor/preview, versioned settings with backup/recovery; native app-ID/focus sampler and on-click permission diagnostics implemented (#35); continuous target invalidation/global worker/overlay pending |
 | D03 | implementing (isolated foundation) | Offline bounded manifests/chunks/disk resume/integrity/no-overwrite commit; network/grants/GUI/quotas absent, M4 not accepted |
 
