@@ -50,6 +50,21 @@ with tempfile.TemporaryDirectory(prefix="peerglide-context-") as temporary:
         if sys.platform.startswith("linux"):
             assert report["foreground_status"] == "unsupported"
         assert not list(pathlib.Path(temporary).iterdir()), "diagnostics must not create identity/config/storage"
+    observer = subprocess.run([str(binary), "diagnose-context", "--observe-ms", "50"], cwd=temporary, capture_output=True, text=True, timeout=15)
+    assert observer.returncode == 0, "observer diagnostic failed; payload intentionally omitted"
+    observed = json.loads(observer.stdout)
+    assert set(observed) == {"schema_version", "platform", "observation_scope", "action_execution_supported", "native_capture_started", "permissions", "foreground_status", "focus_status", "recheck_status", "observer"}
+    assert observed["observation_scope"] == "sampled_with_observer_attempt"
+    assert "application_id" not in observed
+    assert observed["action_execution_supported"] is False and observed["native_capture_started"] is False
+    summary = observed["observer"]
+    assert set(summary) == {"requested_ms", "status", "coalesced_invalidations", "context_minted", "delivery_verified"}
+    assert summary["status"] != "cleanup_failed", "native observer cleanup failure is a real check failure"
+    assert summary["requested_ms"] == 50 and summary["context_minted"] is False and summary["delivery_verified"] is False
+    assert summary["status"] in (statuses - {"available"}) | {"ready", "not_ready", "busy", "wrong_thread", "native_unavailable", "backlog", "closed", "entropy_unavailable", "counter_exhausted", "clock_regressed", "stale"}
+    if sys.platform.startswith("linux"):
+        assert summary["status"] == "unsupported"
+    assert not list(pathlib.Path(temporary).iterdir())
     rejected = subprocess.run([str(binary), "diagnose-context", "--native"], cwd=temporary, capture_output=True, timeout=10)
     assert rejected.returncode != 0, "diagnostics must not accept native input flags"
 print("PASS: readonly native context/status schema, opt-in identifiers, no files or input authority")

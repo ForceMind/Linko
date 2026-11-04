@@ -677,3 +677,71 @@ Backend/owned action injection and local worker consent remain unimplemented;
 query success enables none of them. Final follow-up updates docs/README and an obsolete rule-preview footer; native
 provider, CLI and permission-button logic are unchanged. Its exact-head CI remains
 the PR #35 gate. Main and prior PRs stay unmerged.
+
+## Native invalidation / consuming context binding increment (WIP)
+
+focus-invalidation branches from verified/unmerged #35 head 1a648f4. Adds actual
+read-only Windows/macOS notification adapters and worker-owned context bindings.
+The independent static review found a ready/epoch ABA; replaced separate readiness
+reads with one versioned atomic state and added a controlled interleaving through
+the actual mark clock path. Review then found no new deterministic defect.
+
+Pure regressions cover coalesced away/back, trigger epoch/cache handoff, original
+queue deadline, single consume/conflicting token, configuration/worker/close,
+128-slot accounting including consumed native leases, expiry/clock/counter closure,
+and unsupported Linux. Windows tests cover callback detach/poison, cached target,
+session and notification classification. These do not simulate physical acceptance.
+
+The explicit diagnose-context --observe-ms path starts no input capture and mints
+no context, reports true unavailable/native errors, and treats cleanup failure as
+failure. CI adds standalone CLI dependency-feature checking to avoid workspace GUI
+feature unification masking native bindings. Python syntax/notice and whitespace
+checks are local; Rust/native compilation, whole-workspace checks, real observer
+smoke, final five-job candidate CI and local observer outcome are pending. No
+system permission/toolchain change or new local native observation has been run.
+Input v5 and global G1 remain disabled; C06 and #10 remain open.
+
+
+Initial d4b6db2 passed minimum Rust but failed formatting; 6bbfcce still omitted
+format-only changes in two parent modules. Those parent changes are included in
+the next candidate. Windows lifecycle validation now uses injected cleanup calls
+through the actual shutdown path: partial installations, each cleanup failure,
+repeated shutdown, signal closure/TLS detach before native cleanup, and permanent
+thread poison after failure. Fake handles never reach OS functions, even if a test
+assertion fails. CleanupFailed is distinct from environment unavailable and is a
+failing smoke outcome; constructor/pump cleanup failures preserve that result.
+
+
+### Native observer/binding runtime candidate
+
+Candidate `70bba447302d12c4168c583c5e1c01ef5f28114b` passed all five jobs in
+[41818463792](https://github.com/ForceMind/PeerGlide/actions/runs/41818463792):
+Windows/macOS/Linux format, standalone CLI feature check, strict Clippy, workspace
+regressions, Release build, probe/reconnect/explicit observer smoke, GUI/packages,
+minimum Rust 1.95 and strict audit. Initial strict lint on current stable rejected
+deprecated fetch_update; replaced it with bounded CAS supported by the minimum
+compiler, with no warning ignore or minimum-version increase.
+
+Git transport twice failed commit_refs/ref updates. Commit objects were present;
+a read-verified, expected-old-SHA, force=false GitHub ref API fast-forward restored
+the exact local commits, followed by remote readback/fetch. No force push, history
+rewrite or protected/main update occurred. Transfer failures are not code-check passes.
+
+Downloaded Mac artifact 13315668039, verified inner ARM64 ZIP SHA256
+`c42dc4556c3152c031d76c18e9d3e0930b034afbf99e616650c9549586e44d2c`.
+On macOS 26.2 (25C56), local context_smoke passed against that runtime. Explicit
+100ms observation returned a real access-unavailable rejection, with no minted
+context, native capture or action support, and delivery_verified=false. This is
+NOT successful native notification delivery or focus acceptance. Personal OS
+permissions/IDs remain local at target/local-validation/focus-70bba44/report.json,
+not staged or uploaded. No synthetic input, permission request/change or toolchain
+installation was used.
+
+Final follow-up adds explicit same-worker queued-context cancellation and its
+resource test, plus records: cancelling while stale requires no native access,
+releases only the matching full context, is idempotent and rejects foreign-worker
+contexts. Observer adapters/diagnostic runtime remain the verified candidate; the
+new cancel API/test still require final exact-head CI. Actual callback delivery,
+Windows interactive suspend/session/fault recovery and granted/revoked AX paths
+remain unverified. Independent static review is not full security audit. Global
+G1, Backend/owned injection, shared G03 input wiring and C06 remain open.

@@ -98,3 +98,59 @@ Primary API references:
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getguithreadinfo
 - https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-queryfullprocessimagenamew
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop
+
+## Notification invalidation and local bindings (implementation increment)
+
+`context::watch::LocalContexts` adds explicit native notification ownership, not
+another keyboard/mouse capture stack. Windows uses read-only OUTOFCONTEXT WinEvent
+foreground/focus/destroy/desktop notifications plus a hidden NOACTIVATE session/
+power/environment message window. macOS requires the main thread, seven Workspace
+notifications and all required AX app/window/control subscriptions. Unsupported
+required AX notifications fail closed; there is no polling-only ticket fallback.
+
+Only `Signal::notify` runs in notification callbacks: one coalescing atomic OR.
+The same versioned atomic word holds dirty/closed/ready plus a checked 61-bit epoch.
+The owner drains bounded native work, acknowledges invalidations, refreshes its
+actual cached target, and publishes ready by CAS. Notifications during refresh
+leave the frame unready. This prevents ready ABA from relabelling an old trigger
+with a new target generation. Overflow closes the owner rather than wrapping.
+
+Clone `TriggerSource` before entering capture. Its `mark()` records fixed-size
+worker identity/epoch and the original monotonic start; it performs no allocation,
+random generation, target query or recognition. Queue loss/emergency can call
+`invalidate()` from the existing short path. Capture uses that original mark;
+changed generations, delayed events and target-cache differences reject instead
+of following a new foreground target or restarting the deadline.
+
+The worker creates random 32-byte worker/target values from OS entropy outside
+callbacks. There is no PID, timestamp, fixed fixture or counter fallback. Contexts
+expire at their original mark deadline, no more than the existing 5-second action
+limit. Pending bindings and consumed leases share 128 resource slots until their
+native references are dropped. Explicit cancellation releases only that queued context without requiring permission
+or a native query. Entries consume once before fallible native checks;
+configuration, notifications, uncertainty, queue saturation and shutdown invalidate
+old bindings. A consumed lease requires the same live owner to poll and perform
+late native/permission/target/expiry checks. None of these values is a remote
+credential, user consent or an action capability.
+
+```
+peerglide diagnose-context --observe-ms 100
+```
+
+This explicit 1–5000 ms diagnostic attempts subscription, polls and stops it; it
+never calls capture/consume or mints an action context. Initial native setup/query
+time is additional to the requested observation interval. Default diagnostics
+still start no observer. Output is status/counts only, with `context_minted=false`
+and `delivery_verified=false`; unavailable native access remains unavailable.
+Cleanup failure is a failing smoke result, not accepted as a successful stop.
+Windows cleanup detaches callback pointers first and poisons the thread after a
+failed unregister. AX sources are removed before observer release, and borrowed
+run-loop sources/thread desktops are never independently released.
+
+Finite pumps are NOT total ordering barriers. OS notification delay, stalled
+loops, application accessibility omissions, modal modes and transient permission/
+session changes still need real native acceptance. Common-mode AX registration
+and late native rechecks reduce these gaps but do not prove zero missed events or
+atomic check-and-submit. No Backend or global G1 path is enabled by this increment.
+The existing single capture lifecycle, ownership/escape/watchdog, explicit local
+worker consent, owned action injection and C06 remain gates before execution.
