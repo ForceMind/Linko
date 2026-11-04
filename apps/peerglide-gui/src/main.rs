@@ -6,7 +6,7 @@ mod gesture_rules;
 mod desktop_ui;
 use anyhow::{Context, Result};
 use clap::Parser;
-use eframe::egui::{self, Color32, RichText, Vec2};
+use eframe::egui::{self, RichText, Vec2};
 use peerglide_protocol::worker::{WorkerEvent, WorkerState,WorkerInputEvent,WorkerInputState};
 use peerglide_transport::{self as transport, Identity};
 use serde::{Deserialize, Serialize};
