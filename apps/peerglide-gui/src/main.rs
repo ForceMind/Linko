@@ -566,6 +566,10 @@ impl App {
     }
     fn mark_stop_timeout(&mut self) {
         self.pending_start = None;
+        if self.input_terminal {
+            self.notice = "已收到最终清理状态，仍在等待工作进程与输出通道结束。".into();
+            return;
+        }
         if self.active_mode == Some(SessionMode::Native) {
             self.recovery_blocked = true;
             self.input_state = Some(WorkerInputState::RecoveryUnconfirmed);
@@ -902,6 +906,8 @@ mod tests {
             let drained = Arc::new(WorkerSnapshot::default());
             drained.2.store(true, Ordering::Release);
             app.worker_state = Some(drained);
+            app.stopping = Some(Instant::now() - Duration::from_secs(4));
+            app.poll();
             app.stop();
             assert_eq!(app.input_state, Some(state));
             assert!(app.native_cleanup_reported());

@@ -385,10 +385,8 @@ pub(super) async fn run_with_status(
         )
         .await
         {
-            if native {
-                if notification.is_ok() {
-                    notification = Err(error);
-                }
+            if native && notification.is_ok() {
+                notification = Err(error);
             }
         }
     }
