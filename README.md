@@ -22,7 +22,7 @@ identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
 
 An offline **手势实验室 (Gesture lab)** lets you draw on a window-local canvas, inspect
-recognition/rejection and explicitly save labelled samples. Open it in the sidebar
+recognition/rejection and explicitly save labelled samples. Open 本机鼠标 → 录制与本窗口测试
 or run `peerglide-gui --gesture-lab`; no pairing or input permissions are needed.
 This is a test/recording page, not global mouse gestures or action execution.
 See [gesture lab](docs/GESTURE_LAB.md) for scope and privacy.
@@ -41,11 +41,14 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 Use stable Rust (GUI requires at least 1.95). Run `cargo build --workspace --release --locked` to build both
-executables. Launch `peerglide-gui` with `peerglide` beside it. 设备 (Devices) creates
-an identity and enrolls the other computer's public certificate after fingerprint
-confirmation. 设置 (Settings) explicitly enables native input and receiving control;
-主页 (Home) starts/listens/connects and can run a harmless transport probe. 显示器 (Displays)
-sets the switching side. No config file editing is required.
+executables. Launch `peerglide-gui` with `peerglide` beside it. The Chinese GUI has
+five pages: 总览、设备与屏幕、本机鼠标、剪贴板与文件、设置. 设备与屏幕 provides
+identity/enrollment, independent receiving permission, harmless communication/probes
+and primary-display direction. Starting a keyboard/mouse session requires a fresh
+explicit confirmation; saved preferences never enable native input on a normal
+connection. 本机鼠标 edits offline rules and tests window-local gestures; its global
+G1 switch remains unavailable. See [actual GUI interactions](docs/GUI_INTERACTIONS.zh-CN.md).
+No config file editing is required.
 
 CI artifacts contain an unsigned Windows portable ZIP, macOS app bundle or
 Linux portable ZIP plus checksums and notices. Linux GUI runtime libraries

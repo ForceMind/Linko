@@ -920,3 +920,30 @@ no render-only writes, future/invalid rules preservation, explicit sample export
 and real widget geometry for isolated Xvfb. Full matrix is pending, not local
 Rust success. No host input/clipboard/file sharing or OS permission change has
 been run. Physical C06, native app semantics and #10 root cause remain unverified.
+
+
+The runtime candidate c0a188277d9646c5889727f19490030ab684347b passed all five
+jobs in [run 41883855509](https://github.com/ForceMind/PeerGlide/actions/runs/41883855509).
+This includes strict checks/tests/Release/process smokes on all three platforms,
+macOS repeated parallel GUI regressions, Linux Xvfb actual drawing/explicit export,
+Rust 1.95 and the strict dependency audit. Early fmt/test API/Clippy failures were
+fixed; the process smoke now separates input records while preserving the exact
+connection sequence and asserting Disabled through the final terminal receipt.
+
+The SHA-verified macOS artifact also ran on this host with an explicit isolated
+profile. Actual Chinese navigation, disabled rule save, pasted Chinese peer name
+and certificate path, identity/enrollment, default-off receiving preference,
+loopback managed communication, stop, another probe, persisted layout direction,
+light/dark settings, readonly permission checks and window-close cleanup passed.
+GUI/worker/loopback peer exit codes were 0; actual managed child arguments omitted
+native/receiving flags. No host capture/injection/action/data sharing was started.
+AX/Input Monitoring were denied; no grants changed. Canvas drawing is proven by
+isolated Xvfb, not host right-button sampling or Chinese IME acceptance.
+
+The first sandboxed host launch exited 134 without logs; a WindowServer-accessible
+launch succeeded. This is not a diagnosis of historical #10. CUA App observation
+can relaunch a closed app; that default window was closed without editing it.
+The isolated process exit codes, rather than a subsequent App query, prove cleanup.
+See GUI_INTERACTIONS.zh-CN.md for details. This final documentation follow-up leaves
+runtime/tests/tools/workflow sources unchanged; exact-head CI is read back on #42.
+Physical C06, global G1, native effects and production data sharing remain pending.

@@ -14,3 +14,25 @@
 GUI与CLI本批开发版本统一0.2.0-dev，package标签/Info.plist取workspace版本。网络Input/ALPN仍v5，旧connection IPC schema1不变；新input事件是独立可忽略记录。没有G2、任意脚本/命令、第二输入hook或系统安全设置修改。
 
 验证：全部Rust检查与三平台CI、managed/probe/reconnect/cleanup故障、GUI真实启动/隔离Xvfb样本导出和最终候选产物均须完成。--ui-layout-report仅显式隔离录制测试，一次create_new导出纯widget矩形，不含输入内容，正常GUI不写该文件。本机Rust仍按用户决定不安装；不得把headless render/CI等同于物理输入验收或#10旧根因定位。
+
+## 本批验收（2026-11-05）
+
+运行源码候选c0a188277d9646c5889727f19490030ab684347b通过完整五项
+[CI 41883855509](https://github.com/ForceMind/PeerGlide/actions/runs/41883855509)：
+三平台fmt/独立CLI/严格Clippy/工作区测试/Release、真实无原生输入probe与重连、
+只读上下文、最低Rust1.95与依赖审计；Linux隔离Xvfb实际启动、绘制与显式样本
+保存通过，实际总览/录制截图已读取核对。macOS多轮并行GUI回归通过。
+
+已在本机macOS运行该候选产物，校验artifact与内层ZIP摘要；使用独立测试目录
+操作五页中文导航、添加/保存禁用规则、中文名称/证书路径粘贴、真实身份创建/
+指纹核验/登记、保持接收许可关闭、仅回环通信、停止、重新探针、方向保存、
+深浅外观切换、只读权限诊断和关闭窗口。真实GUI worker参数无--native/
+--allow-control，退出时GUI/worker/对端均0，无残留。全程未开启原生输入或G1。
+权限诊断为辅助功能/输入监控未授予；没有申请或更改权限。中文IME组成、宿主
+右键绘制与真实多机输入没有因此完成验收；画布绘制/导出证据来自隔离Xvfb。
+
+宿主首次沙箱内启动无日志退出134；允许访问WindowServer后正常启动，此结果
+不能确认Issue #10旧根因。关闭后再次查询App会让CUA自动重开默认窗口；已关闭
+且未编辑其设置/身份，退出证据以原隔离进程exit0及参数回读为准。普通GUI不
+自动生成截图/样本；私钥和测试配置不提交。最后文档提交的精确候选五项CI以
+PR #42回读为准；运行、测试及CI脚本与c0a1882保持一致。
