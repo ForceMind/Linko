@@ -707,3 +707,6 @@ mod commit_regressions {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+pub mod clipboard;
+pub mod data_policy;
