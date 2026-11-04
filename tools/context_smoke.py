@@ -27,7 +27,15 @@ with tempfile.TemporaryDirectory(prefix="peerglide-context-") as temporary:
         assert report["observation_scope"] == "sampled_no_notifications"
         assert report["foreground_status"] in statuses
         assert report["focus_status"] in {"available", "unavailable", "permission_denied", "unsupported"}
-        assert report["recheck_status"] in statuses | {"matched_at_recheck", "changed"}
+        if report["foreground_status"] == "available":
+            assert report["recheck_status"] in statuses | {"matched_at_recheck", "changed"}
+        else:
+            assert report["focus_status"] == "unavailable"
+            assert report["recheck_status"] == "unavailable"
+        expected_fields = {"schema_version", "platform", "observation_scope", "action_execution_supported", "native_capture_started", "permissions", "foreground_status", "focus_status", "recheck_status"}
+        if include and report["foreground_status"] == "available":
+            expected_fields.add("application_id")
+        assert set(report) == expected_fields, "diagnostic fields must remain explicitly allowlisted"
         assert set(report["permissions"]) == {"accessibility", "input_monitoring", "input_desktop", "secure_input"}
         for key in ("accessibility", "input_monitoring", "input_desktop"):
             assert report["permissions"][key] in permission_statuses
