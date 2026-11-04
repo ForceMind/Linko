@@ -411,3 +411,22 @@ Final handoff hygiene: ignore generated Python bytecode, disable it for local
 notice checks, and describe Cargo build/cache writes accurately in preflight help.
 ROADMAP now reflects #27–#30 and the isolated D03 foundation, preserving all
 physical gates and genuinely unimplemented product features.
+
+## D01–D03 offline collaboration increment (2026-11-04, #32)
+
+Adds independent session-bound per-direction data consent; bounded UTF-8 text
+backend coordination; real-file admission/cancellation/history and late commit
+permission checks; and an isolated bounded data framing codec. Seventeen new
+regression tests cover pure policy/backend failures and real temporary-file
+pipelines. The new codec is not negotiated or activated on input ALPN v5.
+
+Development uses GitHub APIs/hosted CI only after identifying that the available
+terminal belongs to the user Mac. No local build, installation, capture or OS
+clipboard access was performed. Early candidate CI failed formatting; runner
+diffs were applied. Final full matrix is pending at this checkpoint and must be
+recorded from the exact candidate before calling this increment validated.
+
+Automatic Codex code review could not run: repository review usage limit reached.
+No credits/purchases/review-gate bypass were requested. CI does not replace that
+review. Independent security review, native OS backends/network integration,
+persistent/global disk accounting and real Win/Mac acceptance remain open.
