@@ -201,9 +201,16 @@ impl Manager {
         mut clock: impl FnMut() -> u64,
     ) -> Result<PathBuf, Error> {
         let entry = self.entries.get_mut(&id).ok_or(Error::UnknownId)?;
-        self.session
+        if let Err(error) = self
+            .session
             .validate(&entry.permit, Capability::FileReceive, clock())
-            .map_err(Error::Permission)?;
+        {
+            entry.receiver.take();
+            if entry.summary.state == State::Receiving {
+                entry.summary.state = State::Suspended;
+            }
+            return Err(Error::Permission(error));
+        }
         let receiver = entry.receiver.as_ref().ok_or(Error::Inactive)?;
         if !receiver.progress().chunks_complete {
             return Err(Error::Incomplete);
@@ -418,13 +425,24 @@ mod tests {
         let (mut manager, manifest) = fixture.setup(100);
         grant(&mut manager);
         let mut wire = Vec::new();
-        Frame::Offer { id: [1; 16], manifest }.write(&mut wire).unwrap();
-        Frame::Chunk { id: [1; 16], index: 0, bytes: b"file data".to_vec() }.write(&mut wire).unwrap();
+        Frame::Offer {
+            id: [1; 16],
+            manifest,
+        }
+        .write(&mut wire)
+        .unwrap();
+        Frame::Chunk {
+            id: [1; 16],
+            index: 0,
+            bytes: b"file data".to_vec(),
+        }
+        .write(&mut wire)
+        .unwrap();
         let mut input = Cursor::new(wire);
         match Frame::read(&mut input).unwrap() {
-            Frame::Offer { id, manifest } => manager.accept(
-                PeerBinding::new([1; 32], id), manifest, false, 0
-            ).unwrap(),
+            Frame::Offer { id, manifest } => manager
+                .accept(PeerBinding::new([1; 32], id), manifest, false, 0)
+                .unwrap(),
             _ => panic!("wrong offer"),
         }
         match Frame::read(&mut input).unwrap() {

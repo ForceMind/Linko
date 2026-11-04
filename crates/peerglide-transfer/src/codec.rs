@@ -1,8 +1,6 @@
 //! Bounded framing for a future separately negotiated authenticated data stream.
 //! Never route these bytes to the v5 input stream. No authentication is performed.
-use crate::{
-    clipboard::MAX_TEXT_BYTES, Manifest, CHUNK_BYTES, MAX_FILE_BYTES, MAX_MANIFEST_BYTES,
-};
+use crate::{clipboard::MAX_TEXT_BYTES, Manifest, CHUNK_BYTES, MAX_FILE_BYTES, MAX_MANIFEST_BYTES};
 use std::io::{self, Read, Write};
 
 const MAGIC: [u8; 4] = *b"PGD1";
@@ -11,10 +9,22 @@ const HEADER: usize = 12;
 /// No Debug: variants can carry private clipboard text or file contents/names.
 /// Transfer IDs are session-local routing keys, never authentication or consent.
 pub enum Frame {
-    Text { sequence: u64, text: String },
-    Offer { id: [u8; 16], manifest: Manifest },
-    Chunk { id: [u8; 16], index: u32, bytes: Vec<u8> },
-    Cancel { id: [u8; 16] },
+    Text {
+        sequence: u64,
+        text: String,
+    },
+    Offer {
+        id: [u8; 16],
+        manifest: Manifest,
+    },
+    Chunk {
+        id: [u8; 16],
+        index: u32,
+        bytes: Vec<u8>,
+    },
+    Cancel {
+        id: [u8; 16],
+    },
 }
 
 fn invalid() -> io::Error {
@@ -182,7 +192,10 @@ mod tests {
             header[4] = kind;
             header[8..12].copy_from_slice(&len.to_le_bytes());
             let mut reader = Cursor::new(header);
-            assert_eq!(Frame::read(&mut reader).err().unwrap().kind(), io::ErrorKind::InvalidData);
+            assert_eq!(
+                Frame::read(&mut reader).err().unwrap().kind(),
+                io::ErrorKind::InvalidData
+            );
             assert_eq!(reader.position(), HEADER as u64);
         }
         let mut flags = encoded(&Frame::Cancel { id: [1; 16] });
@@ -193,15 +206,32 @@ mod tests {
 
     #[test]
     fn truncation_invalid_text_and_invalid_chunks_fail_closed() {
-        let bytes = encoded(&Frame::Text { sequence: 1, text: "test".into() });
+        let bytes = encoded(&Frame::Text {
+            sequence: 1,
+            text: "test".into(),
+        });
         for end in 0..bytes.len() {
             assert!(Frame::read(Cursor::new(&bytes[..end])).is_err());
         }
         for frame in [
-            Frame::Text { sequence: 0, text: "x".into() },
-            Frame::Text { sequence: 1, text: "\0".into() },
-            Frame::Chunk { id: [1; 16], index: u32::MAX, bytes: vec![1] },
-            Frame::Chunk { id: [1; 16], index: 0, bytes: vec![0; CHUNK_BYTES + 1] },
+            Frame::Text {
+                sequence: 0,
+                text: "x".into(),
+            },
+            Frame::Text {
+                sequence: 1,
+                text: "\0".into(),
+            },
+            Frame::Chunk {
+                id: [1; 16],
+                index: u32::MAX,
+                bytes: vec![1],
+            },
+            Frame::Chunk {
+                id: [1; 16],
+                index: 0,
+                bytes: vec![0; CHUNK_BYTES + 1],
+            },
         ] {
             let mut output = Vec::new();
             assert!(frame.write(&mut output).is_err());
@@ -214,7 +244,11 @@ mod tests {
 
     #[test]
     fn maximum_chunk_roundtrip_preserves_bytes() {
-        let input = Frame::Chunk { id: [7; 16], index: 32767, bytes: vec![19; CHUNK_BYTES] };
+        let input = Frame::Chunk {
+            id: [7; 16],
+            index: 32767,
+            bytes: vec![19; CHUNK_BYTES],
+        };
         match Frame::read(Cursor::new(encoded(&input))).unwrap() {
             Frame::Chunk { id, index, bytes } => {
                 assert_eq!(id, [7; 16]);

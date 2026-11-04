@@ -103,3 +103,15 @@ backoff have automatic tests. Real interface/suspend/input acceptance, address
 rediscovery and interactive pairing remain pending; see ADR-0005. G1 has isolated
 G01 action-model and G02 recognizer foundations; G2 remains planned. No gesture interception
 is enabled by this connection work.
+
+## Independent data increment (2026-11-04, #32)
+
+D01/P01 now have offline text policy/backend coordination and session-local,
+per-direction consent/ticket invalidation. D03 has a real-file manager with
+bounded admission and late commit authorization. Isolated data framing checks
+size before allocation. These are independently executable without native input.
+
+Production authenticated data streams, persistent/global quota/history and UI
+remain implementation work, not hardware blockers. No M4/native gate is closed.
+See CLIPBOARD_ENGINE.md, TRANSFER_MANAGER.md and DATA_FRAMING.md. Exact candidate
+CI results belong in VALIDATION.md; input v5 remains unchanged.
