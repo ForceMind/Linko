@@ -857,3 +857,20 @@ Final follow-up only records results, preserving all tested runtime/test source;
 exact final-head CI and readiness are recorded on PR #38. No host capture/native
 action, permission change or Rust install occurred. Physical/native delivery and
 all previously listed G1/C06/#10 limitations remain open.
+
+### Sealed local click recovery (owned-local-input candidate)
+
+A real Windows library recovery path now consumes a native End receipt and its
+original target lease, performs physical-point/window-DPI/routing and late consent
+checks, and submits a separately tagged Down/Up in one batch. The existing hook
+records Allowed/Blocked receipts; partial count is never assumed to be a prefix.
+Bounded cleanup only concerns a proven missing owned Up. See
+[LOCAL_CLICK_RECOVERY.md](LOCAL_CLICK_RECOVERY.md) for failure/unknown semantics,
+foreign-input rules and the unavoidable silent-hook-removal observation limit.
+
+Synthetic protocol/capture/native-query/INPUT-construction regressions and full
+candidate CI are required. Local Rust is still absent by user choice; no actual
+input injection, host native permission change or window manipulation was run.
+Keyboard and macOS recovery, worker/recognizer/rules dispatch and explicit enable
+UI remain unfinished. G1 product entry stays closed, all C06 boxes stay unchecked,
+and #10 historical root cause is still unknown. Green CI does not change these.

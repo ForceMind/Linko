@@ -366,3 +366,21 @@ fmt和边界常量Clippy失败已修正，未跳过检查。准入发布/领取A
 最终head五项CI与待审阅状态回读以PR38为准。main保持5d947637，所有这些PR
 尚未合并；未进行宿主捕获/动作/权限变更/装Rust。G1产品入口仍关闭，原生
 输入/普通短右键恢复、真实权限/多机C06和#10旧根因状态不变，继续后续实现。
+
+## 18. 短右键恢复与owned input（owned-local-input，开发中）
+
+本轮基于已通过最终五项CI/待审阅未合并#38的2cd4be6，main仍5d947637。
+目标把真实捕获End生成且不开放构造的Rust私有字段票据、原目标/期限/DPI/位置
+复查、Win同batch独立tag的Down/Up与既有hook回执接成恢复闭环。SDK不保证
+partial count是数组prefix，必须凭逐事件回执识别；count2无回执等不确定
+结果保留pending，不重放点击。部分失败中只能清理确认属于本次的Up，旧
+目标/同意失效后不得新增Down。已放行/抑制physical pair仍归原域。
+
+root负责gesture_capture/recovery协议、LocalActions真实Lease衔接、原生只读
+preflight和记录；review_admission仅做只读契约/代码审查；
+localize_panels只拥有windows.rs既有hook接线/Native INPUT构造。不会新增钩子、
+在回调做识别/IO/分配或运行宿主注入。Native callback只固定字段/原子决策，
+实际SendInput发生在worker/capture loop且先释放TLS RefCell借用。Mac物理
+来源仍未知，本批不猜测或启用。短click恢复完善后再接识别/规则worker；
+全局产品入口仍关闭，中文界面保持，不装Rust/不改权限，验证仍须完整CI。
+当前尚未实现/编译/执行这一增量；不得把设计或后续fake事件当物理验收。

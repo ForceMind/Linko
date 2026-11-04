@@ -91,3 +91,8 @@ consent UI. Ordinary unarmed pairs pass; an armed short click is captured but is
 not replayed by this library. Therefore product G1 stays disabled. Synthetic pair,
 queue, allocation and lifecycle tests are not real right-click, driver, DPI,
 permission, sleep or two-machine C06 acceptance. No new protocol/ALPN or grants.
+
+The next sealed Windows short-click library path is documented in
+[LOCAL_CLICK_RECOVERY.md](LOCAL_CLICK_RECOVERY.md). Its new atomics share this
+same capture lifecycle; source loss and pending injected ownership are not clean
+shutdown proof. It does not enable the product worker or macOS/keyboard recovery.
