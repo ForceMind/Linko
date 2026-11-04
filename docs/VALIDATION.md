@@ -816,7 +816,7 @@ The local preflight again reports missing Rust; the user's no-install decision
 stands. Candidate format/Clippy/tests/build/MSRV/audit results are tracked on its
 PR, including failed checks and fixes, rather than claimed as local runs.
 
-New nonphysical regressions cover ordinary/repeated/startup-held right pairs,
+New and retained nonphysical regressions cover ordinary/repeated/startup-held right pairs,
 stale admission, held modifiers/buttons, injected classification, cancellation,
 queue saturation, completed-but-unretired work, timeout/revoke/escape/source loss,
 bounded shutdown debt, publication/claim interleavings and zero callback-path
@@ -841,8 +841,10 @@ in [41836066218](https://github.com/ForceMind/PeerGlide/actions/runs/41836066218
 Windows/macOS/Linux format, standalone CLI features, strict workspace Clippy,
 workspace tests, Release builds, probe/reconnect/readonly-context smoke, package
 checks, Linux GUI runtime and macOS parallel GUI stress, minimum Rust 1.95 and
-strict dependency audit. Linux ran 193 workspace tests; macOS ran 206. The native
-Windows adapter compiles and its message classifiers are tested, not hook delivery.
+strict dependency audit. Linux ran 193 workspace tests; macOS ran 206. Windows ran 222 workspace tests. The native Windows adapter compiles and its mouse
+message classifiers are tested. Injected-origin cases belong to the retained pure
+G03 model; the unchanged native flag/tag filter was statically compared/reviewed,
+not exercised through real hook delivery or host injection.
 
 Earlier candidates failed formatting and the overflow fixture's redundant
 constant expression. Both were fixed without disabling checks. Targeted
