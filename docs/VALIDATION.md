@@ -460,3 +460,21 @@ cwd-dependent root paths and root-entry capacity boundaries. Each is being fixed
 with filesystem/process regressions; this review is not an independent security
 audit or an automated repository review-quota workaround. User explicitly declined
 local Rust installation; continue source development and hosted CI only.
+
+
+D03 durable-reservation code candidate `bc304939f06ba06920c0c7bdac739c8524752b98`
+passed all five jobs in run [41788814220](https://github.com/ForceMind/PeerGlide/actions/runs/41788814220):
+Windows/macOS/Linux fmt, strict Clippy, workspace tests, Release build, real process
+probe/reconnect, notice checks and packages; isolated Linux GUI smoke; macOS
+isolated/20-parallel GUI stress; Rust 1.95 all-target check and strict dependency
+audit. Linux workspace has 140 tests (transfer crate 40, including 11 new groups;
+the subprocess cwd helper and explicit corpus replay are additional invocations,
+not extra unique tests). Windows omits Unix-only symlink regressions.
+
+The focused independent static reviewer rechecked all three fixes without new
+findings. Additional write/file-sync/directory-sync failure injection and physical
+power-loss/media acceptance remain unrun. Final documentation follow-up changes
+no Rust source, manifest, lockfile or workflow; its exact-head CI remains the PR
+gate. No C06/#10/M4 product checkbox is closed. Persisted aggregate inventory and
+cumulative admission quota are implemented; detailed persistent lifecycle history,
+explicit cleanup/reclamation, free-space policy and network/UI remain future work.

@@ -115,3 +115,12 @@ Production authenticated data streams, persistent/global quota/history and UI
 remain implementation work, not hardware blockers. No M4/native gate is closed.
 See CLIPBOARD_ENGINE.md, TRANSFER_MANAGER.md and DATA_FRAMING.md. Exact candidate
 CI results belong in VALIDATION.md; input v5 remains unchanged.
+
+
+D03 receive-root admission now inventories legacy staging and persists immutable
+bounded reservations before receiving new data (PR #33). Cooperating Managers
+share a root lock, and exact explicit resume never refunds/recharges prior usage.
+Cancelled/failed/published reservations survive sessions/restarts; malformed/future
+storage fails closed. Aggregate durable quota is implemented; persistent detailed
+history, free-space/reclamation policy, network/GUI and native media remain open.
+See TRANSFER_MANAGER.md and exact-candidate evidence in VALIDATION.md.
