@@ -38,6 +38,7 @@ jobs:
       - run: cargo build --release --workspace --locked
       - run: python tools/smoke.py
       - run: python tools/reconnect_smoke.py
+      - run: python tools/context_smoke.py
       - run: python -m unittest discover -s tools -p test_third_party.py
       - run: python tools/third_party.py
       - name: GUI runtime smoke on isolated Linux display

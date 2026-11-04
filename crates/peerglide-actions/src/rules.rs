@@ -87,7 +87,9 @@ pub enum Resolution {
     Selected { rule_id: u64, action: ActionSpec },
 }
 pub struct CompiledRules(RuleBook);
-fn valid_app(id: &str) -> bool {
+/// Shared exact-match rule identifier bound. Platform IDs may be namespaced, but
+/// existing user-specified IDs retain their original case and representation.
+pub fn valid_application_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 256 && id.trim() == id && !id.chars().any(char::is_control)
 }
 impl CompiledRules {
@@ -104,7 +106,7 @@ impl CompiledRules {
         if book.rules.len() > MAX_RULES || book.exclusions.len() > MAX_RULES {
             return Err(RuleError::Limit);
         }
-        if book.exclusions.iter().any(|a| !valid_app(a)) {
+        if book.exclusions.iter().any(|a| !valid_application_id(a)) {
             return Err(RuleError::Application);
         }
         let mut ids = BTreeSet::new();
@@ -117,11 +119,11 @@ impl CompiledRules {
             }
             match &rule.scope {
                 Scope::Global => (),
-                Scope::Application { id } if valid_app(id) => (),
+                Scope::Application { id } if valid_application_id(id) => (),
                 Scope::Group { apps }
                     if !apps.is_empty()
                         && apps.len() <= MAX_APPS
-                        && apps.iter().all(|a| valid_app(a)) => {}
+                        && apps.iter().all(|a| valid_application_id(a)) => {}
                 _ => return Err(RuleError::Application),
             }
         }
@@ -144,7 +146,7 @@ impl CompiledRules {
         if !self.0.enabled {
             return Resolution::Disabled;
         }
-        if !valid_app(app) {
+        if !valid_application_id(app) {
             return Resolution::InvalidApplication;
         }
         if self.0.exclusions.iter().any(|a| a == app) {

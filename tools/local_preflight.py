@@ -54,6 +54,7 @@ def main():
         ("build", ["cargo", "build", "--workspace", "--locked"]),
         ("probe_smoke", [sys.executable, "tools/smoke.py", str(binary)]),
         ("reconnect_smoke", [sys.executable, "tools/reconnect_smoke.py", str(binary)]),
+        ("context_smoke", [sys.executable, "tools/context_smoke.py", str(binary)]),
     ]
     if args.audit:
         checks.append(("dependency_audit", ["cargo", "audit", "--deny", "warnings", "--json"]))

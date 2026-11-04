@@ -606,3 +606,23 @@ its upstream Thin default (100). Three Python notice regressions pass locally.
 Final documentation/README follow-up changes no runtime/build/test source; its
 exact-head candidate CI is reported on PR #34. Physical C06, global G1/actions,
 production data network, persistent detailed history and #10 remain open.
+
+
+## G1 native read-only context increment (2026-11-04, WIP)
+
+Branch native-context follows ready/unmerged #33/#34. Main remains 5d947637;
+#33 head 2d2bed5 and #34 head 69736f6 were rechecked open/unmerged. Local worktree
+was clean before branching. User's no-Rust-install decision and Chinese GUI stay.
+
+Adds real Windows/macOS foreground/focus providers, explicit diagnose-context
+CLI without identity/network/input flags, and an on-click Chinese GUI process
+permission snapshot. IDs follow the existing exact 256-byte rule contract; raw
+window/control references stay private. Point-in-time consistency is explicitly
+not a focus generation, execution ticket or action grant. Linux stays Unsupported.
+See NATIVE_CONTEXT.md for OS APIs, privacy and remaining native worker gates.
+
+Python syntax, notice tests (3) and whitespace checks passed locally. Native
+compile/tests/diagnostic smoke, full final matrix and actual local diagnostic
+are pending. No permission prompt, capture, injection, native context read on the
+user Mac or toolchain installation has been performed by this new increment yet.
+C06/G1 execution/#10 root cause remain open; no acceptance boxes closed.

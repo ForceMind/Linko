@@ -141,6 +141,7 @@ impl WorkerSnapshot {
     }
 }
 struct App {
+    permission_report: Option<peerglide_platform::context::PermissionReport>,
     discovery: discovery_panel::Panel,
     gesture_lab: gesture_lab::GestureLab,
     gesture_rules: gesture_rules::RuleEditor,
@@ -186,6 +187,7 @@ impl App {
                 }
             };
         let mut app = Self {
+            permission_report: None,
             discovery: discovery_panel::Panel::default(),
             gesture_lab: gesture_lab::GestureLab::new(&dir),
             gesture_rules: gesture_rules::RuleEditor::new(&dir),
@@ -779,6 +781,32 @@ impl App {
         ui.label("Ctrl+Alt+Right，松开后切换控制目标\nCtrl+Alt+Esc：紧急恢复本机控制\n接收端的物理输入：收回控制");
         ui.add_space(14.0);
         ui.label("macOS 需要辅助功能和输入监控权限。Windows 提权窗口与安全桌面不在当前原型的控制范围内。");
+        ui.separator();
+        ui.strong("本 GUI 进程的系统权限");
+        ui.weak("仅在点击时读取，不申请或修改权限。此快照不能代替工作进程检查或真实输入验收，也不会启用手势。");
+        if ui.button("检查当前系统权限").clicked() {
+            self.permission_report = Some(peerglide_platform::context::permissions());
+        }
+        if let Some(report) = self.permission_report {
+            use peerglide_platform::context::{PermissionStatus, SecureInput};
+            let label = |status| match status {
+                PermissionStatus::Granted => "系统查询通过，不代表用户已授权控制",
+                PermissionStatus::Denied => "未授予或访问受限",
+                PermissionStatus::NotRequired => "此平台无需同名权限",
+                PermissionStatus::Unknown => "未知，需要实机确认",
+                PermissionStatus::Unsupported => "暂不支持此项检测",
+            };
+            ui.label(format!("辅助功能：{}", label(report.accessibility)));
+            ui.label(format!("输入监控：{}", label(report.input_monitoring)));
+            ui.label(format!("输入桌面查询：{}", label(report.input_desktop)));
+            ui.label(format!("安全输入：{}", match report.secure_input {
+                SecureInput::Active => "已开启，保留系统保护",
+                SecureInput::Inactive => "检查时未检测到",
+                SecureInput::Unknown => "未知，需要实机确认",
+                SecureInput::Unsupported => "暂不支持此项检测，不能据此判断 UAC 状态",
+            }));
+            ui.weak("权限或系统状态变化后请重新检查；GUI 与通信工作进程可能有不同的系统授权。");
+        }
         ui.add_space(14.0);
         ui.label("剪贴板和文件需独立授权，目前尚未接通。无需云账号，不收集遥测。");
         ui.add_space(14.0);

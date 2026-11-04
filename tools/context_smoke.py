@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+"""Read-only native context diagnostics; no capture, injection or permission prompt.
+
+Only schema/status assertions are printed. Application IDs stay in memory and are
+never uploaded/logged; lack of a runner desktop is a real unavailable result.
+"""
+import json
+import pathlib
+import subprocess
+import sys
+import tempfile
+
+binary = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/peerglide").resolve()
+statuses = {"unsupported", "no_foreground", "no_focus", "changed_during_read", "permission_denied", "identifier_unavailable", "identifier_too_long", "query_failed", "available"}
+permission_statuses = {"granted", "denied", "not_required", "unknown", "unsupported"}
+with tempfile.TemporaryDirectory(prefix="peerglide-context-") as temporary:
+    for include in (False, True):
+        command = [str(binary), "diagnose-context"]
+        if include:
+            command.append("--include-application-id")
+        result = subprocess.run(command, cwd=temporary, capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0, "context diagnostic failed; payload intentionally omitted"
+        report = json.loads(result.stdout)
+        assert report["schema_version"] == 1
+        assert report["action_execution_supported"] is False
+        assert report["native_capture_started"] is False
+        assert report["observation_scope"] == "sampled_no_notifications"
+        assert report["foreground_status"] in statuses
+        assert report["focus_status"] in {"available", "unavailable", "permission_denied", "unsupported"}
+        assert report["recheck_status"] in statuses | {"matched_at_recheck", "changed"}
+        assert set(report["permissions"]) == {"accessibility", "input_monitoring", "input_desktop", "secure_input"}
+        for key in ("accessibility", "input_monitoring", "input_desktop"):
+            assert report["permissions"][key] in permission_statuses
+        assert report["permissions"]["secure_input"] in {"active", "inactive", "unknown", "unsupported"}
+        assert not {"pid", "hwnd", "title", "target_token", "window", "private_key"} & set(report)
+        if include and report["foreground_status"] == "available":
+            value = report["application_id"]
+            assert 0 < len(value.encode("utf-8")) <= 256 and value.strip() == value
+            assert value.startswith("mac-bundle:" if report["platform"] == "macos" else "win-exe:")
+        else:
+            assert "application_id" not in report
+        if sys.platform.startswith("linux"):
+            assert report["foreground_status"] == "unsupported"
+        assert not list(pathlib.Path(temporary).iterdir()), "diagnostics must not create identity/config/storage"
+    rejected = subprocess.run([str(binary), "diagnose-context", "--native"], cwd=temporary, capture_output=True, timeout=10)
+    assert rejected.returncode != 0, "diagnostics must not accept native input flags"
+print("PASS: readonly native context/status schema, opt-in identifiers, no files or input authority")
