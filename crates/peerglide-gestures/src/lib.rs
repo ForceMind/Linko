@@ -196,6 +196,11 @@ impl Stroke<'_> {
 }
 
 impl Recognizer {
+    /// Bounded compiled vocabulary, not a rule/action grant. Duplicate example
+    /// IDs may occur; callers must not infer authority from template presence.
+    pub fn template_ids(&self) -> impl Iterator<Item = GestureId> + '_ {
+        self.templates.iter().map(|template| template.id)
+    }
     pub fn config(&self) -> Config {
         self.config
     }

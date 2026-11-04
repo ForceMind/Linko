@@ -898,3 +898,19 @@ host/runner injection, permission change or Rust install occurred. The adapter
 cannot prove continuity after silent hook removal or completion beyond its hook.
 All native/physical/worker/macOS/keyboard gates listed above remain unfinished.
 Final docs-only head preserves runtime/tests; its exact CI/readiness is on PR #39.
+
+### Local gesture worker composition (local-gesture-worker candidate)
+
+The Windows library actor composes the existing capture/GestureBroker/recognizer/
+rule/native actions and click-recovery paths. Constructor remains non-native;
+explicit consent is independent of saved rules and KVM/data grants. No shipped
+binary starts it. New synthetic Core ownership/config/clock/DPI/recognition and
+Windows actor gate tests run without actual input. Target DPI identity and a
+late fullscreen/menu/capture guard protect original coordinate/context scope;
+unretired capture frames cannot be overwritten before queued Begin is consumed.
+Details and remaining subprocess/UI/native gates: LOCAL_GESTURE_WORKER.md.
+
+Local preflight still reports missing Rust, honoring the no-install decision.
+Full format/Clippy/tests/build/process/GUI/MSRV/audit candidate CI is required.
+Native effects, observer delivery, real worker lifetime/hardware/permissions,
+Mac G1 and C06 are NOT RUN; #10 root cause remains unconfirmed.

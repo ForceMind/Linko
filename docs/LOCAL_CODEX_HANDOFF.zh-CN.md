@@ -403,3 +403,17 @@ Unsupported；source silent-removal不能靠heartbeat证明连续性。产品二
 不调用恢复API，GUI仍中文且全局G1关闭。main核对仍5d947637，未合并。
 后续接recognizer/rules worker与独立中文同意/诊断，继续Native source证明和
 原生验收，再推进数据原路线。不要以本批mock回执或绿色CI当实机验收。
+
+## 19. 本机worker流水线（local-gesture-worker，开发中）
+
+基于#39最终文档提交e7d0778；#39的精确最终Mac因GitHub ARM64资源不足未启动，
+仅重试同run41852771336 attempt2 / job126663707349，仍需回读，不因观察超时
+重建候选。代码ceecaa9五项已通过；#39保持草稿，source未变，Issue已记录。
+
+本轮复用既有GestureBroker/Recognizer/CompiledRules，worker线程执行识别，
+把真实Native Prepared及sealed receipt接到typed action或短右键恢复；拒识/
+失焦/配置/队列取消须返还/取消全部Prepared，停止不能用请求成功假装已恢复。
+root负责gesture_worker.rs Native actor、访问器/依赖和记录；localize_panels
+只新增gesture_worker_core.rs纯worker收集/规则/取消测试，readonly reviewer
+继续按需只读复核，不递归派工。不创建新crate/hook、不改变IPC/ALPN，不装
+Rust或自动启用产品G1；无本机实际输入/权限变更。当前WIP尚未编译/测试。
