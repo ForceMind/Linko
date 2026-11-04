@@ -36,7 +36,7 @@
 <text x="28" y="782" font-size="12" font-weight="400" fill="#777">界面与状态均为示例</text>
 <line x1="236" y1="780" x2="1180" y2="780" stroke="#c8c8c8" stroke-width="1"/>
 <text x="244" y="805" font-size="14" font-weight="600" fill="#444">交互线框·示例数据·非运行软件</text>
-<text x="1031" y="805" font-size="13" font-weight="400" fill="#777">设计 0.2.0</text>
+<text x="1031" y="805" font-size="13" font-weight="400" fill="#777">设计 0.3.0</text>
 <text x="244" y="119" font-size="26" font-weight="650" fill="#252525">剪贴板与文件</text>
 <text x="244" y="148" font-size="15" font-weight="400" fill="#666">选择对象与方向，文本和文件分别授权。</text>
 <rect x="244" y="178" width="924" height="200" rx="7" fill="#fff" stroke="#c4c4c4"/>

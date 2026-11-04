@@ -43,7 +43,7 @@ class Frame:
         self.text(28, 782, "界面与状态均为示例", 12, color="#777")
         self.line(236, 780, 1180, 780, stroke="#c8c8c8")
         self.text(244, 805, MARKER, 14, weight=600, color="#444")
-        self.text(1031, 805, "设计 0.2.0", 13, color="#777")
+        self.text(1031, 805, "设计 0.3.0", 13, color="#777")
 
     def rect(self, x, y, width, height, fill="#fff", stroke="#c4c4c4", radius=7, dash=None):
         assert x >= 0 and y >= 0 and x + width <= W and y + height <= H

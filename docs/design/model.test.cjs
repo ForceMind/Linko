@@ -103,3 +103,62 @@ test('reducer preserves caller state and all navigation pages remain reachable',
   for (const page of M.pages) assert.equal(apply(s, 'NAV', { page }).page, page);
   apply(s, 'SYSTEM_READY'); assert.equal(JSON.stringify(s), original);
 });
+
+test('unconfirmed restoration blocks fresh keyboard and gesture activation', () => {
+  let s = apply(M.scenario('control'), 'EMERGENCY');
+  s = apply(s, 'START_CONTROL'); assert.equal(s.input.phase, 'restoring');
+  s = apply(s, 'RECOVERY_FAIL'); s.gesture.consent = true;
+  s = apply(s, 'GESTURE_ACTIVATE'); assert.equal(s.gesture.enabled, false);
+  assert.equal(s.input.phase, 'failed');
+  s = apply(s, 'RECOVERY_ACK'); s = apply(s, 'START_CONTROL'); assert.equal(s.input.phase, 'remote');
+});
+test('application chooser keeps draft and excluded applications reject rule save', () => {
+  let s = apply(M.initial(), 'RULE_EDIT'); s = apply(s, 'DRAFT', { key: 'scope', value: '指定应用' });
+  assert.equal(s.modal, 'appPicker'); s = apply(s, 'APP_CHOOSE', { value: 'Safari（示例）' });
+  assert.equal(s.modal, 'rule'); assert.equal(s.draft.scope, 'Safari（示例）');
+  s = apply(s, 'DRAFT', { key: 'scope', value: '绘图应用（示例）' });
+  s = apply(s, 'RULE_TEST'); s = apply(s, 'RULE_SAVE'); assert.equal(s.rules.length, 2);
+});
+
+test('manual address and sketched draft survive later choices without saved-rule changes', () => {
+  let s = apply(M.initial(), 'ADD_DEVICE'); s = apply(s, 'ADDRESS', { value: '[2001:db8::24]:24870' });
+  s = apply(s, 'SELECT_DEVICE'); s = apply(s, 'PAIR_BACK'); assert.equal(s.pairing.address, '[2001:db8::24]:24870');
+  s = apply(s, 'RULE_EDIT'); s = apply(s, 'SKETCH_EDIT'); s = apply(s, 'CLOSE');
+  assert.equal(s.modal, 'discardRule'); assert.equal(s.rules.length, 2);
+});
+
+test('local gesture continue cannot bypass remote control or unresolved recovery', () => {
+  let s = M.scenario('control'); s.gesture = { enabled: true, consent: true, paused: true, reason: '远程控制期间暂停' };
+  s = apply(s, 'GESTURE_PAUSE'); assert.equal(s.gesture.paused, true);
+  s = apply(s, 'DISCONNECT'); s = apply(s, 'GESTURE_PAUSE'); assert.equal(s.gesture.paused, true);
+  s = apply(s, 'RECOVERY_ACK'); s = apply(s, 'GESTURE_PAUSE'); assert.equal(s.gesture.paused, true);
+});
+test('revoking file permission during verification never reports committed', () => {
+  let s = apply(M.scenario('incoming'), 'ACCEPT_FILE'); s = apply(s, 'FILE_PROGRESS');
+  s = apply(s, 'GRANT', { key: 'files', value: false }); s = apply(s, 'FILE_COMMIT');
+  assert.notEqual(s.transfer.phase, 'done'); assert.equal(s.peer.grants.files, false);
+  s = apply(M.scenario('incoming'), 'ACCEPT_FILE'); s = apply(s, 'FILE_PROGRESS'); s = apply(s, 'DISCONNECT'); s = apply(s, 'FILE_COMMIT');
+  assert.notEqual(s.transfer.phase, 'done');
+});
+test('readonly guard also covers identity registration layout and exclusion updates', () => {
+  let s = apply(M.initial(), 'SELECT_DEVICE'); s = apply(s, 'COMPARE', { value: true }); s.configWritable = false;
+  s = apply(s, 'PAIR_NEXT'); assert.equal(s.peer.trusted, false);
+  s = apply(s, 'POSITION', { value: 'left' }); assert.equal(s.position, 'right');
+  s = apply(s, 'APP_PICKER', { purpose: 'exclude' }); s = apply(s, 'APP_CHOOSE', { value: 'Safari（示例）' });
+  assert.deepEqual(s.exclusions, ['绘图应用（示例）']);
+});
+
+test('manual gesture pause survives temporary remote control and restoration', () => {
+  let s = M.scenario('connected'); s.systemReady = true; s.nativeConsent = true; s.peer.remoteInput = true;
+  s.gesture = { enabled: true, consent: true, paused: false, manualPaused: false, reason: '' };
+  s = apply(s, 'GESTURE_PAUSE'); assert.equal(s.gesture.manualPaused, true);
+  s = apply(s, 'START_CONTROL'); s = apply(s, 'DISCONNECT'); s = apply(s, 'RECOVERY_ACK');
+  assert.equal(s.gesture.paused, true); assert.equal(s.gesture.manualPaused, true);
+});
+test('inbound control has distinct takeover and grant-revocation restoration', () => {
+  let s = M.scenario('receiving'); s = apply(s, 'START_CONTROL'); assert.equal(s.input.phase, 'receiving');
+  s = apply(s, 'PHYSICAL_TAKEOVER'); assert.equal(s.input.phase, 'restoring');
+  s = apply(s, 'RECOVERY_ACK'); assert.equal(s.input.phase, 'local');
+  s = apply(M.scenario('receiving'), 'GRANT', { key: 'input', value: false });
+  assert.equal(s.input.phase, 'restoring'); assert.equal(s.peer.grants.input, false);
+});
