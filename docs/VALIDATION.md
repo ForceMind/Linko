@@ -430,3 +430,23 @@ Automatic Codex code review could not run: repository review usage limit reached
 No credits/purchases/review-gate bypass were requested. CI does not replace that
 review. Independent security review, native OS backends/network integration,
 persistent/global disk accounting and real Win/Mac acceptance remain open.
+
+
+## Explicit isolated GUI profile (2026-11-04, WIP)
+
+Local main preflight on Darwin 25.2.0 arm64 cannot execute Cargo because Rust is
+absent. The user explicitly declined installation; hosted CI remains the build
+path. Existing macOS GUI always uses the user's Application Support directory,
+so it cannot safely isolate native launch validation inside the approved workspace.
+
+Add `--data-dir DIRECTORY` using the workspace's existing Clap dependency, retain
+`--gesture-lab` and default profile behavior, and reject malformed/unknown options
+before opening the window. No identity, trust, grant, discovery or input permission
+is copied from another profile. A regression uses an isolated Unicode/space path
+and preserves a future-version original profile while asserting independent
+settings/default-deny permissions. Linux GUI smoke now passes and checks the
+explicit directory; canvas drawing remains synthetic isolated-display evidence.
+
+Candidate fmt/Clippy/workspace tests/build, native matrix and actual local launch
+remain pending. No toolchain installation, native capture, system clipboard,
+security-policy change or physical desktop acceptance is claimed.

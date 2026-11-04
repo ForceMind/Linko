@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
     def capture(arguments, name):
         log = pathlib.Path(temporary) / f"{name}.log"
         with log.open("w") as output:
-            gui = subprocess.Popen([str(root / "target/release/peerglide-gui"), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
+            gui = subprocess.Popen([str(root / "target/release/peerglide-gui"), "--data-dir", str(pathlib.Path(temporary) / "peerglide"), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
             try:
                 for _ in range(100):
                     if gui.poll() is not None:
@@ -26,6 +26,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     time.sleep(0.1)
                 else:
                     raise TimeoutError("GUI window did not appear")
+                assert (pathlib.Path(temporary) / "peerglide" / "gui-instance.lock").is_file(), "explicit data directory must own the GUI configuration"
                 time.sleep(1)
                 subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
                 if name == "gesture-lab":

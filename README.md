@@ -54,6 +54,20 @@ not stable installers. macOS signing/notarization and Windows code signing are
 pending; do not disable OS protections to open them. The Linux GUI can configure
 and probe connections, but Linux native input is not implemented.
 
+For an isolated local GUI check, use an explicitly selected directory:
+
+```sh
+peerglide-gui --data-dir /path/to/isolated-test-data
+peerglide-gui --data-dir /path/to/isolated-test-data --gesture-lab
+```
+
+This stores settings, new identities and manually exported gesture samples in that
+directory. It never copies existing trust or permissions from the usual profile.
+Keep the CLI beside the GUI. No system input permission is needed for the offline
+pages or transport probes. Without `--data-dir`, the existing user-profile location
+is unchanged. Unknown or incomplete command-line options reject before opening a
+window or creating configuration files.
+
 ## Explicit two-peer enrollment
 
 On each computer create a **different** identity:

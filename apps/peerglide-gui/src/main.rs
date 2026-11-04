@@ -4,6 +4,7 @@ mod discovery_panel;
 mod gesture_lab;
 mod gesture_rules;
 use anyhow::{Context, Result};
+use clap::Parser;
 use eframe::egui::{self, Color32, RichText, Vec2};
 use peerglide_protocol::worker::{WorkerEvent, WorkerState};
 use peerglide_transport::{self as transport, Identity};
@@ -19,6 +20,18 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+#[derive(Parser)]
+#[command(name = "peerglide-gui", version, about = "PeerGlide desktop control panel")]
+struct Options {
+    /// Use this configuration/identity directory instead of the user profile.
+    /// Does not import, migrate or authorize anything from another directory.
+    #[arg(long, value_name = "DIRECTORY")]
+    data_dir: Option<PathBuf>,
+    /// Open the offline, window-local gesture recording page.
+    #[arg(long)]
+    gesture_lab: bool,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -877,7 +890,29 @@ impl Drop for App {
     }
 }
 fn main() -> eframe::Result<()> {
-    let dir = if cfg!(windows) {
+    let options = Options::parse();
+    let dir = options.data_dir.unwrap_or_else(default_data_dir);
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1000.0, 720.0])
+            .with_min_inner_size([860.0, 640.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "PeerGlide",
+        native_options,
+        Box::new(move |cc| {
+            let mut app = App::new(cc, dir);
+            if options.gesture_lab {
+                app.page = Page::GestureLab;
+            }
+            Ok(Box::new(app))
+        }),
+    )
+}
+
+fn default_data_dir() -> PathBuf {
+    if cfg!(windows) {
         PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("LOCALAPPDATA unavailable"))
             .join("PeerGlide")
     } else if cfg!(target_os = "macos") {
@@ -891,32 +926,49 @@ fn main() -> eframe::Result<()> {
                     .join(".local/share")
             })
             .join("peerglide")
-    };
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1000.0, 720.0])
-            .with_min_inner_size([860.0, 640.0]),
-        ..Default::default()
-    };
-    let gesture_lab = std::env::args_os()
-        .skip(1)
-        .any(|arg| arg == "--gesture-lab");
-    eframe::run_native(
-        "PeerGlide",
-        options,
-        Box::new(move |cc| {
-            let mut app = App::new(cc, dir);
-            if gesture_lab {
-                app.page = Page::GestureLab;
-            }
-            Ok(Box::new(app))
-        }),
-    )
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_data_directory_keeps_profiles_and_permissions_separate() {
+        let fixture = Fixture::new().unwrap();
+        let original = fixture.path.join("original");
+        std::fs::create_dir(&original).unwrap();
+        let sentinel = original.join("settings.json");
+        let preserved = br#"{"store_version":999,"data":{"native":true}}"#;
+        std::fs::write(&sentinel, preserved).unwrap();
+        let selected = fixture.path.join("isolated profile 屏跃");
+        let options = Options::try_parse_from([
+            std::ffi::OsString::from("peerglide-gui"),
+            std::ffi::OsString::from("--data-dir"),
+            selected.clone().into_os_string(),
+            std::ffi::OsString::from("--gesture-lab"),
+        ])
+        .unwrap();
+        assert!(options.gesture_lab);
+        let mut app = App::load(options.data_dir.unwrap());
+        assert_eq!(app.dir, selected);
+        assert!(!app.config.native && !app.config.allow && !app.config.reconnect);
+        assert!(app.config.fingerprint.is_none());
+        assert!(app.local_fingerprint().is_none());
+        app.save_config().unwrap();
+        assert!(selected.join("settings.json").is_file());
+        assert!(!selected.join("identity").exists());
+        assert_eq!(std::fs::read(sentinel).unwrap(), preserved);
+    }
+
+    #[test]
+    fn malformed_gui_options_fail_before_creating_a_profile() {
+        assert!(Options::try_parse_from(["peerglide-gui", "--data-dir"]).is_err());
+        assert!(Options::try_parse_from(["peerglide-gui", "--unknown-option"]).is_err());
+        let options = Options::try_parse_from(["peerglide-gui"]).unwrap();
+        assert!(options.data_dir.is_none());
+        assert!(!options.gesture_lab);
+    }
     pub(super) struct Fixture {
         pub(super) path: PathBuf,
         live: bool,
