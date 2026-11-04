@@ -541,6 +541,11 @@ impl App {
     fn stop(&mut self) {
         self.pending_start = None;
         if let Some(child) = &mut self.child {
+            if self.input_terminal {
+                self.connected = false;
+                self.status = "清理已报告，正在等待工作进程退出".into();
+                return;
+            }
             if self.stopping.is_none() {
                 let sent = child
                     .stdin
@@ -877,6 +882,37 @@ mod tests {
         assert_eq!(app.stopping, deadline);
         assert!(app.recovery_blocked);
         app.child.take().unwrap().wait()?;
+        Ok(())
+    }
+    #[test]
+    fn stop_after_terminal_receipt_preserves_cleanup_while_process_is_exiting() -> Result<()> {
+        for state in [WorkerInputState::Local, WorkerInputState::Disabled] {
+            let fixture = Fixture::new()?;
+            let mut app = App::load(fixture.path.clone());
+            let python = if cfg!(windows) { "python" } else { "python3" };
+            app.child = Some(
+                Command::new(python)
+                    .args(["-c", "import sys; sys.stdin.readline()"])
+                    .stdin(Stdio::piped())
+                    .spawn()?,
+            );
+            app.active_mode = Some(SessionMode::Native);
+            app.input_state = Some(state);
+            app.input_terminal = true;
+            let drained = Arc::new(WorkerSnapshot::default());
+            drained.2.store(true, Ordering::Release);
+            app.worker_state = Some(drained);
+            app.stop();
+            assert_eq!(app.input_state, Some(state));
+            assert!(app.native_cleanup_reported());
+            assert!(!app.recovery_blocked);
+            let child = app.child.as_mut().unwrap();
+            child.stdin.as_mut().unwrap().write_all(b"exit\n")?;
+            assert!(child.wait()?.success());
+            app.poll();
+            assert!(app.child.is_none());
+            assert!(!app.recovery_blocked);
+        }
         Ok(())
     }
     #[test]
