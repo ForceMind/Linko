@@ -403,3 +403,22 @@ Unsupported；source silent-removal不能靠heartbeat证明连续性。产品二
 不调用恢复API，GUI仍中文且全局G1关闭。main核对仍5d947637，未合并。
 后续接recognizer/rules worker与独立中文同意/诊断，继续Native source证明和
 原生验收，再推进数据原路线。不要以本批mock回执或绿色CI当实机验收。
+
+## 20. UI线框与交互重设计（用户新任务，2026-11-05）
+
+用户清除了旧Goal，转为UI线框/交互重设计，并要求每个可审阅步骤和版本均
+commit+push。当前chinese-ui-wireframes从owned-local-input/e7d0778派生，
+保留已推送的PR40/local-gesture-worker/db7a680及其CI，不继续扩大Native任务。
+对标按仓库MouseInc/Aitiy为主、Deskflow/ShareMouse为跨屏辅助；已刷新官方资料，
+独立设计、不复制资产。用户明确允许仅本地原型的浏览器交互检查，不访问账号
+或真实设备。设计入口docs/design/README.zh-CN.md；先0.1信息架构，再线框原型
+与完整流程，逐步提交。实际系统能力/实现状态不能被原型模拟状态冒充。
+
+
+UI设计已完成0.1信息架构(fcb991c)、0.2可点击线框/SVG(fad471d)并分别push。
+0.3修复浏览器实际发现的恢复重启/画布丢失，以及复核发现的暂停/撤权/只读/
+弹窗急停，22项Node状态测试通过。用户授权的本地浏览器流程已点验，保留
+http://127.0.0.1:8051/标签页作为设计交付；服务器仅公开docs/design，无账号/
+系统权限/真实剪贴板文件或原生输入操作。SVG与PNG可离线查看。新增GUI尚未
+迁入eframe；不要把目标原型模拟成已可用能力。细节见docs/design/README与
+VALIDATION。旧Native增量#40仍留在独立分支，目标已清除，当前只做UI设计。
