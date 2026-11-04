@@ -293,6 +293,15 @@ impl<T> Store<T> {
         });
         Ok(FrozenContext { context, expires })
     }
+    fn cancel(&mut self, context: Context) -> Result<(), WatchError> {
+        if context.device != self.device {
+            return Err(WatchError::Stale);
+        }
+        // Cancellation needs no current permission/native query. Compare the
+        // complete context so an older trigger cannot remove a newer binding.
+        self.entries.retain(|entry| entry.context != context);
+        Ok(())
+    }
     fn take(&mut self, context: Context, now: Instant) -> Result<Entry<T>, WatchError> {
         self.acknowledge(now)?;
         if context.device != self.device || context.configuration_generation != self.configuration {
@@ -523,6 +532,11 @@ impl LocalContexts {
         }
         Ok(frozen)
     }
+    /// Cancel/reject a queued gesture without waiting for expiry. No native
+    /// permission or focus is needed to release our own retained references.
+    pub fn cancel(&mut self, frozen: FrozenContext) -> Result<(), WatchError> {
+        self.store.cancel(frozen.context)
+    }
     pub fn consume(&mut self, frozen: FrozenContext) -> Result<TargetLease, WatchError> {
         self.poll()?;
         let now = Instant::now();
@@ -685,6 +699,28 @@ mod tests {
         assert!(store.insert(9, epoch, now, now + MAX_LIFETIME, now).is_ok());
         store.close();
         assert_eq!(store.live.load(Ordering::Acquire), 0);
+    }
+    #[test]
+    fn explicit_cancellation_releases_only_its_own_queued_native_slot() {
+        let now = Instant::now();
+        let mut owner = make_store(now);
+        let first = insert(&mut owner, now).context();
+        let second = insert(&mut owner, now).context();
+        owner.signal.notify(); // Cancellation still works while target is lost.
+        owner.cancel(first).unwrap();
+        assert_eq!(owner.live.load(Ordering::Acquire), 1);
+        owner.cancel(first).unwrap();
+        assert_eq!(owner.live.load(Ordering::Acquire), 1);
+        assert_eq!(owner.entries[0].context, second);
+        let foreign = make_store(now);
+        assert_eq!(
+            owner.cancel(Context {
+                device: foreign.device,
+                ..second
+            }),
+            Err(WatchError::Stale)
+        );
+        assert_eq!(owner.live.load(Ordering::Acquire), 1);
     }
     #[test]
     fn invalid_lifetimes_clock_regression_and_counter_exhaustion_fail_closed() {

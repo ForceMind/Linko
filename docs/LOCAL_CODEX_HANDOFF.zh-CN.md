@@ -280,3 +280,21 @@ G03共享捕获短路径、本机Backend/owned injection账本、独立默认关
 决定保持。后续必须独立审查raw callback生命周期/CF与Win句柄释放、跑完整CI
 及显式只读observe诊断。不能把CF/MSG pump当成通知全量屏障或物理验收。G03
 共享输入短路径、动作Backend/owned injection、默认关闭本地worker仍须继续。
+
+
+PR #36 已建立，focus-invalidation 叠加 #35；均未合并。代码候选70bba44通过
+完整五项 run 41818463792，含独立CLI特性、三平台回归、显式observer smoke。
+修复ready ABA采用单一版本化原子值；128资源槽包含消费后仍持有的Lease。
+完整shutdown fake ops回归覆盖部分安装/逐项失败/指针先detach/poison；清理
+失败单独分类且不能让smoke通过。最低Rust保留1.95，当前stable弃用API改有界CAS。
+
+Mac包已校验并实际跑只读观察：当前访问条件拒绝，前台信息可用，没有启动
+输入或签发上下文，delivery_verified=false，不能宣称通知正向验收。报告只在
+本地target，不公开OS个人权限或ID；没有安装Rust或改权限。最后加入显式取消
+API及资源回归，observer适配/诊断运行逻辑不变，最终提交仍需exact-head CI。
+Git ref传输服务曾失败，已用有expected SHA的非强制API快进恢复并回读，不强推。
+
+后续仍需G03唯一捕获短路径的实际接线、Backend/owned injection、独立本机worker
+同意和原生交付验收。现有通知API是异步的，pump不是全量屏障，不能用本批逻辑
+回归代替C06或宣称G1已经全局可用；UI继续简体中文。数据网络/详细持久历史等
+原路线任务继续保留，#10旧根因仍未知。

@@ -126,7 +126,8 @@ The worker creates random 32-byte worker/target values from OS entropy outside
 callbacks. There is no PID, timestamp, fixed fixture or counter fallback. Contexts
 expire at their original mark deadline, no more than the existing 5-second action
 limit. Pending bindings and consumed leases share 128 resource slots until their
-native references are dropped. Entries consume once before fallible native checks;
+native references are dropped. Explicit cancellation releases only that queued context without requiring permission
+or a native query. Entries consume once before fallible native checks;
 configuration, notifications, uncertainty, queue saturation and shutdown invalidate
 old bindings. A consumed lease requires the same live owner to poll and perform
 late native/permission/target/expiry checks. None of these values is a remote
