@@ -432,6 +432,54 @@ review. Independent security review, native OS backends/network integration,
 persistent/global disk accounting and real Win/Mac acceptance remain open.
 
 
+## Local takeover / durable receive-root reservations (2026-11-04, WIP)
+
+Verified main is 5d9476376b218567330cce0b5c74c9fb2e8c70a7 with no open PR.
+Main run 41784077840 and #32 candidate run 41783406794 both succeeded; the latter
+head is 7f0fd40890988da80e2d602e9d6a2dd2e00bf160. This does not close C06 or #10.
+
+On Darwin 25.2.0 arm64, `python tools/local_preflight.py` cannot start because
+`python` is unavailable. `python3 tools/local_preflight.py` records rustc/cargo
+unavailable, fails starting fmt with missing cargo, and leaves subsequent checks
+not_run. Report: target/local-validation/preflight-20261104T064341094380Z-34835.
+No installation, native input, clipboard access or OS permission change occurred.
+Local GUI, actual worker/probe/reconnect and physical input remain unverified.
+
+New regressions exercise durable quota across cancelled/published/moved files,
+legacy receipt import, exact resume without double charge, consent reset, lower
+budget refusal, root-lock lifetime, failed staging, altered manifests and preserved
+malformed/future/oversized records. Candidate tests/CI are pending at this checkpoint;
+no new passing checks or persistent detailed-history claims are made yet.
+
+
+PR #33 initial candidate 1bd0f759a232af40ed47f4659cf00beb941db627 passed the
+Rust 1.95 all-target check in run 41788117975; three platform jobs stopped at
+rustfmt, before Clippy/tests/build. Those are failures, not completed validation.
+A focused independent read-only agent review found incomplete legacy storage,
+cwd-dependent root paths and root-entry capacity boundaries. Each is being fixed
+with filesystem/process regressions; this review is not an independent security
+audit or an automated repository review-quota workaround. User explicitly declined
+local Rust installation; continue source development and hosted CI only.
+
+
+D03 durable-reservation code candidate `bc304939f06ba06920c0c7bdac739c8524752b98`
+passed all five jobs in run [41788814220](https://github.com/ForceMind/PeerGlide/actions/runs/41788814220):
+Windows/macOS/Linux fmt, strict Clippy, workspace tests, Release build, real process
+probe/reconnect, notice checks and packages; isolated Linux GUI smoke; macOS
+isolated/20-parallel GUI stress; Rust 1.95 all-target check and strict dependency
+audit. Linux workspace has 140 tests (transfer crate 40, including 11 new groups;
+the subprocess cwd helper and explicit corpus replay are additional invocations,
+not extra unique tests). Windows omits Unix-only symlink regressions.
+
+The focused independent static reviewer rechecked all three fixes without new
+findings. Additional write/file-sync/directory-sync failure injection and physical
+power-loss/media acceptance remain unrun. Final documentation follow-up changes
+no Rust source, manifest, lockfile or workflow; its exact-head CI remains the PR
+gate. No C06/#10/M4 product checkbox is closed. Persisted aggregate inventory and
+cumulative admission quota are implemented; detailed persistent lifecycle history,
+explicit cleanup/reclamation, free-space policy and network/UI remain future work.
+
+
 ## Explicit isolated GUI profile (2026-11-04, WIP)
 
 Local main preflight on Darwin 25.2.0 arm64 cannot execute Cargo because Rust is
