@@ -63,7 +63,10 @@ impl Callbacks {
     }
 
     fn released(self, failed: bool) -> Self {
-        Self { poisoned: self.poisoned || failed, ..Self::EMPTY }
+        Self {
+            poisoned: self.poisoned || failed,
+            ..Self::EMPTY
+        }
     }
 }
 thread_local! {
@@ -165,7 +168,11 @@ fn active_session() -> Result<(), WatchError> {
             &mut bytes,
         )
     };
-    let error = if success == 0 { unsafe { GetLastError() } } else { 0 };
+    let error = if success == 0 {
+        unsafe { GetLastError() }
+    } else {
+        0
+    };
     if success == 0 {
         return Err(match super::query_error(error) {
             ContextError::PermissionDenied => ContextError::PermissionDenied.into(),
@@ -215,7 +222,10 @@ fn environment() -> Result<Environment, WatchError> {
     // Recheck active state after desktop reads: disconnected sessions may expose
     // the desktop that would become active only upon a future reconnection.
     active_session()?;
-    Ok(Environment { desktop, permissions })
+    Ok(Environment {
+        desktop,
+        permissions,
+    })
 }
 
 /// One dedicated worker queue owner. PhantomData prevents safe cross-thread
@@ -242,7 +252,11 @@ impl Watch {
         CALLBACKS.with(|cell| {
             let current = cell.get();
             reservation(current.occupied, current.poisoned)?;
-            cell.set(Callbacks { signal: Arc::as_ptr(&signal), occupied: true, ..Callbacks::EMPTY });
+            cell.set(Callbacks {
+                signal: Arc::as_ptr(&signal),
+                occupied: true,
+                ..Callbacks::EMPTY
+            });
             Ok::<(), WatchError>(())
         })?;
         let mut watch = Self {
@@ -278,7 +292,10 @@ impl Watch {
             "PeerGlide.ContextWatch.{}.{}",
             unsafe { GetCurrentProcessId() },
             self.thread,
-        ).encode_utf16().chain(Some(0)).collect();
+        )
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
         let class = WNDCLASSW {
             lpfnWndProc: Some(window_callback),
             hInstance: self.instance,
@@ -297,8 +314,14 @@ impl Watch {
                 self.class.as_ptr(),
                 self.class.as_ptr(),
                 WS_POPUP,
-                0, 0, 0, 0,
-                null_mut(), null_mut(), self.instance, null(),
+                0,
+                0,
+                0,
+                0,
+                null_mut(),
+                null_mut(),
+                self.instance,
+                null(),
             )
         };
         if self.window.is_null() {
@@ -311,7 +334,15 @@ impl Watch {
         self.session_registered = true;
         for (index, event) in EVENTS.into_iter().enumerate() {
             let hook = unsafe {
-                SetWinEventHook(event, event, null_mut(), Some(event_callback), 0, 0, WINEVENT_OUTOFCONTEXT)
+                SetWinEventHook(
+                    event,
+                    event,
+                    null_mut(),
+                    Some(event_callback),
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT,
+                )
             };
             if hook.is_null() {
                 return Err(WatchError::NativeUnavailable);
@@ -341,11 +372,17 @@ impl Watch {
         }
         let registered = CALLBACKS.with(|cell| {
             let state = cell.get();
-            !state.poisoned && state.occupied && state.signal == Arc::as_ptr(&self.signal)
-                && state.hooks == self.hooks && state.window == self.window
+            !state.poisoned
+                && state.occupied
+                && state.signal == Arc::as_ptr(&self.signal)
+                && state.hooks == self.hooks
+                && state.window == self.window
         });
-        if !registered || !self.session_registered || self.hooks.iter().any(|hook| hook.is_null())
-            || self.window.is_null() || unsafe { IsWindow(self.window) } == 0
+        if !registered
+            || !self.session_registered
+            || self.hooks.iter().any(|hook| hook.is_null())
+            || self.window.is_null()
+            || unsafe { IsWindow(self.window) } == 0
         {
             self.signal.close();
             return Err(WatchError::NativeUnavailable);
@@ -424,7 +461,9 @@ impl Watch {
             self.signal.notify();
             return Err(WatchError::NotReady);
         }
-        let matched = target.matches_current().inspect_err(|_| self.signal.notify())?;
+        let matched = target
+            .matches_current()
+            .inspect_err(|_| self.signal.notify())?;
         let after = environment().inspect_err(|_| self.signal.notify())?;
         if after != current {
             self.signal.notify();
@@ -438,7 +477,11 @@ impl Watch {
 
     pub(in crate::context) fn shutdown(&mut self) -> Result<(), WatchError> {
         if self.closed {
-            return if self.cleanup_failed { Err(WatchError::NativeUnavailable) } else { Ok(()) };
+            return if self.cleanup_failed {
+                Err(WatchError::NativeUnavailable)
+            } else {
+                Ok(())
+            };
         }
         self.signal.close();
         self.ready = false;
@@ -459,20 +502,28 @@ impl Watch {
         let mut failed = false;
         for hook in &mut self.hooks {
             if !hook.is_null() {
-                if unsafe { UnhookWinEvent(*hook) } == 0 { failed = true; }
+                if unsafe { UnhookWinEvent(*hook) } == 0 {
+                    failed = true;
+                }
                 *hook = null_mut();
             }
         }
         if self.session_registered {
-            if unsafe { WTSUnRegisterSessionNotification(self.window) } == 0 { failed = true; }
+            if unsafe { WTSUnRegisterSessionNotification(self.window) } == 0 {
+                failed = true;
+            }
             self.session_registered = false;
         }
         if !self.window.is_null() {
-            if unsafe { DestroyWindow(self.window) } == 0 { failed = true; }
+            if unsafe { DestroyWindow(self.window) } == 0 {
+                failed = true;
+            }
             self.window = null_mut();
         }
         if self.class_registered {
-            if unsafe { UnregisterClassW(self.class.as_ptr(), self.instance) } == 0 { failed = true; }
+            if unsafe { UnregisterClassW(self.class.as_ptr(), self.instance) } == 0 {
+                failed = true;
+            }
             self.class_registered = false;
         }
         if self.reserved {
@@ -483,7 +534,11 @@ impl Watch {
         }
         self.closed = true;
         self.cleanup_failed = failed;
-        if failed { Err(WatchError::NativeUnavailable) } else { Ok(()) }
+        if failed {
+            Err(WatchError::NativeUnavailable)
+        } else {
+            Ok(())
+        }
     }
 }
 impl Drop for Watch {
@@ -575,8 +630,15 @@ mod tests {
 
     #[test]
     fn notifications_cover_session_power_and_environment_without_input_events() {
-        for message in [WM_WTSSESSION_CHANGE, WM_POWERBROADCAST, WM_DISPLAYCHANGE,
-            WM_SETTINGCHANGE, WM_ENDSESSION, WM_QUERYENDSESSION, WM_DESTROY] {
+        for message in [
+            WM_WTSSESSION_CHANGE,
+            WM_POWERBROADCAST,
+            WM_DISPLAYCHANGE,
+            WM_SETTINGCHANGE,
+            WM_ENDSESSION,
+            WM_QUERYENDSESSION,
+            WM_DESTROY,
+        ] {
             assert!(invalidating_message(message));
         }
         for message in [WM_PAINT, WM_NULL, WM_KEYDOWN, WM_MOUSEMOVE] {

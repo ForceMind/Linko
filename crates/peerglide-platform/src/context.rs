@@ -163,16 +163,26 @@ fn identifier(prefix: &str, value: &str) -> Result<String, ContextError> {
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod native {
-    use super::*;
     use super::watch::{Signal, WatchError};
+    use super::*;
     use std::sync::Arc;
     pub(super) struct Watch;
     impl Watch {
-        pub(super) fn new(_: Arc<Signal>) -> Result<Self, WatchError> { Err(WatchError::Unsupported) }
-        pub(super) fn pump(&mut self) -> Result<(), WatchError> { Err(WatchError::Unsupported) }
-        pub(super) fn refresh(&mut self) -> Result<(), WatchError> { Err(WatchError::Unsupported) }
-        pub(super) fn accepts(&self, _: &Target) -> Result<bool, WatchError> { Err(WatchError::Unsupported) }
-        pub(super) fn shutdown(&mut self) -> Result<(), WatchError> { Ok(()) }
+        pub(super) fn new(_: Arc<Signal>) -> Result<Self, WatchError> {
+            Err(WatchError::Unsupported)
+        }
+        pub(super) fn pump(&mut self) -> Result<(), WatchError> {
+            Err(WatchError::Unsupported)
+        }
+        pub(super) fn refresh(&mut self) -> Result<(), WatchError> {
+            Err(WatchError::Unsupported)
+        }
+        pub(super) fn accepts(&self, _: &Target) -> Result<bool, WatchError> {
+            Err(WatchError::Unsupported)
+        }
+        pub(super) fn shutdown(&mut self) -> Result<(), WatchError> {
+            Ok(())
+        }
     }
     pub(super) struct Target;
     pub(super) fn permissions() -> PermissionReport {

@@ -90,7 +90,8 @@ struct Options {
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::DiagnoseContext {
-            include_application_id, observe_ms,
+            include_application_id,
+            observe_ms,
         } => diagnose_context(include_application_id, observe_ms),
         Command::Init { identity } => {
             let id = transport::Identity::create(&identity)?;
@@ -162,10 +163,18 @@ fn diagnose_context(include_application_id: bool, observe_ms: Option<u64>) -> Re
                     let current = contexts.epoch();
                     changes += current.saturating_sub(epoch);
                     epoch = current;
-                    if let Err(error) = result { status = error.code(); break; }
-                    std::thread::sleep(Duration::from_millis(5).min(deadline.saturating_duration_since(std::time::Instant::now())));
+                    if let Err(error) = result {
+                        status = error.code();
+                        break;
+                    }
+                    std::thread::sleep(
+                        Duration::from_millis(5)
+                            .min(deadline.saturating_duration_since(std::time::Instant::now())),
+                    );
                 }
-                if contexts.shutdown().is_err() { status = "cleanup_failed"; }
+                if contexts.shutdown().is_err() {
+                    status = "cleanup_failed";
+                }
                 status
             }
         };
@@ -352,7 +361,8 @@ mod context_cli_tests {
                 .unwrap()
                 .command,
             Command::DiagnoseContext {
-                include_application_id: false, observe_ms: None
+                include_application_id: false,
+                observe_ms: None
             }
         ));
         assert!(matches!(
@@ -360,13 +370,27 @@ mod context_cli_tests {
                 .unwrap()
                 .command,
             Command::DiagnoseContext {
-                include_application_id: true, observe_ms: None
+                include_application_id: true,
+                observe_ms: None
             }
         ));
-        assert!(matches!(Cli::try_parse_from(["peerglide", "diagnose-context", "--observe-ms", "50"]).unwrap().command,
-            Command::DiagnoseContext { observe_ms: Some(50), .. }));
+        assert!(matches!(
+            Cli::try_parse_from(["peerglide", "diagnose-context", "--observe-ms", "50"])
+                .unwrap()
+                .command,
+            Command::DiagnoseContext {
+                observe_ms: Some(50),
+                ..
+            }
+        ));
         for invalid in ["0", "5001", "-1", "bad"] {
-            assert!(Cli::try_parse_from(["peerglide", "diagnose-context", "--observe-ms", invalid]).is_err());
+            assert!(Cli::try_parse_from([
+                "peerglide",
+                "diagnose-context",
+                "--observe-ms",
+                invalid
+            ])
+            .is_err());
         }
         for flag in [
             "--native",
