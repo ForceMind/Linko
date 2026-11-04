@@ -366,3 +366,40 @@ fmt和边界常量Clippy失败已修正，未跳过检查。准入发布/领取A
 最终head五项CI与待审阅状态回读以PR38为准。main保持5d947637，所有这些PR
 尚未合并；未进行宿主捕获/动作/权限变更/装Rust。G1产品入口仍关闭，原生
 输入/普通短右键恢复、真实权限/多机C06和#10旧根因状态不变，继续后续实现。
+
+## 18. 短右键恢复与owned input（owned-local-input，开发中）
+
+本轮基于已通过最终五项CI/待审阅未合并#38的2cd4be6，main仍5d947637。
+目标把真实捕获End生成且不开放构造的Rust私有字段票据、原目标/期限/DPI/位置
+复查、Win同batch独立tag的Down/Up与既有hook回执接成恢复闭环。SDK不保证
+partial count是数组prefix，必须凭逐事件回执识别；count2无回执等不确定
+结果保留pending，不重放点击。部分失败中只能清理确认属于本次的Up，旧
+目标/同意失效后不得新增Down。已放行/抑制physical pair仍归原域。
+
+root负责gesture_capture/recovery协议、LocalActions真实Lease衔接、原生只读
+preflight和记录；review_admission仅做只读契约/代码审查；
+localize_panels只拥有windows.rs既有hook接线/Native INPUT构造。不会新增钩子、
+在回调做识别/IO/分配或运行宿主注入。Native callback只固定字段/原子决策，
+实际SendInput发生在worker/capture loop且先释放TLS RefCell借用。Mac物理
+来源仍未知，本批不猜测或启用。短click恢复完善后再接识别/规则worker；
+全局产品入口仍关闭，中文界面保持，不装Rust/不改权限，验证仍须完整CI。
+本节初始记录时尚未实现/编译/执行；后续实绩见下，不能把fake事件当物理验收。
+
+PR #39/owned-local-input已建立，叠加未合并#38。代码候选ceecaa9通过完整五项
+run41849905620，三平台fmt/独立CLI/严格Clippy/回归/Release/原probe/重连/
+只读上下文、Linux GUI、Mac并行GUI、最低1.95和审计全部通过；工作区测试
+Linux208、Mac221、Windows243。修复真实Windows导入编译与fmt失败，无忽略。
+
+端到端的库调用已接：真实Native Prepared lease+sealed End→复查整段短点击/
+原坐标/窗口DPI/route/原同意与期限→同batch独立随机tag INPUT→既有hook的
+Allowed/Blocked回执→有限已知缺失Up清理。不是app完成/全局G1交付。四态slot
+复用、外部注入坐标/运动、已排队Up后的foreign-right冲突经针对性独立静态
+审查发现、修复与复核；另补重试在途重置和重复Down几何边界回归。完整安全
+审计仍未运行，#10旧故障根因不变。旧的两个superseded CI已取消释放Mac排队，
+最终候选完整五项照常执行；最后跟进仅记录，受测运行/测试代码保持不变。
+
+原生实际点击/驱动/延迟/睡眠/撤权/C06未运行，Mac恢复与键盘ownership仍
+Unsupported；source silent-removal不能靠heartbeat证明连续性。产品二进制
+不调用恢复API，GUI仍中文且全局G1关闭。main核对仍5d947637，未合并。
+后续接recognizer/rules worker与独立中文同意/诊断，继续Native source证明和
+原生验收，再推进数据原路线。不要以本批mock回执或绿色CI当实机验收。

@@ -52,8 +52,10 @@ Every possible OS effect is preceded by the late guard after native preflight.
 Windows never changes foreground, attaches input threads or terminates processes.
 macOS verifies the close button's AX type, PID and owning AXWindow; CF globals are
 borrowed, Copy results are owned, and parameters are prepared before the guard.
-No synthetic key/button press occurs, so there is no invented owned-key recovery
-claim. Keyboard actions still require the future owned-injection ledger.
+These window-action methods do not synthesize keys/buttons. The separate
+Windows-only [sealed short-click recovery](LOCAL_CLICK_RECOVERY.md) now has its
+own receipt/cleanup path, still disabled in product binaries and native-unverified.
+Keyboard actions still require their own future ownership protocol.
 
 OS success means Submitted only, not proof that an app minimized/closed. AX writes/
 Press returning CannotComplete may already have taken effect or entered a modal

@@ -150,11 +150,21 @@ fn key(device: [u8; 32], epoch: u64, consent: ConsentStamp) -> AdmissionKey {
 /// A worker-verified native frame; caller evaluates application rules/exclusions
 /// before passing it to the capture admission controller. Not an action grant.
 pub struct CaptureAdmission {
+    #[cfg(windows)]
+    dpi: u32,
     key: AdmissionKey,
     application_id: String,
     expires: Instant,
 }
 impl CaptureAdmission {
+    #[cfg(windows)]
+    pub(crate) fn dpi(&self) -> u32 {
+        self.dpi
+    }
+    #[cfg(all(test, not(windows)))]
+    pub(crate) fn dpi(&self) -> u32 {
+        0
+    }
     pub fn application_id(&self) -> &str {
         &self.application_id
     }
@@ -212,6 +222,8 @@ impl ActionTriggerSource {
     }
 }
 pub struct PreparedLocalAction {
+    #[cfg(windows)]
+    origin: (AdmissionKey, Instant),
     frozen: FrozenContext,
     consent: ConsentStamp,
 }
@@ -408,6 +420,8 @@ impl LocalActions {
         lifetime: Duration,
     ) -> Result<PreparedLocalAction, NativeFailure> {
         self.consent.policy_for(trigger.consent)?;
+        #[cfg(windows)]
+        let origin = (trigger.frame_key(), trigger.started());
         let frozen = self
             .contexts
             .capture(trigger.context, lifetime)
@@ -417,6 +431,8 @@ impl LocalActions {
             return Err(error);
         }
         Ok(PreparedLocalAction {
+            #[cfg(windows)]
+            origin,
             frozen,
             consent: trigger.consent,
         })
@@ -432,11 +448,102 @@ impl LocalActions {
         let lease = self.contexts.consume(prepared.frozen).map_err(failure)?;
         lease.recheck(&mut self.contexts).map_err(failure)?;
         self.consent.policy_for(prepared.consent)?;
+        #[cfg(windows)]
+        let dpi = native::recovery_dpi(lease.native_target())?;
+        #[cfg(windows)]
+        lease.recheck(&mut self.contexts).map_err(failure)?;
         Ok(CaptureAdmission {
+            #[cfg(windows)]
+            dpi,
             key,
             application_id: lease.application_id().to_owned(),
             expires,
         })
+    }
+    /// Consume a real original native binding and a sealed capture End receipt.
+    /// No product binary calls this. Success means local-hook submission only.
+    #[cfg(windows)]
+    pub fn recover_click(
+        &mut self,
+        prepared: PreparedLocalAction,
+        receipt: crate::gesture_capture::RecoveryReceipt,
+        control: &mut crate::gesture_capture::GestureControl,
+    ) -> Result<crate::gesture_capture::RecoveryOutcome, NativeFailure> {
+        use crate::gesture_capture::RecoveryOutcome;
+        let stamp = prepared.consent;
+        let origin = prepared.origin;
+        let context = prepared.frozen.context();
+        let deadline = receipt.deadline(prepared.frozen.expires());
+        let point = receipt.point();
+        let receipt_origin = receipt.origin();
+        let source = self.trigger_source();
+        let consent = self.consent.clone();
+        // The same guard also cancels an unused frozen binding on every error.
+        let mut driver = NativeDriver {
+            owner: &mut self.contexts,
+            pending: Some(prepared.frozen),
+            lease: None,
+            context,
+        };
+        if origin != receipt_origin {
+            return Err(NativeFailure::TargetLost);
+        }
+        let deadline = deadline.ok_or(NativeFailure::BeforeSubmission)?;
+        consent.policy_for(stamp)?;
+        driver.begin()?;
+        let lease = driver.lease.as_ref().ok_or(NativeFailure::TargetLost)?;
+        let mut guard = || {
+            consent.policy_for(stamp)?;
+            lease.recheck(driver.owner).map_err(failure)?;
+            native::validate_recovery(lease.native_target(), point.0, point.1, point.2)?;
+            if Instant::now() >= deadline || !source.matches_admission(origin.0) {
+                return Err(NativeFailure::BeforeSubmission);
+            }
+            consent.policy_for(stamp)?;
+            Ok(())
+        };
+        guard()?;
+        // Tags are unpredictable routing markers, never authorization. Fixed
+        // fixture IDs, PID/time and the legacy KVM marker cannot mint receipts.
+        let mut bytes = [0u8; 2 * std::mem::size_of::<usize>()];
+        getrandom::fill(&mut bytes).map_err(|_| NativeFailure::BeforeSubmission)?;
+        let size = std::mem::size_of::<usize>();
+        let down = usize::from_ne_bytes(bytes[..size].try_into().expect("native tag width"));
+        let up = usize::from_ne_bytes(bytes[size..].try_into().expect("native tag width"));
+        if down == 0 || up == 0 || down == up || down == 0x50474c44 || up == 0x50474c44 {
+            return Err(NativeFailure::BeforeSubmission);
+        }
+        let sequence = control.begin_recovery(receipt, deadline, (down, up))?;
+        if let Err(error) = guard() {
+            control.recovery_submitted(0);
+            control.cancel_recovery();
+            control.finish_recovery();
+            return Err(error);
+        }
+        let count = crate::windows::send_recovery_click(down, up);
+        control.recovery_submitted(count);
+        let wait_until = Instant::now() + Duration::from_millis(100);
+        loop {
+            control.heartbeat();
+            let outcome = control
+                .finish_recovery()
+                .or_else(|| control.last_recovery(sequence));
+            if let Some(outcome) = outcome {
+                return if count == 0 && outcome == RecoveryOutcome::Cancelled {
+                    Err(NativeFailure::BeforeSubmission)
+                } else {
+                    Ok(outcome)
+                };
+            }
+            if driver.owner.poll().is_err() {
+                control.cancel_recovery();
+            }
+            if Instant::now() >= wait_until {
+                control.cancel_recovery();
+                return Ok(RecoveryOutcome::UnknownOutcome);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
     pub fn cancel(&mut self, prepared: PreparedLocalAction) -> Result<(), WatchError> {
         self.contexts.cancel(prepared.frozen)

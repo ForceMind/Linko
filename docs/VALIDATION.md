@@ -857,3 +857,44 @@ Final follow-up only records results, preserving all tested runtime/test source;
 exact final-head CI and readiness are recorded on PR #38. No host capture/native
 action, permission change or Rust install occurred. Physical/native delivery and
 all previously listed G1/C06/#10 limitations remain open.
+
+### Sealed local click recovery (owned-local-input candidate)
+
+A real Windows library recovery path now consumes a native End receipt and its
+original target lease, performs physical-point/window-DPI/routing and late consent
+checks, and submits a separately tagged Down/Up in one batch. The existing hook
+records Allowed/Blocked receipts; partial count is never assumed to be a prefix.
+Bounded cleanup only concerns a proven missing owned Up. See
+[LOCAL_CLICK_RECOVERY.md](LOCAL_CLICK_RECOVERY.md) for failure/unknown semantics,
+foreign-input rules and the unavoidable silent-hook-removal observation limit.
+
+Synthetic protocol/capture/native-query/INPUT-construction regressions and full
+candidate CI are required. Local Rust is still absent by user choice; no actual
+input injection, host native permission change or window manipulation was run.
+Keyboard and macOS recovery, worker/recognizer/rules dispatch and explicit enable
+UI remain unfinished. G1 product entry stays closed, all C06 boxes stay unchecked,
+and #10 historical root cause is still unknown. Green CI does not change these.
+
+Recovery runtime/test candidate `ceecaa96e9b87c7dcf088bd5cfa192a0b9ec0ff9` passed
+all five jobs in [41849905620](https://github.com/ForceMind/PeerGlide/actions/runs/41849905620):
+three-platform format, standalone CLI features, strict workspace Clippy,
+workspace tests (Linux 208/macOS 221/Windows 243), Release builds, probe/reconnect/
+readonly context smoke, notices and packaging, Linux GUI runtime, macOS parallel
+GUI stress, minimum Rust 1.95 and strict dependency audit.
+
+Actual CI failures were fixed: full formatter output, the Windows IsWindowEnabled
+binding namespace, and the final repeated-down geometry fixture format. Review
+found and rechecked slot initialization/finish reuse races, callback-point/foreign
+motion protection, and queued owned Up after a foreign right ownership conflict.
+Interleaving regressions preserve pending/Unknown rather than claiming cleanup.
+A zero-insertion cleanup retry resets its in-flight result before exposure, and
+repeated native Down positions contribute to the sealed displacement envelope.
+Two superseded runs were explicitly cancelled to release queued Mac resources;
+no final-candidate check was skipped or relaxed.
+
+This focused independent static review is not a complete security audit. Every
+new input/effect test remains synthetic/query-seam/INPUT construction; no actual
+host/runner injection, permission change or Rust install occurred. The adapter
+cannot prove continuity after silent hook removal or completion beyond its hook.
+All native/physical/worker/macOS/keyboard gates listed above remain unfinished.
+Final docs-only head preserves runtime/tests; its exact CI/readiness is on PR #39.

@@ -17,6 +17,33 @@ enum LocalMouseEvent {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MouseOrigin {
+    Recovery(bool),
+    Injected,
+    Physical,
+}
+
+fn right_transition(message: u32) -> Option<bool> {
+    match message {
+        WM_RBUTTONDOWN => Some(true),
+        WM_RBUTTONUP => Some(false),
+        _ => None,
+    }
+}
+
+fn mouse_origin(recovery: Option<bool>, flags: u32, tag: usize) -> MouseOrigin {
+    if let Some(block) = recovery {
+        // The exact current recovery decision precedes generic injected/TAG
+        // bypass. A matched malformed event is faulted/blocked by the broker.
+        MouseOrigin::Recovery(block)
+    } else if flags & LLMHF_INJECTED != 0 || tag == TAG {
+        MouseOrigin::Injected
+    } else {
+        MouseOrigin::Physical
+    }
+}
+
 fn local_mouse_event(message: u32, data: u32) -> LocalMouseEvent {
     match message {
         WM_RBUTTONDOWN => LocalMouseEvent::Right(true),
@@ -100,6 +127,23 @@ pub fn capture(
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
             let unexpected = loop {
+                let cleanup = STATE.with_borrow_mut(|state| {
+                    state
+                        .as_mut()
+                        .and_then(|s| s.local_gestures.as_mut())
+                        .and_then(|broker| broker.cleanup_request())
+                });
+                if let Some(request) = cleanup {
+                    // SendInput may synchronously reenter mouse_hook. No STATE
+                    // borrow survives this call. Cleanup never emits a down.
+                    let count = send_recovery_up(request.tag);
+                    STATE.with_borrow_mut(|state| {
+                        if let Some(broker) = state.as_mut().and_then(|s| s.local_gestures.as_mut())
+                        {
+                            broker.cleanup_result(request, count);
+                        }
+                    });
+                }
                 let stopping = stop.load(Ordering::Acquire);
                 let keep_running = STATE.with_borrow_mut(|state| {
                     state.as_mut().is_some_and(|s| {
@@ -181,6 +225,12 @@ unsafe extern "system" fn key_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
             if block {
                 return 1;
             }
+        } else {
+            STATE.with_borrow_mut(|state| {
+                if let Some(broker) = state.as_mut().and_then(|s| s.local_gestures.as_mut()) {
+                    broker.foreign_input(false, false);
+                }
+            });
         }
     }
     CallNextHookEx(null_mut(), code, w, l)
@@ -188,7 +238,46 @@ unsafe extern "system" fn key_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
 unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
     if code >= 0 {
         let e = &*(l as *const MSLLHOOKSTRUCT);
-        if e.flags & LLMHF_INJECTED == 0 && e.dwExtraInfo != TAG {
+        let recovery = STATE.with_borrow_mut(|state| {
+            state
+                .as_mut()
+                .and_then(|s| s.local_gestures.as_mut())
+                .and_then(|broker| {
+                    broker.tagged_right(
+                        e.dwExtraInfo,
+                        right_transition(w as u32),
+                        gesture_capture::RawPoint {
+                            x: f64::from(e.pt.x),
+                            y: f64::from(e.pt.y),
+                            units: gesture_capture::CoordinateUnits::WindowsPhysicalPixels,
+                        },
+                    )
+                })
+        });
+        match mouse_origin(recovery, e.flags, e.dwExtraInfo) {
+            MouseOrigin::Recovery(true) => return 1,
+            MouseOrigin::Recovery(false) => return CallNextHookEx(null_mut(), code, w, l),
+            MouseOrigin::Injected => {
+                let block = STATE.with_borrow_mut(|state| {
+                    state
+                        .as_mut()
+                        .and_then(|s| s.local_gestures.as_mut())
+                        .is_some_and(|broker| {
+                            broker.foreign_input(
+                                right_transition(w as u32).is_some(),
+                                w as u32 == WM_MOUSEMOVE,
+                            )
+                        })
+                });
+                return if block {
+                    1
+                } else {
+                    CallNextHookEx(null_mut(), code, w, l)
+                };
+            }
+            MouseOrigin::Physical => (),
+        }
+        {
             let block = STATE.with_borrow_mut(|s| {
                 let Some(s) = s else {
                     return false;
@@ -204,7 +293,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                     };
                     match local_mouse_event(w as u32, e.mouseData) {
                         LocalMouseEvent::Right(down) => return broker.right(down, point, remote),
-                        LocalMouseEvent::Motion => broker.motion(point),
+                        LocalMouseEvent::Motion => return broker.motion(point),
                         LocalMouseEvent::Button(button, down) => broker.button(button, down),
                         LocalMouseEvent::BothExtraButtons(down) => {
                             broker.button(4, down);
@@ -269,6 +358,48 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
     }
     CallNextHookEx(null_mut(), code, w, l)
 }
+
+fn recovery_right_input(tag: usize, down: bool) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: if down {
+                    MOUSEEVENTF_RIGHTDOWN
+                } else {
+                    MOUSEEVENTF_RIGHTUP
+                },
+                time: 0,
+                dwExtraInfo: tag,
+            },
+        },
+    }
+}
+
+fn recovery_click_inputs(down_tag: usize, up_tag: usize) -> [INPUT; 2] {
+    [
+        recovery_right_input(down_tag, true),
+        recovery_right_input(up_tag, false),
+    ]
+}
+
+/// Worker-only fixed right pair. The protocol owns authorization and receipts;
+/// this raw SendInput count never proves a delivered prefix or application action.
+pub(crate) fn send_recovery_click(down_tag: usize, up_tag: usize) -> u32 {
+    let inputs = recovery_click_inputs(down_tag, up_tag);
+    unsafe { SendInput(2, inputs.as_ptr(), size_of::<INPUT>() as i32) }
+}
+
+/// Capture-loop/worker-only cleanup of the protocol's recorded synthetic down.
+/// Never replay down, move the cursor, query global button state or infer success.
+pub(crate) fn send_recovery_up(tag: usize) -> u32 {
+    let input = recovery_right_input(tag, false);
+    unsafe { SendInput(1, &input, size_of::<INPUT>() as i32) }
+}
+
 // Preserve sub-detent wheel increments rather than dropping high-resolution input.
 fn wheel_steps(remainder: &mut i32, delta: i16) -> i16 {
     let total = *remainder + i32::from(delta);
@@ -529,6 +660,71 @@ unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_inputs_are_only_a_tagged_right_pair_or_one_right_up() {
+        // Opaque test tags test field propagation, never consent/authentication.
+        let down_tag = 0x1234usize;
+        let up_tag = 0x5678usize;
+        let pair = recovery_click_inputs(down_tag, up_tag);
+        for (input, tag, flags) in [
+            (&pair[0], down_tag, MOUSEEVENTF_RIGHTDOWN),
+            (&pair[1], up_tag, MOUSEEVENTF_RIGHTUP),
+        ] {
+            assert_eq!(input.r#type, INPUT_MOUSE);
+            // SAFETY: the pure constructor initializes INPUT_MOUSE's mi field.
+            let mouse = unsafe { input.Anonymous.mi };
+            assert_eq!(mouse.dwExtraInfo, tag);
+            assert_eq!(mouse.dwFlags, flags);
+            assert_eq!(
+                (mouse.dx, mouse.dy, mouse.mouseData, mouse.time),
+                (0, 0, 0, 0)
+            );
+            assert_eq!(mouse.dwFlags & MOUSEEVENTF_MOVE, 0);
+        }
+        let cleanup = recovery_right_input(up_tag, false);
+        assert_eq!(cleanup.r#type, INPUT_MOUSE);
+        // SAFETY: the same pure INPUT_MOUSE constructor initializes this union.
+        let mouse = unsafe { cleanup.Anonymous.mi };
+        assert_eq!(mouse.dwFlags, MOUSEEVENTF_RIGHTUP);
+        assert_eq!(mouse.dwExtraInfo, up_tag);
+        assert_eq!(
+            (mouse.dx, mouse.dy, mouse.mouseData, mouse.time),
+            (0, 0, 0, 0)
+        );
+    }
+
+    #[test]
+    fn current_recovery_decision_precedes_legacy_injected_origin_filtering() {
+        for flags in [0, LLMHF_INJECTED] {
+            for tag in [0, TAG] {
+                assert_eq!(
+                    mouse_origin(Some(true), flags, tag),
+                    MouseOrigin::Recovery(true)
+                );
+                assert_eq!(
+                    mouse_origin(Some(false), flags, tag),
+                    MouseOrigin::Recovery(false)
+                );
+            }
+        }
+        assert_eq!(mouse_origin(None, LLMHF_INJECTED, 0), MouseOrigin::Injected);
+        assert_eq!(mouse_origin(None, 0, TAG), MouseOrigin::Injected);
+        assert_eq!(mouse_origin(None, 0, 0), MouseOrigin::Physical);
+        assert_eq!(right_transition(WM_RBUTTONDOWN), Some(true));
+        assert_eq!(right_transition(WM_RBUTTONUP), Some(false));
+        for message in [
+            WM_MOUSEMOVE,
+            WM_LBUTTONDOWN,
+            WM_MBUTTONUP,
+            WM_MOUSEWHEEL,
+            WM_NULL,
+        ] {
+            // The broker receives None and must block/fault a matching recovery
+            // tag on any message other than the exact right-down/right-up pair.
+            assert_eq!(right_transition(message), None);
+        }
+    }
 
     #[test]
     fn local_mouse_classification_preserves_right_pairs_and_all_other_buttons() {

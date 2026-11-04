@@ -1,7 +1,10 @@
 //! Read-only foreground queries. No hooks, injection, focus changes or prompts.
 #[path = "context_actions_windows.rs"]
 mod actions;
+#[path = "context_recovery_windows.rs"]
+mod recovery;
 pub(super) use actions::{action_capabilities, submit_window_action};
+pub(super) use recovery::{recovery_dpi, validate_recovery};
 #[path = "context_events_windows.rs"]
 mod events;
 use super::{
