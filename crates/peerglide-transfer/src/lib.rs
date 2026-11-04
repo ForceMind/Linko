@@ -331,7 +331,17 @@ impl Receiver {
     /// the same directory/filesystem. No execute/open, no overwrite rename fallback.
     /// On errors after publication, the final file may exist: callers inspect it,
     /// never automatically replay. Filesystems without hard links are unsupported.
-    pub fn commit(mut self, root: &Path) -> io::Result<PathBuf> {
+    pub fn commit(self, root: &Path) -> io::Result<PathBuf> {
+        self.commit_checked(root, || Ok(()))
+    }
+    /// Checks current local permission before verification, marker and publication.
+    /// Callback failure preserves staged data and never retries publication.
+    pub fn commit_checked(
+        mut self,
+        root: &Path,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<PathBuf> {
+        check()?;
         if !self.progress().chunks_complete {
             return Err(invalid("transfer incomplete"));
         }
@@ -359,9 +369,11 @@ impl Receiver {
         let destination = root.join(&self.manifest.name);
         // Persist a terminal marker before publication. Resume must never mutate
         // a hard-linked final file, including after a crash/move by the user.
+        check()?;
         let marker = exclusive(&self.dir.join("committing"))?;
         marker.sync_all()?;
         sync_dir(&self.dir)?;
+        check()?;
         fs::hard_link(self.dir.join("partial"), &destination)?;
         sync_dir(root)?;
         fs::remove_file(self.dir.join("partial"))?;
@@ -710,3 +722,4 @@ mod commit_regressions {
 
 pub mod clipboard;
 pub mod data_policy;
+pub mod manager;

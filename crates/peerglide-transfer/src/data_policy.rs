@@ -145,6 +145,20 @@ impl DataSession {
         })
     }
 
+    /// Match an independently verified peer before issuing a local ticket.
+    pub fn authorize_peer(
+        &mut self,
+        peer: Digest,
+        capability: Capability,
+        now: u64,
+    ) -> Result<Permit, Denied> {
+        let permit = self.authorize(capability, now)?;
+        if peer != self.peer {
+            return Err(Denied::WrongSession);
+        }
+        Ok(permit)
+    }
+
     /// Recheck immediately before every disk/OS/network side effect.
     pub fn validate(
         &mut self,
