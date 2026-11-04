@@ -85,10 +85,11 @@ driver. No PID=0/state=1 heuristic or injected fixture substitutes for physical
 provenance. Existing macOS KVM tap remains unchanged. A trustworthy physical
 provider within the same lifecycle and native acceptance are still required.
 
-Not implemented here: gesture worker/recognizer wiring, application rule dispatch,
-owned-injection ledger, balanced short-click replay, native overlay and local G1
-consent UI. Ordinary unarmed pairs pass; an armed short click is captured but is
-not replayed by this library. Therefore product G1 stays disabled. Synthetic pair,
+The initial short-path increment did not implement gesture worker/recognizer
+wiring, application rule dispatch, native overlay or local G1 consent UI. The
+subsequent Windows-only owned short-click recovery library is documented below;
+it has not been accepted on real input and does not complete product G1. Ordinary unarmed pairs pass; an armed short click is captured; only the separate sealed recovery path may
+submit its pair. No product binary calls that path. Therefore product G1 stays disabled. Synthetic pair,
 queue, allocation and lifecycle tests are not real right-click, driver, DPI,
 permission, sleep or two-machine C06 acceptance. No new protocol/ALPN or grants.
 
