@@ -8,7 +8,10 @@ use std::time::Duration;
 #[cfg(any(windows, target_os = "macos", test))]
 use anyhow::Context;
 #[cfg(any(windows, target_os = "macos", test))]
-use std::{fs::{File, Metadata, OpenOptions}, path::Path};
+use std::{
+    fs::{File, Metadata, OpenOptions},
+    path::Path,
+};
 
 #[cfg(any(windows, target_os = "macos", test))]
 static RESERVED: AtomicBool = AtomicBool::new(false);
@@ -19,9 +22,9 @@ static RESERVED: AtomicBool = AtomicBool::new(false);
 #[cfg(any(windows, target_os = "macos", test))]
 pub(super) struct Reservation {
     file: File,
-    release_healthy:Arc<AtomicBool>,
+    release_healthy: Arc<AtomicBool>,
     #[cfg(test)]
-    fail_unlock:bool,
+    fail_unlock: bool,
 }
 #[cfg(any(windows, target_os = "macos", test))]
 struct RollbackReservation(bool);
@@ -43,7 +46,9 @@ fn validate_lock_metadata(metadata: &Metadata) -> anyhow::Result<()> {
 }
 #[cfg(any(windows, target_os = "macos", test))]
 fn validate_lock_file(file: &File, path: &Path, before: Option<&Metadata>) -> anyhow::Result<()> {
-    let opened = file.metadata().context("inspect opened native capture lock")?;
+    let opened = file
+        .metadata()
+        .context("inspect opened native capture lock")?;
     let current = std::fs::symlink_metadata(path).context("inspect native capture lock path")?;
     validate_lock_metadata(&opened)?;
     validate_lock_metadata(&current)?;
@@ -51,8 +56,11 @@ fn validate_lock_file(file: &File, path: &Path, before: Option<&Metadata>) -> an
     {
         use std::os::unix::fs::MetadataExt;
         anyhow::ensure!(
-            opened.dev() == current.dev() && opened.ino() == current.ino()
-                && before.is_none_or(|metadata| metadata.dev() == opened.dev() && metadata.ino() == opened.ino()),
+            opened.dev() == current.dev()
+                && opened.ino() == current.ino()
+                && before.is_none_or(
+                    |metadata| metadata.dev() == opened.dev() && metadata.ino() == opened.ino()
+                ),
             "native capture lock path changed during opening"
         );
     }
@@ -72,10 +80,14 @@ fn open_lock_file(path: &Path) -> anyhow::Result<File> {
     let (file, before) = match create.open(path) {
         Ok(file) => (file, None),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let before = std::fs::symlink_metadata(path).context("inspect existing native capture lock")?;
+            let before =
+                std::fs::symlink_metadata(path).context("inspect existing native capture lock")?;
             validate_lock_metadata(&before)?;
             // Never truncate, overwrite, remove or replace an existing object.
-            let file = OpenOptions::new().read(true).write(true).open(path)
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
                 .context("open existing native capture lock")?;
             (file, Some(before))
         }
@@ -100,8 +112,14 @@ impl Reservation {
         );
         let mut rollback = RollbackReservation(true);
         let file = open_lock_file(path)?;
-        file.try_lock().context("native input capture lock unavailable")?;
-        let reservation = Self { file, release_healthy:Arc::new(AtomicBool::new(true)), #[cfg(test)] fail_unlock:false };
+        file.try_lock()
+            .context("native input capture lock unavailable")?;
+        let reservation = Self {
+            file,
+            release_healthy: Arc::new(AtomicBool::new(true)),
+            #[cfg(test)]
+            fail_unlock: false,
+        };
         rollback.0 = false;
         // From here Reservation owns both guards, including all failure paths.
         validate_lock_file(&reservation.file, path, None)?;
@@ -114,16 +132,18 @@ impl Drop for Reservation {
         // Explicit unlock is necessary even if another reference/duplicated fd
         // still exists. Only a successfully acquired Reservation reaches here.
         #[cfg(not(test))]
-        let inject_failure=false;
+        let inject_failure = false;
         #[cfg(test)]
-        let inject_failure=self.fail_unlock;
+        let inject_failure = self.fail_unlock;
         if !inject_failure && self.file.unlock().is_ok() {
             RESERVED.store(false, Ordering::Release);
         } else {
-            self.release_healthy.store(false,Ordering::Release);
+            self.release_healthy.store(false, Ordering::Release);
             // Retain the process guard on an uncertain OS-lock release. Closing
             // this File is still attempted normally; never unlock another file.
-            eprintln!("Native capture lock release failed; new capture remains blocked in this process.");
+            eprintln!(
+                "Native capture lock release failed; new capture remains blocked in this process."
+            );
         }
     }
 }
@@ -138,14 +158,18 @@ impl CaptureThread {
     pub(super) fn spawn(task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         Self::spawn_owned(task, (), None)
     }
-    #[cfg(any(windows, target_os="macos",test))]
-    pub(super) fn spawn_reserved(task:impl FnOnce(Arc<AtomicBool>)+Send+'static,owner:Reservation)->Self {
-        let health=owner.release_healthy.clone();Self::spawn_owned(task,owner,Some(health))
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub(super) fn spawn_reserved(
+        task: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
+        owner: Reservation,
+    ) -> Self {
+        let health = owner.release_healthy.clone();
+        Self::spawn_owned(task, owner, Some(health))
     }
     fn spawn_owned(
         task: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
         owner: impl Send + 'static,
-        release_healthy:Option<Arc<AtomicBool>>,
+        release_healthy: Option<Arc<AtomicBool>>,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -156,7 +180,8 @@ impl CaptureThread {
         std::thread::spawn(move || {
             let clean = thread.join().is_ok();
             drop(owner);
-            let _ = tx.send(clean && release_healthy.is_none_or(|health|health.load(Ordering::Acquire)));
+            let _ = tx
+                .send(clean && release_healthy.is_none_or(|health| health.load(Ordering::Acquire)));
         });
         Self {
             stop,
@@ -192,7 +217,11 @@ impl Drop for CaptureThread {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{path::PathBuf, process::Command, sync::{atomic::AtomicU64, Mutex}};
+    use std::{
+        path::PathBuf,
+        process::Command,
+        sync::{atomic::AtomicU64, Mutex},
+    };
 
     static RESERVATION_TESTS: Mutex<()> = Mutex::new(());
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -232,7 +261,11 @@ mod tests {
 
     fn child_attempt(path: &Path, expectation: &str) {
         let output = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "capture_thread::tests::reservation_child_process", "--nocapture"])
+            .args([
+                "--exact",
+                "capture_thread::tests::reservation_child_process",
+                "--nocapture",
+            ])
             .env(CHILD_PATH, path)
             .env(CHILD_EXPECTATION, expectation)
             .output()
@@ -252,20 +285,29 @@ mod tests {
 
     #[test]
     fn reservation_child_process() {
-        let Some(path) = std::env::var_os(CHILD_PATH) else { return; };
+        let Some(path) = std::env::var_os(CHILD_PATH) else {
+            return;
+        };
         let expectation = std::env::var(CHILD_EXPECTATION).unwrap();
-        if expectation=="release_failed" {
-            let mut owner=Reservation::acquire_at(Path::new(&path)).unwrap();
-            owner.fail_unlock=true;
-            let mut thread=CaptureThread::spawn_reserved(|_|{},owner);
+        if expectation == "release_failed" {
+            let mut owner = Reservation::acquire_at(Path::new(&path)).unwrap();
+            owner.fail_unlock = true;
+            let mut thread = CaptureThread::spawn_reserved(|_| {}, owner);
             assert!(!thread.shutdown(Duration::from_secs(2)));
-            assert_eq!(thread.completed,Some(false));
+            assert_eq!(thread.completed, Some(false));
             assert!(Reservation::acquire_at(Path::new(&path)).is_err());
-            println!("PEERGLIDE_CAPTURE_LOCK_CHECK:release_failed");return;
+            println!("PEERGLIDE_CAPTURE_LOCK_CHECK:release_failed");
+            return;
         }
-        match (expectation.as_str(), Reservation::acquire_at(Path::new(&path))) {
+        match (
+            expectation.as_str(),
+            Reservation::acquire_at(Path::new(&path)),
+        ) {
             ("blocked", Err(error)) => assert!(
-                matches!(error.downcast_ref::<std::fs::TryLockError>(), Some(std::fs::TryLockError::WouldBlock)),
+                matches!(
+                    error.downcast_ref::<std::fs::TryLockError>(),
+                    Some(std::fs::TryLockError::WouldBlock)
+                ),
                 "child was rejected for a reason other than lock contention: {error:#}"
             ),
             ("acquired", Ok(owner)) => drop(owner),
@@ -279,7 +321,8 @@ mod tests {
 
     #[test]
     fn unlock_failure_reaches_shutdown_and_keeps_process_reservation_poisoned() {
-        let fixture=Fixture::new();child_attempt(&fixture.path(),"release_failed");
+        let fixture = Fixture::new();
+        child_attempt(&fixture.path(), "release_failed");
     }
 
     #[test]
@@ -330,7 +373,10 @@ mod tests {
         #[cfg(windows)]
         std::os::windows::fs::symlink_file(&target, &link).unwrap();
         assert!(Reservation::acquire_at(&link).is_err());
-        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
         assert_eq!(std::fs::metadata(&target).unwrap().len(), 0);
         assert!(Reservation::acquire_at(&target).is_ok());
     }
@@ -342,7 +388,10 @@ mod tests {
         let _serial = RESERVATION_TESTS.lock().unwrap();
         let fixture = Fixture::new();
         let owner = Reservation::acquire_at(&fixture.path()).unwrap();
-        assert_eq!(owner.file.metadata().unwrap().permissions().mode() & 0o077, 0);
+        assert_eq!(
+            owner.file.metadata().unwrap().permissions().mode() & 0o077,
+            0
+        );
     }
 
     #[test]
@@ -416,7 +465,10 @@ mod tests {
             retained,
             "capture ownership must survive thread-local cleanup"
         );
-        assert!(capture_still_reserved, "OS capture guard must survive thread-local cleanup");
+        assert!(
+            capture_still_reserved,
+            "OS capture guard must survive thread-local cleanup"
+        );
         assert!(t.shutdown(Duration::from_secs(1)));
         assert!(!owned.load(Ordering::Acquire));
         assert!(Reservation::acquire_at(&fixture.path()).is_ok());

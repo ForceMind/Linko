@@ -11,9 +11,9 @@ use tokio::sync::mpsc;
 mod capture_thread;
 pub mod context;
 #[cfg(any(windows, test))]
-mod gesture_queue;
-#[cfg(any(windows, test))]
 pub mod gesture_capture;
+#[cfg(any(windows, test))]
+mod gesture_queue;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
 
@@ -519,26 +519,48 @@ mod handoff_tests {
 
 #[cfg(test)]
 mod allocation_checks {
-    use std::{alloc::{GlobalAlloc,Layout,System},cell::Cell};
+    use std::{
+        alloc::{GlobalAlloc, Layout, System},
+        cell::Cell,
+    };
     struct Counting;
     thread_local! {static COUNT:Cell<Option<usize>>=const {Cell::new(None)};}
     #[global_allocator]
-    static ALLOCATOR:Counting=Counting;
+    static ALLOCATOR: Counting = Counting;
     unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self,layout:Layout)->*mut u8 {
-            COUNT.with(|count|{if let Some(n)=count.get(){count.set(Some(n+1));}});
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            COUNT.with(|count| {
+                if let Some(n) = count.get() {
+                    count.set(Some(n + 1));
+                }
+            });
             System.alloc(layout)
         }
-        unsafe fn dealloc(&self,ptr:*mut u8,layout:Layout){System.dealloc(ptr,layout);}
-        unsafe fn realloc(&self,ptr:*mut u8,layout:Layout,new_size:usize)->*mut u8 {
-            COUNT.with(|count|{if let Some(n)=count.get(){count.set(Some(n+1));}});
-            System.realloc(ptr,layout,new_size)
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            System.dealloc(ptr, layout);
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            COUNT.with(|count| {
+                if let Some(n) = count.get() {
+                    count.set(Some(n + 1));
+                }
+            });
+            System.realloc(ptr, layout, new_size)
         }
     }
-    pub(crate) fn count(f:impl FnOnce())->usize {
+    pub(crate) fn count(f: impl FnOnce()) -> usize {
         struct Reset;
-        impl Drop for Reset {fn drop(&mut self){COUNT.with(|count|count.set(None));}}
-        COUNT.with(|count|{assert!(count.get().is_none());count.set(Some(0));});
-        let _reset=Reset;f();COUNT.with(|count|count.get().unwrap())
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                COUNT.with(|count| count.set(None));
+            }
+        }
+        COUNT.with(|count| {
+            assert!(count.get().is_none());
+            count.set(Some(0));
+        });
+        let _reset = Reset;
+        f();
+        COUNT.with(|count| count.get().unwrap())
     }
 }

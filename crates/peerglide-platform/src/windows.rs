@@ -130,7 +130,8 @@ pub fn capture(
                         50,
                         QS_ALLINPUT,
                         MWMO_INPUTAVAILABLE,
-                    ) == WAIT_FAILED {
+                    ) == WAIT_FAILED
+                    {
                         break true;
                     }
                 }
@@ -531,8 +532,14 @@ mod tests {
 
     #[test]
     fn local_mouse_classification_preserves_right_pairs_and_all_other_buttons() {
-        assert_eq!(local_mouse_event(WM_RBUTTONDOWN, 0), LocalMouseEvent::Right(true));
-        assert_eq!(local_mouse_event(WM_RBUTTONUP, 0), LocalMouseEvent::Right(false));
+        assert_eq!(
+            local_mouse_event(WM_RBUTTONDOWN, 0),
+            LocalMouseEvent::Right(true)
+        );
+        assert_eq!(
+            local_mouse_event(WM_RBUTTONUP, 0),
+            LocalMouseEvent::Right(false)
+        );
         assert_eq!(local_mouse_event(WM_MOUSEMOVE, 0), LocalMouseEvent::Motion);
         for (down, up, button, data) in [
             (WM_LBUTTONDOWN, WM_LBUTTONUP, 1, 0),
@@ -540,15 +547,36 @@ mod tests {
             (WM_XBUTTONDOWN, WM_XBUTTONUP, 4, u32::from(XBUTTON1) << 16),
             (WM_XBUTTONDOWN, WM_XBUTTONUP, 5, u32::from(XBUTTON2) << 16),
         ] {
-            assert_eq!(local_mouse_event(down, data), LocalMouseEvent::Button(button, true));
-            assert_eq!(local_mouse_event(up, data), LocalMouseEvent::Button(button, false));
+            assert_eq!(
+                local_mouse_event(down, data),
+                LocalMouseEvent::Button(button, true)
+            );
+            assert_eq!(
+                local_mouse_event(up, data),
+                LocalMouseEvent::Button(button, false)
+            );
         }
-        for message in [WM_MOUSEWHEEL, WM_MOUSEHWHEEL, WM_NULL, WM_XBUTTONDOWN, WM_XBUTTONUP] {
+        for message in [
+            WM_MOUSEWHEEL,
+            WM_MOUSEHWHEEL,
+            WM_NULL,
+            WM_XBUTTONDOWN,
+            WM_XBUTTONUP,
+        ] {
             assert_eq!(local_mouse_event(message, 0), LocalMouseEvent::Other);
         }
-        assert_eq!(local_mouse_event(WM_XBUTTONDOWN, 3 << 16), LocalMouseEvent::BothExtraButtons(true));
-        assert_eq!(local_mouse_event(WM_XBUTTONUP, 3 << 16), LocalMouseEvent::BothExtraButtons(false));
-        assert_eq!(local_mouse_event(WM_XBUTTONDOWN, 4 << 16), LocalMouseEvent::Other);
+        assert_eq!(
+            local_mouse_event(WM_XBUTTONDOWN, 3 << 16),
+            LocalMouseEvent::BothExtraButtons(true)
+        );
+        assert_eq!(
+            local_mouse_event(WM_XBUTTONUP, 3 << 16),
+            LocalMouseEvent::BothExtraButtons(false)
+        );
+        assert_eq!(
+            local_mouse_event(WM_XBUTTONDOWN, 4 << 16),
+            LocalMouseEvent::Other
+        );
     }
 
     #[test]

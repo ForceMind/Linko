@@ -339,12 +339,15 @@ pub struct TriggerMark {
     started: Instant,
 }
 impl TriggerMark {
-    pub(in crate::context) fn frame(&self) -> ([u8; 32], u64) { (self.device, self.epoch) }
+    pub(in crate::context) fn frame(&self) -> ([u8; 32], u64) {
+        (self.device, self.epoch)
+    }
     #[cfg(any(windows, test))]
-    pub(in crate::context) fn started(&self) -> Instant { self.started }
+    pub(in crate::context) fn started(&self) -> Instant {
+        self.started
+    }
 }
 impl TriggerSource {
-    #[cfg(any(windows, test))]
     pub(in crate::context) fn matches_frame(&self, device: [u8; 32], epoch: u64) -> bool {
         self.device == device && self.signal.check(epoch).is_ok()
     }

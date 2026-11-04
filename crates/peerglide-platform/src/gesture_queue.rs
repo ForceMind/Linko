@@ -32,7 +32,11 @@ unsafe impl<T: Send> Sync for Inner<T> {}
 
 /// Positions always lie in 0..slots (at most 257), so addition cannot overflow.
 fn advance(position: usize, slots: usize) -> usize {
-    if position + 1 == slots { 0 } else { position + 1 }
+    if position + 1 == slots {
+        0
+    } else {
+        position + 1
+    }
 }
 
 /// Only final, exclusive Inner destruction owns this drain. Advance before each
@@ -107,8 +111,14 @@ pub(crate) fn channel<T: Send>(
         consumer_alive: AtomicBool::new(true),
     });
     Ok((
-        Producer { inner: inner.clone(), _not_sync: PhantomData },
-        Consumer { inner, _not_sync: PhantomData },
+        Producer {
+            inner: inner.clone(),
+            _not_sync: PhantomData,
+        },
+        Consumer {
+            inner,
+            _not_sync: PhantomData,
+        },
     ))
 }
 
@@ -171,7 +181,10 @@ impl<T: Send> Drop for Consumer<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{thread, time::{Duration, Instant}};
+    use std::{
+        thread,
+        time::{Duration, Instant},
+    };
 
     struct Payload {
         id: usize,
@@ -186,10 +199,16 @@ mod tests {
         Arc::new((0..count).map(|_| AtomicUsize::new(0)).collect())
     }
     fn payload(id: usize, drops: &Arc<Vec<AtomicUsize>>) -> Payload {
-        Payload { id, drops: drops.clone() }
+        Payload {
+            id,
+            drops: drops.clone(),
+        }
     }
     fn assert_drops(drops: &Arc<Vec<AtomicUsize>>, expected: &[usize]) {
-        let actual: Vec<_> = drops.iter().map(|count| count.load(Ordering::Relaxed)).collect();
+        let actual: Vec<_> = drops
+            .iter()
+            .map(|count| count.load(Ordering::Relaxed))
+            .collect();
         assert_eq!(actual.as_slice(), expected);
     }
 
@@ -234,8 +253,12 @@ mod tests {
         let (mut producer, mut consumer) = channel::<Cell<usize>>(1).unwrap();
         thread::spawn(move || {
             assert!(producer.try_push(Cell::new(7)).is_ok());
-        }).join().unwrap();
-        let received = thread::spawn(move || consumer.try_pop().unwrap().get()).join().unwrap();
+        })
+        .join()
+        .unwrap();
+        let received = thread::spawn(move || consumer.try_pop().unwrap().get())
+            .join()
+            .unwrap();
         assert_eq!(received, 7);
     }
 
@@ -288,7 +311,10 @@ mod tests {
                         Ok(()) => break,
                         Err(returned) => value = returned,
                     }
-                    assert!(producer.is_consumer_alive(), "consumer disconnected during transfer");
+                    assert!(
+                        producer.is_consumer_alive(),
+                        "consumer disconnected during transfer"
+                    );
                     assert!(Instant::now() < deadline, "producer stalled");
                     thread::yield_now();
                 }
@@ -297,12 +323,16 @@ mod tests {
         let reader = thread::spawn(move || {
             for expected in 0..COUNT {
                 let value = loop {
-                    if let Some(value) = consumer.try_pop() { break value; }
+                    if let Some(value) = consumer.try_pop() {
+                        break value;
+                    }
                     if !consumer.is_producer_alive() {
                         // Closure Acquire orders all producer publications. Retry
                         // after observing closure rather than mistaking an earlier
                         // empty observation for loss of the final queued values.
-                        break consumer.try_pop().expect("producer disconnected before completion");
+                        break consumer
+                            .try_pop()
+                            .expect("producer disconnected before completion");
                     }
                     assert!(Instant::now() < deadline, "consumer stalled");
                     thread::yield_now();
@@ -336,7 +366,10 @@ mod tests {
                         drop(value);
                         return id + 1;
                     }
-                    assert!(Instant::now() < deadline, "producer failed to observe disconnect");
+                    assert!(
+                        Instant::now() < deadline,
+                        "producer failed to observe disconnect"
+                    );
                     thread::yield_now();
                 }
             }
@@ -350,7 +383,10 @@ mod tests {
                         drop(value);
                         break;
                     }
-                    assert!(Instant::now() < deadline, "consumer stalled before disconnect");
+                    assert!(
+                        Instant::now() < deadline,
+                        "consumer stalled before disconnect"
+                    );
                     thread::yield_now();
                 }
             }
@@ -379,7 +415,12 @@ mod tests {
         let drops = counters(3);
         let (mut producer, consumer) = channel(3).unwrap();
         for id in 0..3 {
-            assert!(producer.try_push(Panicking { id, drops: drops.clone() }).is_ok());
+            assert!(producer
+                .try_push(Panicking {
+                    id,
+                    drops: drops.clone()
+                })
+                .is_ok());
         }
         drop(consumer);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(producer)));

@@ -132,8 +132,16 @@ pub(crate) struct AdmissionKey(pub(crate) [u64; ADMISSION_WORDS]);
 fn key(device: [u8; 32], epoch: u64, consent: ConsentStamp) -> AdmissionKey {
     let mut words = [0; ADMISSION_WORDS];
     for index in 0..4 {
-        words[index] = u64::from_le_bytes(device[index * 8..index * 8 + 8].try_into().expect("fixed nonce chunk"));
-        words[5 + index] = u64::from_le_bytes(consent.identity[index * 8..index * 8 + 8].try_into().expect("fixed consent chunk"));
+        words[index] = u64::from_le_bytes(
+            device[index * 8..index * 8 + 8]
+                .try_into()
+                .expect("fixed nonce chunk"),
+        );
+        words[5 + index] = u64::from_le_bytes(
+            consent.identity[index * 8..index * 8 + 8]
+                .try_into()
+                .expect("fixed consent chunk"),
+        );
     }
     words[4] = epoch;
     words[9] = consent.state;
@@ -141,12 +149,26 @@ fn key(device: [u8; 32], epoch: u64, consent: ConsentStamp) -> AdmissionKey {
 }
 /// A worker-verified native frame; caller evaluates application rules/exclusions
 /// before passing it to the capture admission controller. Not an action grant.
-pub struct CaptureAdmission { key: AdmissionKey, application_id: String, expires: Instant }
+pub struct CaptureAdmission {
+    key: AdmissionKey,
+    application_id: String,
+    expires: Instant,
+}
 impl CaptureAdmission {
-    pub fn application_id(&self) -> &str { &self.application_id }
+    pub fn application_id(&self) -> &str {
+        &self.application_id
+    }
     #[cfg(any(windows, test))]
-    pub(crate) fn key(&self) -> AdmissionKey { self.key }
-    pub fn expires(&self) -> Instant { self.expires }
+    pub(crate) fn key(&self) -> AdmissionKey {
+        self.key
+    }
+    pub fn expires(&self) -> Instant {
+        self.expires
+    }
+    /// Atomic frame/consent/expiry check only; not a native target recheck or grant.
+    pub fn is_current(&self, source: &ActionTriggerSource) -> bool {
+        Instant::now() < self.expires && source.matches_admission(self.key)
+    }
 }
 impl ActionTrigger {
     pub(crate) fn frame_key(&self) -> AdmissionKey {
@@ -154,18 +176,27 @@ impl ActionTrigger {
         key(device, epoch, self.consent)
     }
     #[cfg(any(windows, test))]
-    pub(crate) fn started(&self) -> Instant { self.context.started() }
+    pub(crate) fn started(&self) -> Instant {
+        self.context.started()
+    }
 }
 impl ActionTriggerSource {
-    #[cfg(any(windows, test))]
     pub(crate) fn matches_admission(&self, admission: AdmissionKey) -> bool {
-        let stamp = match self.consent.stamp() { Ok(stamp) => stamp, Err(_) => return false };
+        let stamp = match self.consent.stamp() {
+            Ok(stamp) => stamp,
+            Err(_) => return false,
+        };
         let mut device = [0; 32];
-        for index in 0..4 { device[index * 8..index * 8 + 8].copy_from_slice(&admission.0[index].to_le_bytes()); }
-        self.context.matches_frame(device, admission.0[4]) && key(device, admission.0[4], stamp) == admission
+        for index in 0..4 {
+            device[index * 8..index * 8 + 8].copy_from_slice(&admission.0[index].to_le_bytes());
+        }
+        self.context.matches_frame(device, admission.0[4])
+            && key(device, admission.0[4], stamp) == admission
     }
     #[cfg(any(windows, test))]
-    pub(crate) fn consent_revoked(&self) -> bool { self.consent.0.state.load(Ordering::Acquire) & REVOKED != 0 }
+    pub(crate) fn consent_revoked(&self) -> bool {
+        self.consent.0.state.load(Ordering::Acquire) & REVOKED != 0
+    }
     pub fn mark(&self) -> Result<ActionTrigger, NativeFailure> {
         let (context, consent) = self
             .consent
@@ -401,7 +432,11 @@ impl LocalActions {
         let lease = self.contexts.consume(prepared.frozen).map_err(failure)?;
         lease.recheck(&mut self.contexts).map_err(failure)?;
         self.consent.policy_for(prepared.consent)?;
-        Ok(CaptureAdmission { key, application_id: lease.application_id().to_owned(), expires })
+        Ok(CaptureAdmission {
+            key,
+            application_id: lease.application_id().to_owned(),
+            expires,
+        })
     }
     pub fn cancel(&mut self, prepared: PreparedLocalAction) -> Result<(), WatchError> {
         self.contexts.cancel(prepared.frozen)
