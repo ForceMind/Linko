@@ -478,7 +478,9 @@ mod tests {
         let fixture = super::super::tests::Fixture::new()?;
         let mut lab = GestureLab::new(&fixture.path);
         let ctx = egui::Context::default();
-        ctx.style_mut(|style| style.animation_time = 0.);
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            ctx.style_mut_of(theme, |style| style.animation_time = 0.);
+        }
         assert!(lab.inspection().is_none());
         frame(&mut lab, &ctx, 0., vec![], true, false);
         assert!(lab.inspection().is_none());
