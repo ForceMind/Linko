@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-package-") as temporary:
                  "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,
                  "LSMinimumSystemVersion": "13.0",
                  "NSBonjourServices": ["_peerglide._udp"],
-                 "NSLocalNetworkUsageDescription": "PeerGlide discovers computers on your local network. Discovery never grants control."}
+                 "NSLocalNetworkUsageDescription": "屏跃使用本地网络发现其他电脑。发现设备不会自动登记信任或授予控制权限。"}
         (contents / "Info.plist").write_bytes(plistlib.dumps(plist))
     for name in ("peerglide", "peerglide-gui"):
         shutil.copy2(root / "target" / "release" / (name + suffix), binary_dir)
