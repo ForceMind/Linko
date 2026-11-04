@@ -894,7 +894,7 @@ mod tests {
         assert!(right(&mut b, true));
         assert!(right(&mut b, false));
         let key = b.source.frame();
-        b.shared.latch.store(u64::MAX & !7, Ordering::Release);
+        b.shared.latch.store(!7u64, Ordering::Release);
         assert!(!right(&mut b, false));
         assert!(!b.keep_running(false));
         assert!(!b.source.current(key));
