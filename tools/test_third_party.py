@@ -8,6 +8,16 @@ import third_party
 
 
 class Notices(unittest.TestCase):
+    def test_embedded_chinese_font_notice_is_included_without_cargo_package(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = pathlib.Path(folder) / "notices"
+            with patch("sys.argv", ["third_party.py", "--notices", str(out)]), patch("subprocess.check_output", return_value=b'{"packages":[]}'):
+                third_party.main()
+            target = out / "bundled-font-NotoSansSC"
+            self.assertEqual((target / "OFL.txt").read_bytes(), (third_party.BUNDLED_FONT / "OFL.txt").read_bytes())
+            self.assertTrue((target / "SOURCE.md").is_file())
+            self.assertIn("Noto Sans SC", (out / "INVENTORY.md").read_text())
+
     def test_and_keeps_all_required_terms(self):
         self.assertIsNone(third_party.select("MIT AND GPL-3.0-only"))
         self.assertEqual(third_party.select("GPL-3.0-only OR MIT"), "MIT")

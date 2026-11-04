@@ -17,7 +17,7 @@ See [validation](docs/VALIDATION.md).
 Primary-display switching, basic HID keys, three mouse buttons and scrolling
 form the initial native prototype. Multi-monitor topology, IME composition,
 clipboard, files, pairing codes, tray and signed installers are
-not implemented in this milestone. A native eframe control panel provides
+not implemented in this milestone. The desktop interface is Simplified Chinese, with an embedded OFL-licensed Noto Sans SC font; no system font installation is needed. A native eframe control panel provides
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
 

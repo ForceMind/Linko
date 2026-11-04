@@ -33,11 +33,11 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     let metadata = file.metadata()?;
     anyhow::ensure!(
         metadata.is_file() && metadata.len() <= MAX_BYTES as u64,
-        "configuration must be a regular file under 64 KiB"
+        "配置必须是小于等于 64 KiB 的普通文件"
     );
     let mut bytes = Vec::new();
     file.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes)?;
-    anyhow::ensure!(bytes.len() <= MAX_BYTES, "configuration exceeds 64 KiB");
+    anyhow::ensure!(bytes.len() <= MAX_BYTES, "配置超过 64 KiB 限制");
     Ok(Some(bytes))
 }
 fn options() -> OpenOptions {
@@ -59,7 +59,7 @@ impl Drop for Lock {
 pub fn lock(path: &Path) -> Result<Lock> {
     let file = options().create(true).truncate(false).open(path)?;
     file.try_lock()
-        .map_err(|e| anyhow::anyhow!("another PeerGlide operation owns this configuration: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("另一屏跃操作正在使用此配置：{e}"))?;
     Ok(Lock(file))
 }
 impl Store {
@@ -70,17 +70,17 @@ impl Store {
             None => T::default(),
             Some(bytes) => {
                 let value: serde_json::Value = serde_json::from_slice(&bytes)
-                    .context("invalid configuration JSON; original preserved")?;
+                    .context("配置 JSON 无效，原文件已保留")?;
                 if value.get("store_version").is_some() {
                     let e: Envelope<T> = serde_json::from_value(value)?;
                     anyhow::ensure!(
                         e.store_version == 1,
-                        "unsupported configuration version; original preserved"
+                        "暂不支持此配置版本，原文件已保留"
                     );
                     e.data
                 } else {
                     serde_json::from_value(value)
-                        .context("invalid legacy configuration; original preserved")?
+                        .context("旧版配置无效，原文件已保留")?
                 }
             }
         };
@@ -92,7 +92,7 @@ impl Store {
         let previous = read(&path)?;
         anyhow::ensure!(
             previous.as_deref().map(blake3::hash) == self.expected,
-            "configuration changed in another process; reload before saving"
+            "其他进程已修改配置，请重新加载后再保存"
         );
         self.commit(data, previous)
     }
@@ -113,7 +113,7 @@ impl Store {
             store_version: 1,
             data,
         })?;
-        anyhow::ensure!(bytes.len() <= MAX_BYTES, "configuration exceeds 64 KiB");
+        anyhow::ensure!(bytes.len() <= MAX_BYTES, "配置超过 64 KiB 限制");
         if let Some(previous) = previous {
             let backup = self
                 .path
@@ -126,14 +126,14 @@ impl Store {
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     anyhow::ensure!(
                         read(&backup)?.as_deref() == Some(previous.as_slice()),
-                        "configuration backup differs; refusing overwrite"
+                        "配置备份内容不一致，已拒绝覆盖"
                     );
                 }
-                Err(e) => return Err(e).context("create configuration backup"),
+                Err(e) => return Err(e).context("创建配置备份失败"),
             }
         }
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let parent = self.path.parent().context("configuration parent")?;
+        let parent = self.path.parent().context("读取配置目录失败")?;
         let mut temporary = None;
         for _ in 0..16 {
             let path = parent.join(format!(
@@ -147,10 +147,10 @@ impl Store {
                     break;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e).context("create configuration temporary file"),
+                Err(e) => return Err(e).context("创建配置临时文件失败"),
             }
         }
-        let (path, mut file) = temporary.context("reserve configuration temporary file")?;
+        let (path, mut file) = temporary.context("预留配置临时文件失败")?;
         struct Cleanup(PathBuf);
         impl Drop for Cleanup {
             fn drop(&mut self) {
@@ -161,12 +161,12 @@ impl Store {
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&cleanup.0, &self.path).context("replace configuration atomically")?;
+        std::fs::rename(&cleanup.0, &self.path).context("原子替换配置失败")?;
         self.expected = Some(blake3::hash(&bytes));
         #[cfg(unix)]
         File::open(parent)?
             .sync_all()
-            .context("configuration replaced but directory sync failed")?;
+            .context("配置已替换，但目录同步失败")?;
         Ok(())
     }
 }

@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-package-") as temporary:
         contents = bundle / "PeerGlide.app" / "Contents"
         binary_dir = contents / "MacOS"
         binary_dir.mkdir(parents=True)
-        plist = {"CFBundleName": "PeerGlide", "CFBundleDisplayName": "PeerGlide",
+        plist = {"CFBundleName": "PeerGlide", "CFBundleDisplayName": "屏跃",
                  "CFBundleIdentifier": "com.peerglide.PeerGlide", "CFBundleVersion": "1",
                  "CFBundleShortVersionString": "0.1.0", "CFBundlePackageType": "APPL",
                  "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,

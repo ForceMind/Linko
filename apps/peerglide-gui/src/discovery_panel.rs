@@ -15,19 +15,19 @@ impl Panel {
             if stop.finished() {
                 self.stopping = None;
                 self.handle = None;
-                self.status = "Discovery stopped".into();
+                self.status = "设备发现已停止".into();
             }
             return;
         }
         if let Some(handle) = &mut self.handle {
             if !listener_running && handle.is_advertising() {
                 if let Err(e) = handle.unpublish() {
-                    self.status = format!("Could not withdraw advertisement: {e}");
+                    self.status = format!("无法撤下设备广播：{e}");
                 }
             }
             if let Err(e) = handle.poll(self.own.as_deref()) {
                 handle.table.clear();
-                self.status = format!("Discovery unavailable: {e}");
+                self.status = format!("设备发现不可用：{e}");
             }
         }
     }
@@ -41,32 +41,30 @@ impl Panel {
     ) -> Option<SocketAddr> {
         let mut chosen = None;
         ui.separator();
-        ui.strong("LAN discovery · untrusted hints");
-        ui.weak("Discovery never enrolls a certificate or grants control. Independently verify the public certificate.");
+        ui.strong("局域网设备发现 · 信息未经验证");
+        ui.weak("设备发现不会登记证书或授予控制权限。请通过独立渠道核对公开证书。");
         if let Some(handle) = &mut self.handle {
             if self.stopping.is_none() {
-                if ui.button("Stop discovery").clicked() {
+                if ui.button("停止发现").clicked() {
                     match handle.request_stop() {
                         Ok(stop) => {
                             self.stopping = Some(stop);
-                            self.status = "Stopping discovery".into();
+                            self.status = "正在停止设备发现".into();
                         }
-                        Err(e) => self.status = format!("Stop failed; retry: {e}"),
+                        Err(e) => self.status = format!("停止失败，请重试：{e}"),
                     }
                 }
                 if self.stopping.is_none() {
                     if handle.is_advertising() {
-                        if ui.button("Hide this listener").clicked() {
+                        if ui.button("隐藏本机监听服务").clicked() {
                             if let Err(e) = handle.unpublish() {
-                                self.status = format!("Withdraw failed: {e}");
+                                self.status = format!("撤下广播失败：{e}");
                             }
                         }
                     } else if ui
                         .add_enabled(
                             listener_running && own.is_some(),
-                            egui::Button::new(
-                                "Advertise this listener's public fingerprint on LAN",
-                            ),
+                            egui::Button::new("在局域网广播本机监听服务的公开指纹"),
                         )
                         .clicked()
                     {
@@ -74,22 +72,22 @@ impl Panel {
                             match handle.advertise(fp, 24870) {
                                 Ok(()) => {
                                     self.own = own.clone();
-                                    self.status="Listener advertised; trust still requires certificate verification".into();
+                                    self.status = "监听服务已广播，建立信任仍需核对证书".into();
                                 }
-                                Err(e) => self.status = format!("Advertise failed: {e}"),
+                                Err(e) => self.status = format!("广播失败：{e}"),
                             }
                         }
                     }
                     for hint in handle.table.hints() {
                         ui.group(|ui| {
                             ui.label(&hint.name);
-                            ui.weak("Unauthenticated advertised fingerprint");
+                            ui.weak("广播的指纹未经身份验证");
                             ui.monospace(&hint.fingerprint);
                             for address in &hint.addresses {
                                 if ui
                                     .add_enabled(
                                         idle && writable,
-                                        egui::Button::new(format!("Use address {address}")),
+                                        egui::Button::new(format!("使用地址 {address}")),
                                     )
                                     .clicked()
                                 {
@@ -102,16 +100,16 @@ impl Panel {
             }
         } else {
             if ui
-                .add_enabled(writable, egui::Button::new("Find LAN computers"))
+                .add_enabled(writable, egui::Button::new("查找局域网电脑"))
                 .clicked()
             {
                 match Discovery::start() {
                     Ok(handle) => {
                         self.handle = Some(handle);
                         self.own = own.clone();
-                        self.status = "Browsing IPv4 LAN hints".into();
+                        self.status = "正在查找 IPv4 局域网设备信息".into();
                     }
-                    Err(e) => self.status = format!("Discovery failed: {e}"),
+                    Err(e) => self.status = format!("设备发现失败：{e}"),
                 }
             }
         }

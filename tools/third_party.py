@@ -10,6 +10,9 @@ import re
 import shutil
 import subprocess
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+BUNDLED_FONT = ROOT / "apps/peerglide-gui/assets/fonts"
+
 ALLOWED = {"MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "ISC", "0BSD",
            "BSD-2-Clause", "BSD-3-Clause", "Zlib", "Unicode-3.0", "OFL-1.1",
            "Ubuntu-font-1.0", "CC0-1.0", "MIT-0", "Unlicense", "BSL-1.0"}
@@ -90,6 +93,17 @@ def main():
                 # complete published source and its license declaration for review.
                 shutil.copytree(source,target/'published-source',dirs_exist_ok=True)
                 (target/'NOTICE-REVIEW.txt').write_text('The crate archive contains no separate license file. Complete published source and Cargo license declaration are included. Inspect upstream license/attribution before stable distribution.\n',encoding='utf-8')
+    # Embedded repository fonts are not Cargo packages and must be inventoried
+    # explicitly; otherwise every portable package would omit their license.
+    for name in ("NotoSansSC.ttf", "OFL.txt", "SOURCE.md"):
+        if not (BUNDLED_FONT / name).is_file():
+            raise SystemExit(f"Missing bundled Chinese font asset: {name}")
+    rows.append("| Noto Sans SC (embedded font) | google/fonts a85815a42757630ce188fdad368c2dfc444d4773 | OFL-1.1 | OFL-1.1 |")
+    if args.notices:
+        target = args.notices / "bundled-font-NotoSansSC"
+        target.mkdir(parents=True, exist_ok=True)
+        for name in ("OFL.txt", "SOURCE.md"):
+            shutil.copy2(BUNDLED_FONT / name, target / name)
     text = "\n".join(rows) + "\n"
     if args.inventory:
         args.inventory.parent.mkdir(parents=True, exist_ok=True)

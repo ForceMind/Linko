@@ -7,6 +7,8 @@ import subprocess
 import tempfile
 import time
 
+# Keep both successful and failed isolated-render evidence for Chinese text/layout.
+
 root = pathlib.Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
     profile = pathlib.Path(temporary) / "explicit-profile"
@@ -88,6 +90,10 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     gui.wait(timeout=3)
                 print(f"PASS: {name} native GUI launched and rendered under isolated Xvfb")
             finally:
+                if gui.poll() is None:
+                    dest = root / "dist"
+                    dest.mkdir(exist_ok=True)
+                    subprocess.run(["import", "-window", "root", str(dest / f"peerglide-{name}-final.png")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["xdotool", "mouseup", "3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if gui.poll() is None:
                     gui.kill()

@@ -15,16 +15,29 @@ static RECOGNIZER: LazyLock<Recognizer> = LazyLock::new(|| {
     Recognizer::new(Config::default(), starter_templates()).expect("built-in gesture templates")
 });
 const LABELS: [&str; 9] = [
-    "Unknown / negative",
-    "Left",
-    "Right",
-    "Up",
-    "Down",
-    "Down then right",
-    "Down then left",
-    "Up then right",
-    "Up then left",
+    "未知手势 / 负样本",
+    "向左",
+    "向右",
+    "向上",
+    "向下",
+    "先向下再向右",
+    "先向下再向左",
+    "先向上再向右",
+    "先向上再向左",
 ];
+fn rejection_label(reason: Rejection) -> &'static str {
+    match reason {
+        Rejection::SampleCount => "采样点数量超出上限",
+        Rejection::InvalidCoordinate => "坐标无效",
+        Rejection::NonMonotonicTime => "采样时间顺序无效",
+        Rejection::Duration => "绘制时间超出上限",
+        Rejection::TooShort => "轨迹过短",
+        Rejection::TooLong => "轨迹过长",
+        Rejection::NoMatch => "没有匹配的手势",
+        Rejection::Ambiguous => "结果不明确",
+        Rejection::Cancelled => "已取消",
+    }
+}
 struct Active {
     stroke: Stroke<'static>,
     time: f64,
@@ -125,11 +138,11 @@ impl GestureLab {
     fn export(&mut self) -> Result<PathBuf> {
         anyhow::ensure!(
             self.completed && !self.saved,
-            "draw a new completed sample first"
+            "请先重新绘制一条完整样本"
         );
-        anyhow::ensure!(self.expected < LABELS.len() as u32, "invalid sample label");
+        anyhow::ensure!(self.expected < LABELS.len() as u32, "样本标签无效");
         let directory = PathBuf::from(self.export_dir.trim());
-        anyhow::ensure!(!directory.as_os_str().is_empty(), "choose a sample folder");
+        anyhow::ensure!(!directory.as_os_str().is_empty(), "请选择样本文件夹");
         let points: Vec<_> = self
             .samples
             .iter()
@@ -142,29 +155,26 @@ impl GestureLab {
             "schema_version":1,"source":"egui_canvas","units":"logical_pixels",
             "expected_id":if self.expected==0 {None}else{Some(self.expected)},"samples":points
         }))?;
-        self.serial = self
-            .serial
-            .checked_add(1)
-            .context("sample counter exhausted")?;
+        self.serial = self.serial.checked_add(1).context("样本计数已达上限")?;
         let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        std::fs::create_dir_all(&directory).context("create sample folder")?;
+        std::fs::create_dir_all(&directory).context("创建样本文件夹失败")?;
         let path = directory.join(format!("sample-{time}-{}.json", self.serial));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&path)
-            .context("create a new sample file without overwriting")?;
-        file.write_all(&data).context("write labelled sample")?;
+            .context("创建不覆盖现有文件的新样本失败")?;
+        file.write_all(&data).context("写入标注样本失败")?;
         self.saved = true;
         Ok(path)
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, worker_running: bool) -> Option<Rect> {
-        ui.heading("Gesture lab");
-        ui.label("Draw with the right mouse button inside the canvas. Escape cancels.");
-        ui.weak("Canvas only. No global input capture or actions. Nothing is saved until you choose Save.");
+        ui.heading("手势实验室");
+        ui.label("在画布内按住鼠标右键绘制手势，按 Esc 取消。");
+        ui.weak("仅限此画布，不捕获全局输入、不执行动作。只有点击保存才会写入文件。");
         if worker_running {
             self.cancel();
-            ui.label("Stop the device session to use the gesture lab.");
+            ui.label("请先停止设备会话，再使用手势实验室。");
             return None;
         }
         let (rect, response) = ui.allocate_exact_size(
@@ -234,18 +244,18 @@ impl GestureLab {
         match &self.result {
             Some(Ok(m)) => {
                 ui.label(format!(
-                    "Matched: {}  ·  distance {:.3}",
+                    "识别结果：{}  ·  距离 {:.3}",
                     LABELS[m.id.0 as usize], m.distance
                 ));
             }
             Some(Err(reason)) => {
-                ui.label(format!("Rejected / cancelled: {reason:?}"));
+                ui.label(format!("未识别 / 已取消：{}", rejection_label(*reason)));
             }
             None => {
                 ui.label(if self.active.is_some() {
-                    "Recording in memory"
+                    "正在内存中记录"
                 } else {
-                    "Ready"
+                    "就绪"
                 });
             }
         }
@@ -256,24 +266,24 @@ impl GestureLab {
                     ui.selectable_value(&mut self.expected, id as u32, *label);
                 }
             });
-        ui.weak("Choose the intended label. Labels never change recognition. Canvas samples do not prove native mouse-rate acceptance.");
+        ui.weak("请选择预期手势标签，标签不会影响识别结果。画布样本不能证明原生鼠标采样率已通过验收。");
         ui.horizontal(|ui| {
-            ui.label("Sample folder");
+            ui.label("样本文件夹");
             ui.text_edit_singleline(&mut self.export_dir);
         });
         if ui
             .add_enabled(
                 self.completed && !self.saved,
-                egui::Button::new("Save labelled sample"),
+                egui::Button::new("保存标注样本"),
             )
             .clicked()
         {
             self.feedback = match self.export() {
-                Ok(path) => format!("Saved {}", path.display()),
-                Err(error) => format!("Save failed: {error:#}"),
+                Ok(path) => format!("已保存：{}", path.display()),
+                Err(error) => format!("保存失败：{error:#}"),
             };
         }
-        if ui.button("Clear drawing").clicked() {
+        if ui.button("清空画布").clicked() {
             self.cancel();
             self.samples.clear();
             self.result = None;

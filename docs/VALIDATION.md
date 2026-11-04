@@ -559,3 +559,23 @@ DPI, permissions, network-interface/sleep faults and two-machine C06 remain not_
 No native clipboard, data network, global G1, or #10 root-cause claim is made.
 The final documentation-only follow-up preserves this tested source tree; its
 exact-head CI status is reported on PR #34.
+
+
+### Simplified Chinese GUI correction (2026-11-04, implementing)
+
+User requires the interface in Chinese. All current navigation, Home/Devices/
+Displays/Transfers/Settings, offline lab/rules/discovery, lifecycle/permission/
+configuration recovery labels now use Simplified Chinese. Stable configuration
+keys, action IDs, protocol v5, exported JSON and user-supplied names remain intact.
+Raw diagnostic details retain original text under a Chinese-labelled log view.
+
+Embeds the unmodified Google Fonts Noto Sans SC variable TTF from pinned commit
+a85815a42757630ce188fdad368c2dfc444d4773, verified Git blob
+fb0637bafbcd804fe32152370a1225990745b4bc (17,772,300 bytes). Its original OFL-1.1
+notice and provenance accompany every package; no system font loading/install is
+enabled. A headless glyph-coverage check exercises both proportional/monospace
+families, and page rendering uses the same bundled font. Python notice tests now
+include the non-Cargo font; all three pass locally. Source build remains blocked
+by the explicitly declined Rust installation. Earlier English GUI evidence does
+not verify this new Chinese rendering; final candidate CI/screenshots/native launch
+are pending. No physical input acceptance or global G1 enablement is claimed.
