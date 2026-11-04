@@ -8,14 +8,18 @@ use windows_sys::Win32::{
     },
     UI::WindowsAndMessaging::{
         GetClassLongW, GetMenuState, GetSystemMenu, GetWindowLongW, IsWindow, PostMessageW,
-        ShowWindowAsync, CS_NOCLOSE, GCL_STYLE, GWL_STYLE, MF_BYCOMMAND, MF_DISABLED,
-        MF_GRAYED, MF_POPUP, MF_SEPARATOR, SC_CLOSE, SW_MAXIMIZE, SW_MINIMIZE, WM_CLOSE, WS_CHILD, WS_DISABLED,
-        WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_VISIBLE,
+        ShowWindowAsync, CS_NOCLOSE, GCL_STYLE, GWL_STYLE, MF_BYCOMMAND, MF_DISABLED, MF_GRAYED,
+        MF_POPUP, MF_SEPARATOR, SC_CLOSE, SW_MAXIMIZE, SW_MINIMIZE, WM_CLOSE, WS_CHILD,
+        WS_DISABLED, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_VISIBLE,
     },
 };
 
 pub(in crate::context) fn action_capabilities() -> Capabilities {
-    Capabilities::new([Action::MinimizeWindow, Action::MaximizeWindow, Action::CloseWindow])
+    Capabilities::new([
+        Action::MinimizeWindow,
+        Action::MaximizeWindow,
+        Action::CloseWindow,
+    ])
 }
 
 fn native_error(error: u32) -> NativeFailure {
@@ -138,7 +142,10 @@ fn submit_with(
 ) -> Result<(), NativeFailure> {
     // The Coordinator rejects these as Unsupported via capabilities. Reject a
     // direct unsupported invocation before any query, guard or effect as well.
-    if !matches!(action, Action::MinimizeWindow | Action::MaximizeWindow | Action::CloseWindow) {
+    if !matches!(
+        action,
+        Action::MinimizeWindow | Action::MaximizeWindow | Action::CloseWindow
+    ) {
         return Err(NativeFailure::BeforeSubmission);
     }
     let window = ops.validate_target()?;
@@ -171,8 +178,7 @@ fn submit_with(
             let state = ops
                 .close_item_state(window)
                 .map_err(|_| NativeFailure::BeforeSubmission)?;
-            if state == u32::MAX
-                || state & (MF_DISABLED | MF_GRAYED | MF_POPUP | MF_SEPARATOR) != 0
+            if state == u32::MAX || state & (MF_DISABLED | MF_GRAYED | MF_POPUP | MF_SEPARATOR) != 0
             {
                 return Err(NativeFailure::BeforeSubmission);
             }
@@ -226,7 +232,12 @@ mod tests {
                 effects: Vec::new(),
             }
         }
-        fn effect(&mut self, window: HWND, command: i32, label: &'static str) -> Result<(), NativeFailure> {
+        fn effect(
+            &mut self,
+            window: HWND,
+            command: i32,
+            label: &'static str,
+        ) -> Result<(), NativeFailure> {
             assert_eq!(window, fake_window());
             assert_eq!(self.trace.borrow().last(), Some(&"guard"));
             self.trace.borrow_mut().push(label);
@@ -262,7 +273,10 @@ mod tests {
             self.effect(window, WM_CLOSE as i32, "close")
         }
     }
-    fn guard(trace: Trace, result: Result<(), NativeFailure>) -> impl FnMut() -> Result<(), NativeFailure> {
+    fn guard(
+        trace: Trace,
+        result: Result<(), NativeFailure>,
+    ) -> impl FnMut() -> Result<(), NativeFailure> {
         move || {
             trace.borrow_mut().push("guard");
             result
@@ -273,12 +287,20 @@ mod tests {
     fn unsupported_actions_have_no_queries_guards_or_effects_and_are_not_aliases() {
         let capabilities = action_capabilities();
         for action in peerglide_actions::ACTIONS {
-            let supported = matches!(action, Action::MinimizeWindow | Action::MaximizeWindow | Action::CloseWindow);
+            let supported = matches!(
+                action,
+                Action::MinimizeWindow | Action::MaximizeWindow | Action::CloseWindow
+            );
             assert_eq!(capabilities.supports(action), supported);
-            if supported { continue; }
+            if supported {
+                continue;
+            }
             let mut ops = FakeWindow::new();
             let mut guard = guard(ops.trace.clone(), Ok(()));
-            assert_eq!(submit_with(&mut ops, action, &mut guard), Err(NativeFailure::BeforeSubmission));
+            assert_eq!(
+                submit_with(&mut ops, action, &mut guard),
+                Err(NativeFailure::BeforeSubmission)
+            );
             assert!(ops.trace.borrow().is_empty() && ops.effects.is_empty());
         }
     }
@@ -286,9 +308,21 @@ mod tests {
     #[test]
     fn each_action_guards_after_queries_and_submits_exactly_one_distinct_operation() {
         for (action, command, expected) in [
-            (Action::MinimizeWindow, SW_MINIMIZE, vec!["target", "style", "guard", "show"]),
-            (Action::MaximizeWindow, SW_MAXIMIZE, vec!["target", "style", "guard", "show"]),
-            (Action::CloseWindow, WM_CLOSE as i32, vec!["target", "style", "class", "menu", "guard", "close"]),
+            (
+                Action::MinimizeWindow,
+                SW_MINIMIZE,
+                vec!["target", "style", "guard", "show"],
+            ),
+            (
+                Action::MaximizeWindow,
+                SW_MAXIMIZE,
+                vec!["target", "style", "guard", "show"],
+            ),
+            (
+                Action::CloseWindow,
+                WM_CLOSE as i32,
+                vec!["target", "style", "class", "menu", "guard", "close"],
+            ),
         ] {
             let mut ops = FakeWindow::new();
             let mut guard = guard(ops.trace.clone(), Ok(()));
@@ -300,8 +334,16 @@ mod tests {
 
     #[test]
     fn late_guard_failure_never_submits_even_after_successful_native_queries() {
-        for action in [Action::MinimizeWindow, Action::MaximizeWindow, Action::CloseWindow] {
-            for failure in [NativeFailure::PermissionLost, NativeFailure::TargetLost, NativeFailure::BeforeSubmission] {
+        for action in [
+            Action::MinimizeWindow,
+            Action::MaximizeWindow,
+            Action::CloseWindow,
+        ] {
+            for failure in [
+                NativeFailure::PermissionLost,
+                NativeFailure::TargetLost,
+                NativeFailure::BeforeSubmission,
+            ] {
                 let mut ops = FakeWindow::new();
                 let mut guard = guard(ops.trace.clone(), Err(failure));
                 assert_eq!(submit_with(&mut ops, action, &mut guard), Err(failure));
@@ -326,7 +368,10 @@ mod tests {
             ops.style = Ok(style);
             ops.class = Ok(class);
             let mut guard = guard(ops.trace.clone(), Ok(()));
-            assert_eq!(submit_with(&mut ops, action, &mut guard), Err(NativeFailure::BeforeSubmission));
+            assert_eq!(
+                submit_with(&mut ops, action, &mut guard),
+                Err(NativeFailure::BeforeSubmission)
+            );
             assert!(!ops.trace.borrow().contains(&"guard") && ops.effects.is_empty());
         }
     }
@@ -367,7 +412,11 @@ mod tests {
             Err(NativeFailure::TargetLost)
         );
         assert!(!missing.trace.borrow().contains(&"guard") && missing.effects.is_empty());
-        for failure in [NativeFailure::PermissionLost, NativeFailure::TargetLost, NativeFailure::BeforeSubmission] {
+        for failure in [
+            NativeFailure::PermissionLost,
+            NativeFailure::TargetLost,
+            NativeFailure::BeforeSubmission,
+        ] {
             for phase in 0..4 {
                 let mut ops = FakeWindow::new();
                 match phase {
@@ -377,11 +426,22 @@ mod tests {
                     _ => ops.close_state = Err(failure),
                 }
                 let mut guard = guard(ops.trace.clone(), Ok(()));
-                let expected = if phase == 3 { NativeFailure::BeforeSubmission } else { failure };
-                assert_eq!(submit_with(&mut ops, Action::CloseWindow, &mut guard), Err(expected));
+                let expected = if phase == 3 {
+                    NativeFailure::BeforeSubmission
+                } else {
+                    failure
+                };
+                assert_eq!(
+                    submit_with(&mut ops, Action::CloseWindow, &mut guard),
+                    Err(expected)
+                );
                 assert!(!ops.trace.borrow().contains(&"guard") && ops.effects.is_empty());
             }
-            for action in [Action::MinimizeWindow, Action::MaximizeWindow, Action::CloseWindow] {
+            for action in [
+                Action::MinimizeWindow,
+                Action::MaximizeWindow,
+                Action::CloseWindow,
+            ] {
                 let mut ops = FakeWindow::new();
                 ops.submission = Err(failure);
                 let mut guard = guard(ops.trace.clone(), Ok(()));
@@ -393,12 +453,27 @@ mod tests {
 
     #[test]
     fn native_error_classification_preserves_known_permission_and_target_failures() {
-        assert_eq!(native_error(ERROR_ACCESS_DENIED), NativeFailure::PermissionLost);
-        assert_eq!(native_error(ERROR_INVALID_WINDOW_HANDLE), NativeFailure::TargetLost);
+        assert_eq!(
+            native_error(ERROR_ACCESS_DENIED),
+            NativeFailure::PermissionLost
+        );
+        assert_eq!(
+            native_error(ERROR_INVALID_WINDOW_HANDLE),
+            NativeFailure::TargetLost
+        );
         assert_eq!(native_error(0), NativeFailure::BeforeSubmission);
         assert_eq!(native_error(1816), NativeFailure::BeforeSubmission);
-        assert_eq!(context_error(ContextError::PermissionDenied), NativeFailure::PermissionLost);
-        assert_eq!(context_error(ContextError::ChangedDuringRead), NativeFailure::TargetLost);
-        assert_eq!(context_error(ContextError::QueryFailed), NativeFailure::BeforeSubmission);
+        assert_eq!(
+            context_error(ContextError::PermissionDenied),
+            NativeFailure::PermissionLost
+        );
+        assert_eq!(
+            context_error(ContextError::ChangedDuringRead),
+            NativeFailure::TargetLost
+        );
+        assert_eq!(
+            context_error(ContextError::QueryFailed),
+            NativeFailure::BeforeSubmission
+        );
     }
 }

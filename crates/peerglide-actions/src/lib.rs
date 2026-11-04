@@ -164,7 +164,9 @@ impl ValidatedAction {
     }
 
     /// Original action deadline; native adapters must not extend it during OS queries.
-    pub fn expires(&self) -> Instant { self.expires }
+    pub fn expires(&self) -> Instant {
+        self.expires
+    }
 
     /// Consume and recheck immediately before a future adapter's OS submission.
     /// The adapter must also recheck current permissions/capabilities via validate.

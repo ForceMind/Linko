@@ -3,10 +3,10 @@
 //! A point-in-time match cannot detect focus leaving and returning between reads;
 //! G1 still needs native change notifications, token invalidation and consent.
 
-#[path = "context_watch.rs"]
-pub mod watch;
 #[path = "context_actions.rs"]
 pub mod actions;
+#[path = "context_watch.rs"]
+pub mod watch;
 
 #[cfg(target_os = "macos")]
 #[path = "context_macos.rs"]
@@ -186,8 +186,14 @@ mod native {
             Ok(())
         }
     }
-    pub(super) fn action_capabilities() -> peerglide_actions::Capabilities { peerglide_actions::Capabilities::default() }
-    pub(super) fn submit_window_action(_: &Target, _: peerglide_actions::Action, _: &mut dyn FnMut() -> Result<(), peerglide_actions::execution::NativeFailure>) -> Result<(), peerglide_actions::execution::NativeFailure> {
+    pub(super) fn action_capabilities() -> peerglide_actions::Capabilities {
+        peerglide_actions::Capabilities::default()
+    }
+    pub(super) fn submit_window_action(
+        _: &Target,
+        _: peerglide_actions::Action,
+        _: &mut dyn FnMut() -> Result<(), peerglide_actions::execution::NativeFailure>,
+    ) -> Result<(), peerglide_actions::execution::NativeFailure> {
         Err(peerglide_actions::execution::NativeFailure::BeforeSubmission)
     }
     pub(super) struct Target;
