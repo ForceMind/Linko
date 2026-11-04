@@ -4,6 +4,7 @@ import hashlib
 import pathlib
 import platform
 import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,7 +15,8 @@ dist = root / "dist"
 dist.mkdir(exist_ok=True)
 system = platform.system()
 suffix = ".exe" if system == "Windows" else ""
-label = f"PeerGlide-0.1.0-dev-{system.lower()}-{platform.machine().lower()}"
+version = re.search(r'(?m)^version = "([^"\n]+)"', (root / "Cargo.toml").read_text()).group(1)
+label = f"PeerGlide-{version}-{system.lower()}-{platform.machine().lower()}"
 with tempfile.TemporaryDirectory(prefix="peerglide-package-") as temporary:
     bundle = pathlib.Path(temporary) / label
     bundle.mkdir()
@@ -24,8 +26,8 @@ with tempfile.TemporaryDirectory(prefix="peerglide-package-") as temporary:
         binary_dir = contents / "MacOS"
         binary_dir.mkdir(parents=True)
         plist = {"CFBundleName": "PeerGlide", "CFBundleDisplayName": "屏跃",
-                 "CFBundleIdentifier": "com.peerglide.PeerGlide", "CFBundleVersion": "1",
-                 "CFBundleShortVersionString": "0.1.0", "CFBundlePackageType": "APPL",
+                 "CFBundleIdentifier": "com.peerglide.PeerGlide", "CFBundleVersion": version.split("-")[0],
+                 "CFBundleShortVersionString": version.split("-")[0], "CFBundlePackageType": "APPL",
                  "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,
                  "LSMinimumSystemVersion": "13.0",
                  "NSBonjourServices": ["_peerglide._udp"],

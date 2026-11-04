@@ -3,7 +3,7 @@ mod session;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_protocol::{
-    worker::{WorkerEvent, WorkerState},
+    worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState},
     Edge, InputCapabilities, Message, VERSION,
 };
 use peerglide_transport as transport;
@@ -197,36 +197,125 @@ fn worker_event(managed: bool, state: WorkerState) {
         let _ = out.flush();
     }
 }
+/// Written only by the async supervisor/session, never a native callback. The
+/// bounded wire record contains no peer/input payload, and repeats are coalesced.
+pub(crate) struct InputReporter {
+    managed: bool,
+    last: Option<WorkerInputState>,
+    recovery_unconfirmed: bool,
+    terminal_sent: bool,
+    #[cfg(test)]
+    observed: Vec<WorkerInputState>,
+    #[cfg(test)]
+    emitted: Vec<WorkerInputEvent>,
+}
+impl InputReporter {
+    fn new(managed: bool) -> Self {
+        Self {
+            managed, last: None, recovery_unconfirmed: false, terminal_sent: false,
+            #[cfg(test)] observed: Vec::new(),
+            #[cfg(test)] emitted: Vec::new(),
+        }
+    }
+    fn set(&mut self, state: WorkerInputState) {
+        if self.terminal_sent { return; }
+        if state == WorkerInputState::RecoveryUnconfirmed { self.recovery_unconfirmed = true; }
+        let state = if self.recovery_unconfirmed { WorkerInputState::RecoveryUnconfirmed } else { state };
+        if self.last == Some(state) { return; }
+        self.last = Some(state);
+        #[cfg(test)]
+        self.observed.push(state);
+        self.emit(WorkerInputEvent::new(state));
+    }
+    fn emit(&mut self, event: WorkerInputEvent) {
+        #[cfg(test)]
+        self.emitted.push(event);
+        if self.managed {
+            use std::io::Write;
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{}", event.line());
+            let _ = out.flush();
+        }
+    }
+    /// Called once after the entire supervisor future and its reconnect loop
+    /// returned. Ordinary Local/Disabled records and EOF are never this fence.
+    fn finish(&mut self) -> WorkerInputState {
+        if self.terminal_sent {
+            return self.last.unwrap_or(WorkerInputState::RecoveryUnconfirmed);
+        }
+        let state = if self.recovery_unconfirmed {
+            WorkerInputState::RecoveryUnconfirmed
+        } else {
+            match self.last {
+                Some(WorkerInputState::Local) => WorkerInputState::Local,
+                Some(WorkerInputState::Disabled) => WorkerInputState::Disabled,
+                _ => WorkerInputState::RecoveryUnconfirmed,
+            }
+        };
+        self.last = Some(state);
+        self.recovery_unconfirmed = state == WorkerInputState::RecoveryUnconfirmed;
+        self.terminal_sent = true;
+        self.emit(WorkerInputEvent::new_terminal(state).expect("bounded terminal input state"));
+        state
+    }
+}
+
+async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
+    // A closed supervisor channel also means no owner remains to authorize work.
+    let requested = *stop.borrow();
+    if !requested {
+        let _ = stop.wait_for(|requested| *requested).await;
+    }
+}
+
 async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     let managed = o.managed;
-    let result = if o.managed {
-        let (stop, stopped) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::stdin().lock().lines() {
-                match line {
-                    Ok(s) if s.trim() == "stop" => break,
-                    Ok(_) => (),
-                    Err(_) => break,
+    let mut input_status = InputReporter::new(managed);
+    // No native capture/input effect exists during identity/network setup.
+    input_status.set(WorkerInputState::Disabled);
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let result = {
+        let work = supervise(&o, address, probe, stopped, &mut input_status);
+        tokio::pin!(work);
+        if managed {
+            let (request, requested) = tokio::sync::oneshot::channel();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::stdin().lock().lines() {
+                    match line {
+                        Ok(s) if s.trim() == "stop" => break,
+                        Ok(_) => (),
+                        Err(_) => break,
+                    }
                 }
+                let _ = request.send(());
+            });
+            tokio::select! {
+                result = &mut work => result,
+                _ = requested => { let _ = stop.send(true); work.await },
+                _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); work.await },
             }
-            let _ = stop.send(());
-        });
-        tokio::select! {result=supervise(&o,address,probe)=>result,_=stopped=>Ok(()),_=tokio::signal::ctrl_c()=>Ok(())}
-    } else {
-        tokio::select! { result=supervise(&o,address,probe)=>result, _=tokio::signal::ctrl_c()=>Ok(()) }
-    };
-    worker_event(
-        managed,
-        if result.is_ok() {
-            WorkerState::Stopped
         } else {
-            WorkerState::Failed
-        },
-    );
+            tokio::select! {
+                result = &mut work => result,
+                _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); work.await },
+            }
+        }
+    };
+    let terminal = input_status.finish();
+    let result = if result.is_ok() && terminal == WorkerInputState::RecoveryUnconfirmed {
+        Err(anyhow::anyhow!("native input recovery remains unconfirmed"))
+    } else { result };
+    worker_event(managed, if result.is_ok() { WorkerState::Stopped } else { WorkerState::Failed });
     result
 }
-async fn supervise(o: &Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
+async fn supervise(
+    o: &Options,
+    address: Option<SocketAddr>,
+    probe: bool,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    input_status: &mut InputReporter,
+) -> Result<()> {
     let id = transport::Identity::load(&o.identity)?;
     let peer = transport::read_certificate(&o.peer_cert)?;
     anyhow::ensure!(
@@ -235,8 +324,16 @@ async fn supervise(o: &Options, address: Option<SocketAddr>, probe: bool) -> Res
     );
     let mut backoff = reconnect::Backoff::default();
     loop {
+        if *stop.borrow() { return Ok(()); }
         reconnect::verify_pins(&o.identity, &o.peer_cert, &id.certificate, &peer)?;
-        let result = run_inner(o, address, probe, &id, &peer).await;
+        let result = run_inner(o, address, probe, &id, &peer, stop.clone(), input_status).await;
+        if *stop.borrow() { return result; }
+        if input_status.last == Some(WorkerInputState::RecoveryUnconfirmed) {
+            return match result {
+                Err(error) => Err(error),
+                Ok(()) => Err(anyhow::anyhow!("native input recovery remains unconfirmed")),
+            };
+        }
         if !o.reconnect || probe {
             return result;
         }
@@ -247,7 +344,10 @@ async fn supervise(o: &Options, address: Option<SocketAddr>, probe: bool) -> Res
         }
         worker_event(o.managed, WorkerState::Reconnecting);
         eprintln!("Connection ended; retrying the same enrolled peer after backoff.");
-        tokio::time::sleep(backoff.next_delay()).await;
+        tokio::select! {
+            _ = tokio::time::sleep(backoff.next_delay()) => (),
+            _ = stop_requested(&mut stop) => return Ok(()),
+        }
     }
 }
 async fn run_inner(
@@ -256,6 +356,8 @@ async fn run_inner(
     probe: bool,
     id: &transport::Identity,
     peer: &[u8],
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    input_status: &mut InputReporter,
 ) -> Result<()> {
     println!(
         "Local fingerprint: {}\nEnrolled peer: {}",
@@ -270,6 +372,11 @@ async fn run_inner(
         o.native
     );
     worker_event(o.managed, WorkerState::Listening);
+    // Before the native session is installed, canceling negotiation owns no
+    // captured/injected input. Once installed, stop is handled cooperatively by
+    // session::run_with_status so its explicit recovery tail cannot be dropped.
+    let connected = tokio::select! {
+        result = async {
     let (c, mut tx, mut rx) = if let Some(addr) = address {
         let c = tokio::time::timeout(Duration::from_secs(5), e.connect(addr, "peerglide.local")?)
             .await??;
@@ -304,27 +411,49 @@ async fn run_inner(
         } if capabilities.valid() => capabilities,
         _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
     };
+    Ok::<_, anyhow::Error>((c, tx, rx, local, peer_capabilities))
+        } => Some(result),
+        _ = stop_requested(&mut stop) => None,
+    };
+    let Some(connected) = connected else {
+        e.close(0u8.into(), b"supervisor stopped");
+        e.wait_idle().await;
+        return Ok(());
+    };
+    let (c, mut tx, mut rx, local, peer_capabilities) = connected?;
+    if *stop.borrow() {
+        c.close(0u8.into(), b"supervisor stopped");
+        e.wait_idle().await;
+        return Ok(());
+    }
     if !peer_capabilities.motion() {
         eprintln!("Peer native input is unavailable; connection diagnostics remain available.");
     }
     println!("Authenticated peer connected. Ctrl+C exits; Ctrl+Alt+Esc restores local input.");
     worker_event(o.managed, WorkerState::Authenticated);
     if probe {
-        transport::send(&mut tx, &Message::Ping { lease: 0 }).await?;
-        anyhow::ensure!(
-            matches!(
-                tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??,
-                Message::Pong { lease: 0 }
-            ),
-            "probe response mismatch"
-        );
-        println!("PASS: mutual TLS, protocol negotiation, reliable roundtrip.");
-        worker_event(o.managed, WorkerState::ProbePassed);
+        input_status.set(WorkerInputState::Disabled);
+        let result = tokio::select! {
+            result = async {
+                transport::send(&mut tx, &Message::Ping { lease: 0 }).await?;
+                anyhow::ensure!(
+                    matches!(
+                        tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??,
+                        Message::Pong { lease: 0 }
+                    ),
+                    "probe response mismatch"
+                );
+                println!("PASS: mutual TLS, protocol negotiation, reliable roundtrip.");
+                worker_event(o.managed, WorkerState::ProbePassed);
+                Ok::<_, anyhow::Error>(())
+            } => result,
+            _ = stop_requested(&mut stop) => Ok(()),
+        };
         c.close(0u8.into(), b"probe complete");
         e.wait_idle().await;
-        return Ok(());
+        return result;
     }
-    let result = session::run(
+    let result = session::run_with_status(
         c.clone(),
         tx,
         rx,
@@ -335,6 +464,8 @@ async fn run_inner(
             local,
             peer: peer_capabilities,
         },
+        stop,
+        input_status,
     )
     .await;
     worker_event(o.managed, WorkerState::Disconnected);
@@ -354,6 +485,75 @@ async fn run_inner(
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+    #[test]
+    fn input_reporter_coalesces_changes_independently_of_connection_authentication() {
+        let mut reporter = InputReporter::new(false);
+        reporter.set(WorkerInputState::Disabled);
+        reporter.set(WorkerInputState::Disabled);
+        worker_event(false, WorkerState::Authenticated);
+        assert_eq!(reporter.last, Some(WorkerInputState::Disabled));
+        reporter.set(WorkerInputState::ReceivingRemote);
+        reporter.set(WorkerInputState::ReceivingRemote);
+        reporter.set(WorkerInputState::Recovering);
+        reporter.set(WorkerInputState::RecoveryUnconfirmed);
+        reporter.set(WorkerInputState::RecoveryUnconfirmed);
+        assert_eq!(reporter.observed, [
+            WorkerInputState::Disabled, WorkerInputState::ReceivingRemote,
+            WorkerInputState::Recovering, WorkerInputState::RecoveryUnconfirmed,
+        ]);
+    }
+
+    #[test]
+    fn terminal_input_fence_is_explicit_once_and_prevents_later_or_reversed_snapshots() {
+        let mut reporter = InputReporter::new(false);
+        reporter.set(WorkerInputState::Disabled);
+        reporter.set(WorkerInputState::Local);
+        assert!(reporter.emitted.iter().all(|event| !event.terminal));
+        assert_eq!(reporter.finish(), WorkerInputState::Local);
+        reporter.set(WorkerInputState::ControllingRemote);
+        reporter.set(WorkerInputState::Disabled);
+        assert_eq!(reporter.finish(), WorkerInputState::Local);
+        assert_eq!(reporter.emitted.len(), 3);
+        assert!(reporter.emitted.last().unwrap().terminal);
+        assert_eq!(reporter.emitted.iter().filter(|event| event.terminal).count(), 1);
+
+        let mut uncertain = InputReporter::new(false);
+        uncertain.set(WorkerInputState::ReceivingRemote);
+        uncertain.set(WorkerInputState::RecoveryUnconfirmed);
+        uncertain.set(WorkerInputState::Local);
+        uncertain.set(WorkerInputState::Disabled);
+        assert_eq!(uncertain.finish(), WorkerInputState::RecoveryUnconfirmed);
+        assert_eq!(uncertain.last, Some(WorkerInputState::RecoveryUnconfirmed));
+        assert_eq!(uncertain.emitted.len(), 3);
+        assert!(uncertain.emitted.last().unwrap().terminal);
+    }
+
+    #[test]
+    fn terminal_input_fence_maps_missing_or_inflight_state_to_unconfirmed() {
+        for state in [None, Some(WorkerInputState::ControllingRemote),
+            Some(WorkerInputState::ReceivingRemote), Some(WorkerInputState::Recovering),
+            Some(WorkerInputState::Unavailable)] {
+            let mut reporter = InputReporter::new(false);
+            if let Some(state) = state { reporter.set(state); }
+            assert_eq!(reporter.finish(), WorkerInputState::RecoveryUnconfirmed);
+            assert!(reporter.emitted.last().unwrap().terminal);
+        }
+        let mut never_native = InputReporter::new(false);
+        never_native.set(WorkerInputState::Disabled);
+        assert_eq!(never_native.finish(), WorkerInputState::Disabled);
+        assert!(never_native.emitted.last().unwrap().terminal);
+    }
+
+    #[tokio::test]
+    async fn supervisor_stop_signal_is_cooperative_for_request_and_owner_loss() {
+        let (stop, mut stopped) = tokio::sync::watch::channel(false);
+        stop.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), stop_requested(&mut stopped)).await.unwrap();
+        let (stop, mut stopped) = tokio::sync::watch::channel(false);
+        drop(stop);
+        tokio::time::timeout(Duration::from_secs(1), stop_requested(&mut stopped)).await.unwrap();
+    }
+
     #[test]
     fn readonly_context_command_needs_no_identity_network_or_input_flags() {
         assert!(matches!(

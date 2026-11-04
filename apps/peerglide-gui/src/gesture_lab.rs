@@ -53,6 +53,8 @@ pub struct GestureLab {
     export_dir: String,
     serial: u64,
     feedback: String,
+    export_open: bool,
+    inspection: Option<(Rect, Rect)>,
 }
 impl GestureLab {
     pub fn new(dir: &Path) -> Self {
@@ -66,7 +68,17 @@ impl GestureLab {
             export_dir: dir.join("gesture-samples").display().to_string(),
             serial: 0,
             feedback: String::new(),
+            export_open: false,
+            inspection: None,
         }
+    }
+    pub fn set_export_open(&mut self, open: bool) {
+        self.export_open = open;
+        self.inspection = None;
+    }
+    /// Widget geometry from the most recent frame, never pointer/input contents.
+    pub fn inspection(&self) -> Option<(Rect, Rect)> {
+        self.inspection
     }
     pub fn matched_id(&self) -> Option<u32> {
         self.result
@@ -166,12 +178,13 @@ impl GestureLab {
         Ok(path)
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, worker_running: bool) -> Option<Rect> {
-        ui.heading("手势实验室");
+        self.inspection = None;
+        ui.heading("录制与本窗口测试");
         ui.label("在画布内按住鼠标右键绘制手势，按 Esc 取消。");
         ui.weak("仅限此画布，不捕获全局输入、不执行动作。只有点击保存才会写入文件。");
         if worker_running {
             self.cancel();
-            ui.label("请先停止设备会话，再使用手势实验室。");
+            ui.label("设备会话运行期间暂停画布录制。请先停止设备会话，再进行窗口内测试。");
             return None;
         }
         let (rect, response) = ui.allocate_exact_size(
@@ -256,39 +269,55 @@ impl GestureLab {
                 });
             }
         }
-        egui::ComboBox::from_id_salt("gesture_expected_label")
-            .selected_text(LABELS[self.expected as usize])
-            .show_ui(ui, |ui| {
-                for (id, label) in LABELS.iter().enumerate() {
-                    ui.selectable_value(&mut self.expected, id as u32, *label);
+        ui.horizontal(|ui| {
+            if ui.button("清空画布").clicked() {
+                self.cancel();
+                self.samples.clear();
+                self.result = None;
+                self.completed = false;
+                self.saved = false;
+            }
+            ui.weak("绘制后到规则页选择轨迹、范围与动作；保存规则不会启用全局手势。");
+        });
+        let mut save_rect = None;
+        let export = egui::CollapsingHeader::new("样本标注与导出 · 可选")
+            .open(Some(self.export_open))
+            .show(ui, |ui| {
+                egui::ComboBox::from_id_salt("gesture_expected_label")
+                    .selected_text(LABELS[self.expected as usize])
+                    .show_ui(ui, |ui| {
+                        for (id, label) in LABELS.iter().enumerate() {
+                            ui.selectable_value(&mut self.expected, id as u32, *label);
+                        }
+                    });
+                ui.weak(
+                    "预期标签不影响识别结果。绘制仅保留在内存，只有点击保存才写入轨迹坐标和时间；不含屏幕图像、按键内容或应用标识，不上传。",
+                );
+                ui.horizontal(|ui| {
+                    ui.label("样本文件夹");
+                    ui.text_edit_singleline(&mut self.export_dir);
+                });
+                let save = ui.add_enabled(
+                    self.completed && !self.saved,
+                    egui::Button::new("保存标注样本"),
+                );
+                save_rect = ui.clip_rect().contains_rect(save.rect).then_some(save.rect);
+                if save.clicked() {
+                    self.feedback = match self.export() {
+                        Ok(path) => format!("已保存：{}", path.display()),
+                        Err(error) => format!("保存失败：{error:#}"),
+                    };
                 }
             });
-        ui.weak(
-            "请选择预期手势标签，标签不会影响识别结果。画布样本不能证明原生鼠标采样率已通过验收。",
-        );
-        ui.horizontal(|ui| {
-            ui.label("样本文件夹");
-            ui.text_edit_singleline(&mut self.export_dir);
-        });
-        if ui
-            .add_enabled(
-                self.completed && !self.saved,
-                egui::Button::new("保存标注样本"),
-            )
-            .clicked()
-        {
-            self.feedback = match self.export() {
-                Ok(path) => format!("已保存：{}", path.display()),
-                Err(error) => format!("保存失败：{error:#}"),
-            };
+        if export.header_response.clicked() {
+            self.export_open = !self.export_open;
         }
-        if ui.button("清空画布").clicked() {
-            self.cancel();
-            self.samples.clear();
-            self.result = None;
-            self.completed = false;
-            self.saved = false;
+        // Collapsing animations may still lay out a hidden body. Report only the
+        // fully open body from this frame, never a collapsed or stale save target.
+        if self.export_open && export.body_response.is_some() && ui.clip_rect().contains_rect(rect) {
+            self.inspection = save_rect.map(|save| (rect, save));
         }
+        ui.weak("窗口内轨迹不能证明原生鼠标采样率、全局手势或动作执行已经验收。");
         if !self.feedback.is_empty() {
             ui.label(&self.feedback);
         }
@@ -442,6 +471,49 @@ mod tests {
         lab.release(egui::pos2(110., 10.), 0.2);
         assert!(!lab.completed);
         assert!(lab.export().is_err());
+    }
+    #[test]
+    fn inspection_reports_only_current_canvas_and_visible_save_widget() -> Result<()> {
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut lab = GestureLab::new(&fixture.path);
+        let ctx = egui::Context::default();
+        ctx.style_mut(|style| style.animation_time = 0.);
+        assert!(lab.inspection().is_none());
+        frame(&mut lab, &ctx, 0., vec![], true, false);
+        assert!(lab.inspection().is_none());
+        lab.set_export_open(true);
+        assert!(lab.inspection().is_none());
+        let canvas = frame(&mut lab, &ctx, 0.1, vec![], true, false).unwrap();
+        let (reported_canvas, save) = lab.inspection().unwrap();
+        assert_eq!(reported_canvas, canvas);
+        assert!(save.width() > 0. && save.height() > 0.);
+        assert!(save.min.y >= canvas.max.y);
+        assert!(!lab.completed); // Disabled Save still has real widget bounds.
+        lab.set_export_open(false);
+        assert!(lab.inspection().is_none());
+        frame(&mut lab, &ctx, 0.2, vec![], true, false);
+        assert!(lab.inspection().is_none());
+        lab.set_export_open(true);
+        frame(&mut lab, &ctx, 0.3, vec![], true, false);
+        assert!(lab.inspection().is_some());
+        assert!(frame(&mut lab, &ctx, 0.4, vec![], true, true).is_none());
+        assert!(lab.inspection().is_none());
+        assert_eq!(std::fs::read_dir(&fixture.path)?.count(), 0);
+        Ok(())
+    }
+    #[test]
+    fn rendering_a_completed_sample_never_exports_without_an_explicit_click() -> Result<()> {
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut lab = GestureLab::new(&fixture.path);
+        right(&mut lab);
+        let ctx = egui::Context::default();
+        for tick in 0..3 {
+            assert!(frame(&mut lab, &ctx, f64::from(tick), vec![], true, false).is_some());
+        }
+        assert!(lab.completed && !lab.saved);
+        assert!(!fixture.path.join("gesture-samples").exists());
+        assert_eq!(std::fs::read_dir(&fixture.path)?.count(), 0);
+        Ok(())
     }
     #[test]
     fn saving_is_explicit_labelled_and_never_duplicates_a_completed_sample() -> Result<()> {

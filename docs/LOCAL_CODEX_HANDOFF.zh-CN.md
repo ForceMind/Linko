@@ -422,3 +422,15 @@ http://127.0.0.1:8051/标签页作为设计交付；服务器仅公开docs/desig
 系统权限/真实剪贴板文件或原生输入操作。SVG与PNG可离线查看。新增GUI尚未
 迁入eframe；不要把目标原型模拟成已可用能力。细节见docs/design/README与
 VALIDATION。旧Native增量#40仍留在独立分支，目标已清除，当前只做UI设计。
+
+## 21. 线框迁入实际GUI（actual-gui-interactions，开发中）
+
+用户明确要求按0.3线框落地eframe，实际接线、中文、未实现标注，每步/版本
+commit push。本分支从#41/8d644e6开，保留旧Native worker #40独立分支。
+0.2.0-dev实现五页导航/真实证书向导/通信与Native显式模式/设备权限和布局/
+规则画布/只读恢复/常驻停止。新增input IPC（无内容）和terminal最终软件
+清理状态，Auth不等于控制，旧Local缓存或EOF不等于清理证明；原Input v5不改。
+root拥有GUI main/desktop_ui与platform restore_checked，localize_panels只改
+protocol worker及desktop main/session；gui_mouse_editor只改rules/lab，readonly
+reviewer只审不写，均不递归。第一候选源码已写入未编译；本机无Rust决定不变。
+说明GUI_INTERACTIONS.zh-CN.md。不得用演示原型填充实际GUI或打开未接通功能。

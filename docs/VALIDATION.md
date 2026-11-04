@@ -898,3 +898,25 @@ host/runner injection, permission change or Rust install occurred. The adapter
 cannot prove continuity after silent hook removal or completion beyond its hook.
 All native/physical/worker/macOS/keyboard gates listed above remain unfinished.
 Final docs-only head preserves runtime/tests; its exact CI/readiness is on PR #39.
+
+### Actual Chinese GUI migration (0.2.0-dev, candidate)
+
+The actual eframe GUI now uses the approved five-page design and real enrollment,
+communication/probe, primary-screen direction, independent receiving preference,
+readonly permission diagnostics, rules/canvas/config recovery and stop flows.
+Unimplemented global G1/data/pairing-code/tray features stay explicitly unavailable;
+no demo devices, files, grants or success states are used in the running GUI.
+
+New local input IPC is independent of connection/authentication, with a final
+terminal cleanup observation after the supervisor has ended. GUI drains final
+stdout without read errors, rejects cached nonterminal Local/Disabled as proof,
+and never auto-restarts Native from unknown cleanup. Platform restore_checked
+propagates pointer failures while still attempting thread shutdown. Managed stop
+cooperatively awaits session cleanup rather than dropping its future.
+
+Candidate checks must cover schema/terminal/sticky failure, actual command flags,
+cooperative real-loopback stop without native input, full desktop/dialog render,
+no render-only writes, future/invalid rules preservation, explicit sample export
+and real widget geometry for isolated Xvfb. Full matrix is pending, not local
+Rust success. No host input/clipboard/file sharing or OS permission change has
+been run. Physical C06, native app semantics and #10 root cause remain unverified.

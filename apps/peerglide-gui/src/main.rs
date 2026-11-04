@@ -3,10 +3,11 @@ mod config_store;
 mod discovery_panel;
 mod gesture_lab;
 mod gesture_rules;
+mod desktop_ui;
 use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, Color32, RichText, Vec2};
-use peerglide_protocol::worker::{WorkerEvent, WorkerState};
+use peerglide_protocol::worker::{WorkerEvent, WorkerState,WorkerInputEvent,WorkerInputState};
 use peerglide_transport::{self as transport, Identity};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,7 +16,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU16, Ordering},
         mpsc, Arc,
     },
     time::{Duration, Instant},
@@ -30,6 +31,9 @@ struct Options {
     /// 打开离线手势实验室，仅记录窗口内轨迹。
     #[arg(long)]
     gesture_lab: bool,
+    /// Isolated GUI smoke geometry only; create a new report, never overwrite.
+    #[arg(long,hide=true,requires="gesture_lab")]
+    ui_layout_report:Option<PathBuf>,
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -55,7 +59,7 @@ fn edge_label(edge: &str) -> &'static str {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone,Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Config {
     peer_name: String,
@@ -78,11 +82,23 @@ impl Default for Config {
             native: false,
             reconnect: false,
             edge: "right".into(),
-            dark: true,
+            dark: false,
             fingerprint: None,
         }
     }
 }
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum SessionMode {Communication,Native,Probe}
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum DeviceTab {Device,Layout,Permissions}
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum MouseTab {Rules,Practice}
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum CollaborationTab {Clipboard,Files}
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum Dialog {NativeStart,Revoke,Reset,ForceStop,Recovery}
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum SetupStep {Identity,Find,Verify,Permissions,Layout}
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
     Home,
@@ -95,8 +111,14 @@ enum Page {
 }
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
-struct WorkerSnapshot(AtomicU16);
+struct WorkerSnapshot(AtomicU16,AtomicU16,AtomicBool,AtomicBool);
 impl WorkerSnapshot {
+    fn publish_input(&self,state:WorkerInputState,terminal:bool){
+        let code=match state{WorkerInputState::Disabled=>1,WorkerInputState::Local=>2,WorkerInputState::ControllingRemote=>3,WorkerInputState::ReceivingRemote=>4,WorkerInputState::Recovering=>5,WorkerInputState::RecoveryUnconfirmed=>6,WorkerInputState::Unavailable=>7};
+        self.1.store(code|if terminal{0x100}else{0},Ordering::Release);
+    }
+    fn take_input(&self)->Option<(WorkerInputState,bool)>{let code=self.1.swap(0,Ordering::AcqRel);let state=match code&0xff{1=>WorkerInputState::Disabled,2=>WorkerInputState::Local,3=>WorkerInputState::ControllingRemote,4=>WorkerInputState::ReceivingRemote,5=>WorkerInputState::Recovering,6=>WorkerInputState::RecoveryUnconfirmed,7=>WorkerInputState::Unavailable,_=>return None};Some((state,code&0x100!=0))}
+
     fn publish(&self, state: WorkerState) {
         let code = match state {
             WorkerState::Listening => 1,
@@ -141,6 +163,25 @@ impl WorkerSnapshot {
     }
 }
 struct App {
+    recording_mode:bool,
+    layout_report:Option<PathBuf>,
+    device_tab:DeviceTab,
+    mouse_tab:MouseTab,
+    collaboration_tab:CollaborationTab,
+    wizard:Option<SetupStep>,
+    wizard_name:String,
+    wizard_address:String,
+    wizard_listen:bool,
+    wizard_allow:bool,
+    dialog:Option<Dialog>,
+    native_confirmation:bool,
+    active_mode:Option<SessionMode>,
+    pending_start:Option<SessionMode>,
+    input_state:Option<WorkerInputState>,
+    input_terminal:bool,
+    recovery_blocked:bool,
+    close_requested:bool,
+    exit_confirmed:bool,
     permission_report: Option<peerglide_platform::context::PermissionReport>,
     discovery: discovery_panel::Panel,
     gesture_lab: gesture_lab::GestureLab,
@@ -187,6 +228,10 @@ impl App {
                 }
             };
         let mut app = Self {
+            recording_mode:false,layout_report:None,
+            device_tab:DeviceTab::Device,mouse_tab:MouseTab::Rules,collaboration_tab:CollaborationTab::Clipboard,
+            wizard:None,wizard_name:config.peer_name.clone(),wizard_address:config.address.clone(),wizard_listen:config.listen,wizard_allow:false,
+            dialog:None,native_confirmation:false,active_mode:None,pending_start:None,input_state:None,input_terminal:false,recovery_blocked:false,close_requested:false,exit_confirmed:false,
             permission_report: None,
             discovery: discovery_panel::Panel::default(),
             gesture_lab: gesture_lab::GestureLab::new(&dir),
@@ -280,6 +325,13 @@ impl App {
         Ok(())
     }
     fn start(&mut self, probe: bool) -> Result<()> {
+        self.start_mode(if probe{SessionMode::Probe}else{SessionMode::Communication})
+    }
+    fn start_mode(&mut self, mode:SessionMode) -> Result<()> {
+        let probe=mode==SessionMode::Probe;
+        anyhow::ensure!(mode!=SessionMode::Native||cfg!(any(windows,target_os="macos")),"此平台只支持通信诊断，原生输入尚未实现");
+        anyhow::ensure!(self.stopping.is_none(),"停止和恢复尚未完成");
+        anyhow::ensure!(mode!=SessionMode::Native||!self.recovery_blocked,"上次输入恢复未确认，本窗口只允许通信诊断");
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         anyhow::ensure!(self.child.is_none(), "已有会话正在运行");
         Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
@@ -305,6 +357,53 @@ impl App {
             executable.is_file(),
             "缺少同目录的 peerglide 通信程序，请使用完整开发包"
         );
+        let mut cmd=self.worker_command(executable,cert,mode);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        let mut child = cmd.spawn()?;
+        let (tx, rx) = mpsc::sync_channel(128);
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let output_tx = tx.clone();
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let output_state = snapshot.clone();
+        std::thread::spawn(move || {
+            for result in BufReader::new(stdout).lines() {
+                let line=match result{Ok(line)=>line,Err(_)=>{output_state.3.store(true,Ordering::Release);break;}};
+                if let Some(event) = WorkerEvent::parse(&line) {
+                    output_state.publish(event.state);
+                } else if let Some(event)=WorkerInputEvent::parse(&line){
+                    output_state.publish_input(event.state,event.terminal);
+                } else {
+                    let _ = output_tx.try_send(line.chars().take(600).collect());
+                }
+            }
+            output_state.2.store(true,Ordering::Release);
+        });
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = tx.try_send(line.chars().take(600).collect());
+            }
+        });
+        self.child = Some(child);
+        self.active_mode=Some(mode);self.input_terminal=false;self.input_state=Some(if mode==SessionMode::Native{WorkerInputState::Unavailable}else{WorkerInputState::Disabled});
+        self.events = Some(rx);
+        self.worker_state = Some(snapshot);
+        self.logs.clear();
+        self.connected = false;
+        self.stopping = None;
+        self.status = "正在启动".into();
+        Ok(())
+    }
+    fn native_cleanup_reported(&self)->bool{self.worker_state.as_ref().is_some_and(|snapshot|snapshot.2.load(Ordering::Acquire)&&!snapshot.3.load(Ordering::Acquire))&&self.input_terminal&&matches!(self.input_state,Some(WorkerInputState::Local|WorkerInputState::Disabled))&&!self.recovery_blocked}
+    fn worker_command(&self,executable:PathBuf,cert:PathBuf,mode:SessionMode)->Command{
+        let probe=mode==SessionMode::Probe;
         let mut cmd = Command::new(executable);
         if self.config.listen && !probe {
             cmd.arg("listen");
@@ -325,62 +424,46 @@ impl App {
         }
         if probe {
             cmd.arg("--probe");
-        } else {
+        } else if mode==SessionMode::Native {
             if self.config.allow {
                 cmd.arg("--allow-control");
             }
-            if self.config.native {
-                cmd.arg("--native");
-            }
+            cmd.arg("--native");
         }
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
-        }
-        let mut child = cmd.spawn()?;
-        let (tx, rx) = mpsc::sync_channel(128);
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let output_tx = tx.clone();
-        let snapshot = Arc::new(WorkerSnapshot::default());
-        let output_state = snapshot.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(event) = WorkerEvent::parse(&line) {
-                    output_state.publish(event.state);
-                } else {
-                    let _ = output_tx.try_send(line.chars().take(600).collect());
-                }
-            }
-        });
-        std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = tx.try_send(line.chars().take(600).collect());
-            }
-        });
-        self.child = Some(child);
-        self.events = Some(rx);
-        self.worker_state = Some(snapshot);
-        self.logs.clear();
-        self.connected = false;
-        self.stopping = None;
-        self.status = "正在启动".into();
-        Ok(())
+        cmd
+    }
+    fn resend_stop(&mut self)->Result<()> {
+        self.pending_start=None;
+        let child=self.child.as_mut().context("没有活动工作进程")?;
+        let stdin=child.stdin.as_mut().context("工作进程的停止通道不可用")?;
+        stdin.write_all(b"stop\n").context("再次发送停止请求失败")?;stdin.flush()?;
+        if self.stopping.is_none(){self.stopping=Some(Instant::now());}
+        self.connected=false;Ok(())
     }
     fn stop(&mut self) {
-        if let Some(child) = &mut self.child {
-            if let Some(stdin) = &mut child.stdin {
-                let _ = stdin.write_all(b"stop\n");
-                let _ = stdin.flush();
+        self.pending_start=None;
+        if let Some(child)=&mut self.child{
+            if self.stopping.is_none(){
+                let sent=child.stdin.as_mut().map(|stdin|stdin.write_all(b"stop\n").and_then(|_|stdin.flush()));
+                if !matches!(sent,Some(Ok(()))){if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;}self.notice="未能发送停止请求，请检查工作进程状态".into();}
+                self.stopping=Some(Instant::now());
             }
-            self.connected = false;
-            self.stopping = Some(Instant::now());
-            self.status = "正在恢复本机控制".into();
+            self.connected=false;self.input_state=Some(WorkerInputState::Recovering);self.status="正在停止并恢复本机控制".into();
         }
+    }
+    fn mark_stop_timeout(&mut self){
+        self.pending_start=None;
+        if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;self.input_state=Some(WorkerInputState::RecoveryUnconfirmed);self.notice="停止尚未完成。请查看恢复状态；不会自动启动新键鼠会话。".into();}
+        else{self.notice="通信进程停止尚未完成，未开启原生输入。等待退出或明确结束后再开始新会话。".into();}
+    }
+    fn request_native(&mut self)->Result<()> {
+        anyhow::ensure!(self.native_confirmation,"请明确确认启动真实键鼠");
+        anyhow::ensure!(!self.recovery_blocked&&self.stopping.is_none(),"恢复未确认，不能开始新的键鼠会话");
+        self.config.native=true;self.save_config()?;
+        if self.child.is_some(){
+            anyhow::ensure!(self.active_mode==Some(SessionMode::Communication),"请先停止当前会话");
+            self.stop();self.pending_start=Some(SessionMode::Native);Ok(())
+        }else{self.start_mode(SessionMode::Native)}
     }
     fn revoke(&mut self) -> Result<()> {
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
@@ -409,6 +492,13 @@ impl App {
         }
         if let Some(snapshot) = &self.worker_state {
             let (state, probe_passed) = snapshot.take();
+            if let Some((input,terminal))=snapshot.take_input(){
+                if self.child.is_some(){
+                    self.input_terminal=terminal;
+                    if input==WorkerInputState::RecoveryUnconfirmed{self.recovery_blocked=true;self.pending_start=None;}
+                    if self.stopping.is_none()||matches!(input,WorkerInputState::Local|WorkerInputState::Disabled|WorkerInputState::RecoveryUnconfirmed){self.input_state=Some(input);}
+                }
+            }
             if probe_passed {
                 self.notice = "通信探针通过，未注入任何输入。".into();
             }
@@ -442,14 +532,8 @@ impl App {
                 }
             }
         }
+        if self.stopping.is_some_and(|started|started.elapsed()>Duration::from_secs(3)){self.mark_stop_timeout();}
         if let Some(child) = &mut self.child {
-            if self
-                .stopping
-                .is_some_and(|s| s.elapsed() > Duration::from_secs(3))
-            {
-                let _ = child.kill();
-                self.notice = "工作进程已被强制停止，对端输入租约将自动到期。".into();
-            }
             match child.try_wait() {
                 Ok(Some(exit)) => {
                     self.connected = false;
@@ -458,8 +542,18 @@ impl App {
                     } else {
                         format!("工作进程已退出：{exit}")
                     };
-                    self.child = None;
+                    let native=self.active_mode==Some(SessionMode::Native);
+                    if native{
+                        if let Some(snapshot)=self.worker_state.as_ref(){
+                            if !snapshot.2.load(Ordering::Acquire){self.status="进程已退出，正在读取最终输入状态".into();return;}
+                            if let Some((input,terminal))=snapshot.take_input(){self.input_terminal=terminal;if input==WorkerInputState::RecoveryUnconfirmed{self.recovery_blocked=true;}self.input_state=Some(input);}
+                        }
+                    }
+                    let clean=if native{self.native_cleanup_reported()}else{exit.success()};
+                    if !clean&&native{self.recovery_blocked=true;self.input_state=Some(WorkerInputState::RecoveryUnconfirmed);self.notice="工作进程已退出，输入恢复未确认。".into();}
+                    self.child = None;self.active_mode=None;
                     self.stopping = None;
+                    if clean&&!self.recovery_blocked{if let Some(mode)=self.pending_start.take(){let result=self.start_mode(mode);self.feedback(result,"键鼠会话正在启动，控制归属以工作进程报告为准");}}else{self.pending_start=None;}
                 }
                 Err(e) => {
                     self.notice = e.to_string();
@@ -474,347 +568,7 @@ impl App {
             Err(e) => format!("操作未完成：{e:#}"),
         };
     }
-    fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-        ui.heading(RichText::new(title).size(30.0));
-        ui.add_space(8.0);
-        ui.label(subtitle);
-        ui.add_space(24.0);
-    }
-    fn home(&mut self, ui: &mut egui::Ui) {
-        Self::heading(ui, "多台电脑，一种体验。", "连接设备，让键鼠协作更连贯。");
-        egui::Frame::group(ui.style())
-            .inner_margin(20.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.strong("本机");
-                        ui.add_space(8.0);
-                        ui.label(std::env::consts::OS);
-                        ui.label(if self.local_fingerprint().is_some() {
-                            "身份已就绪"
-                        } else {
-                            "请先创建本机身份"
-                        });
-                    });
-                    ui.add_space(50.0);
-                    ui.vertical(|ui| {
-                        ui.strong(&self.config.peer_name);
-                        ui.add_space(8.0);
-                        ui.colored_label(
-                            if self.connected {
-                                Color32::from_rgb(94, 211, 161)
-                            } else {
-                                ui.visuals().text_color()
-                            },
-                            &self.status,
-                        );
-                        ui.label(if self.config.fingerprint.is_some() {
-                            "已明确登记的可信设备"
-                        } else {
-                            "尚未登记对端"
-                        });
-                    });
-                });
-            });
-        ui.add_space(22.0);
-        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.config.listen, true, "在本机等待连接");
-                ui.selectable_value(&mut self.config.listen, false, "连接另一台电脑");
-            });
-            if !self.config.listen {
-                ui.horizontal(|ui| {
-                    ui.label("对端地址与端口");
-                    ui.text_edit_singleline(&mut self.config.address);
-                });
-            }
-            ui.add_space(12.0);
-            if ui.button(RichText::new("启动会话").size(18.0)).clicked() {
-                let r = self.start(false);
-                self.feedback(r, "会话工作进程已启动。");
-            }
-            if ui.button("运行通信探针").clicked() {
-                let r = self.start(true);
-                self.feedback(r, "正在探测对端地址，请先在对端启动监听。");
-            }
-        });
-        if self.child.is_some() && ui.button("断开连接并恢复本机控制").clicked() {
-            self.stop();
-        }
-        ui.add_space(18.0);
-        ui.label(if self.config.native {
-            "原生输入已启用，按 Ctrl+Alt+Esc 恢复本机控制。"
-        } else {
-            "当前为诊断模式：原生捕获与注入已关闭，可在设置中明确启用。"
-        });
-        egui::CollapsingHeader::new("会话诊断（不含按键内容，原始日志保留原文）").show(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(180.0)
-                .show(ui, |ui| {
-                    for line in &self.logs {
-                        ui.monospace(line);
-                    }
-                });
-        });
-    }
-    fn devices(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "可信设备",
-            "信任需要明确确认。发现设备或处于同一局域网，不代表允许控制。",
-        );
-        let own = self.local_fingerprint();
-        if let Some(address) = self.discovery.ui(
-            ui,
-            own,
-            self.child.is_some() && self.stopping.is_none() && self.config.listen,
-            self.child.is_none(),
-            self.instance_lock.is_some(),
-        ) {
-            let result = self.use_discovery_address(address);
-            self.feedback(result, "仅已选择地址，证书登记和输入授权未改变");
-        }
-        ui.strong("本机");
-        if let Some(fp) = self.local_fingerprint() {
-            ui.label("公钥证书");
-            ui.monospace(
-                self.identity_dir()
-                    .join("node.crt.der")
-                    .display()
-                    .to_string(),
-            );
-            ui.label("BLAKE3 指纹");
-            ui.monospace(fp);
-        } else if ui
-            .add_enabled(
-                self.instance_lock.is_some(),
-                egui::Button::new("创建本机身份"),
-            )
-            .clicked()
-        {
-            let r = Identity::create(&self.identity_dir()).map(|_| ());
-            self.feedback(r, "身份已创建。仅交换 node.crt.der，私钥请保留在本机。");
-        }
-        ui.add_space(18.0);
-        ui.separator();
-        ui.add_space(18.0);
-        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
-            ui.horizontal(|ui| {
-                ui.label("设备名称");
-                ui.text_edit_singleline(&mut self.config.peer_name);
-            });
-            ui.label("另一台电脑的公钥证书文件");
-            if ui.text_edit_singleline(&mut self.import_path).changed() {
-                self.confirmed_fingerprint = None;
-            }
-            let candidate_fingerprint = self
-                .candidate()
-                .ok()
-                .map(|bytes| transport::fingerprint(&bytes));
-            if let Some(fp) = &candidate_fingerprint {
-                ui.monospace(fp);
-            }
-            let mut compared = candidate_fingerprint.is_some()
-                && self.confirmed_fingerprint == candidate_fingerprint;
-            if !compared {
-                self.confirmed_fingerprint = None;
-            }
-            if ui
-                .add_enabled(
-                    candidate_fingerprint.is_some(),
-                    egui::Checkbox::new(&mut compared, "我已在另一台电脑上独立核对该指纹"),
-                )
-                .changed()
-            {
-                self.confirmed_fingerprint = if compared {
-                    candidate_fingerprint
-                } else {
-                    None
-                };
-            }
-            if ui
-                .add_enabled(compared, egui::Button::new("登记可信设备"))
-                .clicked()
-            {
-                let r = self.enroll();
-                self.feedback(r, "设备已登记，输入权限仍需单独设置。");
-            }
-            if let Some(fp) = &self.config.fingerprint {
-                ui.add_space(14.0);
-                ui.label("已登记的指纹");
-                ui.monospace(fp);
-            }
-        });
-        if self.config.fingerprint.is_some() && ui.button("断开连接并撤销设备信任").clicked()
-        {
-            let result = self.revoke();
-            self.feedback(result, "设备信任已撤销，正在停止活动工作进程。");
-        }
-        ui.add_space(18.0);
-        ui.weak("可手动查找局域网设备；发现结果不可信。当前使用公钥证书登记，配对码尚未实现。");
-    }
-    fn displays(&mut self, ui: &mut egui::Ui) {
-        Self::heading(ui, "排列屏幕", "拖动对端屏幕，选择从本机哪一侧切换。");
-        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
-            let (rect, _) = ui.allocate_exact_size(
-                Vec2::new(ui.available_width().min(700.0), 340.0),
-                egui::Sense::hover(),
-            );
-            let center = rect.center();
-            let local = egui::Rect::from_center_size(center, Vec2::new(170.0, 100.0));
-            let offset = match self.config.edge.as_str() {
-                "left" => Vec2::new(-190.0, 0.0),
-                "top" => Vec2::new(0.0, -110.0),
-                "bottom" => Vec2::new(0.0, 110.0),
-                _ => Vec2::new(190.0, 0.0),
-            };
-            let peer = egui::Rect::from_center_size(center + offset, Vec2::new(170.0, 100.0));
-            let response = ui.interact(
-                peer,
-                ui.scope_id().with("peer-display"),
-                egui::Sense::drag(),
-            );
-            let displayed = if response.dragged() {
-                peer.translate(response.drag_delta())
-            } else {
-                peer
-            };
-            let painter = ui.painter();
-            painter.rect_filled(local, 10.0, Color32::from_rgb(49, 65, 91));
-            painter.rect_filled(displayed, 10.0, Color32::from_rgb(41, 103, 130));
-            painter.text(
-                local.center(),
-                egui::Align2::CENTER_CENTER,
-                "本机",
-                egui::FontId::proportional(16.0),
-                Color32::WHITE,
-            );
-            painter.text(
-                displayed.center(),
-                egui::Align2::CENTER_CENTER,
-                &self.config.peer_name,
-                egui::FontId::proportional(16.0),
-                Color32::WHITE,
-            );
-            if response.drag_stopped() {
-                if let Some(p) = response.interact_pointer_pos() {
-                    let d = p - center;
-                    self.config.edge = if d.x.abs() >= d.y.abs() {
-                        if d.x < 0.0 {
-                            "left"
-                        } else {
-                            "right"
-                        }
-                    } else if d.y < 0.0 {
-                        "top"
-                    } else {
-                        "bottom"
-                    }
-                    .into();
-                    self.save();
-                }
-            }
-            ui.horizontal(|ui| {
-                ui.label("切换方向");
-                for side in ["left", "right", "top", "bottom"] {
-                    if ui
-                        .selectable_value(&mut self.config.edge, side.into(), edge_label(side))
-                        .changed()
-                    {
-                        self.save();
-                    }
-                }
-            });
-        });
-        ui.add_space(18.0);
-        ui.label("当前原型仅支持主显示器。布局从下一次会话生效；请在另一台电脑设置相反方向。");
-    }
-    fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        Self::heading(ui, "设置", "管理输入权限与外观。");
-        if self.config_store.is_none() && self.instance_lock.is_some() {
-            ui.label("原设置文件已保留。重置会先备份并关闭授权，本机身份不变。");
-            if ui.button("备份并重置设置").clicked() {
-                match config_store::Store::reset::<Config>(self.dir.join("settings.json")) {
-                    Ok((store, config)) => {
-                        self.config_store = Some(store);
-                        self.config = config;
-                        self.notice = "设置已重置，原文件已备份".into();
-                    }
-                    Err(e) => self.notice = format!("重置失败：{e:#}"),
-                }
-            }
-        }
-        if self.instance_lock.is_none() || self.config_store.is_none() {
-            ui.disable();
-        }
-        if ui.checkbox(&mut self.config.dark, "深色外观").changed() {
-            self.theme(ctx);
-            self.save();
-        }
-        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
-            if ui
-                .checkbox(&mut self.config.reconnect, "自动重连可信设备")
-                .changed()
-            {
-                self.save();
-            }
-            ui.weak("自动重连可选开启；重连后仍由本机控制，直到你再次切换。");
-        });
-        ui.add_space(18.0);
-        ui.add_enabled_ui(self.child.is_none() && self.instance_lock.is_some(), |ui| {
-            if ui
-                .checkbox(&mut self.config.allow, "允许已登记的对端控制本机")
-                .changed()
-            {
-                self.save();
-            }
-            ui.add_enabled_ui(cfg!(any(windows, target_os = "macos")), |ui| {
-                if ui
-                    .checkbox(&mut self.config.native, "启用原生键鼠捕获与注入")
-                    .changed()
-                {
-                    self.save();
-                }
-            });
-        });
-        ui.add_space(18.0);
-        ui.label("Ctrl+Alt+Right，松开后切换控制目标\nCtrl+Alt+Esc：紧急恢复本机控制\n接收端的物理输入：收回控制");
-        ui.add_space(14.0);
-        ui.label("macOS 需要辅助功能和输入监控权限。Windows 提权窗口与安全桌面不在当前原型的控制范围内。");
-        ui.separator();
-        ui.strong("本 GUI 进程的系统权限");
-        ui.weak("仅在点击时读取，不申请或修改权限。此快照不能代替工作进程检查或真实输入验收，也不会启用手势。");
-        if ui.button("检查当前系统权限").clicked() {
-            self.permission_report = Some(peerglide_platform::context::permissions());
-        }
-        if let Some(report) = self.permission_report {
-            use peerglide_platform::context::{PermissionStatus, SecureInput};
-            let label = |status| match status {
-                PermissionStatus::Granted => "系统查询通过，不代表用户已授权控制",
-                PermissionStatus::Denied => "未授予或访问受限",
-                PermissionStatus::NotRequired => "此平台无需同名权限",
-                PermissionStatus::Unknown => "未知，需要实机确认",
-                PermissionStatus::Unsupported => "暂不支持此项检测",
-            };
-            ui.label(format!("辅助功能：{}", label(report.accessibility)));
-            ui.label(format!("输入监控：{}", label(report.input_monitoring)));
-            ui.label(format!("输入桌面查询：{}", label(report.input_desktop)));
-            ui.label(format!(
-                "安全输入：{}",
-                match report.secure_input {
-                    SecureInput::Active => "已开启，保留系统保护",
-                    SecureInput::Inactive => "检查时未检测到",
-                    SecureInput::Unknown => "未知，需要实机确认",
-                    SecureInput::Unsupported => "暂不支持此项检测，不能据此判断 UAC 状态",
-                }
-            ));
-            ui.weak("权限或系统状态变化后请重新检查；GUI 与通信工作进程可能有不同的系统授权。");
-        }
-        ui.add_space(14.0);
-        ui.label("剪贴板和文件需独立授权，目前尚未接通。无需云账号，不收集遥测。");
-        ui.add_space(14.0);
-        ui.weak(format!("设置目录：{}", self.dir.display()));
-    }
+
 }
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
@@ -824,71 +578,8 @@ impl eframe::App for App {
         }
         ctx.request_repaint_after(Duration::from_millis(100));
     }
-    fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
-        let ctx = root.ctx().clone();
-        egui::Panel::left("navigation")
-            .exact_size(180.0)
-            .show(root, |ui| {
-                ui.add_space(24.0);
-                ui.heading(RichText::new("屏跃").size(25.0));
-                ui.weak("屏幕相连，协作无间");
-                ui.add_space(34.0);
-                for (page, label) in [
-                    (Page::Home, "主页"),
-                    (Page::Devices, "设备"),
-                    (Page::Displays, "显示器"),
-                    (Page::Transfers, "传输"),
-                    (Page::Settings, "设置"),
-                    (Page::GestureLab, "手势实验室"),
-                    (Page::GestureRules, "手势规则"),
-                ] {
-                    if ui
-                        .selectable_label(self.page == page, RichText::new(label).size(18.0))
-                        .clicked()
-                    {
-                        self.page = page;
-                    }
-                    ui.add_space(12.0);
-                }
-                ui.separator();
-                ui.weak("0.1.0-dev\n实验性原型");
-            });
-        egui::Panel::bottom("status").show(root, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(&self.status);
-                if !self.notice.is_empty() {
-                    ui.separator();
-                    ui.label(&self.notice);
-                }
-            });
-        });
-        if self.page != Page::GestureLab || self.child.is_some() {
-            self.gesture_lab.cancel();
-        }
-        egui::CentralPanel::default().show(root, |ui| {
-            ui.add_space(20.0);
-            egui::ScrollArea::vertical().show(ui, |ui| match self.page {
-                Page::Home => self.home(ui),
-                Page::Devices => self.devices(ui),
-                Page::Displays => self.displays(ui),
-                Page::Settings => self.settings(ui, &ctx),
-                Page::GestureLab => {
-                    self.gesture_lab.ui(ui, self.child.is_some());
-                    self.gesture_rules
-                        .preview_ui(ui, self.gesture_lab.matched_id());
-                }
-                Page::GestureRules => self.gesture_rules.ui(
-                    ui,
-                    &self.dir,
-                    self.instance_lock.is_some() && self.child.is_none(),
-                ),
-                Page::Transfers => {
-                    Self::heading(ui, "文件传输", "后续 M4 阶段提供");
-                    ui.label("当前原型尚不支持文件发送、断点续传、剪贴板共享或原生跨屏拖拽。");
-                }
-            });
-        });
-    }
+    fn ui(&mut self,root:&mut egui::Ui,_:&mut eframe::Frame){self.desktop(root);}
+
 }
 impl Drop for App {
     fn drop(&mut self) {
@@ -910,8 +601,8 @@ fn main() -> eframe::Result<()> {
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1000.0, 720.0])
-            .with_min_inner_size([860.0, 640.0]),
+            .with_inner_size([1180.0, 820.0])
+            .with_min_inner_size([920.0, 700.0]),
         ..Default::default()
     };
     eframe::run_native(
@@ -920,8 +611,9 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             let mut app = App::new(cc, dir);
             if options.gesture_lab {
-                app.page = Page::GestureLab;
+                app.page = Page::GestureLab;app.mouse_tab=MouseTab::Practice;app.recording_mode=true;app.gesture_lab.set_export_open(true);
             }
+            app.layout_report=options.ui_layout_report;
             Ok(Box::new(app))
         }),
     )
@@ -949,6 +641,68 @@ fn default_data_dir() -> PathBuf {
 mod tests {
     use super::*;
 
+    #[test]
+    fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants()->Result<()> {
+        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
+        app.config.native=true;app.config.allow=true;app.config.listen=false;
+        for mode in [SessionMode::Communication,SessionMode::Probe]{
+            let command=app.worker_command(PathBuf::from("not-executed-worker"),PathBuf::from("public-test.crt"),mode);
+            let args:Vec<_>=command.get_args().map(|s|s.to_string_lossy().to_string()).collect();
+            assert!(!args.iter().any(|s|s=="--native"||s=="--allow-control"));
+            assert_eq!(args.iter().any(|s|s=="--probe"),mode==SessionMode::Probe);
+        }
+        let native=app.worker_command(PathBuf::from("not-executed-worker"),PathBuf::from("public-test.crt"),SessionMode::Native);
+        let args:Vec<_>=native.get_args().map(|s|s.to_string_lossy().to_string()).collect();
+        assert!(args.iter().any(|s|s=="--native")&&args.iter().any(|s|s=="--allow-control"));Ok(())
+    }
+    #[test]
+    fn resend_stop_really_writes_again_without_resetting_recovery_deadline()->Result<()> {
+        use std::io::Read;
+        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
+        let python=if cfg!(windows){"python"}else{"python3"};
+        let mut child=Command::new(python).args(["-c","import sys; print(len([sys.stdin.readline(), sys.stdin.readline()]), flush=True)"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+        let mut out=child.stdout.take().unwrap();app.child=Some(child);app.stop();let deadline=app.stopping;app.recovery_blocked=true;app.resend_stop()?;
+        let mut output=String::new();out.read_to_string(&mut output)?;assert_eq!(output.trim(),"2");assert_eq!(app.stopping,deadline);assert!(app.recovery_blocked);app.child.take().unwrap().wait()?;Ok(())
+    }
+    #[test]
+    fn communication_stop_timeout_cancels_upgrade_without_inventing_input_failure()->Result<()> {
+        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
+        app.active_mode=Some(SessionMode::Communication);app.pending_start=Some(SessionMode::Native);app.mark_stop_timeout();
+        assert!(!app.recovery_blocked);assert!(app.pending_start.is_none());
+        app.active_mode=Some(SessionMode::Native);app.mark_stop_timeout();assert!(app.recovery_blocked);Ok(())
+    }
+    #[test]
+    fn old_routing_state_and_process_eof_are_not_a_terminal_cleanup_receipt()->Result<()> {
+        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
+        for input in[WorkerInputState::Local,WorkerInputState::Disabled]{app.input_state=Some(input);app.input_terminal=false;assert!(!app.native_cleanup_reported());}
+        let drained=Arc::new(WorkerSnapshot::default());drained.2.store(true,Ordering::Release);app.worker_state=Some(drained.clone());
+        app.input_terminal=true;assert!(app.native_cleanup_reported());drained.3.store(true,Ordering::Release);assert!(!app.native_cleanup_reported());drained.3.store(false,Ordering::Release);app.recovery_blocked=true;assert!(!app.native_cleanup_reported());
+        let snapshot=WorkerSnapshot::default();snapshot.publish_input(WorkerInputState::Local,false);assert_eq!(snapshot.take_input(),Some((WorkerInputState::Local,false)));
+        snapshot.publish_input(WorkerInputState::Local,true);assert_eq!(snapshot.take_input(),Some((WorkerInputState::Local,true)));Ok(())
+    }
+    #[test]
+    fn authentication_and_saved_preferences_do_not_invent_input_ownership()->Result<()> {
+        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
+        app.config.native=true;app.connected=true;app.status="已通过身份验证".into();
+        assert_eq!(app.input_label(),"尚未开启键鼠会话");
+        app.input_state=Some(WorkerInputState::ReceivingRemote);assert_eq!(app.input_label(),"对端正在控制本机");
+        app.recovery_blocked=true;assert_eq!(app.input_label(),"输入恢复未确认");
+        app.native_confirmation=true;assert!(app.request_native().is_err());assert!(app.child.is_none());Ok(())
+    }
+    #[test]
+    fn full_desktop_and_dialogs_render_without_starting_workers_or_exporting_samples()->Result<()> {
+        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
+        let ctx=egui::Context::default();install_fonts(&ctx);
+        for page in [Page::Home,Page::Devices,Page::GestureLab,Page::Transfers,Page::Settings]{
+            app.page=page;
+            for dialog in [None,Some(Dialog::NativeStart),Some(Dialog::Recovery),Some(Dialog::Reset)]{
+                app.dialog=dialog;
+                let output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(1180.0,820.0))),..Default::default()},|ui|app.desktop(ui));
+                assert!(!output.shapes.is_empty());output.drop_without_applying_deltas();assert!(app.child.is_none());
+            }
+        }
+        assert!(!app.identity_dir().exists());assert!(!app.dir.join("gesture-samples").exists());Ok(())
+    }
     #[test]
     fn bundled_font_covers_chinese_ui_without_system_fonts() {
         let ctx = egui::Context::default();
