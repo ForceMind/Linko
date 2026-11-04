@@ -1046,10 +1046,7 @@ mod tests {
         let (mut b, mut rx) = fixture(8);
         arm(&b);
         assert!(right(&mut b, true));
-        let far = RawPoint {
-            x: 50.,
-            ..point()
-        };
+        let far = RawPoint { x: 50., ..point() };
         assert!(b.right(true, far, Instant::now(), now_ms(), false));
         assert!(right(&mut b, false));
         let receipt = loop {
