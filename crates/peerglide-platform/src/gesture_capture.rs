@@ -576,6 +576,11 @@ impl<S: TriggerProducer> Broker<S> {
             }
             Phase::Candidate => {
                 if down {
+                    if !point.valid() || remote {
+                        self.cancel();
+                    } else {
+                        self.measure(point);
+                    }
                     return true;
                 }
                 let sequence = self.sequence;
@@ -1029,6 +1034,23 @@ mod tests {
         arm(&b);
         assert!(right(&mut b, true));
         b.motion(RawPoint { x: 50., ..point() }, Instant::now(), now_ms());
+        assert!(right(&mut b, false));
+        let receipt = loop {
+            if let Event::End { recovery, .. } = rx.try_pop().unwrap() {
+                break recovery;
+            }
+        };
+        assert!(receipt
+            .deadline(Instant::now() + Duration::from_secs(1))
+            .is_none());
+        let (mut b, mut rx) = fixture(8);
+        arm(&b);
+        assert!(right(&mut b, true));
+        let far = RawPoint {
+            x: 50.,
+            ..point()
+        };
+        assert!(b.right(true, far, Instant::now(), now_ms(), false));
         assert!(right(&mut b, false));
         let receipt = loop {
             if let Event::End { recovery, .. } = rx.try_pop().unwrap() {
