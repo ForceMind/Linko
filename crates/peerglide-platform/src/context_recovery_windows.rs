@@ -6,9 +6,10 @@ use windows_sys::Win32::{
     Foundation::{HWND, POINT},
     UI::{
         HiDpi::GetDpiForWindow,
+        Input::KeyboardAndMouse::IsWindowEnabled,
         WindowsAndMessaging::{
             GetAncestor, GetGUIThreadInfo, GetPhysicalCursorPos, GetSystemMetrics, IsWindow,
-            IsWindowEnabled, WindowFromPhysicalPoint, GA_ROOT, GUITHREADINFO, GUI_INMENUMODE,
+            WindowFromPhysicalPoint, GA_ROOT, GUITHREADINFO, GUI_INMENUMODE,
             GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, SM_SWAPBUTTON,
         },
     },
@@ -63,7 +64,7 @@ impl WindowOps for Native<'_> {
             return None;
         }
         let owner = super::owner(hit).ok()?;
-        if owner.0 != self.0.window.process_id {
+        if owner != (self.0.window.process_id, self.0.window.thread_id) {
             return None;
         }
         let root = unsafe { GetAncestor(hit, GA_ROOT) };

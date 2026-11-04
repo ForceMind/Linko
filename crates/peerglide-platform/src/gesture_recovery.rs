@@ -307,6 +307,7 @@ impl RecoveryState {
         self.word
             .compare_exchange(word, word | CLEANUP, Ordering::AcqRel, Ordering::Acquire)
             .ok()?;
+        self.cleanup_count.store(UNSET, Ordering::Release);
         self.attempts.fetch_add(1, Ordering::AcqRel);
         Some(RecoveryCleanup {
             tag: self.up_tag.load(Ordering::Acquire) as usize,
@@ -609,6 +610,7 @@ mod tests {
         state.submitted(1);
         for _ in 0..MAX_CLEANUP_ATTEMPTS {
             let request = state.cleanup_request().unwrap();
+            assert!(!state.quiescent());
             state.cleanup_submitted(request, 0);
             assert!(state.owns_down());
         }
