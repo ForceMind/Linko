@@ -9,8 +9,8 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::IsWindowEnabled,
         WindowsAndMessaging::{
             GetAncestor, GetGUIThreadInfo, GetPhysicalCursorPos, GetSystemMetrics, IsWindow,
-            WindowFromPhysicalPoint, GA_ROOT, GUITHREADINFO, GUI_INMENUMODE,
-            GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, SM_SWAPBUTTON,
+            WindowFromPhysicalPoint, GA_ROOT, GUITHREADINFO, GUI_INMENUMODE, GUI_INMOVESIZE,
+            GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, SM_SWAPBUTTON,
         },
     },
 };
