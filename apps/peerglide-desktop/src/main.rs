@@ -147,38 +147,6 @@ fn diagnose_context(include_application_id: bool) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod context_cli_tests {
-    use super::*;
-    #[test]
-    fn readonly_context_command_needs_no_identity_network_or_input_flags() {
-        assert!(matches!(
-            Cli::try_parse_from(["peerglide", "diagnose-context"])
-                .unwrap()
-                .command,
-            Command::DiagnoseContext {
-                include_application_id: false
-            }
-        ));
-        assert!(matches!(
-            Cli::try_parse_from(["peerglide", "diagnose-context", "--include-application-id"])
-                .unwrap()
-                .command,
-            Command::DiagnoseContext {
-                include_application_id: true
-            }
-        ));
-        for flag in [
-            "--native",
-            "--allow-control",
-            "--identity",
-            "--peer-cert",
-            "--managed",
-        ] {
-            assert!(Cli::try_parse_from(["peerglide", "diagnose-context", flag]).is_err());
-        }
-    }
-}
 fn worker_event(managed: bool, state: WorkerState) {
     if managed {
         use std::io::Write;
@@ -340,4 +308,37 @@ async fn run_inner(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod context_cli_tests {
+    use super::*;
+    #[test]
+    fn readonly_context_command_needs_no_identity_network_or_input_flags() {
+        assert!(matches!(
+            Cli::try_parse_from(["peerglide", "diagnose-context"])
+                .unwrap()
+                .command,
+            Command::DiagnoseContext {
+                include_application_id: false
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["peerglide", "diagnose-context", "--include-application-id"])
+                .unwrap()
+                .command,
+            Command::DiagnoseContext {
+                include_application_id: true
+            }
+        ));
+        for flag in [
+            "--native",
+            "--allow-control",
+            "--identity",
+            "--peer-cert",
+            "--managed",
+        ] {
+            assert!(Cli::try_parse_from(["peerglide", "diagnose-context", flag]).is_err());
+        }
+    }
 }
