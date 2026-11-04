@@ -3,9 +3,10 @@ use super::Target;
 use crate::context::ContextError;
 use peerglide_actions::execution::NativeFailure;
 use windows_sys::Win32::{
-    Foundation::{HWND, POINT},
+    Foundation::{HWND, POINT, RECT},
+    Graphics::{Dwm::{DwmGetWindowAttribute,DWMWA_EXTENDED_FRAME_BOUNDS},Gdi::{GetMonitorInfoW,MonitorFromWindow,MONITORINFO,MONITOR_DEFAULTTONEAREST}},
     UI::{
-        HiDpi::GetDpiForWindow,
+        HiDpi::{GetDpiForWindow,SetThreadDpiAwarenessContext,DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
         Input::KeyboardAndMouse::IsWindowEnabled,
         WindowsAndMessaging::{
             GetAncestor, GetGUIThreadInfo, GetPhysicalCursorPos, GetSystemMetrics, IsWindow,
@@ -30,6 +31,7 @@ trait WindowOps {
     fn root_at(&mut self, x: i32, y: i32) -> Option<HWND>;
     fn route_idle(&mut self) -> bool;
     fn swapped(&mut self) -> bool;
+    fn fullscreen(&mut self,window:HWND)->Result<bool,NativeFailure>;
 }
 struct Native<'a>(&'a Target);
 impl WindowOps for Native<'_> {
@@ -90,11 +92,33 @@ impl WindowOps for Native<'_> {
     fn swapped(&mut self) -> bool {
         unsafe { GetSystemMetrics(SM_SWAPBUTTON) != 0 }
     }
+    fn fullscreen(&mut self,window:HWND)->Result<bool,NativeFailure>{
+        // Only this worker's coordinate-query context changes, then is restored.
+        // No display configuration, focus, permission or user setting changes.
+        let old=unsafe{SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)};
+        if old.is_null(){return Err(NativeFailure::BeforeSubmission);}
+        let result=(||{
+            let mut bounds:RECT=unsafe{std::mem::zeroed()};
+            if unsafe{DwmGetWindowAttribute(window,DWMWA_EXTENDED_FRAME_BOUNDS as u32,(&mut bounds as *mut RECT).cast(),std::mem::size_of::<RECT>() as u32)}<0{return Err(NativeFailure::BeforeSubmission);}
+            let monitor=unsafe{MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST)};
+            if monitor.is_null(){return Err(NativeFailure::BeforeSubmission);}
+            let mut info:MONITORINFO=unsafe{std::mem::zeroed()};info.cbSize=std::mem::size_of::<MONITORINFO>() as u32;
+            if unsafe{GetMonitorInfoW(monitor,&mut info)}==0{return Err(NativeFailure::BeforeSubmission);}
+            covers_monitor(bounds,info.rcMonitor)
+        })();
+        if unsafe{SetThreadDpiAwarenessContext(old)}.is_null(){return Err(NativeFailure::BeforeSubmission);}
+        result
+    }
+
+}
+fn covers_monitor(window:RECT,monitor:RECT)->Result<bool,NativeFailure>{
+    if window.left>=window.right||window.top>=window.bottom||monitor.left>=monitor.right||monitor.top>=monitor.bottom{return Err(NativeFailure::BeforeSubmission);}
+    Ok(window.left<=monitor.left&&window.top<=monitor.top&&window.right>=monitor.right&&window.bottom>=monitor.bottom)
 }
 fn read_dpi(ops: &mut impl WindowOps) -> Result<u32, NativeFailure> {
     let window = ops.target()?;
     let dpi = ops.dpi(window);
-    if !(48..=768).contains(&dpi) {
+    if !ops.enabled(window)||ops.swapped()||!ops.route_idle()||ops.fullscreen(window)?||!(48..=768).contains(&dpi) {
         return Err(NativeFailure::BeforeSubmission);
     }
     if ops.target()? != window {
@@ -109,6 +133,7 @@ fn validate(ops: &mut impl WindowOps, x: i32, y: i32, dpi: u32) -> Result<(), Na
         || !ops.enabled(window)
         || ops.swapped()
         || !ops.route_idle()
+        || ops.fullscreen(window)?
     {
         return Err(NativeFailure::BeforeSubmission);
     }
@@ -145,6 +170,7 @@ mod tests {
         idle: bool,
         swapped: bool,
         calls: usize,
+        fullscreen:Result<bool,NativeFailure>,
     }
     impl WindowOps for Fake {
         fn target(&mut self) -> Result<HWND, NativeFailure> {
@@ -173,6 +199,8 @@ mod tests {
         fn swapped(&mut self) -> bool {
             self.swapped
         }
+        fn fullscreen(&mut self,_:HWND)->Result<bool,NativeFailure>{self.fullscreen}
+
     }
     // Opaque test-only handles never enter Native or authorize input.
     fn fake() -> Fake {
@@ -187,7 +215,17 @@ mod tests {
             idle: true,
             swapped: false,
             calls: 0,
+            fullscreen:Ok(false),
         }
+    }
+    #[test]
+    fn fullscreen_unknown_geometry_and_scope_changes_reject_capture_admission(){
+        for fullscreen in [Ok(true),Err(NativeFailure::BeforeSubmission)]{let mut ops=fake();ops.fullscreen=fullscreen;assert_eq!(read_dpi(&mut ops),Err(NativeFailure::BeforeSubmission));}
+        for kind in 0..3{let mut ops=fake();match kind{0=>ops.enabled=false,1=>ops.idle=false,_=>ops.swapped=true}assert_eq!(read_dpi(&mut ops),Err(NativeFailure::BeforeSubmission));}
+        let monitor=RECT{left:-1920,top:0,right:0,bottom:1080};
+        assert_eq!(covers_monitor(RECT{left:-1920,top:0,right:0,bottom:1080},monitor),Ok(true));
+        assert_eq!(covers_monitor(RECT{left:-1900,top:0,right:0,bottom:1080},monitor),Ok(false));
+        assert_eq!(covers_monitor(RECT{left:0,top:0,right:0,bottom:0},monitor),Err(NativeFailure::BeforeSubmission));
     }
     #[test]
     fn complete_preflight_accepts_only_original_point_and_dpi() {

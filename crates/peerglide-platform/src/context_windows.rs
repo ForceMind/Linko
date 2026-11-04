@@ -27,9 +27,9 @@ use windows_sys::Win32::{
             PROCESS_QUERY_LIMITED_INFORMATION,
         },
     },
-    UI::WindowsAndMessaging::{
+    UI::{HiDpi::GetDpiForWindow,WindowsAndMessaging::{
         GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
-    },
+    }},
 };
 
 const PATH_CAPACITY: usize = 32_768;
@@ -53,6 +53,7 @@ impl Drop for ProcessHandle {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct WindowSnapshot {
+    dpi:u32,
     foreground: HWND,
     focused: HWND,
     process_id: u32,
@@ -236,7 +237,10 @@ fn window_snapshot() -> Result<WindowSnapshot, ContextError> {
     {
         return Err(ContextError::ChangedDuringRead);
     }
+    let dpi=unsafe{GetDpiForWindow(foreground)};
+    if dpi==0{return Err(ContextError::QueryFailed);}
     Ok(WindowSnapshot {
+        dpi,
         foreground,
         focused,
         process_id,
@@ -401,6 +405,7 @@ mod tests {
     #[test]
     fn target_equality_checks_focused_child_and_process_instance() {
         let window = WindowSnapshot {
+            dpi:96,
             foreground: null_mut(),
             focused: null_mut(),
             process_id: 7,
@@ -419,6 +424,8 @@ mod tests {
         changed = window;
         changed.thread_id += 1;
         assert!(!same_target(window, 11, changed, 11));
+        changed=window;changed.dpi=144;
+        assert!(!same_target(window,11,changed,11));
         assert!(!same_target(window, 11, window, 12));
     }
 

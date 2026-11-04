@@ -14,6 +14,8 @@ pub mod context;
 pub mod gesture_capture;
 #[cfg(any(windows, test))]
 mod gesture_queue;
+#[cfg(any(windows,test))]
+pub mod gesture_worker;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
 
