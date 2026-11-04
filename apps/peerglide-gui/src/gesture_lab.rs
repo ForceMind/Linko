@@ -314,7 +314,8 @@ impl GestureLab {
         }
         // Collapsing animations may still lay out a hidden body. Report only the
         // fully open body from this frame, never a collapsed or stale save target.
-        if self.export_open && export.body_response.is_some() && ui.clip_rect().contains_rect(rect) {
+        if self.export_open && export.body_response.is_some() && ui.clip_rect().contains_rect(rect)
+        {
             self.inspection = save_rect.map(|save| (rect, save));
         }
         ui.weak("窗口内轨迹不能证明原生鼠标采样率、全局手势或动作执行已经验收。");

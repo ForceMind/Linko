@@ -212,16 +212,31 @@ pub(crate) struct InputReporter {
 impl InputReporter {
     fn new(managed: bool) -> Self {
         Self {
-            managed, last: None, recovery_unconfirmed: false, terminal_sent: false,
-            #[cfg(test)] observed: Vec::new(),
-            #[cfg(test)] emitted: Vec::new(),
+            managed,
+            last: None,
+            recovery_unconfirmed: false,
+            terminal_sent: false,
+            #[cfg(test)]
+            observed: Vec::new(),
+            #[cfg(test)]
+            emitted: Vec::new(),
         }
     }
     fn set(&mut self, state: WorkerInputState) {
-        if self.terminal_sent { return; }
-        if state == WorkerInputState::RecoveryUnconfirmed { self.recovery_unconfirmed = true; }
-        let state = if self.recovery_unconfirmed { WorkerInputState::RecoveryUnconfirmed } else { state };
-        if self.last == Some(state) { return; }
+        if self.terminal_sent {
+            return;
+        }
+        if state == WorkerInputState::RecoveryUnconfirmed {
+            self.recovery_unconfirmed = true;
+        }
+        let state = if self.recovery_unconfirmed {
+            WorkerInputState::RecoveryUnconfirmed
+        } else {
+            state
+        };
+        if self.last == Some(state) {
+            return;
+        }
         self.last = Some(state);
         #[cfg(test)]
         self.observed.push(state);
@@ -305,8 +320,17 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
     let terminal = input_status.finish();
     let result = if result.is_ok() && terminal == WorkerInputState::RecoveryUnconfirmed {
         Err(anyhow::anyhow!("native input recovery remains unconfirmed"))
-    } else { result };
-    worker_event(managed, if result.is_ok() { WorkerState::Stopped } else { WorkerState::Failed });
+    } else {
+        result
+    };
+    worker_event(
+        managed,
+        if result.is_ok() {
+            WorkerState::Stopped
+        } else {
+            WorkerState::Failed
+        },
+    );
     result
 }
 async fn supervise(
@@ -324,10 +348,14 @@ async fn supervise(
     );
     let mut backoff = reconnect::Backoff::default();
     loop {
-        if *stop.borrow() { return Ok(()); }
+        if *stop.borrow() {
+            return Ok(());
+        }
         reconnect::verify_pins(&o.identity, &o.peer_cert, &id.certificate, &peer)?;
         let result = run_inner(o, address, probe, &id, &peer, stop.clone(), input_status).await;
-        if *stop.borrow() { return result; }
+        if *stop.borrow() {
+            return result;
+        }
         if input_status.last == Some(WorkerInputState::RecoveryUnconfirmed) {
             return match result {
                 Err(error) => Err(error),
@@ -497,10 +525,15 @@ mod context_cli_tests {
         reporter.set(WorkerInputState::Recovering);
         reporter.set(WorkerInputState::RecoveryUnconfirmed);
         reporter.set(WorkerInputState::RecoveryUnconfirmed);
-        assert_eq!(reporter.observed, [
-            WorkerInputState::Disabled, WorkerInputState::ReceivingRemote,
-            WorkerInputState::Recovering, WorkerInputState::RecoveryUnconfirmed,
-        ]);
+        assert_eq!(
+            reporter.observed,
+            [
+                WorkerInputState::Disabled,
+                WorkerInputState::ReceivingRemote,
+                WorkerInputState::Recovering,
+                WorkerInputState::RecoveryUnconfirmed,
+            ]
+        );
     }
 
     #[test]
@@ -515,7 +548,14 @@ mod context_cli_tests {
         assert_eq!(reporter.finish(), WorkerInputState::Local);
         assert_eq!(reporter.emitted.len(), 3);
         assert!(reporter.emitted.last().unwrap().terminal);
-        assert_eq!(reporter.emitted.iter().filter(|event| event.terminal).count(), 1);
+        assert_eq!(
+            reporter
+                .emitted
+                .iter()
+                .filter(|event| event.terminal)
+                .count(),
+            1
+        );
 
         let mut uncertain = InputReporter::new(false);
         uncertain.set(WorkerInputState::ReceivingRemote);
@@ -530,11 +570,17 @@ mod context_cli_tests {
 
     #[test]
     fn terminal_input_fence_maps_missing_or_inflight_state_to_unconfirmed() {
-        for state in [None, Some(WorkerInputState::ControllingRemote),
-            Some(WorkerInputState::ReceivingRemote), Some(WorkerInputState::Recovering),
-            Some(WorkerInputState::Unavailable)] {
+        for state in [
+            None,
+            Some(WorkerInputState::ControllingRemote),
+            Some(WorkerInputState::ReceivingRemote),
+            Some(WorkerInputState::Recovering),
+            Some(WorkerInputState::Unavailable),
+        ] {
             let mut reporter = InputReporter::new(false);
-            if let Some(state) = state { reporter.set(state); }
+            if let Some(state) = state {
+                reporter.set(state);
+            }
             assert_eq!(reporter.finish(), WorkerInputState::RecoveryUnconfirmed);
             assert!(reporter.emitted.last().unwrap().terminal);
         }
@@ -548,10 +594,14 @@ mod context_cli_tests {
     async fn supervisor_stop_signal_is_cooperative_for_request_and_owner_loss() {
         let (stop, mut stopped) = tokio::sync::watch::channel(false);
         stop.send(true).unwrap();
-        tokio::time::timeout(Duration::from_secs(1), stop_requested(&mut stopped)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), stop_requested(&mut stopped))
+            .await
+            .unwrap();
         let (stop, mut stopped) = tokio::sync::watch::channel(false);
         drop(stop);
-        tokio::time::timeout(Duration::from_secs(1), stop_requested(&mut stopped)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), stop_requested(&mut stopped))
+            .await
+            .unwrap();
     }
 
     #[test]

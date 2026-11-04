@@ -1,13 +1,13 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod config_store;
+mod desktop_ui;
 mod discovery_panel;
 mod gesture_lab;
 mod gesture_rules;
-mod desktop_ui;
 use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, RichText, Vec2};
-use peerglide_protocol::worker::{WorkerEvent, WorkerState,WorkerInputEvent,WorkerInputState};
+use peerglide_protocol::worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState};
 use peerglide_transport::{self as transport, Identity};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -32,8 +32,8 @@ struct Options {
     #[arg(long)]
     gesture_lab: bool,
     /// Isolated GUI smoke geometry only; create a new report, never overwrite.
-    #[arg(long,hide=true,requires="gesture_lab")]
-    ui_layout_report:Option<PathBuf>,
+    #[arg(long, hide = true, requires = "gesture_lab")]
+    ui_layout_report: Option<PathBuf>,
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -59,7 +59,7 @@ fn edge_label(edge: &str) -> &'static str {
     }
 }
 
-#[derive(Clone,Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Config {
     peer_name: String,
@@ -87,18 +87,44 @@ impl Default for Config {
         }
     }
 }
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
-enum SessionMode {Communication,Native,Probe}
-#[derive(Clone,Copy,PartialEq,Eq)]
-enum DeviceTab {Device,Layout,Permissions}
-#[derive(Clone,Copy,PartialEq,Eq)]
-enum MouseTab {Rules,Practice}
-#[derive(Clone,Copy,PartialEq,Eq)]
-enum CollaborationTab {Clipboard,Files}
-#[derive(Clone,Copy,PartialEq,Eq)]
-enum Dialog {NativeStart,Revoke,Reset,ForceStop,Recovery}
-#[derive(Clone,Copy,PartialEq,Eq)]
-enum SetupStep {Identity,Find,Verify,Permissions,Layout}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionMode {
+    Communication,
+    Native,
+    Probe,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeviceTab {
+    Device,
+    Layout,
+    Permissions,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MouseTab {
+    Rules,
+    Practice,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollaborationTab {
+    Clipboard,
+    Files,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Dialog {
+    NativeStart,
+    Revoke,
+    Reset,
+    ForceStop,
+    Recovery,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SetupStep {
+    Identity,
+    Find,
+    Verify,
+    Permissions,
+    Layout,
+}
 #[derive(Clone, Copy, PartialEq)]
 enum Page {
     Home,
@@ -111,13 +137,35 @@ enum Page {
 }
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
-struct WorkerSnapshot(AtomicU16,AtomicU16,AtomicBool,AtomicBool);
+struct WorkerSnapshot(AtomicU16, AtomicU16, AtomicBool, AtomicBool);
 impl WorkerSnapshot {
-    fn publish_input(&self,state:WorkerInputState,terminal:bool){
-        let code=match state{WorkerInputState::Disabled=>1,WorkerInputState::Local=>2,WorkerInputState::ControllingRemote=>3,WorkerInputState::ReceivingRemote=>4,WorkerInputState::Recovering=>5,WorkerInputState::RecoveryUnconfirmed=>6,WorkerInputState::Unavailable=>7};
-        self.1.store(code|if terminal{0x100}else{0},Ordering::Release);
+    fn publish_input(&self, state: WorkerInputState, terminal: bool) {
+        let code = match state {
+            WorkerInputState::Disabled => 1,
+            WorkerInputState::Local => 2,
+            WorkerInputState::ControllingRemote => 3,
+            WorkerInputState::ReceivingRemote => 4,
+            WorkerInputState::Recovering => 5,
+            WorkerInputState::RecoveryUnconfirmed => 6,
+            WorkerInputState::Unavailable => 7,
+        };
+        self.1
+            .store(code | if terminal { 0x100 } else { 0 }, Ordering::Release);
     }
-    fn take_input(&self)->Option<(WorkerInputState,bool)>{let code=self.1.swap(0,Ordering::AcqRel);let state=match code&0xff{1=>WorkerInputState::Disabled,2=>WorkerInputState::Local,3=>WorkerInputState::ControllingRemote,4=>WorkerInputState::ReceivingRemote,5=>WorkerInputState::Recovering,6=>WorkerInputState::RecoveryUnconfirmed,7=>WorkerInputState::Unavailable,_=>return None};Some((state,code&0x100!=0))}
+    fn take_input(&self) -> Option<(WorkerInputState, bool)> {
+        let code = self.1.swap(0, Ordering::AcqRel);
+        let state = match code & 0xff {
+            1 => WorkerInputState::Disabled,
+            2 => WorkerInputState::Local,
+            3 => WorkerInputState::ControllingRemote,
+            4 => WorkerInputState::ReceivingRemote,
+            5 => WorkerInputState::Recovering,
+            6 => WorkerInputState::RecoveryUnconfirmed,
+            7 => WorkerInputState::Unavailable,
+            _ => return None,
+        };
+        Some((state, code & 0x100 != 0))
+    }
 
     fn publish(&self, state: WorkerState) {
         let code = match state {
@@ -163,25 +211,25 @@ impl WorkerSnapshot {
     }
 }
 struct App {
-    recording_mode:bool,
-    layout_report:Option<PathBuf>,
-    device_tab:DeviceTab,
-    mouse_tab:MouseTab,
-    collaboration_tab:CollaborationTab,
-    wizard:Option<SetupStep>,
-    wizard_name:String,
-    wizard_address:String,
-    wizard_listen:bool,
-    wizard_allow:bool,
-    dialog:Option<Dialog>,
-    native_confirmation:bool,
-    active_mode:Option<SessionMode>,
-    pending_start:Option<SessionMode>,
-    input_state:Option<WorkerInputState>,
-    input_terminal:bool,
-    recovery_blocked:bool,
-    close_requested:bool,
-    exit_confirmed:bool,
+    recording_mode: bool,
+    layout_report: Option<PathBuf>,
+    device_tab: DeviceTab,
+    mouse_tab: MouseTab,
+    collaboration_tab: CollaborationTab,
+    wizard: Option<SetupStep>,
+    wizard_name: String,
+    wizard_address: String,
+    wizard_listen: bool,
+    wizard_allow: bool,
+    dialog: Option<Dialog>,
+    native_confirmation: bool,
+    active_mode: Option<SessionMode>,
+    pending_start: Option<SessionMode>,
+    input_state: Option<WorkerInputState>,
+    input_terminal: bool,
+    recovery_blocked: bool,
+    close_requested: bool,
+    exit_confirmed: bool,
     permission_report: Option<peerglide_platform::context::PermissionReport>,
     discovery: discovery_panel::Panel,
     gesture_lab: gesture_lab::GestureLab,
@@ -228,10 +276,25 @@ impl App {
                 }
             };
         let mut app = Self {
-            recording_mode:false,layout_report:None,
-            device_tab:DeviceTab::Device,mouse_tab:MouseTab::Rules,collaboration_tab:CollaborationTab::Clipboard,
-            wizard:None,wizard_name:config.peer_name.clone(),wizard_address:config.address.clone(),wizard_listen:config.listen,wizard_allow:false,
-            dialog:None,native_confirmation:false,active_mode:None,pending_start:None,input_state:None,input_terminal:false,recovery_blocked:false,close_requested:false,exit_confirmed:false,
+            recording_mode: false,
+            layout_report: None,
+            device_tab: DeviceTab::Device,
+            mouse_tab: MouseTab::Rules,
+            collaboration_tab: CollaborationTab::Clipboard,
+            wizard: None,
+            wizard_name: config.peer_name.clone(),
+            wizard_address: config.address.clone(),
+            wizard_listen: config.listen,
+            wizard_allow: false,
+            dialog: None,
+            native_confirmation: false,
+            active_mode: None,
+            pending_start: None,
+            input_state: None,
+            input_terminal: false,
+            recovery_blocked: false,
+            close_requested: false,
+            exit_confirmed: false,
             permission_report: None,
             discovery: discovery_panel::Panel::default(),
             gesture_lab: gesture_lab::GestureLab::new(&dir),
@@ -325,13 +388,23 @@ impl App {
         Ok(())
     }
     fn start(&mut self, probe: bool) -> Result<()> {
-        self.start_mode(if probe{SessionMode::Probe}else{SessionMode::Communication})
+        self.start_mode(if probe {
+            SessionMode::Probe
+        } else {
+            SessionMode::Communication
+        })
     }
-    fn start_mode(&mut self, mode:SessionMode) -> Result<()> {
-        let probe=mode==SessionMode::Probe;
-        anyhow::ensure!(mode!=SessionMode::Native||cfg!(any(windows,target_os="macos")),"此平台只支持通信诊断，原生输入尚未实现");
-        anyhow::ensure!(self.stopping.is_none(),"停止和恢复尚未完成");
-        anyhow::ensure!(mode!=SessionMode::Native||!self.recovery_blocked,"上次输入恢复未确认，本窗口只允许通信诊断");
+    fn start_mode(&mut self, mode: SessionMode) -> Result<()> {
+        let probe = mode == SessionMode::Probe;
+        anyhow::ensure!(
+            mode != SessionMode::Native || cfg!(any(windows, target_os = "macos")),
+            "此平台只支持通信诊断，原生输入尚未实现"
+        );
+        anyhow::ensure!(self.stopping.is_none(), "停止和恢复尚未完成");
+        anyhow::ensure!(
+            mode != SessionMode::Native || !self.recovery_blocked,
+            "上次输入恢复未确认，本窗口只允许通信诊断"
+        );
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         anyhow::ensure!(self.child.is_none(), "已有会话正在运行");
         Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
@@ -357,7 +430,7 @@ impl App {
             executable.is_file(),
             "缺少同目录的 peerglide 通信程序，请使用完整开发包"
         );
-        let mut cmd=self.worker_command(executable,cert,mode);
+        let mut cmd = self.worker_command(executable, cert, mode);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -375,16 +448,22 @@ impl App {
         let output_state = snapshot.clone();
         std::thread::spawn(move || {
             for result in BufReader::new(stdout).lines() {
-                let line=match result{Ok(line)=>line,Err(_)=>{output_state.3.store(true,Ordering::Release);break;}};
+                let line = match result {
+                    Ok(line) => line,
+                    Err(_) => {
+                        output_state.3.store(true, Ordering::Release);
+                        break;
+                    }
+                };
                 if let Some(event) = WorkerEvent::parse(&line) {
                     output_state.publish(event.state);
-                } else if let Some(event)=WorkerInputEvent::parse(&line){
-                    output_state.publish_input(event.state,event.terminal);
+                } else if let Some(event) = WorkerInputEvent::parse(&line) {
+                    output_state.publish_input(event.state, event.terminal);
                 } else {
                     let _ = output_tx.try_send(line.chars().take(600).collect());
                 }
             }
-            output_state.2.store(true,Ordering::Release);
+            output_state.2.store(true, Ordering::Release);
         });
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
@@ -392,7 +471,13 @@ impl App {
             }
         });
         self.child = Some(child);
-        self.active_mode=Some(mode);self.input_terminal=false;self.input_state=Some(if mode==SessionMode::Native{WorkerInputState::Unavailable}else{WorkerInputState::Disabled});
+        self.active_mode = Some(mode);
+        self.input_terminal = false;
+        self.input_state = Some(if mode == SessionMode::Native {
+            WorkerInputState::Unavailable
+        } else {
+            WorkerInputState::Disabled
+        });
         self.events = Some(rx);
         self.worker_state = Some(snapshot);
         self.logs.clear();
@@ -401,9 +486,18 @@ impl App {
         self.status = "正在启动".into();
         Ok(())
     }
-    fn native_cleanup_reported(&self)->bool{self.worker_state.as_ref().is_some_and(|snapshot|snapshot.2.load(Ordering::Acquire)&&!snapshot.3.load(Ordering::Acquire))&&self.input_terminal&&matches!(self.input_state,Some(WorkerInputState::Local|WorkerInputState::Disabled))&&!self.recovery_blocked}
-    fn worker_command(&self,executable:PathBuf,cert:PathBuf,mode:SessionMode)->Command{
-        let probe=mode==SessionMode::Probe;
+    fn native_cleanup_reported(&self) -> bool {
+        self.worker_state.as_ref().is_some_and(|snapshot| {
+            snapshot.2.load(Ordering::Acquire) && !snapshot.3.load(Ordering::Acquire)
+        }) && self.input_terminal
+            && matches!(
+                self.input_state,
+                Some(WorkerInputState::Local | WorkerInputState::Disabled)
+            )
+            && !self.recovery_blocked
+    }
+    fn worker_command(&self, executable: PathBuf, cert: PathBuf, mode: SessionMode) -> Command {
+        let probe = mode == SessionMode::Probe;
         let mut cmd = Command::new(executable);
         if self.config.listen && !probe {
             cmd.arg("listen");
@@ -424,7 +518,7 @@ impl App {
         }
         if probe {
             cmd.arg("--probe");
-        } else if mode==SessionMode::Native {
+        } else if mode == SessionMode::Native {
             if self.config.allow {
                 cmd.arg("--allow-control");
             }
@@ -432,38 +526,69 @@ impl App {
         }
         cmd
     }
-    fn resend_stop(&mut self)->Result<()> {
-        self.pending_start=None;
-        let child=self.child.as_mut().context("没有活动工作进程")?;
-        let stdin=child.stdin.as_mut().context("工作进程的停止通道不可用")?;
-        stdin.write_all(b"stop\n").context("再次发送停止请求失败")?;stdin.flush()?;
-        if self.stopping.is_none(){self.stopping=Some(Instant::now());}
-        self.connected=false;Ok(())
+    fn resend_stop(&mut self) -> Result<()> {
+        self.pending_start = None;
+        let child = self.child.as_mut().context("没有活动工作进程")?;
+        let stdin = child.stdin.as_mut().context("工作进程的停止通道不可用")?;
+        stdin.write_all(b"stop\n").context("再次发送停止请求失败")?;
+        stdin.flush()?;
+        if self.stopping.is_none() {
+            self.stopping = Some(Instant::now());
+        }
+        self.connected = false;
+        Ok(())
     }
     fn stop(&mut self) {
-        self.pending_start=None;
-        if let Some(child)=&mut self.child{
-            if self.stopping.is_none(){
-                let sent=child.stdin.as_mut().map(|stdin|stdin.write_all(b"stop\n").and_then(|_|stdin.flush()));
-                if !matches!(sent,Some(Ok(()))){if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;}self.notice="未能发送停止请求，请检查工作进程状态".into();}
-                self.stopping=Some(Instant::now());
+        self.pending_start = None;
+        if let Some(child) = &mut self.child {
+            if self.stopping.is_none() {
+                let sent = child
+                    .stdin
+                    .as_mut()
+                    .map(|stdin| stdin.write_all(b"stop\n").and_then(|_| stdin.flush()));
+                if !matches!(sent, Some(Ok(()))) {
+                    if self.active_mode == Some(SessionMode::Native) {
+                        self.recovery_blocked = true;
+                    }
+                    self.notice = "未能发送停止请求，请检查工作进程状态".into();
+                }
+                self.stopping = Some(Instant::now());
             }
-            self.connected=false;self.input_state=Some(WorkerInputState::Recovering);self.status="正在停止并恢复本机控制".into();
+            self.connected = false;
+            self.input_state = Some(WorkerInputState::Recovering);
+            self.status = "正在停止并恢复本机控制".into();
         }
     }
-    fn mark_stop_timeout(&mut self){
-        self.pending_start=None;
-        if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;self.input_state=Some(WorkerInputState::RecoveryUnconfirmed);self.notice="停止尚未完成。请查看恢复状态；不会自动启动新键鼠会话。".into();}
-        else{self.notice="通信进程停止尚未完成，未开启原生输入。等待退出或明确结束后再开始新会话。".into();}
+    fn mark_stop_timeout(&mut self) {
+        self.pending_start = None;
+        if self.active_mode == Some(SessionMode::Native) {
+            self.recovery_blocked = true;
+            self.input_state = Some(WorkerInputState::RecoveryUnconfirmed);
+            self.notice = "停止尚未完成。请查看恢复状态；不会自动启动新键鼠会话。".into();
+        } else {
+            self.notice =
+                "通信进程停止尚未完成，未开启原生输入。等待退出或明确结束后再开始新会话。".into();
+        }
     }
-    fn request_native(&mut self)->Result<()> {
-        anyhow::ensure!(self.native_confirmation,"请明确确认启动真实键鼠");
-        anyhow::ensure!(!self.recovery_blocked&&self.stopping.is_none(),"恢复未确认，不能开始新的键鼠会话");
-        self.config.native=true;self.save_config()?;
-        if self.child.is_some(){
-            anyhow::ensure!(self.active_mode==Some(SessionMode::Communication),"请先停止当前会话");
-            self.stop();self.pending_start=Some(SessionMode::Native);Ok(())
-        }else{self.start_mode(SessionMode::Native)}
+    fn request_native(&mut self) -> Result<()> {
+        anyhow::ensure!(self.native_confirmation, "请明确确认启动真实键鼠");
+        anyhow::ensure!(
+            !self.recovery_blocked && self.stopping.is_none(),
+            "恢复未确认，不能开始新的键鼠会话"
+        );
+        self.config.native = true;
+        self.save_config()?;
+        if self.child.is_some() {
+            anyhow::ensure!(
+                self.active_mode == Some(SessionMode::Communication),
+                "请先停止当前会话"
+            );
+            self.stop();
+            self.pending_start = Some(SessionMode::Native);
+            Ok(())
+        } else {
+            self.start_mode(SessionMode::Native)
+        }
     }
     fn revoke(&mut self) -> Result<()> {
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
@@ -492,11 +617,23 @@ impl App {
         }
         if let Some(snapshot) = &self.worker_state {
             let (state, probe_passed) = snapshot.take();
-            if let Some((input,terminal))=snapshot.take_input(){
-                if self.child.is_some(){
-                    self.input_terminal=terminal;
-                    if input==WorkerInputState::RecoveryUnconfirmed{self.recovery_blocked=true;self.pending_start=None;}
-                    if self.stopping.is_none()||matches!(input,WorkerInputState::Local|WorkerInputState::Disabled|WorkerInputState::RecoveryUnconfirmed){self.input_state=Some(input);}
+            if let Some((input, terminal)) = snapshot.take_input() {
+                if self.child.is_some() {
+                    self.input_terminal = terminal;
+                    if input == WorkerInputState::RecoveryUnconfirmed {
+                        self.recovery_blocked = true;
+                        self.pending_start = None;
+                    }
+                    if self.stopping.is_none()
+                        || matches!(
+                            input,
+                            WorkerInputState::Local
+                                | WorkerInputState::Disabled
+                                | WorkerInputState::RecoveryUnconfirmed
+                        )
+                    {
+                        self.input_state = Some(input);
+                    }
                 }
             }
             if probe_passed {
@@ -532,7 +669,12 @@ impl App {
                 }
             }
         }
-        if self.stopping.is_some_and(|started|started.elapsed()>Duration::from_secs(3)){self.mark_stop_timeout();}
+        if self
+            .stopping
+            .is_some_and(|started| started.elapsed() > Duration::from_secs(3))
+        {
+            self.mark_stop_timeout();
+        }
         if let Some(child) = &mut self.child {
             match child.try_wait() {
                 Ok(Some(exit)) => {
@@ -542,18 +684,43 @@ impl App {
                     } else {
                         format!("工作进程已退出：{exit}")
                     };
-                    let native=self.active_mode==Some(SessionMode::Native);
-                    if native{
-                        if let Some(snapshot)=self.worker_state.as_ref(){
-                            if !snapshot.2.load(Ordering::Acquire){self.status="进程已退出，正在读取最终输入状态".into();return;}
-                            if let Some((input,terminal))=snapshot.take_input(){self.input_terminal=terminal;if input==WorkerInputState::RecoveryUnconfirmed{self.recovery_blocked=true;}self.input_state=Some(input);}
+                    let native = self.active_mode == Some(SessionMode::Native);
+                    if native {
+                        if let Some(snapshot) = self.worker_state.as_ref() {
+                            if !snapshot.2.load(Ordering::Acquire) {
+                                self.status = "进程已退出，正在读取最终输入状态".into();
+                                return;
+                            }
+                            if let Some((input, terminal)) = snapshot.take_input() {
+                                self.input_terminal = terminal;
+                                if input == WorkerInputState::RecoveryUnconfirmed {
+                                    self.recovery_blocked = true;
+                                }
+                                self.input_state = Some(input);
+                            }
                         }
                     }
-                    let clean=if native{self.native_cleanup_reported()}else{exit.success()};
-                    if !clean&&native{self.recovery_blocked=true;self.input_state=Some(WorkerInputState::RecoveryUnconfirmed);self.notice="工作进程已退出，输入恢复未确认。".into();}
-                    self.child = None;self.active_mode=None;
+                    let clean = if native {
+                        self.native_cleanup_reported()
+                    } else {
+                        exit.success()
+                    };
+                    if !clean && native {
+                        self.recovery_blocked = true;
+                        self.input_state = Some(WorkerInputState::RecoveryUnconfirmed);
+                        self.notice = "工作进程已退出，输入恢复未确认。".into();
+                    }
+                    self.child = None;
+                    self.active_mode = None;
                     self.stopping = None;
-                    if clean&&!self.recovery_blocked{if let Some(mode)=self.pending_start.take(){let result=self.start_mode(mode);self.feedback(result,"键鼠会话正在启动，控制归属以工作进程报告为准");}}else{self.pending_start=None;}
+                    if clean && !self.recovery_blocked {
+                        if let Some(mode) = self.pending_start.take() {
+                            let result = self.start_mode(mode);
+                            self.feedback(result, "键鼠会话正在启动，控制归属以工作进程报告为准");
+                        }
+                    } else {
+                        self.pending_start = None;
+                    }
                 }
                 Err(e) => {
                     self.notice = e.to_string();
@@ -568,7 +735,6 @@ impl App {
             Err(e) => format!("操作未完成：{e:#}"),
         };
     }
-
 }
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
@@ -578,8 +744,9 @@ impl eframe::App for App {
         }
         ctx.request_repaint_after(Duration::from_millis(100));
     }
-    fn ui(&mut self,root:&mut egui::Ui,_:&mut eframe::Frame){self.desktop(root);}
-
+    fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+        self.desktop(root);
+    }
 }
 impl Drop for App {
     fn drop(&mut self) {
@@ -611,9 +778,12 @@ fn main() -> eframe::Result<()> {
         Box::new(move |cc| {
             let mut app = App::new(cc, dir);
             if options.gesture_lab {
-                app.page = Page::GestureLab;app.mouse_tab=MouseTab::Practice;app.recording_mode=true;app.gesture_lab.set_export_open(true);
+                app.page = Page::GestureLab;
+                app.mouse_tab = MouseTab::Practice;
+                app.recording_mode = true;
+                app.gesture_lab.set_export_open(true);
             }
-            app.layout_report=options.ui_layout_report;
+            app.layout_report = options.ui_layout_report;
             Ok(Box::new(app))
         }),
     )
@@ -642,66 +812,173 @@ mod tests {
     use super::*;
 
     #[test]
-    fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants()->Result<()> {
-        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
-        app.config.native=true;app.config.allow=true;app.config.listen=false;
-        for mode in [SessionMode::Communication,SessionMode::Probe]{
-            let command=app.worker_command(PathBuf::from("not-executed-worker"),PathBuf::from("public-test.crt"),mode);
-            let args:Vec<_>=command.get_args().map(|s|s.to_string_lossy().to_string()).collect();
-            assert!(!args.iter().any(|s|s=="--native"||s=="--allow-control"));
-            assert_eq!(args.iter().any(|s|s=="--probe"),mode==SessionMode::Probe);
+    fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants() -> Result<()>
+    {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.config.native = true;
+        app.config.allow = true;
+        app.config.listen = false;
+        for mode in [SessionMode::Communication, SessionMode::Probe] {
+            let command = app.worker_command(
+                PathBuf::from("not-executed-worker"),
+                PathBuf::from("public-test.crt"),
+                mode,
+            );
+            let args: Vec<_> = command
+                .get_args()
+                .map(|s| s.to_string_lossy().to_string())
+                .collect();
+            assert!(!args
+                .iter()
+                .any(|s| s == "--native" || s == "--allow-control"));
+            assert_eq!(
+                args.iter().any(|s| s == "--probe"),
+                mode == SessionMode::Probe
+            );
         }
-        let native=app.worker_command(PathBuf::from("not-executed-worker"),PathBuf::from("public-test.crt"),SessionMode::Native);
-        let args:Vec<_>=native.get_args().map(|s|s.to_string_lossy().to_string()).collect();
-        assert!(args.iter().any(|s|s=="--native")&&args.iter().any(|s|s=="--allow-control"));Ok(())
+        let native = app.worker_command(
+            PathBuf::from("not-executed-worker"),
+            PathBuf::from("public-test.crt"),
+            SessionMode::Native,
+        );
+        let args: Vec<_> = native
+            .get_args()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            args.iter().any(|s| s == "--native") && args.iter().any(|s| s == "--allow-control")
+        );
+        Ok(())
     }
     #[test]
-    fn resend_stop_really_writes_again_without_resetting_recovery_deadline()->Result<()> {
+    fn resend_stop_really_writes_again_without_resetting_recovery_deadline() -> Result<()> {
         use std::io::Read;
-        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
-        let python=if cfg!(windows){"python"}else{"python3"};
-        let mut child=Command::new(python).args(["-c","import sys; print(len([sys.stdin.readline(), sys.stdin.readline()]), flush=True)"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
-        let mut out=child.stdout.take().unwrap();app.child=Some(child);app.stop();let deadline=app.stopping;app.recovery_blocked=true;app.resend_stop()?;
-        let mut output=String::new();out.read_to_string(&mut output)?;assert_eq!(output.trim(),"2");assert_eq!(app.stopping,deadline);assert!(app.recovery_blocked);app.child.take().unwrap().wait()?;Ok(())
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let mut child = Command::new(python)
+            .args([
+                "-c",
+                "import sys; print(len([sys.stdin.readline(), sys.stdin.readline()]), flush=True)",
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let mut out = child.stdout.take().unwrap();
+        app.child = Some(child);
+        app.stop();
+        let deadline = app.stopping;
+        app.recovery_blocked = true;
+        app.resend_stop()?;
+        let mut output = String::new();
+        out.read_to_string(&mut output)?;
+        assert_eq!(output.trim(), "2");
+        assert_eq!(app.stopping, deadline);
+        assert!(app.recovery_blocked);
+        app.child.take().unwrap().wait()?;
+        Ok(())
     }
     #[test]
-    fn communication_stop_timeout_cancels_upgrade_without_inventing_input_failure()->Result<()> {
-        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
-        app.active_mode=Some(SessionMode::Communication);app.pending_start=Some(SessionMode::Native);app.mark_stop_timeout();
-        assert!(!app.recovery_blocked);assert!(app.pending_start.is_none());
-        app.active_mode=Some(SessionMode::Native);app.mark_stop_timeout();assert!(app.recovery_blocked);Ok(())
+    fn communication_stop_timeout_cancels_upgrade_without_inventing_input_failure() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.active_mode = Some(SessionMode::Communication);
+        app.pending_start = Some(SessionMode::Native);
+        app.mark_stop_timeout();
+        assert!(!app.recovery_blocked);
+        assert!(app.pending_start.is_none());
+        app.active_mode = Some(SessionMode::Native);
+        app.mark_stop_timeout();
+        assert!(app.recovery_blocked);
+        Ok(())
     }
     #[test]
-    fn old_routing_state_and_process_eof_are_not_a_terminal_cleanup_receipt()->Result<()> {
-        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
-        for input in[WorkerInputState::Local,WorkerInputState::Disabled]{app.input_state=Some(input);app.input_terminal=false;assert!(!app.native_cleanup_reported());}
-        let drained=Arc::new(WorkerSnapshot::default());drained.2.store(true,Ordering::Release);app.worker_state=Some(drained.clone());
-        app.input_terminal=true;assert!(app.native_cleanup_reported());drained.3.store(true,Ordering::Release);assert!(!app.native_cleanup_reported());drained.3.store(false,Ordering::Release);app.recovery_blocked=true;assert!(!app.native_cleanup_reported());
-        let snapshot=WorkerSnapshot::default();snapshot.publish_input(WorkerInputState::Local,false);assert_eq!(snapshot.take_input(),Some((WorkerInputState::Local,false)));
-        snapshot.publish_input(WorkerInputState::Local,true);assert_eq!(snapshot.take_input(),Some((WorkerInputState::Local,true)));Ok(())
+    fn old_routing_state_and_process_eof_are_not_a_terminal_cleanup_receipt() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        for input in [WorkerInputState::Local, WorkerInputState::Disabled] {
+            app.input_state = Some(input);
+            app.input_terminal = false;
+            assert!(!app.native_cleanup_reported());
+        }
+        let drained = Arc::new(WorkerSnapshot::default());
+        drained.2.store(true, Ordering::Release);
+        app.worker_state = Some(drained.clone());
+        app.input_terminal = true;
+        assert!(app.native_cleanup_reported());
+        drained.3.store(true, Ordering::Release);
+        assert!(!app.native_cleanup_reported());
+        drained.3.store(false, Ordering::Release);
+        app.recovery_blocked = true;
+        assert!(!app.native_cleanup_reported());
+        let snapshot = WorkerSnapshot::default();
+        snapshot.publish_input(WorkerInputState::Local, false);
+        assert_eq!(
+            snapshot.take_input(),
+            Some((WorkerInputState::Local, false))
+        );
+        snapshot.publish_input(WorkerInputState::Local, true);
+        assert_eq!(snapshot.take_input(), Some((WorkerInputState::Local, true)));
+        Ok(())
     }
     #[test]
-    fn authentication_and_saved_preferences_do_not_invent_input_ownership()->Result<()> {
-        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
-        app.config.native=true;app.connected=true;app.status="已通过身份验证".into();
-        assert_eq!(app.input_label(),"尚未开启键鼠会话");
-        app.input_state=Some(WorkerInputState::ReceivingRemote);assert_eq!(app.input_label(),"对端正在控制本机");
-        app.recovery_blocked=true;assert_eq!(app.input_label(),"输入恢复未确认");
-        app.native_confirmation=true;assert!(app.request_native().is_err());assert!(app.child.is_none());Ok(())
+    fn authentication_and_saved_preferences_do_not_invent_input_ownership() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.config.native = true;
+        app.connected = true;
+        app.status = "已通过身份验证".into();
+        assert_eq!(app.input_label(), "尚未开启键鼠会话");
+        app.input_state = Some(WorkerInputState::ReceivingRemote);
+        assert_eq!(app.input_label(), "对端正在控制本机");
+        app.recovery_blocked = true;
+        assert_eq!(app.input_label(), "输入恢复未确认");
+        app.native_confirmation = true;
+        assert!(app.request_native().is_err());
+        assert!(app.child.is_none());
+        Ok(())
     }
     #[test]
-    fn full_desktop_and_dialogs_render_without_starting_workers_or_exporting_samples()->Result<()> {
-        let fixture=Fixture::new()?;let mut app=App::load(fixture.path.clone());
-        let ctx=egui::Context::default();install_fonts(&ctx);
-        for page in [Page::Home,Page::Devices,Page::GestureLab,Page::Transfers,Page::Settings]{
-            app.page=page;
-            for dialog in [None,Some(Dialog::NativeStart),Some(Dialog::Recovery),Some(Dialog::Reset)]{
-                app.dialog=dialog;
-                let output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,Vec2::new(1180.0,820.0))),..Default::default()},|ui|app.desktop(ui));
-                assert!(!output.shapes.is_empty());output.drop_without_applying_deltas();assert!(app.child.is_none());
+    fn full_desktop_and_dialogs_render_without_starting_workers_or_exporting_samples() -> Result<()>
+    {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        for page in [
+            Page::Home,
+            Page::Devices,
+            Page::GestureLab,
+            Page::Transfers,
+            Page::Settings,
+        ] {
+            app.page = page;
+            for dialog in [
+                None,
+                Some(Dialog::NativeStart),
+                Some(Dialog::Recovery),
+                Some(Dialog::Reset),
+            ] {
+                app.dialog = dialog;
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(1180.0, 820.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.desktop(ui),
+                );
+                assert!(!output.shapes.is_empty());
+                output.drop_without_applying_deltas();
+                assert!(app.child.is_none());
             }
         }
-        assert!(!app.identity_dir().exists());assert!(!app.dir.join("gesture-samples").exists());Ok(())
+        assert!(!app.identity_dir().exists());
+        assert!(!app.dir.join("gesture-samples").exists());
+        Ok(())
     }
     #[test]
     fn bundled_font_covers_chinese_ui_without_system_fonts() {

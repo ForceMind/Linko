@@ -38,7 +38,14 @@ fn rule_error_label(error: RuleError) -> &'static str {
 
 // IDs remain the recognizer's stable IDs; the editor presents their trajectories.
 const GESTURES: [&str; 8] = [
-    "向左", "向右", "向上", "向下", "先向下再向右", "先向下再向左", "先向上再向右", "先向上再向左",
+    "向左",
+    "向右",
+    "向上",
+    "向下",
+    "先向下再向右",
+    "先向下再向左",
+    "先向上再向右",
+    "先向上再向左",
 ];
 fn gesture_label(id: u32) -> &'static str {
     id.checked_sub(1)
@@ -62,14 +69,16 @@ fn gesture_icon(ui: &mut egui::Ui, id: u32) {
     let position = |p: [f32; 2]| rect.min + egui::vec2(rect.width() * p[0], rect.height() * p[1]);
     let stroke = egui::Stroke::new(2., ui.visuals().text_color());
     for pair in path.windows(2) {
-        ui.painter().line_segment([position(pair[0]), position(pair[1])], stroke);
+        ui.painter()
+            .line_segment([position(pair[0]), position(pair[1])], stroke);
     }
     let end = position(path[path.len() - 1]);
     let previous = position(path[path.len() - 2]);
     let direction = (end - previous).normalized();
     let side = egui::vec2(-direction.y, direction.x);
     for sign in [-1., 1.] {
-        ui.painter().line_segment([end, end - direction * 6. + side * (sign * 4.)], stroke);
+        ui.painter()
+            .line_segment([end, end - direction * 6. + side * (sign * 4.)], stroke);
     }
 }
 fn choose_action(rule: &mut Rule, action: Action) {
@@ -82,7 +91,10 @@ fn choose_action(rule: &mut Rule, action: Action) {
 }
 fn platform_action_status(action: Action) -> &'static str {
     if cfg!(target_os = "windows")
-        && matches!(action, Action::MinimizeWindow | Action::MaximizeWindow | Action::CloseWindow)
+        && matches!(
+            action,
+            Action::MinimizeWindow | Action::MaximizeWindow | Action::CloseWindow
+        )
         || cfg!(target_os = "macos")
             && matches!(action, Action::MinimizeWindow | Action::CloseWindow)
     {
@@ -112,7 +124,13 @@ fn scopes_overlap(a: &Scope, b: &Scope) -> bool {
 }
 fn conflict_details(book: &RuleBook) -> Option<String> {
     for (i, a) in book.rules.iter().enumerate().filter(|(_, r)| r.enabled) {
-        for (j, b) in book.rules.iter().enumerate().skip(i + 1).filter(|(_, r)| r.enabled) {
+        for (j, b) in book
+            .rules
+            .iter()
+            .enumerate()
+            .skip(i + 1)
+            .filter(|(_, r)| r.enabled)
+        {
             if a.gesture == b.gesture
                 && scope_rank(&a.scope) == scope_rank(&b.scope)
                 && a.priority == b.priority
@@ -141,9 +159,17 @@ impl RuleEditor {
             Ok((store, draft)) => {
                 let (store, status) = match CompiledRules::new(draft.clone()) {
                     Ok(_) => (Some(store), String::new()),
-                    Err(e) => (None, format!("原规则文件已保留，当前只读：{}", rule_error_label(e))),
+                    Err(e) => (
+                        None,
+                        format!("原规则文件已保留，当前只读：{}", rule_error_label(e)),
+                    ),
                 };
-                Self { draft, store, application: String::new(), status }
+                Self {
+                    draft,
+                    store,
+                    application: String::new(),
+                    status,
+                }
             }
             Err(e) => Self {
                 draft: RuleBook::default(),
@@ -158,25 +184,59 @@ impl RuleEditor {
         self.draft.enabled = false;
         CompiledRules::new(self.draft.clone())
             .map_err(|e| anyhow::anyhow!("规则无效：{}", rule_error_label(e)))?;
-        self.store.as_mut()
+        self.store
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("需要先恢复规则文件"))?
             .save(&self.draft)
     }
     fn add_rule(&mut self) {
-        if self.draft.rules.len() >= 128 { return; }
-        if let Some(id) = self.draft.rules.iter().map(|r| r.id).max().unwrap_or(0).checked_add(1) {
+        if self.draft.rules.len() >= 128 {
+            return;
+        }
+        if let Some(id) = self
+            .draft
+            .rules
+            .iter()
+            .map(|r| r.id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+        {
             self.draft.rules.push(Rule {
-                id, enabled: false, gesture: 2, scope: Scope::Global, priority: 0,
+                id,
+                enabled: false,
+                gesture: 2,
+                scope: Scope::Global,
+                priority: 0,
                 action: ActionSpec::new(Action::Copy),
             });
         }
     }
-    pub fn add_from_gesture(&mut self,gesture:u32)->anyhow::Result<()> {
-        anyhow::ensure!((1..=8).contains(&gesture),"此轨迹不在当前八种模板中");
-        anyhow::ensure!(self.store.is_some()&&self.draft.rules.len()<128,"规则当前只读或已达数量上限");
-        let id=self.draft.rules.iter().map(|rule|rule.id).max().unwrap_or(0).checked_add(1).ok_or_else(||anyhow::anyhow!("规则编号已达上限"))?;
-        self.draft.rules.push(Rule{id,enabled:false,gesture,scope:Scope::Global,priority:0,action:ActionSpec::new(Action::MinimizeWindow)});
-        self.status="已从窗口轨迹创建未保存规则；请选择动作并保存，全局手势仍关闭。".into();Ok(())
+    pub fn add_from_gesture(&mut self, gesture: u32) -> anyhow::Result<()> {
+        anyhow::ensure!((1..=8).contains(&gesture), "此轨迹不在当前八种模板中");
+        anyhow::ensure!(
+            self.store.is_some() && self.draft.rules.len() < 128,
+            "规则当前只读或已达数量上限"
+        );
+        let id = self
+            .draft
+            .rules
+            .iter()
+            .map(|rule| rule.id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("规则编号已达上限"))?;
+        self.draft.rules.push(Rule {
+            id,
+            enabled: false,
+            gesture,
+            scope: Scope::Global,
+            priority: 0,
+            action: ActionSpec::new(Action::MinimizeWindow),
+        });
+        self.status = "已从窗口轨迹创建未保存规则；请选择动作并保存，全局手势仍关闭。".into();
+        Ok(())
     }
     pub fn preview(&self, gesture: u32) -> Result<Resolution, RuleError> {
         // Preview consent is not global G1 consent. No native hook/action backend.
@@ -190,14 +250,25 @@ impl RuleEditor {
         ui.label("匹配顺序：排除优先 → 精确应用 → 应用组 → 全局兜底。");
         ui.horizontal(|ui| {
             ui.label("测试应用标识");
-            ui.add(egui::TextEdit::singleline(&mut self.application).hint_text("手动填入真实应用标识"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.application).hint_text("手动填入真实应用标识"),
+            );
         });
         ui.weak("应用选择器尚未实现。此字段仅供手动测试，不会读取或切换当前应用。");
         if let Some(id) = gesture {
             ui.label(match self.preview(id) {
                 Ok(Resolution::Selected { rule_id, action }) => {
-                    let position = self.draft.rules.iter().position(|r| r.id == rule_id).map_or(0, |i| i + 1);
-                    format!("{} → {} · 命中第 {position} 条（仅预览）", gesture_label(id), action_label(action.action))
+                    let position = self
+                        .draft
+                        .rules
+                        .iter()
+                        .position(|r| r.id == rule_id)
+                        .map_or(0, |i| i + 1);
+                    format!(
+                        "{} → {} · 命中第 {position} 条（仅预览）",
+                        gesture_label(id),
+                        action_label(action.action)
+                    )
                 }
                 Ok(Resolution::Excluded) => "此应用已被排除，所有映射均不匹配。".into(),
                 Ok(Resolution::InvalidApplication) => "请输入有效的测试应用标识。".into(),
@@ -212,7 +283,9 @@ impl RuleEditor {
         ui.heading("轨迹、范围与动作");
         ui.label("保存的是本机规则。全局手势 G1 仍关闭，勾选规则仅用于匹配预览。");
         ui.weak("Windows 已实现最小化 / 最大化 / 关闭窗口的 Native 库；macOS 已实现最小化 / 关闭窗口；Linux 暂无。均未在此 GUI 接通执行，真实效果未验收。");
-        if !writable { ui.label("当前配置只读，可以查看与测试，不能编辑或保存。"); }
+        if !writable {
+            ui.label("当前配置只读，可以查看与测试，不能编辑或保存。");
+        }
         if self.store.is_none() {
             ui.label("规则文件不可用：原文件已保留。显式备份重置后才能保存新规则。");
             if writable && ui.button("备份并重置无效的规则文件").clicked() {
@@ -336,7 +409,9 @@ impl RuleEditor {
                 };
             }
         });
-        if !self.status.is_empty() { ui.label(&self.status); }
+        if !self.status.is_empty() {
+            ui.label(&self.status);
+        }
         ui.weak("应用标识须与本机读取结果精确一致；此页不捕获全局输入、不执行动作。");
     }
 }
@@ -354,9 +429,17 @@ mod tests {
         output.drop_without_applying_deltas();
     }
     #[test]
-    fn recorded_gesture_creates_only_an_unsaved_disabled_rule()->anyhow::Result<()> {
-        let fixture=super::super::tests::Fixture::new()?;let mut editor=RuleEditor::new(&fixture.path);
-        editor.add_from_gesture(3)?;let rule=editor.draft.rules.last().unwrap();assert_eq!(rule.gesture,3);assert!(!rule.enabled);assert!(!editor.draft.enabled);assert!(!fixture.path.join("gesture-rules.json").exists());assert!(editor.add_from_gesture(99).is_err());Ok(())
+    fn recorded_gesture_creates_only_an_unsaved_disabled_rule() -> anyhow::Result<()> {
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut editor = RuleEditor::new(&fixture.path);
+        editor.add_from_gesture(3)?;
+        let rule = editor.draft.rules.last().unwrap();
+        assert_eq!(rule.gesture, 3);
+        assert!(!rule.enabled);
+        assert!(!editor.draft.enabled);
+        assert!(!fixture.path.join("gesture-rules.json").exists());
+        assert!(editor.add_from_gesture(99).is_err());
+        Ok(())
     }
     #[test]
     fn ordinary_render_and_preview_do_not_write_or_enable_global_capture() -> anyhow::Result<()> {
@@ -410,15 +493,25 @@ mod tests {
     fn conflict_description_identifies_both_rows_and_overlapping_scope() {
         let mut book = RuleBook::default();
         let rule = Rule {
-            id: 4, enabled: true, gesture: 2,
-            scope: Scope::Application { id: "app:browser".into() },
-            priority: 0, action: ActionSpec::new(Action::CloseWindow),
+            id: 4,
+            enabled: true,
+            gesture: 2,
+            scope: Scope::Application {
+                id: "app:browser".into(),
+            },
+            priority: 0,
+            action: ActionSpec::new(Action::CloseWindow),
         };
         book.rules = vec![rule.clone(), Rule { id: 5, ..rule }];
         let description = conflict_details(&book).unwrap();
         assert!(description.contains("第 1 条") && description.contains("第 2 条"));
-        assert!(matches!(CompiledRules::new(book.clone()), Err(RuleError::Conflict)));
-        book.rules[1].scope = Scope::Application { id: "app:editor".into() };
+        assert!(matches!(
+            CompiledRules::new(book.clone()),
+            Err(RuleError::Conflict)
+        ));
+        book.rules[1].scope = Scope::Application {
+            id: "app:editor".into(),
+        };
         assert!(conflict_details(&book).is_none());
         assert!(CompiledRules::new(book).is_ok());
     }

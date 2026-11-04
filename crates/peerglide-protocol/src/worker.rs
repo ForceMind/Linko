@@ -60,24 +60,47 @@ pub struct WorkerInputEvent {
     #[serde(default, skip_serializing_if = "is_false")]
     pub terminal: bool,
 }
-fn is_false(value: &bool) -> bool { !*value }
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 impl WorkerInputEvent {
     pub fn new(state: WorkerInputState) -> Self {
-        Self { version: 1, kind: InputEventKind::Input, state, terminal: false }
+        Self {
+            version: 1,
+            kind: InputEventKind::Input,
+            state,
+            terminal: false,
+        }
     }
     /// The producer may issue this only after its supervisor has returned and
     /// cannot start another native session. Unconfirmed never proves cleanup.
     pub fn new_terminal(state: WorkerInputState) -> Option<Self> {
-        matches!(state, WorkerInputState::Local | WorkerInputState::Disabled | WorkerInputState::RecoveryUnconfirmed)
-            .then_some(Self { version: 1, kind: InputEventKind::Input, state, terminal: true })
+        matches!(
+            state,
+            WorkerInputState::Local
+                | WorkerInputState::Disabled
+                | WorkerInputState::RecoveryUnconfirmed
+        )
+        .then_some(Self {
+            version: 1,
+            kind: InputEventKind::Input,
+            state,
+            terminal: true,
+        })
     }
     pub fn parse(line: &str) -> Option<Self> {
         if line.len() > 1024 {
             return None;
         }
         serde_json::from_str::<Self>(line).ok().filter(|event| {
-            event.version == 1 && (!event.terminal || matches!(event.state,
-                WorkerInputState::Local | WorkerInputState::Disabled | WorkerInputState::RecoveryUnconfirmed))
+            event.version == 1
+                && (!event.terminal
+                    || matches!(
+                        event.state,
+                        WorkerInputState::Local
+                            | WorkerInputState::Disabled
+                            | WorkerInputState::RecoveryUnconfirmed
+                    ))
         })
     }
     /// One bounded JSON record without a trailing newline. Only finite enums
@@ -110,9 +133,12 @@ mod tests {
     #[test]
     fn input_states_have_an_independent_closed_schema_without_private_data() {
         for state in [
-            WorkerInputState::Disabled, WorkerInputState::Local,
-            WorkerInputState::ControllingRemote, WorkerInputState::ReceivingRemote,
-            WorkerInputState::Recovering, WorkerInputState::RecoveryUnconfirmed,
+            WorkerInputState::Disabled,
+            WorkerInputState::Local,
+            WorkerInputState::ControllingRemote,
+            WorkerInputState::ReceivingRemote,
+            WorkerInputState::Recovering,
+            WorkerInputState::RecoveryUnconfirmed,
             WorkerInputState::Unavailable,
         ] {
             let line = WorkerInputEvent::new(state).line();
@@ -124,10 +150,13 @@ mod tests {
             assert_eq!(object.len(), 3);
             assert_eq!(data["version"], 1);
             assert_eq!(data["kind"], "input");
-            assert!(object.keys().all(|key| ["version", "kind", "state"].contains(&key.as_str())));
+            assert!(object
+                .keys()
+                .all(|key| ["version", "kind", "state"].contains(&key.as_str())));
             assert!(line.len() < 128 && !line.contains('\n'));
         }
-        let connection = serde_json::to_string(&WorkerEvent::new(WorkerState::Authenticated)).unwrap();
+        let connection =
+            serde_json::to_string(&WorkerEvent::new(WorkerState::Authenticated)).unwrap();
         assert!(WorkerInputEvent::parse(&connection).is_none());
     }
 
@@ -153,7 +182,11 @@ mod tests {
 
     #[test]
     fn only_explicit_consistent_terminal_records_can_report_supervisor_completion() {
-        for state in [WorkerInputState::Local, WorkerInputState::Disabled, WorkerInputState::RecoveryUnconfirmed] {
+        for state in [
+            WorkerInputState::Local,
+            WorkerInputState::Disabled,
+            WorkerInputState::RecoveryUnconfirmed,
+        ] {
             let event = WorkerInputEvent::new_terminal(state).unwrap();
             assert!(event.terminal);
             assert_eq!(WorkerInputEvent::parse(&event.line()), Some(event));
@@ -161,27 +194,50 @@ mod tests {
             assert!(!normal.line().contains("terminal"));
             assert!(!WorkerInputEvent::parse(&normal.line()).unwrap().terminal);
         }
-        for state in [WorkerInputState::ControllingRemote, WorkerInputState::ReceivingRemote,
-            WorkerInputState::Recovering, WorkerInputState::Unavailable] {
+        for state in [
+            WorkerInputState::ControllingRemote,
+            WorkerInputState::ReceivingRemote,
+            WorkerInputState::Recovering,
+            WorkerInputState::Unavailable,
+        ] {
             assert!(WorkerInputEvent::new_terminal(state).is_none());
             let mut invalid = serde_json::to_value(WorkerInputEvent::new(state)).unwrap();
             invalid["terminal"] = true.into();
             assert!(WorkerInputEvent::parse(&invalid.to_string()).is_none());
         }
-        assert!(WorkerInputEvent::parse(r#"{"version":1,"kind":"input","state":"Local","terminal":"true"}"#).is_none());
-        let explicit_false = WorkerInputEvent::parse(r#"{"version":1,"kind":"input","state":"Local","terminal":false}"#).unwrap();
+        assert!(WorkerInputEvent::parse(
+            r#"{"version":1,"kind":"input","state":"Local","terminal":"true"}"#
+        )
+        .is_none());
+        let explicit_false = WorkerInputEvent::parse(
+            r#"{"version":1,"kind":"input","state":"Local","terminal":false}"#,
+        )
+        .unwrap();
         assert!(!explicit_false.terminal);
     }
 
     #[test]
     fn reversed_input_records_do_not_turn_a_normal_local_snapshot_into_terminal_proof() {
         let normal = WorkerInputEvent::new(WorkerInputState::Local).line();
-        let terminal = WorkerInputEvent::new_terminal(WorkerInputState::RecoveryUnconfirmed).unwrap().line();
-        for records in [[normal.as_str(), terminal.as_str()], [terminal.as_str(), normal.as_str()]] {
-            let parsed: Vec<_> = records.into_iter().map(|line| WorkerInputEvent::parse(line).unwrap()).collect();
+        let terminal = WorkerInputEvent::new_terminal(WorkerInputState::RecoveryUnconfirmed)
+            .unwrap()
+            .line();
+        for records in [
+            [normal.as_str(), terminal.as_str()],
+            [terminal.as_str(), normal.as_str()],
+        ] {
+            let parsed: Vec<_> = records
+                .into_iter()
+                .map(|line| WorkerInputEvent::parse(line).unwrap())
+                .collect();
             assert_eq!(parsed.iter().filter(|event| event.terminal).count(), 1);
-            assert_eq!(parsed.iter().find(|event| event.terminal).unwrap().state, WorkerInputState::RecoveryUnconfirmed);
-            assert!(parsed.iter().all(|event| event.state != WorkerInputState::Local || !event.terminal));
+            assert_eq!(
+                parsed.iter().find(|event| event.terminal).unwrap().state,
+                WorkerInputState::RecoveryUnconfirmed
+            );
+            assert!(parsed
+                .iter()
+                .all(|event| event.state != WorkerInputState::Local || !event.terminal));
         }
     }
 }

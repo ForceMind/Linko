@@ -1,7 +1,9 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
 use peerglide_platform::{self as platform, now_ms, Captured};
-use peerglide_protocol::{decode, encode, worker::WorkerInputState, Edge, Input, InputCapabilities, Message, Motion};
+use peerglide_protocol::{
+    decode, encode, worker::WorkerInputState, Edge, Input, InputCapabilities, Message, Motion,
+};
 use peerglide_transport as transport;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -108,20 +110,34 @@ struct InputStatus<'a> {
 }
 impl<'a> InputStatus<'a> {
     fn new(native: bool, reporter: &'a mut super::InputReporter) -> Self {
-        Self { native, reporter, unconfirmed: false }
+        Self {
+            native,
+            reporter,
+            unconfirmed: false,
+        }
     }
     fn routing(&mut self, outgoing: bool, incoming: bool) {
-        let state = if !self.native { WorkerInputState::Disabled }
-            else if self.unconfirmed { WorkerInputState::RecoveryUnconfirmed }
-            else if outgoing { WorkerInputState::ControllingRemote }
-            else if incoming { WorkerInputState::ReceivingRemote }
-            else { WorkerInputState::Local };
+        let state = if !self.native {
+            WorkerInputState::Disabled
+        } else if self.unconfirmed {
+            WorkerInputState::RecoveryUnconfirmed
+        } else if outgoing {
+            WorkerInputState::ControllingRemote
+        } else if incoming {
+            WorkerInputState::ReceivingRemote
+        } else {
+            WorkerInputState::Local
+        };
         self.reporter.set(state);
     }
     fn recovering(&mut self) {
-        self.reporter.set(if !self.native { WorkerInputState::Disabled }
-            else if self.unconfirmed { WorkerInputState::RecoveryUnconfirmed }
-            else { WorkerInputState::Recovering });
+        self.reporter.set(if !self.native {
+            WorkerInputState::Disabled
+        } else if self.unconfirmed {
+            WorkerInputState::RecoveryUnconfirmed
+        } else {
+            WorkerInputState::Recovering
+        });
     }
     fn checked<T>(&mut self, result: Result<T>) -> Result<T> {
         if result.is_err() && self.native {
@@ -132,7 +148,9 @@ impl<'a> InputStatus<'a> {
     }
     fn restore(&mut self, capture: Option<&platform::CaptureSession>) -> Result<()> {
         self.recovering();
-        if let Some(capture) = capture { self.checked(capture.restore_checked())?; }
+        if let Some(capture) = capture {
+            self.checked(capture.restore_checked())?;
+        }
         Ok(())
     }
     fn release(&mut self, recovery: &mut Recovery) -> Result<()> {
@@ -140,10 +158,15 @@ impl<'a> InputStatus<'a> {
         self.checked(recovery.release())
     }
     fn finish(&mut self, clean: bool) {
-        self.reporter.set(if !self.native { WorkerInputState::Disabled }
-            else if self.unconfirmed { WorkerInputState::RecoveryUnconfirmed }
-            else if clean { WorkerInputState::Local }
-            else { WorkerInputState::Unavailable });
+        self.reporter.set(if !self.native {
+            WorkerInputState::Disabled
+        } else if self.unconfirmed {
+            WorkerInputState::RecoveryUnconfirmed
+        } else if clean {
+            WorkerInputState::Local
+        } else {
+            WorkerInputState::Unavailable
+        });
     }
 }
 
@@ -160,7 +183,6 @@ pub async fn run(
 }
 
 pub(super) async fn run_with_status(
-
     c: quinn::Connection,
     mut tx: quinn::SendStream,
     mut rx: quinn::RecvStream,
@@ -344,14 +366,29 @@ pub(super) async fn run_with_status(
     let receiving = recovery.receiver.active();
     let sending = outgoing.take();
     let cleanup = input_status.checked(recovery.release());
-    let shutdown = input_status.checked(capture.as_mut().map(|capture| capture.shutdown()).transpose());
+    let shutdown = input_status.checked(
+        capture
+            .as_mut()
+            .map(|capture| capture.shutdown())
+            .transpose(),
+    );
     // Notify a still-connected source/receiver after stopping local routing. A
     // queued Release is not an acknowledgement of the peer's native effects.
     let mut notification = Ok(());
     for lease in [receiving, sending].into_iter().flatten() {
-        if let Err(error) = send(&mut tx, &Message::Release { lease, cursor: None }).await {
+        if let Err(error) = send(
+            &mut tx,
+            &Message::Release {
+                lease,
+                cursor: None,
+            },
+        )
+        .await
+        {
             if native {
-                if notification.is_ok() { notification = Err(error); }
+                if notification.is_ok() {
+                    notification = Err(error);
+                }
             }
         }
     }
@@ -397,14 +434,17 @@ mod tests {
             status.routing(true, false);
             status.routing(false, true);
             status.recovering();
-            assert!(status.checked::<()>(Err(anyhow::anyhow!("simulated failure"))).is_err());
+            assert!(status
+                .checked::<()>(Err(anyhow::anyhow!("simulated failure")))
+                .is_err());
             status.finish(false);
         }
         assert_eq!(reporter.observed, [WorkerInputState::Disabled]);
     }
 
     #[test]
-    fn real_receiver_ledger_transitions_are_separate_from_connection_and_cleanup_failure_is_sticky() {
+    fn real_receiver_ledger_transitions_are_separate_from_connection_and_cleanup_failure_is_sticky()
+    {
         // Reporting is exercised against a real Receiver ledger and fake native
         // effects. No hook, OS injection, permissions or current input are used.
         let mut recovery = held_recovery();
@@ -416,15 +456,23 @@ mod tests {
             status.routing(false, recovery.receiver.active().is_some());
             status.routing(true, false);
             status.recovering();
-            assert!(status.checked::<()>(Err(anyhow::anyhow!("restore rejected"))).is_err());
+            assert!(status
+                .checked::<()>(Err(anyhow::anyhow!("restore rejected")))
+                .is_err());
             status.routing(false, false);
             status.finish(true);
         }
-        assert_eq!(reporter.observed, [
-            WorkerInputState::ReceivingRemote, WorkerInputState::Recovering,
-            WorkerInputState::Local, WorkerInputState::ControllingRemote,
-            WorkerInputState::Recovering, WorkerInputState::RecoveryUnconfirmed,
-        ]);
+        assert_eq!(
+            reporter.observed,
+            [
+                WorkerInputState::ReceivingRemote,
+                WorkerInputState::Recovering,
+                WorkerInputState::Local,
+                WorkerInputState::ControllingRemote,
+                WorkerInputState::Recovering,
+                WorkerInputState::RecoveryUnconfirmed,
+            ]
+        );
     }
 
     #[test]
@@ -523,28 +571,50 @@ mod tests {
             let mut status = InputStatus::new(true, &mut reporter);
             status.routing(false, recovery.receiver.active().is_some());
             status.recovering();
-            assert!(status.checked(recovery.finish_with(
-                1, None, 2, |_| Ok(()),
-                |_| { attempts += 1; anyhow::bail!("fake native release rejected") },
-            )).is_err());
+            assert!(status
+                .checked(recovery.finish_with(
+                    1,
+                    None,
+                    2,
+                    |_| Ok(()),
+                    |_| {
+                        attempts += 1;
+                        anyhow::bail!("fake native release rejected")
+                    },
+                ))
+                .is_err());
             assert_eq!(attempts, 3);
             let mut remaining = Vec::new();
-            recovery.pending_releases.flush(|event| {
-                remaining.push(event);
-                Ok::<_, ()>(())
-            }).unwrap();
-            assert_eq!(remaining, [Input::Key { usage: 0xe0, down: false }]);
+            recovery
+                .pending_releases
+                .flush(|event| {
+                    remaining.push(event);
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+            assert!(matches!(
+                remaining.as_slice(),
+                [Input::Key {
+                    usage: 0xe0,
+                    down: false
+                }]
+            ));
             status.routing(false, recovery.receiver.active().is_some());
             status.finish(true);
         }
-        assert_eq!(reporter.observed, [
-            WorkerInputState::ReceivingRemote, WorkerInputState::Recovering,
-            WorkerInputState::RecoveryUnconfirmed,
-        ]);
+        assert_eq!(
+            reporter.observed,
+            [
+                WorkerInputState::ReceivingRemote,
+                WorkerInputState::Recovering,
+                WorkerInputState::RecoveryUnconfirmed,
+            ]
+        );
     }
 
     #[tokio::test]
-    async fn cooperative_stop_releases_a_real_session_before_return_without_native_input() -> Result<()> {
+    async fn cooperative_stop_releases_a_real_session_before_return_without_native_input(
+    ) -> Result<()> {
         let a = Identity::generate()?;
         let b = Identity::generate()?;
         let ea = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
@@ -555,11 +625,21 @@ mod tests {
             let c = eb.accept().await.unwrap().await?;
             let (tx, rx) = c.accept_bi().await?;
             let mut reporter = super::super::InputReporter::new(false);
-            run_with_status(c.clone(), tx, rx, Policy {
-                allow: true, native: false, edge: Edge::Right,
-                local: InputCapabilities::new(&[0xe0], true, 1, true).unwrap(),
-                peer: InputCapabilities::default(),
-            }, stopped, &mut reporter).await?;
+            run_with_status(
+                c.clone(),
+                tx,
+                rx,
+                Policy {
+                    allow: true,
+                    native: false,
+                    edge: Edge::Right,
+                    local: InputCapabilities::new(&[0xe0], true, 1, true).unwrap(),
+                    peer: InputCapabilities::default(),
+                },
+                stopped,
+                &mut reporter,
+            )
+            .await?;
             assert_eq!(reporter.observed, [WorkerInputState::Disabled]);
             release_confirmed.await?;
             c.close(0u8.into(), b"stopped without native input");
@@ -568,21 +648,57 @@ mod tests {
         let client = async {
             let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
             let (mut tx, mut rx) = c.open_bi().await?;
-            send(&mut tx, &Message::Acquire { lease: 1, edge: Edge::Right, along: 0.5 }).await?;
-            assert!(matches!(transport::receive(&mut rx).await?, Message::Granted { lease: 1 }));
-            send(&mut tx, &Message::Input {
-                lease: 1, event: Input::Key { usage: 0xe0, down: true },
-                cursor: Motion { lease: 1, sequence: 1, x: 0.5, y: 0.5 },
-            }).await?;
+            send(
+                &mut tx,
+                &Message::Acquire {
+                    lease: 1,
+                    edge: Edge::Right,
+                    along: 0.5,
+                },
+            )
+            .await?;
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Granted { lease: 1 }
+            ));
+            send(
+                &mut tx,
+                &Message::Input {
+                    lease: 1,
+                    event: Input::Key {
+                        usage: 0xe0,
+                        down: true,
+                    },
+                    cursor: Motion {
+                        lease: 1,
+                        sequence: 1,
+                        x: 0.5,
+                        y: 0.5,
+                    },
+                },
+            )
+            .await?;
             send(&mut tx, &Message::Ping { lease: 1 }).await?;
-            assert!(matches!(transport::receive(&mut rx).await?, Message::Pong { lease: 1 }));
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Pong { lease: 1 }
+            ));
             stop.send(true)?;
-            assert!(matches!(transport::receive(&mut rx).await?, Message::Release { lease: 1, cursor: None }));
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Release {
+                    lease: 1,
+                    cursor: None
+                }
+            ));
             let _ = release_seen.send(());
             c.close(0u8.into(), b"release observed");
             Ok::<_, anyhow::Error>(())
         };
-        tokio::time::timeout(Duration::from_secs(8), async { tokio::try_join!(server, client) }).await??;
+        tokio::time::timeout(Duration::from_secs(8), async {
+            tokio::try_join!(server, client)
+        })
+        .await??;
         Ok(())
     }
 

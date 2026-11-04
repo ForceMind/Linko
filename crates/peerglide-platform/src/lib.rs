@@ -131,12 +131,12 @@ pub struct CaptureSession {
 impl CaptureSession {
     pub fn shutdown(&mut self) -> Result<()> {
         // Always stop the native thread, even when cursor restoration fails.
-        let restored=self.restore_checked();
-        #[cfg(any(windows,target_os="macos"))]
-        let stopped=self._thread.shutdown(std::time::Duration::from_millis(500));
+        let restored = self.restore_checked();
+        #[cfg(any(windows, target_os = "macos"))]
+        let stopped = self._thread.shutdown(std::time::Duration::from_millis(500));
         restored?;
-        #[cfg(any(windows,target_os="macos"))]
-        anyhow::ensure!(stopped,"native capture shutdown timed out or panicked");
+        #[cfg(any(windows, target_os = "macos"))]
+        anyhow::ensure!(stopped, "native capture shutdown timed out or panicked");
         Ok(())
     }
     pub fn begin(&self, return_x: f64, return_y: f64) -> Result<bool> {
@@ -153,16 +153,21 @@ impl CaptureSession {
         pointer(0.5, 0.5)?;
         Ok(true)
     }
-    pub fn restore_checked(&self)->Result<()> {
+    pub fn restore_checked(&self) -> Result<()> {
         self.gate.disable();
-        let mut position=self.return_position.lock().map_err(|_|anyhow::anyhow!("capture position lock poisoned"))?;
-        if let Some((x,y))=*position{pointer(x,y)?;*position=None;}
+        let mut position = self
+            .return_position
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))?;
+        if let Some((x, y)) = *position {
+            pointer(x, y)?;
+            *position = None;
+        }
         Ok(())
     }
     pub fn restore(&self) {
-        let _=self.restore_checked();
+        let _ = self.restore_checked();
     }
-
 }
 /// Compiled backend support, independent of OS permissions and peer grants.
 pub fn input_capabilities() -> InputCapabilities {
@@ -329,20 +334,37 @@ impl HookState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(any(windows,target_os="macos")))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     #[test]
-    fn checked_restore_reports_failure_and_keeps_the_return_position(){
-        let session=CaptureSession{gate:CaptureGate::default(),return_position:std::sync::Mutex::new(Some((0.2,0.3)))};
-        assert!(session.gate.try_activate());assert!(session.restore_checked().is_err());assert!(!session.gate.active());
-        assert_eq!(*session.return_position.lock().unwrap(),Some((0.2,0.3)));
+    fn checked_restore_reports_failure_and_keeps_the_return_position() {
+        let session = CaptureSession {
+            gate: CaptureGate::default(),
+            return_position: std::sync::Mutex::new(Some((0.2, 0.3))),
+        };
+        assert!(session.gate.try_activate());
+        assert!(session.restore_checked().is_err());
+        assert!(!session.gate.active());
+        assert_eq!(*session.return_position.lock().unwrap(), Some((0.2, 0.3)));
     }
-    #[cfg(any(windows,target_os="macos"))]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
-    fn shutdown_still_reaps_thread_after_restore_lock_failure(){
-        let position=std::sync::Mutex::new(None);
-        let _=std::panic::catch_unwind(||{let _guard=position.lock().unwrap();panic!("test poison");});
-        let mut session=CaptureSession{gate:CaptureGate::default(),_thread:CaptureThread::spawn(|stop|{while !stop.load(Ordering::Acquire){std::thread::yield_now();}}),return_position:position};
-        assert!(session.shutdown().is_err());assert!(session._thread.shutdown(std::time::Duration::from_secs(1)));
+    fn shutdown_still_reaps_thread_after_restore_lock_failure() {
+        let position = std::sync::Mutex::new(None);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = position.lock().unwrap();
+            panic!("test poison");
+        });
+        let mut session = CaptureSession {
+            gate: CaptureGate::default(),
+            _thread: CaptureThread::spawn(|stop| {
+                while !stop.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+            }),
+            return_position: position,
+        };
+        assert!(session.shutdown().is_err());
+        assert!(session._thread.shutdown(std::time::Duration::from_secs(1)));
     }
     #[test]
     fn compiled_backend_capabilities_are_valid_and_do_not_claim_linux_input() {
