@@ -430,3 +430,23 @@ Automatic Codex code review could not run: repository review usage limit reached
 No credits/purchases/review-gate bypass were requested. CI does not replace that
 review. Independent security review, native OS backends/network integration,
 persistent/global disk accounting and real Win/Mac acceptance remain open.
+
+
+## Local takeover / durable receive-root reservations (2026-11-04, WIP)
+
+Verified main is 5d9476376b218567330cce0b5c74c9fb2e8c70a7 with no open PR.
+Main run 41784077840 and #32 candidate run 41783406794 both succeeded; the latter
+head is 7f0fd40890988da80e2d602e9d6a2dd2e00bf160. This does not close C06 or #10.
+
+On Darwin 25.2.0 arm64, `python tools/local_preflight.py` cannot start because
+`python` is unavailable. `python3 tools/local_preflight.py` records rustc/cargo
+unavailable, fails starting fmt with missing cargo, and leaves subsequent checks
+not_run. Report: target/local-validation/preflight-20261104T064341094380Z-34835.
+No installation, native input, clipboard access or OS permission change occurred.
+Local GUI, actual worker/probe/reconnect and physical input remain unverified.
+
+New regressions exercise durable quota across cancelled/published/moved files,
+legacy receipt import, exact resume without double charge, consent reset, lower
+budget refusal, root-lock lifetime, failed staging, altered manifests and preserved
+malformed/future/oversized records. Candidate tests/CI are pending at this checkpoint;
+no new passing checks or persistent detailed-history claims are made yet.

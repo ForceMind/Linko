@@ -1,8 +1,8 @@
-//! Offline file admission and lifecycle. No networking or global disk quota.
-//! Budget is cumulative for this manager lifetime, including retained partials.
+//! Offline file admission with durable root-wide cumulative reservations.
+//! No networking, automatic refunds, cleanup or filesystem free-space guarantee.
 use crate::{
     data_policy::{Capability, DataSession, Denied, Permissions, Permit},
-    Manifest, PeerBinding, Progress, Receiver,
+    admission::Ledger, Manifest, PeerBinding, Progress, Receiver,
 };
 use std::{
     collections::BTreeMap,
@@ -52,24 +52,25 @@ struct Entry {
 }
 
 /// Every admission is an explicit local per-offer accept (or explicit resume).
-/// Reconstructing a manager does not inventory old disk usage: the product must
-/// account for retained data before choosing a new budget. No automatic cleanup.
+/// Opening inventories retained storage and holds an OS lock for this receive
+/// root. Reservations survive manager/session/process lifetimes. No cleanup.
 pub struct Manager {
     root: PathBuf,
     session: DataSession,
     budget: u64,
-    admitted: u64,
     entries: BTreeMap<[u8; 16], Entry>,
+    // Drop last: receivers must close before another manager can acquire the root.
+    ledger: Ledger,
 }
 impl Manager {
     pub fn new(root: &Path, session: DataSession, budget: u64) -> io::Result<Self> {
-        crate::require_dir(root)?;
+        let ledger = Ledger::open(root)?;
         Ok(Self {
             root: root.to_owned(),
             session,
             budget,
-            admitted: 0,
             entries: BTreeMap::new(),
+            ledger,
         })
     }
 
@@ -124,15 +125,13 @@ impl Manager {
             .values()
             .filter(|entry| entry.receiver.is_some())
             .count();
-        let admitted = self
-            .admitted
-            .checked_add(manifest.size())
-            .ok_or(Error::Quota)?;
-        if active >= MAX_ACTIVE || self.entries.len() >= MAX_ATTEMPTS || admitted > self.budget {
+        if active >= MAX_ACTIVE || self.entries.len() >= MAX_ATTEMPTS {
             return Err(Error::Quota);
         }
-        // Reserve before filesystem work: an I/O failure may leave partial data.
-        self.admitted = admitted;
+        // Sync the durable reservation before creating or extending staged data.
+        if !self.ledger.reserve(binding.clone(), &manifest, resume, self.budget)? {
+            return Err(Error::Quota);
+        }
         let total_bytes = manifest.size();
         let result = if resume {
             Receiver::resume(&self.root, binding, manifest)
@@ -246,8 +245,14 @@ impl Manager {
         self.entries.get(&id).map(|entry| entry.summary)
     }
 
+    /// Startup inventory plus durable admissions; retained/terminal counts are
+    /// the startup snapshot, not a live progress or publication-success report.
+    pub fn inventory(&self) -> crate::Inventory {
+        self.ledger.inventory()
+    }
+
     pub fn admitted_bytes(&self) -> u64 {
-        self.admitted
+        self.ledger.inventory().reserved_bytes
     }
 }
 
@@ -314,7 +319,7 @@ mod tests {
         assert!(manager
             .accept(binding(1), manifest.clone(), false, 0)
             .is_err());
-        assert_eq!(fs::read_dir(&manager.root).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&manager.root).unwrap().count(), 1);
         grant(&mut manager);
         assert!(manager
             .accept(
@@ -324,7 +329,7 @@ mod tests {
                 0
             )
             .is_err());
-        assert_eq!(fs::read_dir(&manager.root).unwrap().count(), 0);
+        assert_eq!(fs::read_dir(&manager.root).unwrap().count(), 1);
         manager
             .accept(binding(1), manifest.clone(), false, 0)
             .unwrap();
@@ -410,7 +415,9 @@ mod tests {
             .unwrap();
         let root = manager.root.clone();
         manager.close();
-        let mut resumed = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 9).unwrap();
+        drop(manager);
+        let mut resumed = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
+        assert_eq!(resumed.admitted_bytes(), 45);
         grant(&mut resumed);
         resumed.accept(binding(1), manifest, true, 0).unwrap();
         assert_eq!(resumed.summary([1; 16]).unwrap().verified_bytes, 9);
@@ -453,5 +460,130 @@ mod tests {
         }
         let path = manager.commit([1; 16], || 2).unwrap();
         assert_eq!(fs::read(path).unwrap(), b"file data");
+    }
+
+    #[test]
+    fn restart_preserves_cancelled_and_published_reservations() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(18);
+        grant(&mut manager);
+        manager.accept(binding(1), manifest.clone(), false, 0).unwrap();
+        manager.cancel([1; 16]).unwrap();
+        manager.accept(binding(2), manifest.clone(), false, 0).unwrap();
+        manager.write_chunk([2; 16], 0, b"file data", 1).unwrap();
+        let published = manager.commit([2; 16], || 2).unwrap();
+        // Moving the user's published file must not refund admission credit.
+        fs::rename(published, fixture.0.join("moved.txt")).unwrap();
+        let root = manager.root.clone();
+        drop(manager);
+        let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 18).unwrap();
+        assert_eq!(manager.admitted_bytes(), 18);
+        assert_eq!(manager.inventory().reservations, 2);
+        assert_eq!(manager.inventory().retained_partials, 1);
+        assert_eq!(manager.inventory().terminal_records, 1);
+        // A new session still starts without consent.
+        assert!(matches!(manager.accept(binding(1), manifest.clone(), true, 0), Err(Error::Permission(_))));
+        grant(&mut manager);
+        assert!(matches!(manager.accept(binding(3), manifest.clone(), false, 0), Err(Error::Quota)));
+        manager.accept(binding(1), manifest, true, 0).unwrap();
+        assert_eq!(manager.admitted_bytes(), 18);
+        assert_eq!(fs::read(fixture.0.join("moved.txt")).unwrap(), b"file data");
+    }
+
+    #[test]
+    fn legacy_inventory_is_imported_without_refunding_or_double_charging() {
+        let fixture = Fixture::new();
+        let (manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        drop(manager);
+        let mut legacy = Receiver::create(&root, binding(1), manifest.clone()).unwrap();
+        legacy.write_chunk(0, b"file data").unwrap();
+        drop(legacy);
+        let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 8).unwrap();
+        assert_eq!(manager.admitted_bytes(), 9);
+        grant(&mut manager);
+        assert!(matches!(manager.accept(binding(1), manifest.clone(), true, 0), Err(Error::Quota)));
+        drop(manager);
+        let mut manager = Manager::new(&root, DataSession::new([1; 32], [4; 32], 0), 9).unwrap();
+        grant(&mut manager);
+        manager.accept(binding(1), manifest, true, 0).unwrap();
+        assert_eq!(manager.summary([1; 16]).unwrap().verified_bytes, 9);
+        assert_eq!(manager.admitted_bytes(), 9);
+        manager.commit([1; 16], || 1).unwrap();
+    }
+
+    #[test]
+    fn exclusive_manager_lock_survives_session_close_and_releases_on_drop() {
+        let fixture = Fixture::new();
+        let (mut manager, _) = fixture.setup(100);
+        let root = manager.root.clone();
+        assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
+        manager.close();
+        assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
+        drop(manager);
+        assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_ok());
+    }
+
+    #[test]
+    fn admission_io_failure_keeps_durable_reservation() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(9);
+        let root = manager.root.clone();
+        let receipt = serde_json::to_vec(&crate::Receipt { binding: binding(1), manifest: manifest.clone() }).unwrap();
+        let staging = root.join(format!(".peerglide-{}", blake3::hash(&receipt).to_hex()));
+        fs::create_dir(&staging).unwrap();
+        grant(&mut manager);
+        assert!(manager.accept(binding(1), manifest.clone(), false, 0).is_err());
+        assert_eq!(manager.admitted_bytes(), 9);
+        drop(manager);
+        // A partial initialization blocks reopening; the original is preserved.
+        assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 9).is_err());
+        assert!(staging.is_dir());
+        // Explicit fixture recovery does not delete the durable reservation.
+        fs::remove_dir(&staging).unwrap();
+        let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 9).unwrap();
+        grant(&mut manager);
+        assert_eq!(manager.admitted_bytes(), 9);
+        assert!(matches!(manager.accept(binding(2), manifest, false, 0), Err(Error::Quota)));
+    }
+
+    #[test]
+    fn damaged_and_future_storage_records_are_preserved_and_rejected() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        grant(&mut manager);
+        manager.accept(binding(1), manifest, false, 0).unwrap();
+        drop(manager);
+        let record = fs::read_dir(&root).unwrap().map(|entry| entry.unwrap().path()).find(|path| path.file_name().unwrap().to_str().unwrap().starts_with(".peerglide-admission-")).unwrap();
+        let original = fs::read(&record).unwrap();
+        let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        value["version"] = 2.into();
+        let future = serde_json::to_vec(&value).unwrap();
+        for bytes in [b"{".to_vec(), future, vec![0; 2049]] {
+            fs::write(&record, &bytes).unwrap();
+            assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
+            assert_eq!(fs::read(&record).unwrap(), bytes);
+        }
+        fs::write(&record, original).unwrap();
+        assert_eq!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap().admitted_bytes(), 9);
+    }
+
+    #[test]
+    fn restart_rejects_changed_manifest_or_reused_id_but_retains_quota() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        grant(&mut manager);
+        manager.accept(binding(1), manifest.clone(), false, 0).unwrap();
+        drop(manager);
+        fs::write(fixture.0.join("source.txt"), b"different").unwrap();
+        let changed = Manifest::from_file(&fixture.0.join("source.txt")).unwrap();
+        let mut manager = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
+        grant(&mut manager);
+        assert!(manager.accept(binding(1), changed, true, 0).is_err());
+        assert!(manager.accept(binding(1), manifest.clone(), false, 0).is_err());
+        manager.accept(binding(1), manifest, true, 0).unwrap();
+        assert_eq!(manager.admitted_bytes(), 9);
     }
 }
