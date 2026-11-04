@@ -606,3 +606,74 @@ its upstream Thin default (100). Three Python notice regressions pass locally.
 Final documentation/README follow-up changes no runtime/build/test source; its
 exact-head candidate CI is reported on PR #34. Physical C06, global G1/actions,
 production data network, persistent detailed history and #10 remain open.
+
+
+## G1 native read-only context increment (2026-11-04, WIP)
+
+Branch native-context follows ready/unmerged #33/#34. Main remains 5d947637;
+#33 head 2d2bed5 and #34 head 69736f6 were rechecked open/unmerged. Local worktree
+was clean before branching. User's no-Rust-install decision and Chinese GUI stay.
+
+Adds real Windows/macOS foreground/focus providers, explicit diagnose-context
+CLI without identity/network/input flags, and an on-click Chinese GUI process
+permission snapshot. IDs follow the existing exact 256-byte rule contract; raw
+window/control references stay private. Point-in-time consistency is explicitly
+not a focus generation, execution ticket or action grant. Linux stays Unsupported.
+See NATIVE_CONTEXT.md for OS APIs, privacy and remaining native worker gates.
+
+Python syntax, notice tests (3) and whitespace checks passed locally. Native
+compile/tests/diagnostic smoke, full final matrix and actual local diagnostic
+are pending. No permission prompt, capture, injection, native context read on the
+user Mac or toolchain installation has been performed by this new increment yet.
+C06/G1 execution/#10 root cause remain open; no acceptance boxes closed.
+
+
+### Native context candidate results
+
+Initial 52e1a83 passed minimum Rust but failed formatting. One format-log EOF hunk
+was initially missed and then applied; superseded intermediate 9d63f27 was cancelled.
+Candidate 51997e7 reached strict Clippy and identified two actual integration
+issues: CLI test-module placement, and conflicting const/mut CFRelease declarations
+between old/new Mac adapters. Moved the tests to EOF and matched CFTypeRef's const
+signature without changing ownership or ignoring lints. This is unrelated to #10.
+
+Mac candidate 8f3847a passed its complete native job. Linux reported Unsupported
+correctly, but the smoke omitted the corresponding unavailable recheck status;
+fixed the harness to require unavailable focus/recheck on all unavailable foreground
+results and retain native result codes only when a foreground exists. The output
+field allowlist was strengthened, not replaced with a fake success or skipped test.
+
+Final runtime/test candidate `31ae8be796fc32f5a3dd2f44974e525d88aa67b2` passed
+all five jobs in [41806308409](https://github.com/ForceMind/PeerGlide/actions/runs/41806308409):
+Windows/macOS/Linux fmt/strict Clippy/workspace tests/Release/process probe/reconnect/
+read-only context smoke/packages; Linux GUI; macOS stress; Rust 1.95; strict audit.
+The focused static reviewer rechecked NSString bounds, FFI ownership/signature and
+CLI-module fixes without new findings; this is not an independent security audit.
+
+Downloaded 8f3847a macOS artifact 13308579428 (complete Mac job run 41805129361),
+verified inner ARM64 ZIP SHA256
+`22538d688b2c2fa5c1ec36f8ffcb1d0939c4bd3f32f3946d3d1beaa6d79ff1d9`.
+Its runtime/build sources match 31ae8be; only the corrected Python smoke differs.
+On macOS 26.2 (25C56), the current smoke passed against that binary. Default
+stdout omits identifiers; the explicit-ID variant was checked only in memory.
+Foreground application information was available; focus/native successful access
+was not accepted where current OS access was unavailable. Personal permission
+values and application IDs are not published. Local metadata report remains
+at target/local-validation/context-8f3847a/report.json and was not staged/uploaded.
+
+The exact runtime's isolated GUI opened in Chinese. Settings → 检查当前系统权限
+was actually clicked; Chinese statuses and GUI/worker/snapshot caveats rendered,
+without enabling input/control, opening OS settings or requesting trust. Its
+profile still contained only gui-instance.lock; no identity/certificate/settings
+was created. The test window remains open for the user. No native Mac screenshot
+or local report was uploaded. A suspected pre-existing dark-checkbox/native-theme
+mismatch was observed separately and left for independent investigation; no theme
+logic changed here.
+
+Native focus success under granted/revoked permissions, transient away-and-back,
+Windows real interactive desktop/UAC/session behavior, process/handle counts and
+physical C06 remain unverified. Continuous notification/generation/token lifecycle,
+Backend/owned action injection and local worker consent remain unimplemented;
+query success enables none of them. Final follow-up updates docs/README and an obsolete rule-preview footer; native
+provider, CLI and permission-button logic are unchanged. Its exact-head CI remains
+the PR #35 gate. Main and prior PRs stay unmerged.

@@ -68,6 +68,19 @@ pages or transport probes. Without `--data-dir`, the existing user-profile locat
 is unchanged. Unknown or incomplete command-line options reject before opening a
 window or creating configuration files.
 
+Read-only diagnostics need no identity or network and never request input permissions;
+unavailable OS access is reported explicitly:
+
+```sh
+peerglide diagnose-context
+# Opt in only if you want the exact application identifier in local stdout:
+peerglide diagnose-context --include-application-id
+```
+
+Settings → 检查当前系统权限 also reads the GUI process's permission snapshot.
+These checks never request OS permissions or authorize control/actions. See
+[native context](docs/NATIVE_CONTEXT.md) for privacy, supported OSes and limitations.
+
 ## Explicit two-peer enrollment
 
 On each computer create a **different** identity:

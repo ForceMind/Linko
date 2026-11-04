@@ -9,6 +9,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
+pub mod context;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
 

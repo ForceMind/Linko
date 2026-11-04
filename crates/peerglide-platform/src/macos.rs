@@ -57,7 +57,7 @@ extern "C" {
     fn CFRunLoopAddSource(loop_: Ref, source: Ref, mode: Ref);
     fn CFRunLoopRunInMode(mode: Ref, seconds: f64, return_after_source: bool) -> i32;
     static kCFRunLoopDefaultMode: Ref;
-    fn CFRelease(value: Ref);
+    fn CFRelease(value: *const c_void);
 }
 thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)};}
 static MODIFIERS: Mutex<u64> = Mutex::new(0);

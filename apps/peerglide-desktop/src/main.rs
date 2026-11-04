@@ -20,6 +20,12 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// 只读检查本进程的前台/焦点与系统权限，不创建身份或启用输入。
+    DiagnoseContext {
+        /// 明确输出应用标识（Windows 可能包含个人安装路径）；默认不输出。
+        #[arg(long)]
+        include_application_id: bool,
+    },
     /// Create an identity. Exchange ONLY node.crt.der over an independently trusted channel.
     Init {
         #[arg(long, default_value = "identity")]
@@ -80,6 +86,9 @@ struct Options {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::DiagnoseContext {
+            include_application_id,
+        } => diagnose_context(include_application_id),
         Command::Init { identity } => {
             let id = transport::Identity::create(&identity)?;
             println!(
@@ -97,6 +106,47 @@ async fn main() -> Result<()> {
         } => run(options, Some(address), probe).await,
     }
 }
+
+fn diagnose_context(include_application_id: bool) -> Result<()> {
+    use peerglide_platform::context::{observe_foreground, permissions};
+    let permissions = permissions();
+    let mut report = serde_json::json!({
+        "schema_version": 1,
+        "platform": std::env::consts::OS,
+        "observation_scope": "sampled_no_notifications",
+        "action_execution_supported": false,
+        "native_capture_started": false,
+        "permissions": {
+            "accessibility": permissions.accessibility.code(),
+            "input_monitoring": permissions.input_monitoring.code(),
+            "input_desktop": permissions.input_desktop.code(),
+            "secure_input": permissions.secure_input.code(),
+        },
+    });
+    match observe_foreground() {
+        Ok(foreground) => {
+            report["foreground_status"] = "available".into();
+            report["focus_status"] = foreground.focus().code().into();
+            report["recheck_status"] = match foreground.matches_current() {
+                Ok(true) => "matched_at_recheck",
+                Ok(false) => "changed",
+                Err(error) => error.code(),
+            }
+            .into();
+            if include_application_id {
+                report["application_id"] = foreground.application_id().into();
+            }
+        }
+        Err(error) => {
+            report["foreground_status"] = error.code().into();
+            report["focus_status"] = "unavailable".into();
+            report["recheck_status"] = "unavailable".into();
+        }
+    }
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
 fn worker_event(managed: bool, state: WorkerState) {
     if managed {
         use std::io::Write;
@@ -258,4 +308,37 @@ async fn run_inner(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod context_cli_tests {
+    use super::*;
+    #[test]
+    fn readonly_context_command_needs_no_identity_network_or_input_flags() {
+        assert!(matches!(
+            Cli::try_parse_from(["peerglide", "diagnose-context"])
+                .unwrap()
+                .command,
+            Command::DiagnoseContext {
+                include_application_id: false
+            }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["peerglide", "diagnose-context", "--include-application-id"])
+                .unwrap()
+                .command,
+            Command::DiagnoseContext {
+                include_application_id: true
+            }
+        ));
+        for flag in [
+            "--native",
+            "--allow-control",
+            "--identity",
+            "--peer-cert",
+            "--managed",
+        ] {
+            assert!(Cli::try_parse_from(["peerglide", "diagnose-context", flag]).is_err());
+        }
+    }
 }

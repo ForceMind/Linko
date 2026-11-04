@@ -247,7 +247,7 @@ impl RuleEditor {
         if !self.status.is_empty() {
             ui.label(&self.status);
         }
-        ui.weak("精确应用标识将由后续的平台适配器提供；不使用窗口标题或通配符匹配。");
+        ui.weak("应用标识须与本机读取结果精确一致；当前预览仍不捕获全局输入或执行动作。");
     }
 }
 #[cfg(test)]
