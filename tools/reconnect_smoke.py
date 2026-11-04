@@ -41,10 +41,22 @@ def states(log):
     for line in log.read_text().splitlines():
         if line.startswith("{"):
             try:
-                result.append(json.loads(line)["state"])
+                record = json.loads(line)
+                if "kind" not in record:
+                    result.append(record["state"])
             except (json.JSONDecodeError, KeyError):
                 pass  # A concurrent reader can observe the final line before flush.
     return result
+
+def assert_input_disabled(log, finished):
+    records = [json.loads(line) for line in log.read_text().splitlines()
+               if line.startswith("{")]
+    inputs = [record for record in records if record.get("kind") == "input"]
+    disabled = {"version": 1, "kind": "input", "state": "Disabled"}
+    expected = [disabled]
+    if finished:
+        expected.append({**disabled, "terminal": True})
+    assert inputs == expected, log.read_text()
 
 with tempfile.TemporaryDirectory(prefix="peerglide-reconnect-") as work:
     root = pathlib.Path(work)
@@ -70,6 +82,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-reconnect-") as work:
         wait_for(lambda: "Reconnecting" in states(client_log), client, client_log)
         second = server(b, address)
         wait_for(lambda: states(client_log).count("Authenticated") >= 2, client, client_log)
+        assert_input_disabled(client_log, finished=False)
         print("PASS: independent processes reconnect and authenticate the same pinned peer")
         retry_count = states(client_log).count("Reconnecting")
         stop(second)
@@ -81,6 +94,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-reconnect-") as work:
         assert client.wait(timeout=25) != 0, client_log.read_text()
         assert "identity changed during reconnect" in client_log.read_text(), client_log.read_text()
         assert states(client_log).count("Authenticated") == 2, client_log.read_text()
+        assert_input_disabled(client_log, finished=True)
         print("PASS: changing a pin cannot silently enroll a replacement identity")
         stop(third)
         pin.write_bytes(original_pin)
@@ -90,6 +104,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-reconnect-") as work:
         waiting.stdin.flush()
         assert waiting.wait(timeout=5) == 0, client_log.read_text()
         assert states(client_log)[-1] == "Stopped", client_log.read_text()
+        assert_input_disabled(client_log, finished=True)
         print("PASS: managed stop cancels reconnection backoff")
     finally:
         for child in children:

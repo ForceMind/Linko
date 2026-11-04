@@ -8,6 +8,20 @@ import sys
 import tempfile
 import time
 
+def managed_states(output):
+    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    inputs = [record for record in records if record.get("kind") == "input"]
+    disabled = {"version": 1, "kind": "input", "state": "Disabled"}
+    terminal = {**disabled, "terminal": True}
+    assert inputs == [disabled, terminal], output
+    assert records[0] == disabled, output
+    assert records[-2:] == [terminal, {"version": 1, "state": "Stopped"}], output
+    connections = [record for record in records if "kind" not in record]
+    assert len(connections) + len(inputs) == len(records), output
+    assert all(set(record) == {"version", "state"} and record["version"] == 1
+               for record in connections), output
+    return [record["state"] for record in connections]
+
 binary = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/peerglide").resolve()
 with tempfile.TemporaryDirectory(prefix="peerglide-smoke-") as work:
     root = pathlib.Path(work)
@@ -37,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-smoke-") as work:
             try:
                 assert probe.wait(timeout=10) == 0, probe.stderr.read()
                 stdout = probe.stdout.read()
-                states = [json.loads(line)["state"] for line in stdout.splitlines() if line.startswith("{")]
+                states = managed_states(stdout)
                 assert states == ["Listening", "Authenticated", "ProbePassed", "Stopped"], stdout
             finally:
                 if probe.poll() is None:
@@ -58,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-smoke-") as work:
         try:
             managed.communicate(input=b"stop\n",timeout=5)
             assert managed.returncode==0,log.read_text()
-            states = [json.loads(line)["state"] for line in log.read_text().splitlines() if line.startswith("{")]
+            states = managed_states(log.read_text())
             assert states[-1] == "Stopped", states
             print("PASS: GUI-managed worker gracefully stops without a connected peer")
         finally:
