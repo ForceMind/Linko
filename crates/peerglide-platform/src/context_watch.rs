@@ -116,12 +116,21 @@ impl Signal {
 struct Slot(Arc<AtomicUsize>);
 impl Slot {
     fn reserve(count: &Arc<AtomicUsize>) -> Result<Self, WatchError> {
-        count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                value.checked_add(1).filter(|next| *next <= MAX_BINDINGS)
-            })
-            .map_err(|_| WatchError::Capacity)?;
-        Ok(Self(count.clone()))
+        // Bounded worker-side CAS works on the minimum toolchain as well as
+        // current stable; no deprecated update helper or callback retry loop.
+        for _ in 0..16 {
+            let value = count.load(Ordering::Acquire);
+            if value >= MAX_BINDINGS {
+                return Err(WatchError::Capacity);
+            }
+            if count
+                .compare_exchange(value, value + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Ok(Self(count.clone()));
+            }
+        }
+        Err(WatchError::Backlog)
     }
 }
 impl Drop for Slot {
