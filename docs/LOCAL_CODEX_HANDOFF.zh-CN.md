@@ -422,3 +422,36 @@ http://127.0.0.1:8051/标签页作为设计交付；服务器仅公开docs/desig
 系统权限/真实剪贴板文件或原生输入操作。SVG与PNG可离线查看。新增GUI尚未
 迁入eframe；不要把目标原型模拟成已可用能力。细节见docs/design/README与
 VALIDATION。旧Native增量#40仍留在独立分支，目标已清除，当前只做UI设计。
+
+## 21. 线框迁入实际GUI（actual-gui-interactions，开发中）
+
+用户明确要求按0.3线框落地eframe，实际接线、中文、未实现标注，每步/版本
+commit push。本分支从#41/8d644e6开，保留旧Native worker #40独立分支。
+0.2.0-dev实现五页导航/真实证书向导/通信与Native显式模式/设备权限和布局/
+规则画布/只读恢复/常驻停止。新增input IPC（无内容）和terminal最终软件
+清理状态，Auth不等于控制，旧Local缓存或EOF不等于清理证明；原Input v5不改。
+root拥有GUI main/desktop_ui与platform restore_checked，localize_panels只改
+protocol worker及desktop main/session；gui_mouse_editor只改rules/lab，readonly
+reviewer只审不写，均不递归。第一候选源码已写入未编译；本机无Rust决定不变。
+说明GUI_INTERACTIONS.zh-CN.md。不得用演示原型填充实际GUI或打开未接通功能。
+
+
+本批实际源码c0a1882通过完整五项CI41883855509，包含三平台严格检查/测试/
+Release/真实进程smokes、Linux实际GUI绘制与显式导出、Mac多轮并行回归、最低
+1.95与审计。fmt、测试Debug断言、egui测试API、严格Clippy和旧smoke混合解析
+均按实际日志修复，原连接顺序断言保留，新增input Disabled与最终terminal断言。
+针对只读审查修正重复停止/超时覆盖已到达terminal的竞态，旧Local缓存、读取
+失败与未终态EOF都不能充当恢复成功。每批修复已commit push，无强推。
+
+SHA校验的同候选Mac产物已在本机以独立目录实际验收：中文五页/禁用规则保存/
+中文名称和路径粘贴/真实身份指纹登记/独立接收许可保持关闭/仅回环通信/停止/
+再次probe/布局持久化/深浅色/只读权限检查/关闭窗口；GUI、worker和测试peer均
+exit0，无残留。没有--native/--allow-control、全局G1或数据共享。Mac AX与输入
+监控未授予，没有改权限。宿主沙箱内初次启动134无日志，允许WindowServer后
+成功，不是#10根因定位。CUA观察已关闭App会重开默认窗口，已关闭未编辑；用
+真实隔离进程退出码确认收尾。细节GUI_INTERACTIONS、VALIDATION。私钥/配置/
+宿主截图不上传，测试产物留ignored target。最后跟进仅文档，源码/测试/tools/
+workflow与c0a1882一致；精确最终head五项CI与PR42就绪状态以远端回读为准。
+#42叠加未合并#41，main未合并；后续授权仍只沿本次GUI迁移，不恢复旧G1/数据
+完整Goal。物理C06、Native动作、权限变化、中文IME、托盘/配对码/应用选择器/
+生产数据流仍未验收或未提供，不能把CI当完整独立安全审计。

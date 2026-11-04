@@ -18,6 +18,9 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
     def capture(arguments, name):
         log = pathlib.Path(temporary) / f"{name}.log"
         with log.open("w") as output:
+            geometry = pathlib.Path(temporary) / "widget-geometry.json"
+            if name == "gesture-lab":
+                arguments = [*arguments, "--ui-layout-report", str(geometry)]
             gui = subprocess.Popen([str(root / "target/release/peerglide-gui"), "--data-dir", str(profile), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
             try:
                 for _ in range(100):
@@ -37,16 +40,27 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                 if name == "gesture-lab":
                     # Fixed-size, scale-1 virtual window. This is synthetic GUI
                     # input on our isolated X server, never a user desktop.
-                    subprocess.run(["xdotool", "mousemove", "--window", window, "300", "200"], check=True)
+                    for _ in range(30):
+                        if geometry.exists():
+                            layout = json.loads(geometry.read_text())
+                            break
+                        time.sleep(0.1)
+                    else:
+                        raise TimeoutError("real widget geometry was not reported")
+                    assert layout["scope"] == "isolated_gui_widget_geometry"
+                    cx, cy, cw, ch = layout["canvas"]
+                    sx, sy, sw, sh = layout["save"]
+                    start_x, start_y = int(cx + 45), int(cy + ch / 2)
+                    subprocess.run(["xdotool", "mousemove", "--window", window, str(start_x), str(start_y)], check=True)
                     subprocess.run(["xdotool", "mousedown", "3"], check=True)
-                    for x in (320, 345, 370, 400, 420):
-                        subprocess.run(["xdotool", "mousemove", "--window", window, str(x), "200"], check=True)
+                    for delta in (20, 45, 70, 100, 120):
+                        subprocess.run(["xdotool", "mousemove", "--window", window, str(start_x + delta), str(start_y)], check=True)
                         time.sleep(0.06)
                     subprocess.run(["xdotool", "mouseup", "3"], check=True)
                     time.sleep(0.3)
                     folder = profile / "gesture-samples"
                     assert not folder.exists(), "recording must not autosave"
-                    subprocess.run(["xdotool", "mousemove", "--window", window, "240", "440", "click", "1"], check=True)
+                    subprocess.run(["xdotool", "mousemove", "--window", window, str(int(sx + sw / 2)), str(int(sy + sh / 2)), "click", "1"], check=True)
                     sample = None
                     for _ in range(30):
                         files = list(folder.glob("*.json"))

@@ -898,3 +898,52 @@ host/runner injection, permission change or Rust install occurred. The adapter
 cannot prove continuity after silent hook removal or completion beyond its hook.
 All native/physical/worker/macOS/keyboard gates listed above remain unfinished.
 Final docs-only head preserves runtime/tests; its exact CI/readiness is on PR #39.
+
+### Actual Chinese GUI migration (0.2.0-dev, candidate)
+
+The actual eframe GUI now uses the approved five-page design and real enrollment,
+communication/probe, primary-screen direction, independent receiving preference,
+readonly permission diagnostics, rules/canvas/config recovery and stop flows.
+Unimplemented global G1/data/pairing-code/tray features stay explicitly unavailable;
+no demo devices, files, grants or success states are used in the running GUI.
+
+New local input IPC is independent of connection/authentication, with a final
+terminal cleanup observation after the supervisor has ended. GUI drains final
+stdout without read errors, rejects cached nonterminal Local/Disabled as proof,
+and never auto-restarts Native from unknown cleanup. Platform restore_checked
+propagates pointer failures while still attempting thread shutdown. Managed stop
+cooperatively awaits session cleanup rather than dropping its future.
+
+Candidate checks must cover schema/terminal/sticky failure, actual command flags,
+cooperative real-loopback stop without native input, full desktop/dialog render,
+no render-only writes, future/invalid rules preservation, explicit sample export
+and real widget geometry for isolated Xvfb. Full matrix is pending, not local
+Rust success. No host input/clipboard/file sharing or OS permission change has
+been run. Physical C06, native app semantics and #10 root cause remain unverified.
+
+
+The runtime candidate c0a188277d9646c5889727f19490030ab684347b passed all five
+jobs in [run 41883855509](https://github.com/ForceMind/PeerGlide/actions/runs/41883855509).
+This includes strict checks/tests/Release/process smokes on all three platforms,
+macOS repeated parallel GUI regressions, Linux Xvfb actual drawing/explicit export,
+Rust 1.95 and the strict dependency audit. Early fmt/test API/Clippy failures were
+fixed; the process smoke now separates input records while preserving the exact
+connection sequence and asserting Disabled through the final terminal receipt.
+
+The SHA-verified macOS artifact also ran on this host with an explicit isolated
+profile. Actual Chinese navigation, disabled rule save, pasted Chinese peer name
+and certificate path, identity/enrollment, default-off receiving preference,
+loopback managed communication, stop, another probe, persisted layout direction,
+light/dark settings, readonly permission checks and window-close cleanup passed.
+GUI/worker/loopback peer exit codes were 0; actual managed child arguments omitted
+native/receiving flags. No host capture/injection/action/data sharing was started.
+AX/Input Monitoring were denied; no grants changed. Canvas drawing is proven by
+isolated Xvfb, not host right-button sampling or Chinese IME acceptance.
+
+The first sandboxed host launch exited 134 without logs; a WindowServer-accessible
+launch succeeded. This is not a diagnosis of historical #10. CUA App observation
+can relaunch a closed app; that default window was closed without editing it.
+The isolated process exit codes, rather than a subsequent App query, prove cleanup.
+See GUI_INTERACTIONS.zh-CN.md for details. This final documentation follow-up leaves
+runtime/tests/tools/workflow sources unchanged; exact-head CI is read back on #42.
+Physical C06, global G1, native effects and production data sharing remain pending.
