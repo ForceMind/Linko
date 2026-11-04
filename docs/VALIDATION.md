@@ -677,3 +677,26 @@ Backend/owned action injection and local worker consent remain unimplemented;
 query success enables none of them. Final follow-up updates docs/README and an obsolete rule-preview footer; native
 provider, CLI and permission-button logic are unchanged. Its exact-head CI remains
 the PR #35 gate. Main and prior PRs stay unmerged.
+
+## Native invalidation / consuming context binding increment (WIP)
+
+focus-invalidation branches from verified/unmerged #35 head 1a648f4. Adds actual
+read-only Windows/macOS notification adapters and worker-owned context bindings.
+The independent static review found a ready/epoch ABA; replaced separate readiness
+reads with one versioned atomic state and added a controlled interleaving through
+the actual mark clock path. Review then found no new deterministic defect.
+
+Pure regressions cover coalesced away/back, trigger epoch/cache handoff, original
+queue deadline, single consume/conflicting token, configuration/worker/close,
+128-slot accounting including consumed native leases, expiry/clock/counter closure,
+and unsupported Linux. Windows tests cover callback detach/poison, cached target,
+session and notification classification. These do not simulate physical acceptance.
+
+The explicit diagnose-context --observe-ms path starts no input capture and mints
+no context, reports true unavailable/native errors, and treats cleanup failure as
+failure. CI adds standalone CLI dependency-feature checking to avoid workspace GUI
+feature unification masking native bindings. Python syntax/notice and whitespace
+checks are local; Rust/native compilation, whole-workspace checks, real observer
+smoke, final five-job candidate CI and local observer outcome are pending. No
+system permission/toolchain change or new local native observation has been run.
+Input v5 and global G1 remain disabled; C06 and #10 remain open.

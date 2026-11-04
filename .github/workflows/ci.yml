@@ -18,6 +18,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
+      - name: Standalone CLI dependency features
+        run: cargo check -p peerglide-desktop --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
       - name: Synthetic gesture corpus metrics (not human acceptance)

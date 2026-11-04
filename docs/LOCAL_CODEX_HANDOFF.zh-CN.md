@@ -262,3 +262,21 @@ G03共享捕获短路径、本机Backend/owned injection账本、独立默认关
 界面保持中文。另观察到原生深色选项与可见主题疑似不一致，单独待定位，不
 扩大此PR修复范围。#35最终跟进为README/记录及过期的规则页脚说明；原生提供器、CLI与权限按钮
 逻辑不变，exact-head CI见PR。
+
+
+## 15. 原生通知失效与有界上下文票据（focus-invalidation，开发中）
+
+本轮从已完成且未合并的 #35/1a648f4 新开 focus-invalidation。主线仍5d947637，
+当前实现 context_watch.rs、context_events_windows.rs、context_events_macos.rs：
+只读WinEvent/会话/电源与Workspace/AX通知，回调只设置原子失效位；不是第二套
+键鼠捕获。原捕获生命周期、输入v5、独立授权及全局G1关闭状态保持不变。
+
+原生回调可用固定大小 TriggerMark 记录原代次/单调起点，Worker 不得延迟后
+跟随新target。OS随机worker nonce/target token在回调外生成；128绑定、原始
+5秒以内deadline、消费一次、配置/事件/队列丢失/退出代次失效。Native observer
+不支持时拒绝创建可用上下文，不以采样降级宣称持续保护。API 不提供执行授权。
+
+代码和针对性回归正在写入，未编译/运行/提交；用户不安装Rust、不改系统权限
+决定保持。后续必须独立审查raw callback生命周期/CF与Win句柄释放、跑完整CI
+及显式只读observe诊断。不能把CF/MSG pump当成通知全量屏障或物理验收。G03
+共享输入短路径、动作Backend/owned injection、默认关闭本地worker仍须继续。

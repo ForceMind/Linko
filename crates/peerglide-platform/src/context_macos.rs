@@ -1,4 +1,7 @@
 //! NSWorkspace/AX reads only. Never asks for trust or creates an event tap.
+#[path = "context_events_macos.rs"]
+mod events;
+pub(super) use events::Watch;
 use super::{
     identifier, ContextError, FocusStatus, PermissionReport, PermissionStatus, SecureInput,
 };

@@ -25,6 +25,9 @@ enum Command {
         /// 明确输出应用标识（Windows 可能包含个人安装路径）；默认不输出。
         #[arg(long)]
         include_application_id: bool,
+        /// 显式观察焦点/会话通知，1–5000毫秒；不捕获输入或签发动作票据。
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=5000))]
+        observe_ms: Option<u64>,
     },
     /// Create an identity. Exchange ONLY node.crt.der over an independently trusted channel.
     Init {
@@ -87,8 +90,8 @@ struct Options {
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::DiagnoseContext {
-            include_application_id,
-        } => diagnose_context(include_application_id),
+            include_application_id, observe_ms,
+        } => diagnose_context(include_application_id, observe_ms),
         Command::Init { identity } => {
             let id = transport::Identity::create(&identity)?;
             println!(
@@ -107,7 +110,7 @@ async fn main() -> Result<()> {
     }
 }
 
-fn diagnose_context(include_application_id: bool) -> Result<()> {
+fn diagnose_context(include_application_id: bool, observe_ms: Option<u64>) -> Result<()> {
     use peerglide_platform::context::{observe_foreground, permissions};
     let permissions = permissions();
     let mut report = serde_json::json!({
@@ -142,6 +145,35 @@ fn diagnose_context(include_application_id: bool) -> Result<()> {
             report["focus_status"] = "unavailable".into();
             report["recheck_status"] = "unavailable".into();
         }
+    }
+    if let Some(milliseconds) = observe_ms {
+        report["observation_scope"] = "sampled_with_observer_attempt".into();
+        use peerglide_platform::context::watch::LocalContexts;
+        let started = std::time::Instant::now();
+        let deadline = started + Duration::from_millis(milliseconds);
+        let mut changes = 0;
+        let observer_status = match LocalContexts::new() {
+            Err(error) => error.code(),
+            Ok(mut contexts) => {
+                let mut epoch = contexts.epoch();
+                let mut status = "ready";
+                while std::time::Instant::now() < deadline {
+                    let result = contexts.poll();
+                    let current = contexts.epoch();
+                    changes += current.saturating_sub(epoch);
+                    epoch = current;
+                    if let Err(error) = result { status = error.code(); break; }
+                    std::thread::sleep(Duration::from_millis(5).min(deadline.saturating_duration_since(std::time::Instant::now())));
+                }
+                if contexts.shutdown().is_err() { status = "cleanup_failed"; }
+                status
+            }
+        };
+        report["observer"] = serde_json::json!({
+            "requested_ms": milliseconds, "status": observer_status,
+            "coalesced_invalidations": changes, "context_minted": false,
+            "delivery_verified": false,
+        });
     }
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
@@ -320,7 +352,7 @@ mod context_cli_tests {
                 .unwrap()
                 .command,
             Command::DiagnoseContext {
-                include_application_id: false
+                include_application_id: false, observe_ms: None
             }
         ));
         assert!(matches!(
@@ -328,9 +360,14 @@ mod context_cli_tests {
                 .unwrap()
                 .command,
             Command::DiagnoseContext {
-                include_application_id: true
+                include_application_id: true, observe_ms: None
             }
         ));
+        assert!(matches!(Cli::try_parse_from(["peerglide", "diagnose-context", "--observe-ms", "50"]).unwrap().command,
+            Command::DiagnoseContext { observe_ms: Some(50), .. }));
+        for invalid in ["0", "5001", "-1", "bad"] {
+            assert!(Cli::try_parse_from(["peerglide", "diagnose-context", "--observe-ms", invalid]).is_err());
+        }
         for flag in [
             "--native",
             "--allow-control",
