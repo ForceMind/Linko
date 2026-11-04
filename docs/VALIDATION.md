@@ -806,3 +806,54 @@ is reported on PR #37. Global G1, keyboard owned injection, G03 input wiring/loc
 worker consent UI, native positive effects, C06 and #10 remain open. No local
 Rust/system font/permission installation/change, actual action or stable release
 was performed. Protocol v5/MIT and data permission separation remain unchanged.
+
+### Native G03 short-path candidate (native-gesture-broker)
+
+The optional Windows library path reuses the existing capture hooks, with no
+product binary enable/dispatch. The existing KVM None path, readonly observer,
+probe/reconnect and GUI checks remain required in the full five-job candidate CI.
+The local preflight again reports missing Rust; the user's no-install decision
+stands. Candidate format/Clippy/tests/build/MSRV/audit results are tracked on its
+PR, including failed checks and fixes, rather than claimed as local runs.
+
+New and retained nonphysical regressions cover ordinary/repeated/startup-held right pairs,
+stale admission, held modifiers/buttons, injected classification, cancellation,
+queue saturation, completed-but-unretired work, timeout/revoke/escape/source loss,
+bounded shutdown debt, publication/claim interleavings and zero callback-path
+heap allocations after construction. SPSC tests exercise non-Copy transfer on
+real threads, endpoint closure, wraparound and exactly-once payload destruction.
+OS file-lock tests use separate current-test-exe processes and isolated files,
+prove explicit unlock with a clone still open, preserve rejected objects and
+retain ownership through blocked TLS destruction. Injected unlock failure must
+propagate through shutdown and keep that isolated child process poisoned. These
+do not install hooks.
+
+Windows actual hook delivery, silent-hook-removal behavior, callback latency,
+DPI/driver semantics and all physical C06 items remain NOT RUN. macOS G1 rejects
+by absence of this entry until physical provenance is established; CGEvent
+PID/state is not used as proof. Existing macOS KVM behavior is unchanged. No
+balanced click replay, recognition worker, UI consent or owned-injection ledger
+is delivered here. Product G1 remains disabled; no host permissions or Rust were
+installed, no real window action/capture or protocol-v5 change was attempted.
+
+Candidate `feb3f7ac7371aef1265475e283f00f15ff9fcfd9` passed the complete five jobs
+in [41836066218](https://github.com/ForceMind/PeerGlide/actions/runs/41836066218):
+Windows/macOS/Linux format, standalone CLI features, strict workspace Clippy,
+workspace tests, Release builds, probe/reconnect/readonly-context smoke, package
+checks, Linux GUI runtime and macOS parallel GUI stress, minimum Rust 1.95 and
+strict dependency audit. Linux ran 193 workspace tests; macOS ran 206. Windows ran 222 workspace tests. The native Windows adapter compiles and its mouse
+message classifiers are tested. Injected-origin cases belong to the retained pure
+G03 model; the unchanged native flag/tag filter was statically compared/reviewed,
+not exercised through real hook delivery or host injection.
+
+Earlier candidates failed formatting and the overflow fixture's redundant
+constant expression. Both were fixed without disabling checks. Targeted
+independent static review found and rechecked publication/claim ABA, shutdown
+unlock-failure propagation and original-expiry conversion; deterministic
+interleavings, isolated-child failure injection and delayed-clock regressions
+cover them. This is a focused code review, not a complete security audit.
+
+Final follow-up only records results, preserving all tested runtime/test source;
+exact final-head CI and readiness are recorded on PR #38. No host capture/native
+action, permission change or Rust install occurred. Physical/native delivery and
+all previously listed G1/C06/#10 limitations remain open.

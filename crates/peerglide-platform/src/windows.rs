@@ -7,23 +7,74 @@ use windows_sys::Win32::{
 };
 
 const TAG: usize = 0x50474c44;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalMouseEvent {
+    Right(bool),
+    Motion,
+    Button(u8, bool),
+    BothExtraButtons(bool),
+    Other,
+}
+
+fn local_mouse_event(message: u32, data: u32) -> LocalMouseEvent {
+    match message {
+        WM_RBUTTONDOWN => LocalMouseEvent::Right(true),
+        WM_RBUTTONUP => LocalMouseEvent::Right(false),
+        WM_MOUSEMOVE => LocalMouseEvent::Motion,
+        WM_LBUTTONDOWN => LocalMouseEvent::Button(1, true),
+        WM_LBUTTONUP => LocalMouseEvent::Button(1, false),
+        WM_MBUTTONDOWN => LocalMouseEvent::Button(3, true),
+        WM_MBUTTONUP => LocalMouseEvent::Button(3, false),
+        WM_XBUTTONDOWN | WM_XBUTTONUP => {
+            let button = match (data >> 16) as u16 {
+                XBUTTON1 => 4,
+                XBUTTON2 => 5,
+                both if both == (XBUTTON1 | XBUTTON2) => {
+                    return LocalMouseEvent::BothExtraButtons(message == WM_XBUTTONDOWN);
+                }
+                _ => return LocalMouseEvent::Other,
+            };
+            LocalMouseEvent::Button(button, message == WM_XBUTTONDOWN)
+        }
+        _ => LocalMouseEvent::Other,
+    }
+}
+
 thread_local! { static WHEEL:RefCell<[i32; 2]>=const {RefCell::new([0; 2])}; }
 thread_local! { static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)}; }
 pub fn capture(
     tx: mpsc::Sender<Captured>,
     gate: CaptureGate,
     target: InputCapabilities,
+    local_gestures: Option<gesture_capture::CallbackBroker>,
 ) -> Result<CaptureThread> {
     let reservation = capture_thread::Reservation::acquire()?;
     let (ready, rx) = std::sync::mpsc::sync_channel(1);
-    let thread = CaptureThread::spawn_owned(
+    let thread = CaptureThread::spawn_reserved(
         move |stop| unsafe {
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let keys = initial_keys();
+            let buttons = initial_buttons();
+            let mut local_gestures = local_gestures;
+            if let Some(broker) = local_gestures.as_mut() {
+                // Startup sampling/collection precedes installation, never in
+                // callbacks. KVM keeps its existing three-button capability.
+                let extra_buttons = [(4, VK_XBUTTON1), (5, VK_XBUTTON2)]
+                    .into_iter()
+                    .filter(|(_, vk)| GetAsyncKeyState(i32::from(*vk)) < 0)
+                    .map(|(button, _)| button);
+                broker.initialize(
+                    keys.iter().copied(),
+                    buttons.iter().copied().chain(extra_buttons),
+                );
+            }
             let state = HookState {
+                local_gestures,
                 tx,
                 gate,
-                keys: initial_keys(),
-                buttons: initial_buttons(),
+                keys,
+                buttons,
                 toggle_armed: false,
                 target,
             };
@@ -38,32 +89,61 @@ pub fn capture(
                 if !keyboard.is_null() {
                     UnhookWindowsHookEx(keyboard);
                 }
+                STATE.with_borrow_mut(|state| {
+                    if let Some(broker) = state.as_mut().and_then(|s| s.local_gestures.as_mut()) {
+                        broker.lost();
+                    }
+                });
                 let _ = ready.send(false);
                 return;
             }
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
-            while !stop.load(Ordering::Acquire) {
+            let unexpected = loop {
+                let stopping = stop.load(Ordering::Acquire);
+                let keep_running = STATE.with_borrow_mut(|state| {
+                    state.as_mut().is_some_and(|s| {
+                        if let Some(broker) = s.local_gestures.as_mut() {
+                            // Stop cancels admission immediately. The same hook
+                            // remains installed until its owed physical up is
+                            // received; no competing hook or synthetic release.
+                            broker.keep_running(stopping)
+                        } else {
+                            !stopping
+                        }
+                    })
+                });
+                if !keep_running {
+                    break false;
+                }
                 if PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0 {
                     if msg.message == WM_QUIT {
-                        break;
+                        break true;
                     }
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
                 } else {
                     // Input wakes immediately; the timeout bounds cooperative shutdown.
-                    MsgWaitForMultipleObjectsEx(
+                    if MsgWaitForMultipleObjectsEx(
                         0,
                         std::ptr::null(),
                         50,
                         QS_ALLINPUT,
                         MWMO_INPUTAVAILABLE,
-                    );
+                    ) == WAIT_FAILED
+                    {
+                        break true;
+                    }
                 }
-            }
-            STATE.with_borrow(|s| {
-                if let Some(s) = s {
+            };
+            STATE.with_borrow_mut(|state| {
+                if let Some(s) = state {
                     s.gate.disable();
+                    if unexpected {
+                        if let Some(broker) = s.local_gestures.as_mut() {
+                            broker.lost();
+                        }
+                    }
                 }
             });
             UnhookWindowsHookEx(mouse);
@@ -83,7 +163,11 @@ unsafe extern "system" fn key_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
         if e.flags & LLKHF_INJECTED == 0 && e.dwExtraInfo != TAG {
             let block = STATE.with_borrow_mut(|s| {
                 s.as_mut().is_some_and(|s| {
-                    let _callback = s.gate.begin_event();
+                    let _callback = if s.local_gestures.is_none() {
+                        Some(s.gate.begin_event())
+                    } else {
+                        None
+                    };
                     let down = w as u32 == WM_KEYDOWN || w as u32 == WM_SYSKEYDOWN;
                     physical_key(
                         s,
@@ -109,6 +193,27 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                 let Some(s) = s else {
                     return false;
                 };
+                if let Some(broker) = s.local_gestures.as_mut() {
+                    let remote = s.gate.active();
+                    // Fixed native short path only: no legacy BTreeSet, tokio
+                    // channel, cursor query, wheel state or recognition here.
+                    let point = gesture_capture::RawPoint {
+                        x: f64::from(e.pt.x),
+                        y: f64::from(e.pt.y),
+                        units: gesture_capture::CoordinateUnits::WindowsPhysicalPixels,
+                    };
+                    match local_mouse_event(w as u32, e.mouseData) {
+                        LocalMouseEvent::Right(down) => return broker.right(down, point, remote),
+                        LocalMouseEvent::Motion => broker.motion(point),
+                        LocalMouseEvent::Button(button, down) => broker.button(button, down),
+                        LocalMouseEvent::BothExtraButtons(down) => {
+                            broker.button(4, down);
+                            broker.button(5, down);
+                        }
+                        LocalMouseEvent::Other => broker.other(),
+                    }
+                    return false;
+                }
                 let _callback = s.gate.begin_event();
                 let active = s.gate.active();
                 match w as u32 {
@@ -363,9 +468,6 @@ fn from_scan(scan: u16, extended: bool) -> Option<u16> {
 }
 const STARTUP_VK: u16 = 0x4000;
 fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: bool) -> bool {
-    // Startup state is sampled as VKs; the first physical callback replaces that
-    // sample with its unambiguous scan identity (including keypad Enter).
-    let startup_held = s.keys.remove(&(STARTUP_VK | vk));
     let usage = if vk == VK_PAUSE || vk == VK_SNAPSHOT {
         None
     } else if vk == VK_NUMLOCK {
@@ -373,6 +475,17 @@ fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: boo
     } else {
         from_scan(scan, extended)
     };
+    if let Some(broker) = s.local_gestures.as_mut() {
+        broker.clear_startup_key(STARTUP_VK | vk);
+        // HookState's G1 branches use only the broker's fixed key bitset.
+        return match usage {
+            Some(usage) => s.key(usage, down),
+            None => s.unsupported_key(vk, down),
+        };
+    }
+    // Startup state is sampled as VKs; the first physical callback replaces that
+    // sample with its unambiguous scan identity (including keypad Enter).
+    let startup_held = s.keys.remove(&(STARTUP_VK | vk));
     match usage {
         Some(usage) => {
             if startup_held && down {
@@ -416,6 +529,56 @@ unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_mouse_classification_preserves_right_pairs_and_all_other_buttons() {
+        assert_eq!(
+            local_mouse_event(WM_RBUTTONDOWN, 0),
+            LocalMouseEvent::Right(true)
+        );
+        assert_eq!(
+            local_mouse_event(WM_RBUTTONUP, 0),
+            LocalMouseEvent::Right(false)
+        );
+        assert_eq!(local_mouse_event(WM_MOUSEMOVE, 0), LocalMouseEvent::Motion);
+        for (down, up, button, data) in [
+            (WM_LBUTTONDOWN, WM_LBUTTONUP, 1, 0),
+            (WM_MBUTTONDOWN, WM_MBUTTONUP, 3, 0),
+            (WM_XBUTTONDOWN, WM_XBUTTONUP, 4, u32::from(XBUTTON1) << 16),
+            (WM_XBUTTONDOWN, WM_XBUTTONUP, 5, u32::from(XBUTTON2) << 16),
+        ] {
+            assert_eq!(
+                local_mouse_event(down, data),
+                LocalMouseEvent::Button(button, true)
+            );
+            assert_eq!(
+                local_mouse_event(up, data),
+                LocalMouseEvent::Button(button, false)
+            );
+        }
+        for message in [
+            WM_MOUSEWHEEL,
+            WM_MOUSEHWHEEL,
+            WM_NULL,
+            WM_XBUTTONDOWN,
+            WM_XBUTTONUP,
+        ] {
+            assert_eq!(local_mouse_event(message, 0), LocalMouseEvent::Other);
+        }
+        assert_eq!(
+            local_mouse_event(WM_XBUTTONDOWN, 3 << 16),
+            LocalMouseEvent::BothExtraButtons(true)
+        );
+        assert_eq!(
+            local_mouse_event(WM_XBUTTONUP, 3 << 16),
+            LocalMouseEvent::BothExtraButtons(false)
+        );
+        assert_eq!(
+            local_mouse_event(WM_XBUTTONDOWN, 4 << 16),
+            LocalMouseEvent::Other
+        );
+    }
+
     #[test]
     fn high_resolution_wheel_preserves_remainder_and_direction() {
         let mut remainder = 0;
@@ -455,6 +618,7 @@ mod tests {
     fn startup_virtual_sample_repeat_is_not_a_fresh_switch_press() {
         let (tx, _rx) = mpsc::channel(16);
         let mut s = HookState {
+            local_gestures: None,
             tx,
             gate: CaptureGate::default(),
             keys: [STARTUP_VK | VK_RIGHT, 0xe0, 0xe2].into(),
@@ -470,6 +634,7 @@ mod tests {
     fn keypad_enter_release_clears_ambiguous_startup_sample() {
         let (tx, mut rx) = mpsc::channel(8);
         let mut s = HookState {
+            local_gestures: None,
             tx,
             gate: CaptureGate::default(),
             keys: [STARTUP_VK | VK_RETURN].into(),
