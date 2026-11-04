@@ -86,7 +86,9 @@ struct Options {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::DiagnoseContext { include_application_id } => diagnose_context(include_application_id),
+        Command::DiagnoseContext {
+            include_application_id,
+        } => diagnose_context(include_application_id),
         Command::Init { identity } => {
             let id = transport::Identity::create(&identity)?;
             println!(
@@ -129,7 +131,8 @@ fn diagnose_context(include_application_id: bool) -> Result<()> {
                 Ok(true) => "matched_at_recheck",
                 Ok(false) => "changed",
                 Err(error) => error.code(),
-            }.into();
+            }
+            .into();
             if include_application_id {
                 report["application_id"] = foreground.application_id().into();
             }
@@ -150,14 +153,28 @@ mod context_cli_tests {
     #[test]
     fn readonly_context_command_needs_no_identity_network_or_input_flags() {
         assert!(matches!(
-            Cli::try_parse_from(["peerglide", "diagnose-context"]).unwrap().command,
-            Command::DiagnoseContext { include_application_id: false }
+            Cli::try_parse_from(["peerglide", "diagnose-context"])
+                .unwrap()
+                .command,
+            Command::DiagnoseContext {
+                include_application_id: false
+            }
         ));
         assert!(matches!(
-            Cli::try_parse_from(["peerglide", "diagnose-context", "--include-application-id"]).unwrap().command,
-            Command::DiagnoseContext { include_application_id: true }
+            Cli::try_parse_from(["peerglide", "diagnose-context", "--include-application-id"])
+                .unwrap()
+                .command,
+            Command::DiagnoseContext {
+                include_application_id: true
+            }
         ));
-        for flag in ["--native", "--allow-control", "--identity", "--peer-cert", "--managed"] {
+        for flag in [
+            "--native",
+            "--allow-control",
+            "--identity",
+            "--peer-cert",
+            "--managed",
+        ] {
             assert!(Cli::try_parse_from(["peerglide", "diagnose-context", flag]).is_err());
         }
     }

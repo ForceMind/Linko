@@ -139,7 +139,11 @@ pub fn observe_foreground() -> Result<Foreground, ContextError> {
     if !peerglide_actions::rules::valid_application_id(&application_id) {
         return Err(ContextError::IdentifierUnavailable);
     }
-    Ok(Foreground { application_id, focus, target })
+    Ok(Foreground {
+        application_id,
+        focus,
+        target,
+    })
 }
 
 #[cfg(any(windows, target_os = "macos", test))]
@@ -181,19 +185,37 @@ mod tests {
     use super::*;
     #[test]
     fn native_ids_preserve_case_unicode_and_exact_rule_byte_bound() {
-        assert_eq!(identifier("mac-bundle", "com.Example.Editor").unwrap(), "mac-bundle:com.Example.Editor");
-        assert_eq!(identifier("win-exe", r"C:\应用\Editor.exe").unwrap(), r"win-exe:C:\应用\Editor.exe");
+        assert_eq!(
+            identifier("mac-bundle", "com.Example.Editor").unwrap(),
+            "mac-bundle:com.Example.Editor"
+        );
+        assert_eq!(
+            identifier("win-exe", r"C:\应用\Editor.exe").unwrap(),
+            r"win-exe:C:\应用\Editor.exe"
+        );
         assert_eq!(identifier("x", &"a".repeat(254)).unwrap().len(), 256);
-        assert_eq!(identifier("x", &"a".repeat(255)), Err(ContextError::IdentifierTooLong));
-        assert_eq!(identifier("x", &"中".repeat(85)), Err(ContextError::IdentifierTooLong));
+        assert_eq!(
+            identifier("x", &"a".repeat(255)),
+            Err(ContextError::IdentifierTooLong)
+        );
+        assert_eq!(
+            identifier("x", &"中".repeat(85)),
+            Err(ContextError::IdentifierTooLong)
+        );
         for invalid in ["", " leading", "trailing ", "bad\nvalue", "bad\0value"] {
-            assert_eq!(identifier("x", invalid), Err(ContextError::IdentifierUnavailable));
+            assert_eq!(
+                identifier("x", invalid),
+                Err(ContextError::IdentifierUnavailable)
+            );
         }
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     #[test]
     fn unsupported_platform_does_not_fabricate_context_or_permission() {
-        assert!(matches!(observe_foreground(), Err(ContextError::Unsupported)));
+        assert!(matches!(
+            observe_foreground(),
+            Err(ContextError::Unsupported)
+        ));
         assert_eq!(permissions().accessibility, PermissionStatus::Unsupported);
     }
 }

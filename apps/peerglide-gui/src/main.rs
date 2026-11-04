@@ -799,12 +799,15 @@ impl App {
             ui.label(format!("辅助功能：{}", label(report.accessibility)));
             ui.label(format!("输入监控：{}", label(report.input_monitoring)));
             ui.label(format!("输入桌面查询：{}", label(report.input_desktop)));
-            ui.label(format!("安全输入：{}", match report.secure_input {
-                SecureInput::Active => "已开启，保留系统保护",
-                SecureInput::Inactive => "检查时未检测到",
-                SecureInput::Unknown => "未知，需要实机确认",
-                SecureInput::Unsupported => "暂不支持此项检测，不能据此判断 UAC 状态",
-            }));
+            ui.label(format!(
+                "安全输入：{}",
+                match report.secure_input {
+                    SecureInput::Active => "已开启，保留系统保护",
+                    SecureInput::Inactive => "检查时未检测到",
+                    SecureInput::Unknown => "未知，需要实机确认",
+                    SecureInput::Unsupported => "暂不支持此项检测，不能据此判断 UAC 状态",
+                }
+            ));
             ui.weak("权限或系统状态变化后请重新检查；GUI 与通信工作进程可能有不同的系统授权。");
         }
         ui.add_space(14.0);
