@@ -22,7 +22,11 @@ use std::{
 };
 
 #[derive(Parser)]
-#[command(name = "peerglide-gui", version, about = "PeerGlide desktop control panel")]
+#[command(
+    name = "peerglide-gui",
+    version,
+    about = "PeerGlide desktop control panel"
+)]
 struct Options {
     /// Use this configuration/identity directory instead of the user profile.
     /// Does not import, migrate or authorize anything from another directory.

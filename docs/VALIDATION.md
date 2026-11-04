@@ -450,3 +450,21 @@ explicit directory; canvas drawing remains synthetic isolated-display evidence.
 Candidate fmt/Clippy/workspace tests/build, native matrix and actual local launch
 remain pending. No toolchain installation, native capture, system clipboard,
 security-policy change or physical desktop acceptance is claimed.
+
+
+Native Mac process baseline (no Rust installation): downloaded macOS artifact
+13300483368 from main run 41784077840, package darwin-arm64, SHA256
+`da9f5a55aabd5848616006284df2bea1d0175b4363d928ddb559ed1b130caac7` verified
+against the bundled checksum. `file` reports a Mach-O ARM64 executable. The initial
+restricted execution failed loopback bind with Operation not permitted; rerunning
+with the authorized loopback capability passed both existing tools/smoke.py and
+tools/reconnect_smoke.py: independent identities/authenticated QUIC/probe/clean
+exit, managed worker stop, trusted reconnect after server loss/restart, pin-change
+refusal and stop during backoff. No --native/--allow-control, discovery, clipboard,
+user-profile access or security bypass was used. Local metadata report:
+target/local-validation/baseline-main-5d947637/report.json. These results test main
+5d947637's prebuilt worker, not a local source build or the new GUI candidate.
+
+GUI candidate cb9d2be passed Rust 1.95 check, but platform jobs stopped at one
+rustfmt difference in run 41789377283. Applied the exact emitted difference; final
+candidate full matrix and local GUI launch remain pending.
