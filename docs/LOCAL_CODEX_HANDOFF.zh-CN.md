@@ -156,3 +156,27 @@ Manager 预算仅覆盖该对象生命周期；重连/重启前需盘点已有�
 当前会话只有用户 Mac 终端和 GitHub 连接，没有独立云开发执行器；本增量通过
 GitHub 分支与 CI 验证，不在用户 Mac 安装工具或启用输入/剪贴板。
 最终候选 CI 与审查限制记录在 PR/VALIDATION，未跑项仍保持未验收。
+
+
+## 11. 本机接管：持久接收预算增量（2026-11-04，PR #33）
+
+本地克隆 main 5d947637，核验无开放 PR；main run 41784077840 与 #32
+最终候选 run 41783406794 均成功。`python` 不存在，使用已有 python3 运行
+预检，报告显示 rustc/cargo 不可用，fmt 无法启动，后续检查 not_run。
+没有安装工具、授予输入权限或读取系统剪贴板；真实 GUI/worker/C06 尚未运行。
+用户明确暂不安装 Rust，继续代码和 GitHub CI；本机运行验证客观受阻。
+
+当前分支 persist-transfer-admission：接收根目录独占锁、跨会话/重启的持久
+预留、旧暂存盘点/导入和配额复用，见 TRANSFER_MANAGER.md。修复旧测试中重建
+Manager 只计当前续传、不计其余残留的问题；保留未知提交结果和独立授权。
+最终候选尚需 fmt/严格 Clippy/全 workspace 测试、构建及三平台 CI，不能以
+代码已写入代替通过。后续仍有 G03/native context/Backend、独立数据网络协商、
+详细持久历史/清理、原生剪贴板和界面；不启用全局手势，不修改协议 v5。
+
+
+代码候选 bc304939 已通过完整五项 run 41788814220；11组新增回归、Linux
+workspace 140项（transfer 40项）通过。独立静态审查发现并修复了不完整暂存、
+相对路径/cwd 与目录条目容量边界，复核未发现新增问题；不等于安全审计。
+PR #33 的最终文档候选以其 exact-head CI 为准，尚未合并。后续 GUI 隔离入口
+PR #34 独立交付。当前 main 的已校验 ARM64 开发包也已在本机通过真实
+probe/managed-stop/reconnect/pin-change/backoff-stop；无 native/control/权限改动。
