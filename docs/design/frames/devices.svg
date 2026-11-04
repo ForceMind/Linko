@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820" role="img" aria-labelledby="title desc">
+<title id="title">屏跃 · 设备与屏幕 · 中文交互线框</title>
+<desc id="desc">原创黑白灰低保真设计。所有设备、权限、文件和进度均为示例，不联网、不读取数据、不执行系统动作。</desc>
+<g font-family="PingFang SC, Microsoft YaHei, sans-serif">
+<rect x="0" y="0" width="1200" height="820" rx="0" fill="#fff" stroke="none"/>
+<rect x="0" y="0" width="212" height="820" rx="0" fill="#f5f5f5" stroke="none"/>
+<line x1="212" y1="0" x2="212" y2="820" stroke="#d0d0d0" stroke-width="1"/>
+<line x1="212" y1="76" x2="1200" y2="76" stroke="#d0d0d0" stroke-width="1"/>
+<text x="28" y="39" font-size="27" font-weight="700" fill="#252525">屏跃</text>
+<text x="28" y="65" font-size="13" font-weight="400" fill="#666">鼠标增强与多机协同</text>
+<text x="244" y="32" font-size="15" font-weight="400" fill="#555">本机控制 · 连接状态为示例</text>
+<text x="244" y="55" font-size="13" font-weight="400" fill="#777">停止与恢复入口始终可见</text>
+<rect x="844" y="20" width="142" height="36" rx="5" fill="#fff" stroke="#b6b6b6"/>
+<text x="858" y="43.0" font-size="15" font-weight="500" fill="#333">暂停本机手势</text>
+<rect x="1002" y="20" width="174" height="36" rx="5" fill="#333" stroke="#444"/>
+<text x="1016" y="43.0" font-size="15" font-weight="500" fill="#fff">紧急恢复本机控制</text>
+<rect x="29" y="135" width="16" height="16" rx="2" fill="#fff" stroke="#777"/>
+<text x="34" y="147" font-size="10" font-weight="400" fill="#555">1</text>
+<text x="58" y="150" font-size="17" font-weight="400" fill="#252525">总览</text>
+<rect x="16" y="178" width="180" height="44" rx="5" fill="#e3e3e3" stroke="#999"/>
+<rect x="29" y="192" width="16" height="16" rx="2" fill="#fff" stroke="#777"/>
+<text x="34" y="204" font-size="10" font-weight="400" fill="#555">2</text>
+<text x="58" y="207" font-size="17" font-weight="600" fill="#252525">设备与屏幕</text>
+<rect x="29" y="249" width="16" height="16" rx="2" fill="#fff" stroke="#777"/>
+<text x="34" y="261" font-size="10" font-weight="400" fill="#555">3</text>
+<text x="58" y="264" font-size="17" font-weight="400" fill="#252525">本机鼠标</text>
+<rect x="29" y="306" width="16" height="16" rx="2" fill="#fff" stroke="#777"/>
+<text x="34" y="318" font-size="10" font-weight="400" fill="#555">4</text>
+<text x="58" y="321" font-size="17" font-weight="400" fill="#252525">剪贴板与文件</text>
+<rect x="29" y="363" width="16" height="16" rx="2" fill="#fff" stroke="#777"/>
+<text x="34" y="375" font-size="10" font-weight="400" fill="#555">5</text>
+<text x="58" y="378" font-size="17" font-weight="400" fill="#252525">设置</text>
+<line x1="24" y1="684" x2="188" y2="684" stroke="#d4d4d4" stroke-width="1"/>
+<text x="28" y="714" font-size="14" font-weight="400" fill="#555">本机鼠标：关闭</text>
+<text x="28" y="741" font-size="14" font-weight="400" fill="#555">跨屏控制：关闭</text>
+<text x="28" y="782" font-size="12" font-weight="400" fill="#777">界面与状态均为示例</text>
+<line x1="236" y1="780" x2="1180" y2="780" stroke="#c8c8c8" stroke-width="1"/>
+<text x="244" y="805" font-size="14" font-weight="600" fill="#444">交互线框·示例数据·非运行软件</text>
+<text x="1031" y="805" font-size="13" font-weight="400" fill="#777">设计 0.2.0</text>
+<text x="244" y="119" font-size="26" font-weight="650" fill="#252525">设备与屏幕</text>
+<text x="244" y="148" font-size="15" font-weight="400" fill="#666">先连接，再摆放。屏幕位置不会自动开启键鼠控制。</text>
+<rect x="244" y="178" width="580" height="324" rx="7" fill="#fff" stroke="#c4c4c4"/>
+<text x="268" y="211" font-size="20" font-weight="600" fill="#252525">屏幕布局</text>
+<rect x="672" y="192" width="128" height="25" rx="4" fill="#eee" stroke="#d2d2d2"/>
+<text x="680" y="210" font-size="12" font-weight="400" fill="#666">拖动布局 · 规划</text>
+<text x="268" y="243" font-size="15" font-weight="400" fill="#666">拖动屏幕，设置相对位置（布局示例）</text>
+<rect x="284" y="279" width="208" height="125" rx="5" fill="#eee" stroke="#999"/>
+<rect x="550" y="279" width="230" height="125" rx="5" fill="#f8f8f8" stroke="#999" stroke-dasharray="5 4"/>
+<text x="340" y="328" font-size="19" font-weight="550" fill="#252525">本机 Mac</text>
+<text x="329" y="360" font-size="14" font-weight="400" fill="#666">当前控制在本机</text>
+<text x="585" y="328" font-size="18" font-weight="550" fill="#252525">Windows 电脑</text>
+<text x="604" y="360" font-size="14" font-weight="400" fill="#666">示例 · 未连接</text>
+<line x1="499" y1="342" x2="542" y2="342" stroke="#999" stroke-width="2" stroke-dasharray="4 4"/>
+<line x1="388" y1="405" x2="388" y2="418" stroke="#999" stroke-width="2"/>
+<line x1="352" y1="419" x2="424" y2="419" stroke="#999" stroke-width="2"/>
+<line x1="665" y1="405" x2="665" y2="418" stroke="#999" stroke-width="2"/>
+<line x1="626" y1="419" x2="704" y2="419" stroke="#999" stroke-width="2"/>
+<text x="268" y="468" font-size="14" font-weight="400" fill="#666">相对位置仅为示例，连接不会自动开启跨屏。</text>
+<rect x="844" y="178" width="324" height="324" rx="7" fill="#fff" stroke="#c4c4c4"/>
+<text x="868" y="211" font-size="20" font-weight="600" fill="#252525">Windows 电脑</text>
+<text x="868" y="241" font-size="14" font-weight="400" fill="#666">已登记 · 尚未连接（示例）</text>
+<text x="868" y="280" font-size="14" font-weight="400" fill="#252525">本机允许对方控制键鼠</text>
+<rect x="1084" y="262" width="59" height="25" rx="12" fill="#f1f1f1" stroke="#bcbcbc"/>
+<rect x="1089" y="267" width="15" height="15" rx="8" fill="#fff" stroke="#aaa"/>
+<text x="1110" y="279" font-size="11" font-weight="400" fill="#666">关闭</text>
+<text x="868" y="307" font-size="13" font-weight="400" fill="#777">对方允许本机：由对端选择</text>
+<text x="868" y="345" font-size="14" font-weight="400" fill="#252525">发送本机文本</text>
+<rect x="1084" y="328" width="59" height="25" rx="12" fill="#f1f1f1" stroke="#bcbcbc"/>
+<rect x="1089" y="333" width="15" height="15" rx="8" fill="#fff" stroke="#aaa"/>
+<text x="1110" y="345" font-size="11" font-weight="400" fill="#666">关闭</text>
+<text x="868" y="387" font-size="14" font-weight="400" fill="#252525">接收对方文件</text>
+<rect x="1084" y="370" width="59" height="25" rx="12" fill="#f1f1f1" stroke="#bcbcbc"/>
+<rect x="1089" y="375" width="15" height="15" rx="8" fill="#fff" stroke="#aaa"/>
+<text x="1110" y="387" font-size="11" font-weight="400" fill="#666">关闭</text>
+<rect x="868" y="429" width="276" height="39" rx="5" fill="#fff" stroke="#b6b6b6"/>
+<text x="882" y="453.5" font-size="15" font-weight="500" fill="#333">查看设备权限与连接</text>
+<rect x="244" y="526" width="924" height="220" rx="7" fill="#fff" stroke="#c4c4c4"/>
+<text x="268" y="562" font-size="20" font-weight="600" fill="#252525">添加设备</text>
+<rect x="990" y="543" width="154" height="36" rx="5" fill="#333" stroke="#444"/>
+<text x="1004" y="566.0" font-size="15" font-weight="500" fill="#fff">打开添加向导</text>
+<rect x="284" y="601" width="30" height="30" rx="15" fill="#eee" stroke="#aaa"/>
+<text x="294" y="623" font-size="16" font-weight="400" fill="#252525">1</text>
+<text x="269" y="658" font-size="16" font-weight="400" fill="#252525">查找地址</text>
+<line x1="329" y1="616" x2="424" y2="616" stroke="#ccc" stroke-width="1"/>
+<rect x="459" y="601" width="30" height="30" rx="15" fill="#eee" stroke="#aaa"/>
+<text x="469" y="623" font-size="16" font-weight="400" fill="#252525">2</text>
+<text x="444" y="658" font-size="16" font-weight="400" fill="#252525">核验身份</text>
+<line x1="504" y1="616" x2="599" y2="616" stroke="#ccc" stroke-width="1"/>
+<rect x="634" y="601" width="30" height="30" rx="15" fill="#eee" stroke="#aaa"/>
+<text x="644" y="623" font-size="16" font-weight="400" fill="#252525">3</text>
+<text x="619" y="658" font-size="16" font-weight="400" fill="#252525">登记设备</text>
+<line x1="679" y1="616" x2="774" y2="616" stroke="#ccc" stroke-width="1"/>
+<rect x="809" y="601" width="30" height="30" rx="15" fill="#eee" stroke="#aaa"/>
+<text x="819" y="623" font-size="16" font-weight="400" fill="#252525">4</text>
+<text x="794" y="658" font-size="16" font-weight="400" fill="#252525">选择权限</text>
+<line x1="854" y1="616" x2="949" y2="616" stroke="#ccc" stroke-width="1"/>
+<rect x="984" y="601" width="30" height="30" rx="15" fill="#eee" stroke="#aaa"/>
+<text x="994" y="623" font-size="16" font-weight="400" fill="#252525">5</text>
+<text x="969" y="658" font-size="16" font-weight="400" fill="#252525">建立连接</text>
+<text x="268" y="700" font-size="15" font-weight="400" fill="#666">发现结果未被信任；登记与连接均不代表获得控制权限。</text>
+<text x="268" y="727" font-size="13" font-weight="400" fill="#777">身份核验使用公开证书，配对码与扫码属于后续规划。</text>
+</g>
+</svg>
