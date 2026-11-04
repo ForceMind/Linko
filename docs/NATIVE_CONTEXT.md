@@ -78,8 +78,10 @@ Pure identifier/focus/instance/error regressions plus CLI argument isolation and
 three-platform `tools/context_smoke.py` run in CI. Unavailable runner desktops
 remain unavailable; the smoke does not manufacture a passing foreground target.
 Local preflight includes the same read-only smoke after build, while real desktop,
-physical input and GUI acceptance fields stay separate. Final candidate results
-belong in VALIDATION.md and the PR.
+physical input and GUI acceptance fields stay separate. Candidate 31ae8be passed all five jobs in CI run 41806308409, including native
+read-only process smoke on Windows/macOS and explicit Linux Unsupported. Local
+Mac process and GUI-button evidence, unverified focus/physical gates, and the
+final documentation follow-up are recorded in VALIDATION.md and the PR.
 
 This increment does not finish G03/G04. The shared capture short path, continuous
 focus/target invalidation, local action Backend/owned-injection ledger, independent

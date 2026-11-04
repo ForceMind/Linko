@@ -68,7 +68,8 @@ pages or transport probes. Without `--data-dir`, the existing user-profile locat
 is unchanged. Unknown or incomplete command-line options reject before opening a
 window or creating configuration files.
 
-Read-only native context diagnostics need no identity/network/input permissions:
+Read-only diagnostics need no identity or network and never request input permissions;
+unavailable OS access is reported explicitly:
 
 ```sh
 peerglide diagnose-context

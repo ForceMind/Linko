@@ -86,7 +86,7 @@ runtime evidence and historical failures are in VALIDATION.md.
 | G01 | implementing | Local action/rule/preflight/result coordinator tested; native Backend and global capture remain absent |
 | G02 | implementing | Bounded direction-preserving logic and synthetic corpus; human corpus/physical accuracy remain pending |
 | G03 | implementing | Pure ownership/cancellation/edge model tested; native callback/queue wiring and C06 remain pending |
-| G04 | implementing | Offline lab, exact app-rule editor/preview, versioned settings with backup/recovery; native app IDs/global worker/overlay pending |
+| G04 | implementing | Offline lab, exact app-rule editor/preview, versioned settings with backup/recovery; native app-ID/focus sampler and on-click permission diagnostics implemented (#35); continuous target invalidation/global worker/overlay pending |
 | D03 | implementing (isolated foundation) | Offline bounded manifests/chunks/disk resume/integrity/no-overwrite commit; network/grants/GUI/quotas absent, M4 not accepted |
 
 

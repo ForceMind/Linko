@@ -28,7 +28,7 @@ D03 offline storage follows as an independent foundation, without a network send
 | M3 GUI | eframe devices, untrusted discovery, rule preview/editor, versioned config recovery | Native runtime validation; pairing codes, tray, full topology #5 |
 | M4 clipboard/files | D03 offline chunk/storage/resume foundation; no network send or clipboard | Separate grants/data stream/consent/GUI/quotas; native drag separate #6 |
 | M5 release | Planned | Performance/endurance, installers, signing/notarization, Linux input #7 |
-| G1 optional local mouse enhancement | G01/G02 models, reference G03, offline canvas and rule editor; no global gestures/action execution | Human corpus, native broker/context/Backend, global offline worker, overlay and physical acceptance #11 |
+| G1 optional local mouse enhancement | G01/G02 models, reference G03, offline canvas/rule editor, native foreground/focus sampler and permission diagnostics; no global gestures/action execution | Human corpus, native broker/continuous context invalidation/tokens/Backend, global offline worker, overlay and physical acceptance #11 |
 | G2 cross-device semantic actions | Planned, after G1 and trusted sessions | Separate grants, target context, ordering, deduplication and Win/Mac acceptance #12 |
 
 The first supported release requires P0 real-machine acceptance. CI artifacts

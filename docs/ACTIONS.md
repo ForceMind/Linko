@@ -73,3 +73,10 @@ cross-process or remote exactly-once delivery. Backend is a trait with mock test
 no native backend is instantiated and remote requests still reject. Native
 implementations must revalidate the OS target/permissions at dispatch and clean
 up only their owned ActionInjected state. This is not a G2 protocol or grant.
+
+
+The platform now provides real read-only foreground/focus observations and explicit
+permission diagnostics; see [NATIVE_CONTEXT.md](NATIVE_CONTEXT.md). These snapshots
+do not mint action Context tokens or LocalPolicy, cannot detect transient
+away-and-back focus changes, and cannot authorize native execution. Backend and
+continuous target invalidation remain required.
