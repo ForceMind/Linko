@@ -80,3 +80,12 @@ permission diagnostics; see [NATIVE_CONTEXT.md](NATIVE_CONTEXT.md). These snapsh
 do not mint action Context tokens or LocalPolicy, cannot detect transient
 away-and-back focus changes, and cannot authorize native execution. Backend and
 continuous target invalidation remain required.
+
+
+The platform's `context::actions::LocalActions` now implements an independently
+consented native window Backend: Windows min/max/close, macOS public AX min/close.
+It consumes the real native binding and rechecks original deadlines/target/policy
+at submission. Default-off consent replacement/revocation invalidates old
+triggers; no shipped binary enables it. Keyboard/other semantic actions, G03
+input integration, worker consent UI and physical effects remain incomplete. See
+[LOCAL_WINDOW_ACTIONS.md](LOCAL_WINDOW_ACTIONS.md) and candidate validation.

@@ -1,4 +1,7 @@
 //! NSWorkspace/AX reads only. Never asks for trust or creates an event tap.
+#[path = "context_actions_macos.rs"]
+mod actions;
+pub(super) use actions::{action_capabilities, submit_window_action};
 #[path = "context_events_macos.rs"]
 mod events;
 use super::{

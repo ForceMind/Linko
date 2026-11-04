@@ -94,7 +94,7 @@ impl ActionSpec {
 }
 
 /// Native adapter support, independent of authorization and keyboard capabilities.
-/// Empty by default: no native action backend has been implemented yet.
+/// Empty by default; a native adapter must explicitly declare implemented semantics.
 #[derive(Clone, Debug, Default)]
 pub struct Capabilities(Vec<Action>);
 
@@ -161,6 +161,11 @@ pub struct ValidatedAction {
 impl ValidatedAction {
     pub fn spec(&self) -> ActionSpec {
         self.spec
+    }
+
+    /// Original action deadline; native adapters must not extend it during OS queries.
+    pub fn expires(&self) -> Instant {
+        self.expires
     }
 
     /// Consume and recheck immediately before a future adapter's OS submission.

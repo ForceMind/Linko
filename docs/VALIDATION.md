@@ -745,3 +745,64 @@ new cancel API/test still require final exact-head CI. Actual callback delivery,
 Windows interactive suspend/session/fault recovery and granted/revoked AX paths
 remain unverified. Independent static review is not full security audit. Global
 G1, Backend/owned injection, shared G03 input wiring and C06 remain open.
+
+
+## Local native window Backend (WIP)
+
+local-window-actions branches from verified/unmerged #36/c6bc593 after rechecking
+main5d947637 and a clean worktree. Adds a real peerglide-actions::execution::Backend
+adapter using the existing Coordinator/native context bindings and independent
+process-local default-off consent. Consent revision is fixed before context mark;
+revocation/replacement cannot revive a queued trigger. Native effects are only
+Windows min/max/close and macOS public AX min/close; unsupported semantics stay
+unsupported, with no keys, focus override, process kill, input hook or network.
+
+Injected tests cover policy/target/deadline/dedup/one-attempt and native preflight/
+late guard/failure mapping, without operating any OS windows. Apple SDK review
+confirmed AXFullScreen is not an established public attribute, so fullscreen is
+not claimed or emulated with Zoom. Original deadlines and uncertain effects are
+preserved; successful OS calls are Submitted, never app execution completion.
+
+Rust/native compilation, final CI and further static review are pending. Local
+Rust installation/OS permissions and global G1 remain unchanged; no actual window
+action has been attempted on the user's Mac. Positive effects/AX access, C06 and
+independent security review remain unverified. See LOCAL_WINDOW_ACTIONS.md.
+
+
+Independent static review found that style/close-button identity alone did not
+respect disabled native close controls. Windows now requires the borrowed system
+menu's SC_CLOSE to be present and enabled; macOS requires a typed AXEnabled=true
+and owning AXWindow match. Missing/unknown/disabled/query errors reject before
+the late guard/effect; injected regressions assert zero effects. CF parameters are
+prepared before the late guard, so no allocation/query is inserted after it.
+
+
+### Native window action candidate results
+
+Initial dfa96a2 passed minimum Rust but failed formatting; applied the exact
+complete runner rustfmt patch including parent modules. Final runtime candidate
+`86b4e7175e02df293bc642e7b643a860113fda75` passed all five jobs in
+[41826266699](https://github.com/ForceMind/PeerGlide/actions/runs/41826266699):
+Windows/macOS/Linux format, standalone CLI features, strict Clippy, workspace
+regressions, Release builds, probe/reconnect/readonly observer smoke, GUI/packages,
+minimum Rust 1.95 and strict audit. All declared native bindings compile/link.
+
+Independent static review's disabled-close defect was fixed and rechecked:
+Windows SC_CLOSE must be present/enabled, macOS AXEnabled typed true with matching
+AXWindow. No later native query/allocation occurs between the final guard and
+submission. Tests use injected drivers/WindowOps; no host or runner-native window
+was minimized/maximized/closed for this increment. Successful native effects,
+application semantics, modal/privilege boundaries and latency remain unverified.
+
+Existing CLI/GUI binaries do not create/enable/dispatch LocalActions. Context
+observer/privacy/transport baseline stayed intact in CI. Default-off consent,
+trigger revision races/replacement/revocation/overflow, late original deadlines,
+destructive/remote/stale/unsupported rejection, consumed-target one-attempt and
+cached UnknownOutcome/no replay are automatically verified. These are logical
+and native compilation results, not C06 or physical right-click acceptance.
+
+Final docs-only follow-up preserves runtime/build/test source; its exact-head CI
+is reported on PR #37. Global G1, keyboard owned injection, G03 input wiring/local
+worker consent UI, native positive effects, C06 and #10 remain open. No local
+Rust/system font/permission installation/change, actual action or stable release
+was performed. Protocol v5/MIT and data permission separation remain unchanged.
