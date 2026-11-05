@@ -942,8 +942,8 @@ mod tests {
         assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
     }
     #[tokio::test]
-    async fn retired_or_lost_capture_fence_releases_the_receiver_and_ping_cannot_revive_it() -> Result<()>
-    {
+    async fn retired_or_lost_capture_fence_releases_the_receiver_and_ping_cannot_revive_it(
+    ) -> Result<()> {
         for lost in [false, true] {
             let mut recovery = held_recovery();
             let capture = platform::CaptureGate::default();
