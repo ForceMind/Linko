@@ -67,11 +67,40 @@ impl Recovery {
             if native { platform::inject(event) } else { Ok(()) }
         }).map_err(|remaining| anyhow::anyhow!("native input cleanup failed: {remaining} releases remain pending; session stopped"))
     }
-    fn input(&mut self, event: Input) -> Result<()> {
-        if self.native {
-            platform::inject(event)?;
+    fn input(&mut self, lease: u64, event: Input, cursor: Motion, now: u64) -> Result<bool> {
+        let native = self.native;
+        self.input_with(
+            lease,
+            event,
+            cursor,
+            now,
+            |m| {
+                if native { platform::pointer(m.x, m.y) } else { Ok(()) }
+            },
+            |event| {
+                if native { platform::inject(event) } else { Ok(()) }
+            },
+        )
+    }
+    fn input_with(
+        &mut self,
+        lease: u64,
+        event: Input,
+        cursor: Motion,
+        now: u64,
+        pointer: impl FnOnce(Motion) -> Result<()>,
+        inject: impl FnOnce(Input) -> Result<()>,
+    ) -> Result<bool> {
+        if !self.receiver.accepts_input(lease, event, now)
+            || cursor.lease != lease
+            || !self.receiver.anchor(cursor, now)
+        {
+            return Ok(false);
         }
-        Ok(())
+        // Positioning can fail before injection. Never retire an owned release
+        // before either operation succeeds; session cleanup must still retry it.
+        pointer(cursor)?;
+        self.receiver.input_with(lease, event, now, inject)
     }
     fn pointer(&self, x: f64, y: f64) -> Result<()> {
         if self.native {
@@ -290,9 +319,7 @@ pub(super) async fn run_with_status(
                     Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;}},
                     Message::Input{lease,event,cursor}=>{
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
-                        if event.valid() && cursor.lease==lease && recovery.receiver.anchor(cursor,now) && recovery.receiver.input(lease,event,now) {
-                            input_status.checked(recovery.pointer(cursor.x,cursor.y))?;input_status.checked(recovery.input(event))?;
-                        }
+                        input_status.checked(recovery.input(lease,event,cursor,now))?;
                     },
                     Message::Release { lease, cursor }=>{
                         if recovery.receiver.active()==Some(lease){input_status.recovering();}
@@ -504,6 +531,62 @@ mod tests {
             1
         ));
         recovery
+    }
+    #[test]
+    fn normal_up_failures_keep_key_and_button_ownership_until_cleanup() -> Result<()> {
+        for (down, up) in [
+            (Input::Key { usage: 0xe0, down: true }, Input::Key { usage: 0xe0, down: false }),
+            (Input::Button { button: 1, down: true }, Input::Button { button: 1, down: false }),
+        ] {
+            for fail_pointer in [true, false] {
+                let mut recovery = Recovery {
+                    receiver: Receiver::default(),
+                    native: false,
+                    pending_releases: PendingReleases::default(),
+                };
+                assert!(recovery.receiver.acquire(1, 0, true));
+                let cursor = Motion { lease: 1, sequence: 1, x: 0.5, y: 0.5 };
+                assert!(recovery.input_with(1, down, cursor, 1, |_| Ok(()), |_| Ok(()))?);
+                let mut up_attempts = 0;
+                assert!(recovery.input_with(
+                    1, up, Motion { sequence: 2, ..cursor }, 2,
+                    |_| {
+                        if fail_pointer { anyhow::bail!("fake pointer failure before Up"); }
+                        Ok(())
+                    },
+                    |_| {
+                        up_attempts += 1;
+                        anyhow::bail!("fake Up injection failure")
+                    },
+                ).is_err());
+                assert_eq!(up_attempts, usize::from(!fail_pointer));
+                let mut released = Vec::new();
+                recovery.finish_with(1, None, 3, |_| Ok(()), |event| {
+                    released.push(event);
+                    Ok(())
+                })?;
+                assert!(released == [up]);
+                recovery.finish_with(1, None, 4, |_| Ok(()), |_| {
+                    panic!("acknowledged cleanup must not replay an Up")
+                })?;
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn successful_up_and_unowned_up_never_move_or_release_again() -> Result<()> {
+        let mut recovery = held_recovery();
+        let up = Input::Key { usage: 0xe0, down: false };
+        let cursor = Motion { lease: 1, sequence: 1, x: 0.5, y: 0.5 };
+        assert!(recovery.input_with(1, up, cursor, 2, |_| Ok(()), |_| Ok(()))?);
+        assert!(!recovery.input_with(1, up, Motion { sequence: 2, ..cursor }, 3,
+            |_| panic!("unowned Up must not position the pointer"),
+            |_| panic!("unowned Up must not reach the native injector"),
+        )?);
+        recovery.finish_with(1, None, 4, |_| Ok(()), |_| {
+            panic!("successful Up was already acknowledged")
+        })?;
+        Ok(())
     }
     #[test]
     fn terminal_pointer_failure_still_releases_pressed_input() {

@@ -455,3 +455,21 @@ workflow与c0a1882一致；精确最终head五项CI与PR42就绪状态以远端�
 #42叠加未合并#41，main未合并；后续授权仍只沿本次GUI迁移，不恢复旧G1/数据
 完整Goal。物理C06、Native动作、权限变化、中文IME、托盘/配对码/应用选择器/
 生产数据流仍未验收或未提供，不能把CI当完整独立安全审计。
+
+
+## 22. 本版优先基础 Win/Mac KVM（2026-11-05）
+
+用户明确下一版先用于 Windows + macOS 两台电脑工作，剩余G1/数据暂缓。
+从最终五项CI通过的#42/51c9eb9开basic-kvm-readiness，main刷新仍5d947637，
+旧PR均保留未合并；本机仍不安装Rust，预检因cargo/rustc不可用停在fmt。
+本批开发版本0.2.1-dev，保留v5/唯一捕获/独立许可与恢复机制，不宣称物理C06通过。
+root负责core/session与GUI接线，review_admission只读审session/core，
+localize_panels审基础platform并协作capture路由契约，不递归、不扩G1/数据。
+
+已定位并修复正常Up的早删账：pointer或原生Up注入失败时，不得先丢失已持有
+的key/button；新input_with在Down尝试前登记潜在责任、Up成功后才移除，未持有
+Up在定位/注入前拒绝，重复Down保留autorepeat。实际session走同一路径，新增
+key/button故障/不重放回归；当前待CI编译与验证，不能记已通过。
+待本批修复：接收端physical takeover不得同事件反向Acquire；capture时route/
+epoch必须防止队列中的旧本地事件或旧lease事件按处理时状态转发到新lease。
+后续基础软件检查与两平台包围绕这两项继续，具体CI及真实设备结果记VALIDATION。
