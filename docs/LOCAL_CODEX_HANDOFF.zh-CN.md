@@ -724,3 +724,18 @@ child/stop/reconnect/discovery/worker诊断/画布/layout-report的tick；postUI
 代码身份确认权限再进Native。设备身份/Windows配对不动，Mac不接收控制；不把签名或
 新诊断通过当实际KVM可用。当前GUI已结束，无活跃Native。先完成本批资源候选测试，
 再集中给用户最终包与必要系统确认步骤，避免中间包反复授权。GUI6.83GB根因仍未知。
+
+
+0.2.4运行源fd8c071五项42058770247全过，资源42058770207的Mac排队取消后重跑通过，
+Linux也通过；新增6条idle/hidden-close/late-output/canvas回归全过。Mac RSS峰116368/
+116784KiB，physical第一场景partial，整体null，不宣称全内存通过。Mac包13431955670
+已取回ignored idle-activity-fd8c071/mac并在本机严格核验摘要/完整签名/无用户材料。
+Windows匹配包13430926303由CI产出。保留fd8完整运行包，最后文档更新不改应用或CI源码。
+
+本机0.2.3只读worker的TCC responsible/subject已成为com.peerglide.PeerGlide，authValue0，
+包身份查询归属差异已核对；实际权限仍未授予新版，不等于Native可用。所有试跑GUI/
+worker当前无残留，设备身份和配对保持。下一步集中让用户针对最终0.2.4明确系统授权，
+先只读复查实际worker，随后再约单向物理短测；不自动捕获/不扩宿主权限/不重配证书。
+Oink参考阶段覆盖/授权/机制选择和首批独立落地已完成，物理C06、GUI6.83GB根因以及
+G1/数据生产接线等后续范围仍未完成。PR49叠加PR48，main未合并，最新CI和实际证据
+以PR49/VALIDATION为准；不要把参考阶段完成当整个PeerGlide研发目标完成。

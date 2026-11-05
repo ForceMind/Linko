@@ -1168,3 +1168,27 @@ Oink固定3ca82127源码的15个Rust crate、UI、FileProvider/音频插件、�
 worker均Denied，Secure Input inactive；没有申请权限或启动Native。新版代码身份变动
 需要用户对最后候选明确授权后再验，当前不反复让用户操作中间包。GUI只读检查后结束，
 既有设备身份/配对与Mac接收关闭状态保留。实际worker授权传递与物理C06仍待验。
+
+
+#### 0.2.4运行候选结果（2026-11-06）
+
+fd8c071084afd19047df7354a6eb32b07b278dc6已通过完整五项
+[CI42058770247](https://github.com/ForceMind/PeerGlide/actions/runs/42058770247)：三平台fmt/
+严格Clippy/locked测试和Debug+Release、进程probe/reconnect/context、GUI smoke/打包、
+最低Rust1.95、依赖审计、Mac解压签名与篡改拒绝。新增6条软件资源/生命周期回归通过。
+[驻留42058770207](https://github.com/ForceMind/PeerGlide/actions/runs/42058770207)的Mac任务
+排队中取消后仅重跑未执行项，最终两平台任务均success；这不是取消失败来制造绿色。
+
+Mac两场景各约181秒：RSS峰116368/116784KiB，预热后增长0/112KiB；所取physical
+footprint峰40141/38912KiB，工具reported peak均48128KiB。第一场景partial，第二available，
+整体physical检查仍null。不可把success解释为全部GPU/压缩内存验证或长驻事故修复。
+
+Mac artifact13431955670外层sha256=a22a963780f4c56a6c5ad990f6ef6827aa81b81c071dbfe63041102ecd180336，
+内层摘要、安全解压/无用户身份配置、本机codesign strict和metadata均已验证；Windows
+匹配artifact13430926303已由CI产出，本机不运行Windows程序。运行候选保留在ignored
+idle-activity-fd8c071，最终记录更新不改变受测代码，也不要求为纯文档更换试跑二进制。
+
+另只读核对0.2.3实际诊断worker的TCC记录：responsible和subject已统一为应用ID，
+不再是旧GUI二进制路径式查询；authValue为未授予状态，与新ad-hoc代码身份需用户确认
+相符。未改OS授权/重置TCC，仍需最终候选真正获许可后再测试Native。没有物理C06通过，
+没有新部署/稳定发布，没有把Oink源码测试当PG验证或把CI当独立安全审查。
