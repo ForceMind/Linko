@@ -2,12 +2,71 @@ mod reconnect;
 mod session;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use peerglide_platform::ReceiveControl;
 use peerglide_protocol::{
     worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState},
     Edge, InputCapabilities, Message, VERSION,
 };
 use peerglide_transport as transport;
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+static NATIVE_RECOVERY: Mutex<Option<Arc<ReceiveControl>>> = Mutex::new(None);
+struct NativeRecoveryRegistration {
+    control: Arc<ReceiveControl>,
+    registered: bool,
+}
+impl NativeRecoveryRegistration {
+    fn new(control: ReceiveControl, already_stopping: bool) -> Self {
+        let control = Arc::new(control);
+        let registered = match NATIVE_RECOVERY.lock() {
+            Ok(mut slot) => {
+                let previous = slot.replace(control.clone());
+                drop(slot);
+                drop(previous);
+                true
+            }
+            Err(_) => false,
+        };
+        if already_stopping || !registered {
+            control.request_stop();
+            control.wake_loop();
+        }
+        Self {
+            control,
+            registered,
+        }
+    }
+}
+impl Drop for NativeRecoveryRegistration {
+    fn drop(&mut self) {
+        if !self.registered {
+            return;
+        }
+        let previous = NATIVE_RECOVERY.lock().ok().and_then(|mut slot| {
+            if slot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &self.control))
+            {
+                slot.take()
+            } else {
+                None
+            }
+        });
+        drop(previous);
+    }
+}
+fn request_native_stop() {
+    let control = NATIVE_RECOVERY.lock().ok().and_then(|slot| slot.clone());
+    if let Some(control) = control {
+        control.request_stop();
+        control.wake_loop();
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -294,6 +353,7 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
         tokio::pin!(work);
         if managed {
             let (request, requested) = tokio::sync::oneshot::channel();
+            let direct_stop = stop.clone();
             std::thread::spawn(move || {
                 use std::io::BufRead;
                 for line in std::io::stdin().lock().lines() {
@@ -303,17 +363,21 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
                         Err(_) => break,
                     }
                 }
+                // This thread must also wake native recovery when the async
+                // session itself is stalled. No OS input is injected here.
+                let _ = direct_stop.send(true);
+                request_native_stop();
                 let _ = request.send(());
             });
             tokio::select! {
                 result = &mut work => result,
-                _ = requested => { let _ = stop.send(true); work.await },
-                _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); work.await },
+                _ = requested => { let _ = stop.send(true); request_native_stop(); work.await },
+                _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); request_native_stop(); work.await },
             }
         } else {
             tokio::select! {
                 result = &mut work => result,
-                _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); work.await },
+                _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); request_native_stop(); work.await },
             }
         }
     };

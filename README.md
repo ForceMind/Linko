@@ -110,8 +110,11 @@ These checks never request OS permissions or authorize control/actions. See
    鼠标拖拽。按住按钮时不跨屏，原生文件跨屏拖放未提供。Control/Command 保持
    各自物理语义，快捷键、布局和输入法由目标系统解释，不是 Unicode/IME 文本转发。
 8. `Ctrl+Alt+Right` 并松开组合键可手动切换；`Ctrl+Alt+Esc` 紧急恢复。
-   停止或退出后等待工作进程收尾。若显示“输入恢复未确认”，先松开所有物理键/
-   按钮并检查两端，保留警告，不反复开启新原生会话；强制停止不能证明恢复成功。
+   接收端首次物理动作只用于收回控制，不执行或回放触发动作；切回本机后先松开
+   全部物理键/按钮再操作。停止或退出后等待工作进程收尾。若显示“输入恢复未确认”，
+   松开所有键/按钮并检查两端，保留警告，不反复开启新原生会话。清理失败且原生
+   捕获仍可用时，重新按下并松开完整 `Ctrl+Alt+Esc` 可请求强制返回；未知警告不清除，
+   不代表系统修饰键已释放。明确强制结束工作进程同样不能证明恢复成功。
 
 此顺序不替代四边、拖拽/滚轮、修饰键、接收端物理接管、不同DPI、断网/退出、
 睡眠唤醒与权限变化的实机矩阵。当前 G1、生产剪贴板/文件、配对码和托盘仍未提供。
@@ -165,7 +168,7 @@ peerglide connect 192.168.1.10:24870 --peer-cert peer.crt.der --bind 0.0.0.0:0 -
 - Keyboard follows the pointer. Move back over the remote entry edge to return. Edge rearming requires interior movement.
 - **Ctrl+Alt+Right**, then release the chord, toggles the local control target.
 - **Ctrl+Alt+Esc** immediately stops capture and requests remote release.
-- Physical input at the receiver reclaims control.
+- The first physical action at the receiver only requests local takeover; its key/button pair is consumed, with no replay. Release physical keys/buttons before continuing locally.
 - Capture watchdog: 1 second. Receiver lease: 1.5 seconds. Exit/error paths
   release tracked remote keys and buttons.
 

@@ -85,6 +85,12 @@ pub(super) fn permissions() -> PermissionReport {
         },
     }
 }
+pub(super) fn capture_source_available() -> bool {
+    let report = permissions();
+    report.accessibility == PermissionStatus::Granted
+        && report.input_monitoring == PermissionStatus::Granted
+        && report.secure_input == SecureInput::Inactive
+}
 
 fn bundle_id(application: &NSRunningApplication) -> Result<String, ContextError> {
     let value = application

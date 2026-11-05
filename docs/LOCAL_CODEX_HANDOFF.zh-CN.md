@@ -528,3 +528,70 @@ Submitted只指SDK请求，不是OS或应用效果。接收保护必须有独立
 用户已确认Win+Mac且每端一个主屏；不扩多屏。当前文档跟进不改运行源码，最终
 文档head CI以PR44为准；随后小分支接phase2，仍同0.2.1-dev目标，不把phase1
 绿灯宣称可日常工作。真实C06/宿主权限/无Rust决定保持不变。
+
+
+Phase1最终文档head383ec384a4c49b21ae9f0d071863d6e46232884d五项CI41967524520
+全过，PR44已ready，code与5ced一致。当前native-receive-recovery/PR45：705180b先
+仅提交冻结receive_driver.rs和基于HEAD构造的test-only pub mod入口，真实纳入
+编译；此步骤只写Git index，完整Parent工作文件没有覆盖。d54036a按CI修65个
+fmt hunks，同样保留Parent WIP。旧14测试类型检查在1.95通过，三平台Clippy发现
+两处if可合并，writer已在当前WIP修正；不能把尚未运行的新18测试记为通过。
+
+生产WIP目前：Root独占apps/main.rs/session.rs、context三入口与CI Debug build；
+writer独占receive_driver.rs、lib/windows/mac/G1 literal最小适配。Parent增加
+CaptureRoute::Receiving、plain Option driver/control、Native loop单一OS owner与
+waker、coalesced takeover、Consumed/旧Remote modifier屏障、额外键按钮账本、
+wheel remainder epoch、Mac按钮事务、健康/观测缺口。Root Core只在Submitted且
+still current后记协议ack，退账不重复发OS Up；Draining保持Recovering，不凭
+release Submitted报Local。managed stdin先写watch stop再直接request_stop+wake
+Native控制器，Arc ptr registration防旧scope清新slot，不依赖Tokio才恢复。
+CaptureSession原本!Sync而整体future可Send，因此撤销“加Mutex改done”的预防性
+建议，done结构未动；Root全用短借用或&mut跨await。context可用性只读，Win
+confirmed_input_desktop，Mac AX/IM+非SecureInput，不在callback查询/修改权限。
+
+Phase2 checkpoint仍未共同编译：writer补18个engine及9个Parent软件回归，真实
+原生输入没有运行。Readonly窄审强调enter_receiving Err不可已发布保护、SDK/inflight
+不是OS/app效果、release Submitted不是Retired；又发现SourceHealth只loop开头查
+缺口会在长SDK之后、下一轮前盲补Up。writer当前窄改Backend按同一观测基准在
+每次效果/cleanup前确认时效并补回归，完成后Root统一提交完整接线进CI，保持
+v5/单hook/独立授权。所有未提交WIP需保留，不能清理/stash/reset；新18/Parent
+以及接收保护尚未验收，不得宣称双机已可日常使用。目标仍Win+Mac各单主屏。
+
+
+Phase2共同编译检查点现已齐全：writer全文件冻结，20 Engine fake+Parent回归
+未实际运行；Root apps async adapter/direct stdin stop、context可用性入口与CI
+Debug build已准备。Parent扩CaptureRoute::Receiving；public Driver/Control等由
+platform根重导出，Root已改根import，不访问private receive_driver。实际Native
+父loop/waker/Consumed/force/健康/SourceObservation、Mac BUTTONS和Win单batch双轴
+scroll已接。Root将统一commit push整批（此前705/d540只是test-only入口检查点），
+再修真实fmt/类型/Clippy/测试，不能把先前14测试类型检查当新20/生产路径已通过。
+确定P1观测缺口已由writer修到每次效果与cleanup前；追加纯helper+慢pointer/慢Up
+fake，源已不可确认就不盲补剩余CtrlUp。Readonly Parent其余未见确定新缺陷，
+建议补fresh第二次Esc完整路径回归（当前还没跑/不视作关闭）。普通cancel最终guard
+之后仍可有in-flight本次SDK，但owner保证后续收尾无迟到新Down，不夸零调用。
+
+
+共同接线已commit push bbc3f1e；首轮1.95只报一个旧回归fn非async，Root修为tokio
+async并应用115个fmt hunks后f680c3b；再按CI修签名格式610dc90。完整Native接线
+的Linux类型检查已过，三平台检查仍待继续，不得声称新20/Parent测试已运行。
+Writer当前窄修真实HookState强制返回：不再用全局required/outcome准备chord，改
+can_force_return(exact epoch, phase==FAILED)；DRAINING第一次cleanup失败后required
+虽true，也不能让中途开始的chord提前force。新增3个真实HookState/Control/Engine
+假后端回归（ACTIVE/DRAINING中途失败、旧mods/重复Esc、全新FAILED完整chord一次
+force、ADMISSIONS_CLOSED健康仍true与旧Up归属），代码已写，未编译。临时旧patch
+在/private/tmp不再apply，源码包含新版。Root将统一提交并用CI修实际失败。
+
+
+本版完整软件候选746b07e1022c2939627f09ff048cca89955e7dd6五项CI41974906260
+已全过，含三平台Debug+Release/严格检查/工作区回归/真实无Native smokes、GUI/
+最低1.95/审计；Engine20与Parent freshEsc/观测/配对等现为实际自动验证。Readonly
+源观测/force入场问题已修并复核，不是独立安全审计。Win/Mac artifact及内层ZIP
+摘要核对且无用户身份/配置，未签名开发包。Mac包smoke/reconnect/context在本机
+全过；GUI用旧0.2.0隔离profile启动0.2.1，中文新说明/默认未勾选确认/取消/只读
+权限/exit0已验，旧identity字节未变，native/allow仍false，无任务进程残留。
+Mac AX/IM仍未授予，无真实捕获/注入；Win机器不可操作。匹配包在ignored target
+basic-kvm-746b07e/mac和win，已给用户入口并异步问现在能否双机试跑，回答待到。
+此为进入C06前的具体候选，不能mark整个双机工作Goal完成或C06通过。最终记录
+详VALIDATION/GUI_INTERACTIONS；本次最后文档提交不改运行源码，精确head CI与
+PR45待审阅状态下一步回读。main未合并、MIT/v5/单hook不改、G1/数据仍后置。
+Native设备/系统权限必须用户手动明确处理，不装Rust、不绕过防护、不发布稳定版。

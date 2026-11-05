@@ -121,3 +121,32 @@ GUI仍可明确ForceStop并保留未知警告。
 本段是phase1软件契约，自动结果需按最终SHA记录。接收端首个物理事件在旧远程
 修饰键释放前被OS处理的P1尚需phase2 Receiving保护；当前域隔离不能宣称已解决。
 Win/Mac真实输入、DPI/权限/睡眠/故障、硬件Up与OS效果均仍属#3/C06。
+
+
+## 接收端独立Native owner接线（0.2.1-dev，当前待共同CI）
+
+同一Native loop串行执行pointer/input/normal Release/恢复，callback只做固定配对
+和原子请求。Receiving与epoch/physical-held/IN_CALLBACK一次CAS发布后才可Granted。
+首个本地键/按钮整对Consumed，移动/滚轮丢本次以请求接管；清理完成且被吞修饰键
+松开后才撤保护，旧Up跨clear/stop仍吞。source旧Remote修饰键债务也阻止新的本地
+组合；Windows wheel remainder按捕获域重置。G1路径仍关闭，不新增hook。
+
+Driver命令250ms截止与取消序号，Native执行前复查，取消之后已in-flight的当前
+SDK调用不能被虚构中断，由单一owner账本回收。Native-only Engine有有限ledger/
+队列、epoch-tagged heartbeat及独立watchdog；Tokio停滞时Native仍处理恢复。Core
+只管协议意图，不能把其release列表再重复注入OS。Submitted仅SDK请求或接受恢复；
+Active/Draining/Retired/RecoveryRequired明确区分，Draining不能显示本地恢复完成。
+
+managed stdin线程先设置stop watch，再直接原子stop并唤醒Native loop，不等Tokio。
+常规收尾等engine退出条件与物理pair债务；失败后需松开并使用新的完整逃生组合
+请求强制返回，保留Unknown、旧Consumed Up并关闭新入场，不假报正常恢复。OS/loop
+真失进展仍只能由外部明确ForceStop，不能自动强杀后写Local。
+
+权限/桌面/SecureInput只在Native loop中只读采样，发生不可确认变化不绕过保护。
+观测基准同时用单调和墙钟，不可在慢SDK后刷新；每次后续效果/cleanup前再检查
+1.5s连续性，失效不盲发Up。源失效/强制返回不同于观察到了配对Up，保持Unknown。
+Mac event对象创建成功前不修改BUTTONS；CGEventPost为SDK请求而非OS/app确认。
+
+此代码与20个Engine fake、Parent配对/滚轮/观测缺口回归尚待本批实际fmt/编译/
+测试/进程验证；真实Win/Mac、权限、DPI、睡眠与OS效果没有因此通过。Linux仍仅
+诊断，unsupported facade不会生成ready状态或调用OS输入。

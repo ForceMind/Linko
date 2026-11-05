@@ -135,6 +135,12 @@ impl Foreground {
 pub fn permissions() -> PermissionReport {
     native::permissions()
 }
+/// Read-only capture continuity check, not an input grant or an OS-effect receipt.
+/// Call from the Native loop outside callbacks; never prompts or changes access.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn capture_source_available() -> bool {
+    native::capture_source_available()
+}
 pub fn observe_foreground() -> Result<Foreground, ContextError> {
     let (application_id, target, focus) = native::observe()?;
     // Reuse the exact rule-store bound, never truncate or invent a basename ID.

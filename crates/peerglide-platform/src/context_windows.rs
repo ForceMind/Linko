@@ -186,6 +186,9 @@ fn confirmed_input_desktop() -> Result<String, ContextError> {
     require_same_desktop(&thread_name, &input_name)?;
     Ok(input_name)
 }
+pub(super) fn capture_source_available() -> bool {
+    confirmed_input_desktop().is_ok()
+}
 
 fn owner(window: HWND) -> Result<(u32, u32), ContextError> {
     let mut process_id = 0;

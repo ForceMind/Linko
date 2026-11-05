@@ -217,6 +217,9 @@ impl App {
                         ui.label(format!("通信：{}", self.status));
                         ui.label(format!("键鼠：{}", self.input_label()));
                         ui.weak("本机不能代替对端授予接收控制权限；控制请求由对端独立决定。");
+                        if matches!(self.input_state, Some(WorkerInputState::ReceivingRemote | WorkerInputState::Recovering)) {
+                            ui.label("本机首次物理动作只用于收回控制，不执行或回放；请先松开按键和鼠标按钮再继续操作。");
+                        }
                         ui.add_space(12.0);
                         self.connection_actions(ui);
                         if self.config.fingerprint.is_some() && ui.button("撤销设备信任…").clicked()
@@ -747,6 +750,7 @@ impl App {
                     ui.label(if self.config.allow{"本机接收偏好：允许已登记对端控制本机。"}else{"本机接收偏好：不允许对端控制本机；可请求控制已授权本机的对端。"});
                     if self.child.is_some(){ui.weak("当前仅通信会话将先停止；清理成功后再以键鼠模式重连。失败不自动继续。");}
                     ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");
+                    ui.label("接收端首次物理动作仅用于收回控制，不执行或回放。切回本机后先松开物理按键／鼠标按钮，再继续操作。");
                     ui.checkbox(&mut self.native_confirmation,"我明确同意本次使用真实键鼠协同");
                     if ui.add_enabled(cfg!(any(windows,target_os="macos"))&&self.writable()&&self.native_confirmation&&self.stopping.is_none()&&!self.recovery_blocked,egui::Button::new("确认并启动键鼠会话")).clicked(){let result=self.request_native();let success=result.is_ok();self.feedback(result,"正在准备真实键鼠会话，输入归属等待进程报告。");if success{self.dialog=None;}}
                 },
@@ -754,7 +758,7 @@ impl App {
                 Dialog::Reset=>{ui.label("先备份原设置，再恢复默认并关闭授权。本机身份保持。无效或未来版本不会直接覆盖。");if ui.add_enabled(self.child.is_none()&&self.instance_lock.is_some(),egui::Button::new("确认备份并恢复设置")).clicked(){match config_store::Store::reset::<Config>(self.dir.join("settings.json")){Ok((store,config))=>{self.config_store=Some(store);self.config=config;self.theme(ctx);self.notice="已备份并恢复设置，授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},
                 Dialog::ForceStop=>{ui.label("仅在正常停止无响应时使用。强制结束不能确认输入已释放，之后本窗口只允许通信诊断。");if ui.button("明确强制结束，保留恢复警告").clicked(){if let Some(child)=self.child.as_mut(){let result=child.kill().map_err(anyhow::Error::from);self.feedback(result,"已请求强制结束，输入恢复未确认。");}
                 if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;}self.pending_start=None;self.dialog=None;}},
-                Dialog::Recovery=>{ui.strong(self.input_label());ui.label("松开物理按键/鼠标按钮，检查两端提示与系统权限。屏跃不会关闭安全防护，也不把退出当恢复成功。进程报告只表示软件路由与清理请求，不代表OS或应用效果已确认。");ui.label("恢复未确认时保留警告。可运行仅通信诊断；新的原生键鼠会话保持禁止。");if self.child.is_some()&&ui.button("再次发送停止请求").clicked(){let result=self.resend_stop();self.feedback(result,"已再次发送停止请求，仍需等待清理结果。");}
+                Dialog::Recovery=>{ui.strong(self.input_label());ui.label("松开物理按键/鼠标按钮，检查两端提示与系统权限。屏跃不会关闭安全防护，也不把退出当恢复成功。进程报告只表示软件路由与清理请求，不代表OS或应用效果已确认。");ui.label("恢复未确认时保留警告。可运行仅通信诊断；新的原生键鼠会话保持禁止。");ui.label("清理失败且原生捕获仍可用时：先松开全部物理按键／按钮，再重新按下并松开Ctrl+Alt+Esc，可请求强制返回。它仍保留未知警告，不证明系统按键已释放。");if self.child.is_some()&&ui.button("再次发送停止请求").clicked(){let result=self.resend_stop();self.feedback(result,"已再次发送停止请求，仍需等待清理结果。");}
                 if self.child.is_some()&&ui.button("正常停止无响应，查看强制结束…").clicked(){self.dialog=Some(Dialog::ForceStop);}
                 if self.close_requested&&self.child.is_none()&&ui.button("明确退出，已了解恢复未确认").clicked(){self.exit_confirmed=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);}},
             }

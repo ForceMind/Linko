@@ -21,6 +21,7 @@ jobs:
       - name: Standalone CLI dependency features
         run: cargo check -p peerglide-desktop --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
       - name: Synthetic gesture corpus metrics (not human acceptance)
         run: cargo test -p peerglide-gestures --test corpus --locked -- --nocapture

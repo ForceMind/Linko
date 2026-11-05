@@ -10,6 +10,11 @@ use tokio::sync::mpsc;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+mod receive_driver;
+pub use receive_driver::{
+    ReceiveAck, ReceiveControl, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot,
+    COMMAND_TIMEOUT,
+};
 #[cfg(any(windows, test))]
 pub mod gesture_capture;
 #[cfg(any(windows, test))]
@@ -40,12 +45,14 @@ pub struct CaptureEpoch {
 pub enum CaptureRoute {
     Local(CaptureEpoch),
     Remote(CaptureEpoch),
+    /// Protected receiver admission; never an outgoing input route.
+    Receiving(CaptureEpoch),
 }
 #[cfg(any(windows, target_os = "macos"))]
 impl CaptureRoute {
     fn epoch(self) -> CaptureEpoch {
         match self {
-            Self::Local(epoch) | Self::Remote(epoch) => epoch,
+            Self::Local(epoch) | Self::Remote(epoch) | Self::Receiving(epoch) => epoch,
         }
     }
     fn remote(self) -> bool {
@@ -79,9 +86,11 @@ pub enum Captured {
 const ACTIVE: u64 = 1 << 63;
 const IN_CALLBACK: u64 = 1 << 62;
 const STOPPED: u64 = 1 << 61;
+const RECEIVING: u64 = 1 << 60;
+const ADMISSIONS_CLOSED: u64 = 1 << 59;
 const COUNT_BITS: u32 = 17;
 const COUNT: u64 = (1 << COUNT_BITS) - 1;
-const GENERATION_MAX: u64 = (1 << (61 - COUNT_BITS)) - 1;
+const GENERATION_MAX: u64 = (1 << (59 - COUNT_BITS)) - 1;
 const GENERATION: u64 = GENERATION_MAX << COUNT_BITS;
 static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(1);
 struct GateState {
@@ -89,6 +98,8 @@ struct GateState {
     deadline: AtomicU64,
     control: AtomicU64,
     healthy: std::sync::atomic::AtomicBool,
+    receive: OnceLock<ReceiveControl>,
+    return_pending: std::sync::atomic::AtomicBool,
 }
 #[derive(Clone)]
 pub struct CaptureGate(Arc<GateState>);
@@ -115,6 +126,8 @@ impl Default for CaptureGate {
             deadline: AtomicU64::new(0),
             control: AtomicU64::new(if instance == 0 { STOPPED } else { 0 }),
             healthy: std::sync::atomic::AtomicBool::new(instance != 0),
+            receive: OnceLock::new(),
+            return_pending: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 }
@@ -127,15 +140,20 @@ impl CaptureGate {
     }
     fn route_from(&self, word: u64) -> CaptureRoute {
         let epoch = self.epoch_from(word);
-        if word & ACTIVE != 0 {
+        if word & RECEIVING != 0 {
+            CaptureRoute::Receiving(epoch)
+        } else if word & ACTIVE != 0 {
             CaptureRoute::Remote(epoch)
         } else {
             CaptureRoute::Local(epoch)
         }
     }
     fn publish(&self, remote: bool) -> Option<CaptureEpoch> {
+        self.publish_mode(if remote { ACTIVE } else { 0 })
+    }
+    fn publish_mode(&self, mode: u64) -> Option<CaptureEpoch> {
         let old = self.0.control.load(Ordering::Acquire);
-        if old & (ACTIVE | IN_CALLBACK | STOPPED | COUNT) != 0 {
+        if old & (ACTIVE | RECEIVING | IN_CALLBACK | STOPPED | ADMISSIONS_CLOSED | COUNT) != 0 {
             return None;
         }
         let generation = (old & GENERATION) >> COUNT_BITS;
@@ -147,14 +165,14 @@ impl CaptureGate {
             return None;
         };
         self.0.deadline.store(
-            if remote {
+            if mode == ACTIVE {
                 now_ms().saturating_add(1000)
             } else {
                 0
             },
             Ordering::Release,
         );
-        let new = (next << COUNT_BITS) | if remote { ACTIVE } else { 0 };
+        let new = (next << COUNT_BITS) | mode;
         self.0
             .control
             .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
@@ -184,17 +202,32 @@ impl CaptureGate {
                 .store(now_ms().saturating_add(1000), Ordering::Release);
         }
     }
+    fn receiving_epoch(&self) -> Option<CaptureEpoch> {
+        let word = self.0.control.load(Ordering::Acquire);
+        (word & (RECEIVING | STOPPED) == RECEIVING).then(|| self.epoch_from(word))
+    }
+    fn request_takeover(&self, route: CaptureRoute) {
+        if let CaptureRoute::Receiving(epoch) = route {
+            if let Some(control) = self.0.receive.get() {
+                control.request_recovery(epoch);
+            }
+        }
+    }
     pub fn disable(&self) {
         self.0.deadline.store(0, Ordering::Release);
         // Mode and generation change together. A queued Local Toggle is invalid
         // after disable too, not only events that used to be Remote.
         let mut old = self.0.control.load(Ordering::Acquire);
         loop {
+            if old & (RECEIVING | STOPPED) == RECEIVING {
+                self.request_takeover(self.route_from(old));
+                return; // Only Native-owned cleanup may remove receiver protection.
+            }
             let generation = (old & GENERATION) >> COUNT_BITS;
             let new = if old & STOPPED != 0 || generation == GENERATION_MAX {
-                (old & !ACTIVE) | STOPPED
+                (old & !(ACTIVE | RECEIVING)) | STOPPED
             } else {
-                (old & !(ACTIVE | GENERATION)) | ((generation + 1) << COUNT_BITS)
+                (old & !(ACTIVE | RECEIVING | GENERATION)) | ((generation + 1) << COUNT_BITS)
             };
             match self.0.control.compare_exchange_weak(
                 old,
@@ -211,6 +244,32 @@ impl CaptureGate {
                 Err(actual) => old = actual,
             }
         }
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    fn enter_receiving(&self) -> Option<CaptureEpoch> {
+        if self.0.return_pending.load(Ordering::Acquire) {
+            return None;
+        }
+        self.publish_mode(RECEIVING)
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    fn leave_receiving(&self, epoch: CaptureEpoch, force: bool) -> bool {
+        let old = self.0.control.load(Ordering::Acquire);
+        if old & (RECEIVING | STOPPED | IN_CALLBACK) != RECEIVING || self.epoch_from(old) != epoch {
+            return false;
+        }
+        let generation = epoch.generation;
+        if generation == GENERATION_MAX {
+            self.source_lost();
+            return false;
+        }
+        let new = (old & !(RECEIVING | GENERATION))
+            | ((generation + 1) << COUNT_BITS)
+            | if force { ADMISSIONS_CLOSED } else { 0 };
+        self.0
+            .control
+            .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
     }
     pub fn active(&self) -> bool {
         let word = self.0.control.load(Ordering::Acquire);
@@ -297,8 +356,13 @@ pub struct CaptureSession {
     #[cfg(any(windows, target_os = "macos"))]
     _thread: CaptureThread,
     return_position: std::sync::Mutex<Option<(f64, f64)>>,
+    receive_driver: Option<ReceiveDriver>,
+    receive_control: Option<ReceiveControl>,
 }
 impl CaptureSession {
+    pub fn take_receive_driver(&mut self) -> Result<Option<ReceiveDriver>> {
+        Ok(self.receive_driver.take())
+    }
     pub fn shutdown(&mut self) -> Result<()> {
         anyhow::ensure!(
             self.shutdown_wait(std::time::Duration::from_millis(500))?,
@@ -322,6 +386,10 @@ impl CaptureSession {
         }
     }
     fn shutdown_wait(&mut self, timeout: std::time::Duration) -> Result<bool> {
+        if let Some(control) = &self.receive_control {
+            control.request_stop();
+            control.wake_loop();
+        }
         let restored = self.restore_checked();
         #[cfg(any(windows, target_os = "macos"))]
         let stopped = self._thread.shutdown(timeout);
@@ -339,13 +407,30 @@ impl CaptureSession {
             }
             anyhow::bail!("native capture thread or reservation release failed");
         }
+        if let Some(control) = &self.receive_control {
+            anyhow::ensure!(
+                control.outcome() == ReceiveAck::Retired,
+                "native receiver cleanup remains unconfirmed"
+            );
+        }
         Ok(true)
     }
     pub fn begin(&self, return_x: f64, return_y: f64) -> Result<bool> {
         Ok(self.begin_routed(return_x, return_y)?.is_some())
     }
     pub fn begin_routed(&self, return_x: f64, return_y: f64) -> Result<Option<CaptureEpoch>> {
+        if self
+            .receive_control
+            .as_ref()
+            .is_some_and(|control| control.outcome() != ReceiveAck::Retired)
+        {
+            return Ok(None);
+        }
+        if self.gate.0.return_pending.swap(true, Ordering::AcqRel) {
+            return Ok(None);
+        }
         let Some(epoch) = self.gate.publish(true) else {
+            self.gate.0.return_pending.store(false, Ordering::Release);
             return Ok(None);
         };
         let result = (|| {
@@ -364,6 +449,15 @@ impl CaptureSession {
     }
     pub fn restore_checked(&self) -> Result<()> {
         self.gate.disable();
+        anyhow::ensure!(
+            self.gate.0.healthy.load(Ordering::Acquire),
+            "native capture source lost; no further pointer request is permitted"
+        );
+        // A receiver's pointer/owned ledger belongs exclusively to its Native
+        // loop. A source return cursor must never race that serialized owner.
+        if self.gate.receiving_epoch().is_some() {
+            return Ok(());
+        }
         let mut position = self
             .return_position
             .lock()
@@ -372,10 +466,152 @@ impl CaptureSession {
             pointer(x, y)?;
             *position = None;
         }
+        self.gate.0.return_pending.store(false, Ordering::Release);
         Ok(())
     }
     pub fn restore(&self) {
         let _ = self.restore_checked();
+    }
+}
+#[cfg(any(windows, target_os = "macos"))]
+struct NativeReceiveBackend {
+    gate: CaptureGate,
+    observation: SourceObservation,
+}
+#[cfg(any(windows, target_os = "macos"))]
+impl NativeReceiveBackend {
+    fn source_available(&self) -> bool {
+        if !self
+            .observation
+            .fresh_at(now_ms(), std::time::SystemTime::now())
+        {
+            self.gate.source_lost();
+            return false;
+        }
+        self.gate.0.healthy.load(Ordering::Acquire)
+    }
+}
+#[cfg(any(windows, target_os = "macos"))]
+impl receive_driver::ReceiveBackend for NativeReceiveBackend {
+    fn enter_receiving(
+        &mut self,
+    ) -> std::result::Result<CaptureEpoch, peerglide_actions::execution::NativeFailure> {
+        use peerglide_actions::execution::NativeFailure;
+        if !self.source_available() {
+            return Err(NativeFailure::PermissionLost);
+        }
+        // Failure must leave protection unpublished; publish_mode is one CAS.
+        self.gate
+            .enter_receiving()
+            .ok_or(NativeFailure::BeforeSubmission)
+    }
+    fn is_current(&self, epoch: CaptureEpoch) -> bool {
+        self.gate.receiving_epoch() == Some(epoch)
+    }
+    fn source_alive(&self) -> bool {
+        self.source_available()
+    }
+    fn consumed_modifiers_held(&self) -> bool {
+        native::suppressed_modifiers_held()
+    }
+    fn pointer(
+        &mut self,
+        point: ReceivePoint,
+    ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+        if !self.source_available() {
+            return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        native::receive_pointer(point.x, point.y)
+    }
+    fn input(
+        &mut self,
+        event: Input,
+    ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+        if !self.source_available() {
+            return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        native::receive_inject(event)
+    }
+    fn leave_receiving(
+        &mut self,
+        epoch: CaptureEpoch,
+    ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+        if !self.source_available() {
+            return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        self.gate
+            .leave_receiving(epoch, false)
+            .then_some(())
+            .ok_or(peerglide_actions::execution::NativeFailure::TargetLost)
+    }
+    fn force_return(
+        &mut self,
+        epoch: CaptureEpoch,
+    ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+        if !self.source_available() {
+            return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        self.gate
+            .leave_receiving(epoch, true)
+            .then_some(())
+            .ok_or(peerglide_actions::execution::NativeFailure::TargetLost)
+    }
+}
+/// The loop's last observation, never a timestamp refreshed by an SDK return.
+/// Both clocks are checked: wall time includes sleep on hosts whose monotonic
+/// clock pauses; backward/overflowing observations cannot confirm source health.
+#[cfg(any(windows, target_os = "macos", test))]
+#[derive(Clone, Copy)]
+struct SourceObservation {
+    monotonic: u64,
+    wall: std::time::SystemTime,
+}
+#[cfg(any(windows, target_os = "macos", test))]
+impl SourceObservation {
+    fn at(monotonic: u64, wall: std::time::SystemTime) -> Self {
+        Self { monotonic, wall }
+    }
+    fn fresh_at(self, monotonic: u64, wall: std::time::SystemTime) -> bool {
+        monotonic
+            .checked_sub(self.monotonic)
+            .is_some_and(|elapsed| elapsed <= 1500)
+            && wall
+                .duration_since(self.wall)
+                .is_ok_and(|elapsed| elapsed <= std::time::Duration::from_millis(1500))
+    }
+}
+/// Read-only sampling occurs on the Native loop, never under STATE/callback.
+/// The very same pre-query observation also guards every effect and cleanup.
+#[cfg(any(windows, target_os = "macos"))]
+struct SourceHealth {
+    checked: u64,
+    observation: SourceObservation,
+}
+#[cfg(any(windows, target_os = "macos"))]
+impl SourceHealth {
+    fn new() -> Self {
+        Self {
+            checked: u64::MAX,
+            observation: SourceObservation::at(now_ms(), std::time::SystemTime::now()),
+        }
+    }
+    fn sample(&mut self, backend: &mut NativeReceiveBackend, debt: bool) {
+        let now = now_ms();
+        let wall = std::time::SystemTime::now();
+        if debt && !self.observation.fresh_at(now, wall) {
+            backend.gate.source_lost();
+            return;
+        }
+        // Stamp before the health query. A slow query or later SDK call cannot
+        // advance this baseline and hide a gap before subsequent owned Up.
+        self.observation = SourceObservation::at(now, wall);
+        backend.observation = self.observation;
+        if self.checked == u64::MAX || now.saturating_sub(self.checked) >= 100 {
+            self.checked = now;
+            if !context::capture_source_available() {
+                backend.gate.source_lost();
+            }
+        }
     }
 }
 /// Compiled backend support, independent of OS permissions and peer grants.
@@ -394,14 +630,19 @@ pub fn capture(tx: mpsc::Sender<Captured>, target: InputCapabilities) -> Result<
     let gate = CaptureGate::default();
     #[cfg(any(windows, target_os = "macos"))]
     {
-        #[cfg(windows)]
-        let thread = native::capture(tx, gate.clone(), target, None)?;
-        #[cfg(target_os = "macos")]
-        let thread = native::capture(tx, gate.clone(), target)?;
+        let wake = Arc::new(native::ReceiveWake::default());
+        let wake_callback = wake.clone();
+        let (driver, engine) =
+            receive_driver::channel(128, Arc::new(move || wake_callback.wake()))?;
+        let control = driver.control();
+        let _ = gate.0.receive.set(control.clone());
+        let thread = native::capture_receiving(tx, gate.clone(), target, engine, wake)?;
         Ok(CaptureSession {
             gate,
             _thread: thread,
             return_position: std::sync::Mutex::new(None),
+            receive_driver: Some(driver),
+            receive_control: Some(control),
         })
     }
     #[cfg(not(any(windows, target_os = "macos")))]
@@ -454,6 +695,8 @@ enum PairOwner {
     Local(CaptureEpoch),
     Remote(CaptureEpoch),
     Consumed(CaptureRoute),
+    // Protected pairs are fixed-table holds, never added to the legacy sets.
+    Protected(CaptureRoute),
 }
 #[cfg(any(windows, target_os = "macos"))]
 impl PairOwner {
@@ -461,18 +704,25 @@ impl PairOwner {
         match self {
             Self::Local(e) => CaptureRoute::Local(e),
             Self::Remote(e) => CaptureRoute::Remote(e),
-            Self::Consumed(r) => r,
+            Self::Consumed(r) | Self::Protected(r) => r,
             Self::Empty => CaptureRoute::Local(fallback.epoch()),
         }
     }
     fn suppressed(self) -> bool {
-        matches!(self, Self::Remote(_) | Self::Consumed(_))
+        matches!(
+            self,
+            Self::Remote(_) | Self::Consumed(_) | Self::Protected(_)
+        )
     }
 }
 #[cfg(any(windows, target_os = "macos"))]
 struct PairLedger {
     keys: [PairOwner; 256],
-    buttons: [PairOwner; 8],
+    buttons: [PairOwner; 256],
+    unknown: [u64; 1024],
+    extra_held: usize,
+    force_armed: bool,
+    force_pending: bool,
     debt: usize,
 }
 #[cfg(any(windows, target_os = "macos"))]
@@ -480,7 +730,11 @@ impl Default for PairLedger {
     fn default() -> Self {
         Self {
             keys: [PairOwner::Empty; 256],
-            buttons: [PairOwner::Empty; 8],
+            buttons: [PairOwner::Empty; 256],
+            unknown: [0; 1024],
+            extra_held: 0,
+            force_armed: false,
+            force_pending: false,
             debt: 0,
         }
     }
@@ -493,6 +747,8 @@ impl PairLedger {
         } else {
             &mut self.buttons[index]
         };
+        self.extra_held = self.extra_held - usize::from(matches!(slot, PairOwner::Protected(_)))
+            + usize::from(matches!(owner, PairOwner::Protected(_)));
         self.debt = self.debt - usize::from(slot.suppressed()) + usize::from(owner.suppressed());
         *slot = owner;
     }
@@ -516,6 +772,83 @@ impl HookState {
     }
     fn source_lost(&mut self) {
         self.gate.source_lost();
+    }
+    fn suppressed_modifiers(&self) -> bool {
+        self.pairs.keys[0xe0..=0xe7].iter().any(|owner| owner.suppressed())
+            // Unknown keys cannot safely be proved non-modifiers.
+            || self.pairs.unknown.iter().any(|word| *word != 0)
+    }
+    fn physical_key_held(&self, usage: u16) -> bool {
+        self.keys.contains(&usage)
+            || (usize::from(usage) < self.pairs.keys.len()
+                && matches!(self.pairs.keys[usize::from(usage)], PairOwner::Protected(_)))
+    }
+    fn finish_force_chord(&mut self) {
+        if self.pairs.force_pending && !self.suppressed_modifiers() && !self.physical_key_held(0x29)
+        {
+            self.pairs.force_pending = false;
+            self.pairs.force_armed = false;
+            if let (Some(epoch), Some(control)) =
+                (self.gate.receiving_epoch(), self.gate.0.receive.get())
+            {
+                // The second, fresh complete escape chord authorizes dropping
+                // new-input protection only. Native owned debt stays Unknown.
+                control.request_force_return(epoch);
+            }
+        }
+    }
+    fn protect_pair(
+        &mut self,
+        key: bool,
+        index: usize,
+        down: bool,
+        route: CaptureRoute,
+    ) -> Option<bool> {
+        let old = if key {
+            self.pairs.keys[index]
+        } else {
+            self.pairs.buttons[index]
+        };
+        if matches!(old, PairOwner::Protected(_)) {
+            if !down {
+                self.pairs.replace(key, index, PairOwner::Empty);
+                self.update_held();
+                self.finish_force_chord();
+            }
+            return Some(true);
+        }
+        let held = if key {
+            self.keys.contains(&(index as u16))
+        } else {
+            self.buttons.contains(&(index as u8))
+        };
+        let protected = matches!(route, CaptureRoute::Receiving(_))
+            || (!route.remote() && self.suppressed_modifiers());
+        if !down || !matches!(old, PairOwner::Empty) || held || !protected {
+            return None;
+        }
+        if key && (0xe0..=0xe7).contains(&index) && !self.suppressed_modifiers() {
+            self.pairs.force_armed = self.gate.receiving_epoch().is_some_and(|epoch| {
+                self.gate
+                    .0
+                    .receive
+                    .get()
+                    .is_some_and(|control| control.can_force_return(epoch))
+            });
+        }
+        self.pairs.replace(key, index, PairOwner::Protected(route));
+        self.update_held();
+        self.gate.request_takeover(route);
+        if key
+            && index == 0x29
+            && (self.physical_key_held(0xe0) || self.physical_key_held(0xe4))
+            && (self.physical_key_held(0xe2) || self.physical_key_held(0xe6))
+        {
+            self.pairs.force_pending = self.pairs.force_armed;
+            self.gate.disable();
+            self.emit(Captured::Emergency);
+        }
+        Some(true)
     }
     fn pair_input(
         &mut self,
@@ -547,7 +880,11 @@ impl HookState {
             route: owner.route(route),
         });
         let owner = if empty && down && owner.suppressed() && !sent {
-            PairOwner::Local(route.epoch())
+            if self.suppressed_modifiers() {
+                PairOwner::Consumed(route)
+            } else {
+                PairOwner::Local(route.epoch())
+            }
         } else {
             owner
         };
@@ -561,6 +898,9 @@ impl HookState {
         self.button_routed(button, down, self.gate.snapshot())
     }
     fn button_routed(&mut self, button: u8, down: bool, route: CaptureRoute) -> bool {
+        if let Some(block) = self.protect_pair(false, usize::from(button), down, route) {
+            return block;
+        }
         if down {
             self.buttons.insert(button);
         } else {
@@ -590,7 +930,11 @@ impl HookState {
             self.pairs.buttons[index]
         };
         let owner = if down && matches!(old, PairOwner::Empty) {
-            PairOwner::Local(route.epoch())
+            if self.suppressed_modifiers() {
+                PairOwner::Consumed(route)
+            } else {
+                PairOwner::Local(route.epoch())
+            }
         } else {
             old
         };
@@ -599,6 +943,9 @@ impl HookState {
         owner.suppressed()
     }
     fn unsupported_button(&mut self, button: u8, down: bool, route: CaptureRoute) -> bool {
+        if let Some(block) = self.protect_pair(false, usize::from(button), down, route) {
+            return block;
+        }
         if down {
             self.buttons.insert(button);
         } else {
@@ -631,6 +978,12 @@ impl HookState {
         self.scroll_routed(x, y, self.gate.snapshot())
     }
     fn scroll_routed(&mut self, x: i16, y: i16, route: CaptureRoute) -> bool {
+        if matches!(route, CaptureRoute::Receiving(_))
+            || (!route.remote() && self.suppressed_modifiers())
+        {
+            self.gate.request_takeover(route);
+            return true;
+        }
         if self.reject_target(Input::Scroll { x, y }) {
             return false;
         }
@@ -640,6 +993,10 @@ impl HookState {
         }) && route.remote()
     }
     fn movement(&mut self, event: Captured, route: CaptureRoute) -> bool {
+        if matches!(route, CaptureRoute::Receiving(_)) {
+            self.gate.request_takeover(route);
+            return true;
+        }
         let debt = self.pairs.mouse_debt();
         if !route.remote() && debt {
             return true;
@@ -649,7 +1006,7 @@ impl HookState {
     }
     fn update_held(&self) {
         self.gate
-            .set_held((self.keys.len() + self.buttons.len()) as u64);
+            .set_held((self.keys.len() + self.buttons.len() + self.pairs.extra_held) as u64);
     }
     fn emit(&self, event: Captured) -> bool {
         if self.tx.try_send(event).is_err() {
@@ -666,6 +1023,32 @@ impl HookState {
             return false;
         }
         let token = 0x8000 | (code & 0x7fff);
+        let route = self
+            .gate
+            .route_from(self.gate.0.control.load(Ordering::Acquire));
+        let word = usize::from(token) / 64;
+        let bit = 1u64 << (token % 64);
+        let consumed = self.pairs.unknown[word] & bit != 0;
+        if consumed
+            || (down
+                && !self.keys.contains(&token)
+                && (matches!(route, CaptureRoute::Receiving(_))
+                    || (!route.remote() && self.suppressed_modifiers())))
+        {
+            if down && !consumed {
+                self.pairs.unknown[word] |= bit;
+                self.pairs.debt += 1;
+                self.pairs.extra_held += 1;
+            } else if !down && consumed {
+                self.pairs.unknown[word] &= !bit;
+                self.pairs.debt -= 1;
+                self.pairs.extra_held -= 1;
+            }
+            self.update_held();
+            self.gate.request_takeover(route);
+            self.finish_force_chord();
+            return true;
+        }
         if down {
             self.keys.insert(token);
         } else {
@@ -691,6 +1074,9 @@ impl HookState {
         if usize::from(usage) >= self.pairs.keys.len() {
             return self.unsupported_key(usage, down);
         }
+        if let Some(block) = self.protect_pair(true, usize::from(usage), down, route) {
+            return block;
+        }
         let fresh = if down {
             self.keys.insert(usage)
         } else {
@@ -708,7 +1094,8 @@ impl HookState {
             self.emit(Captured::Emergency);
             if matches!(old, PairOwner::Empty) {
                 self.pairs
-                    .replace(true, usize::from(usage), PairOwner::Local(route.epoch()));
+                    .replace(true, usize::from(usage), PairOwner::Consumed(route));
+                return true;
             }
             return old.suppressed();
         }
@@ -756,6 +1143,37 @@ impl HookState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_observation_checks_wall_and_monotonic_without_refreshing_after_a_slow_call() {
+        use std::time::{Duration, SystemTime};
+        let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(10);
+        let observed = SourceObservation::at(100, wall);
+        assert!(observed.fresh_at(1600, wall + Duration::from_millis(1500)));
+        assert!(!observed.fresh_at(1601, wall + Duration::from_millis(10)));
+        assert!(!observed.fresh_at(110, wall + Duration::from_millis(1501)));
+        assert!(!observed.fresh_at(99, wall));
+        assert!(!observed.fresh_at(100, wall - Duration::from_millis(1)));
+        assert!(!observed.fresh_at(u64::MAX, wall));
+        assert!(
+            !observed.fresh_at(1601, wall + Duration::from_millis(1501)),
+            "checking a completed SDK call never advances the original observation"
+        );
+    }
+    #[test]
+    fn receiving_is_a_distinct_atomic_mode_and_disable_cannot_remove_protection() {
+        let gate = CaptureGate::default();
+        let before = gate.route().unwrap();
+        let epoch = gate.publish_mode(RECEIVING).unwrap();
+        assert_eq!(gate.route(), Some(CaptureRoute::Receiving(epoch)));
+        assert!(!gate.is_current(before));
+        assert!(!gate.active());
+        assert!(!gate.try_activate());
+        assert!(gate.try_local_epoch().is_none());
+        gate.disable();
+        assert_eq!(gate.receiving_epoch(), Some(epoch));
+        gate.source_lost();
+        assert!(gate.route().is_none());
+    }
     #[test]
     fn epochs_do_not_promote_local_or_retired_remote_events_across_phases_or_captures() {
         let gate = CaptureGate::default();
@@ -814,6 +1232,8 @@ mod tests {
         let session = CaptureSession {
             gate: CaptureGate::default(),
             return_position: std::sync::Mutex::new(Some((0.2, 0.3))),
+            receive_driver: None,
+            receive_control: None,
         };
         assert!(session.gate.try_activate());
         assert!(session.restore_checked().is_err());
@@ -836,6 +1256,8 @@ mod tests {
                 }
             }),
             return_position: position,
+            receive_driver: None,
+            receive_control: None,
         };
         assert!(session.begin_routed(0.2, 0.3).is_err());
         assert!(
@@ -905,6 +1327,130 @@ mod hook_tests {
         let epoch = s.gate.publish(true).unwrap();
         s.gate.0.deadline.store(u64::MAX, Ordering::Release);
         epoch
+    }
+    #[test]
+    fn receiving_consumes_fixed_pairs_without_queueing_and_keeps_ups_after_mode_retirement() {
+        let (mut s, mut rx) = state(1);
+        let epoch = s.gate.enter_receiving().unwrap();
+        let route = CaptureRoute::Receiving(epoch);
+        assert!(s.key_routed(4, true, route));
+        assert!(s.key_routed(4, true, route));
+        assert!(s.unsupported_button(4, true, route));
+        assert!(s.unsupported_key(0x100, true));
+        assert_eq!(s.pairs.debt, 3);
+        assert!(!s.gate.idle());
+        assert!(
+            s.keys.is_empty() && s.buttons.is_empty(),
+            "protected Down never allocates legacy set entries"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "first takeover is atomic, not a queued input"
+        );
+        // Exercise retained ownership even after a force/retirement transition.
+        assert!(s.gate.leave_receiving(epoch, true));
+        assert!(s.key_routed(4, false, route));
+        assert!(s.unsupported_button(4, false, route));
+        assert!(s.unsupported_key(0x100, false));
+        assert_eq!(s.pairs.debt, 0);
+        assert!(s.gate.idle());
+        assert!(rx.try_recv().is_err());
+    }
+    #[test]
+    fn local_passed_hold_prevents_receiver_admission_and_its_up_stays_local() {
+        let (mut s, mut rx) = state(8);
+        assert!(!s.key(4, true));
+        assert!(s.gate.enter_receiving().is_none());
+        assert!(!s.key(4, false));
+        assert_eq!(s.pairs.debt, 0);
+        let epoch = s.gate.enter_receiving().unwrap();
+        assert!(s.key_routed(4, true, CaptureRoute::Receiving(epoch)));
+        for _ in 0..2 {
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                Captured::Input {
+                    route: CaptureRoute::Local(_),
+                    ..
+                }
+            ));
+        }
+        assert!(rx.try_recv().is_err());
+    }
+    #[test]
+    fn old_remote_modifiers_protect_fresh_local_combinations_without_freezing_normal_local_input() {
+        let (mut s, mut rx) = state(16);
+        activate(&s);
+        assert!(s.key(0xe0, true));
+        s.gate.disable();
+        assert!(s.key(6, true));
+        assert!(s.button(1, true));
+        assert!(s.scroll(0, 1));
+        assert!(s.unsupported_key(0x100, true));
+        assert!(s.key(0xe0, false));
+        // Unknown protected keys conservatively keep the modifier barrier.
+        assert!(s.unsupported_key(0x100, false));
+        assert!(!s.suppressed_modifiers());
+        assert!(!s.key(7, true));
+        assert!(!s.key(7, false));
+        assert!(s.key(6, false));
+        assert!(s.button(1, false));
+        assert_eq!(s.pairs.debt, 0);
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert_eq!(
+            events.len(),
+            4,
+            "only original Ctrl pair and later plain local key reach the worker"
+        );
+    }
+    #[test]
+    fn remote_modifier_combinations_still_forward_but_queue_failure_cannot_fail_open_a_new_combo() {
+        let (mut s, mut rx) = state(1);
+        activate(&s);
+        assert!(s.key(0xe0, true));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Captured::Input {
+                event: Input::Key {
+                    usage: 0xe0,
+                    down: true
+                },
+                ..
+            }
+        ));
+        assert!(s.key(6, true));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            Captured::Input {
+                event: Input::Key {
+                    usage: 6,
+                    down: true
+                },
+                ..
+            }
+        ));
+        assert!(s.key(6, false)); // fills the queue
+        assert!(
+            s.key(7, true),
+            "Ctrl held remotely: failed fresh Down must be consumed, never local"
+        );
+        assert!(!s.gate.active());
+        assert!(s.key(7, false));
+        assert!(s.key(0xe0, false));
+        assert_eq!(s.pairs.debt, 0);
+    }
+    #[test]
+    fn stopping_keeps_protected_side_button_and_key_pair_debt_until_observed_up() {
+        let (mut s, _rx) = state(1);
+        let epoch = s.gate.enter_receiving().unwrap();
+        let route = CaptureRoute::Receiving(epoch);
+        assert!(s.unsupported_button(32, true, route));
+        assert!(s.key_routed(0xe2, true, route));
+        assert!(s.keep_running(true));
+        assert!(s.gate.leave_receiving(epoch, true));
+        assert!(s.unsupported_button(32, false, route));
+        assert!(s.keep_running(true));
+        assert!(s.key_routed(0xe2, false, route));
+        assert!(!s.keep_running(true));
     }
     #[test]
     fn key_repeat_and_up_keep_the_remote_down_owner_after_disable_and_queue_pressure() {
@@ -1071,6 +1617,8 @@ mod hook_tests {
             gate,
             _thread: thread,
             return_position: std::sync::Mutex::new(None),
+            receive_driver: None,
+            receive_control: None,
         };
         struct Rescue(Option<std::sync::mpsc::Sender<()>>);
         impl Drop for Rescue {
@@ -1101,6 +1649,8 @@ mod hook_tests {
             gate: s.gate.clone(),
             _thread: CaptureThread::spawn(|_| ()),
             return_position: std::sync::Mutex::new(None),
+            receive_driver: None,
+            receive_control: None,
         };
         assert!(session._thread.shutdown(std::time::Duration::from_secs(1)));
         assert!(session.shutdown_poll().is_err());
@@ -1294,5 +1844,349 @@ mod allocation_checks {
         let _reset = Reset;
         f();
         COUNT.with(|count| count.get().unwrap())
+    }
+}
+
+// Software-only callback/Engine integration; backend effects never call OS input APIs.
+#[cfg(all(test, any(windows, target_os = "macos")))]
+mod fresh_escape_tests {
+    use super::*;
+    use crate::receive_driver::{channel, ReceiveBackend, ReceiveEngine};
+    use peerglide_actions::execution::NativeFailure;
+    use std::{
+        future::{poll_fn, Future},
+        task::Poll,
+    };
+
+    struct Rig {
+        state: HookState,
+        driver: ReceiveDriver,
+        engine: ReceiveEngine,
+        fail_up: bool,
+        force_calls: usize,
+        up_calls: usize,
+        arm_ctrl_during_second_up: bool,
+        _events: mpsc::Receiver<Captured>,
+    }
+    struct FakeBackend<'a> {
+        state: &'a mut HookState,
+        fail_up: bool,
+        force_calls: &'a mut usize,
+        up_calls: &'a mut usize,
+        arm_ctrl_during_second_up: bool,
+    }
+    impl ReceiveBackend for FakeBackend<'_> {
+        fn enter_receiving(&mut self) -> Result<CaptureEpoch, NativeFailure> {
+            self.state
+                .gate
+                .enter_receiving()
+                .ok_or(NativeFailure::BeforeSubmission)
+        }
+        fn is_current(&self, epoch: CaptureEpoch) -> bool {
+            self.state.gate.receiving_epoch() == Some(epoch)
+        }
+        fn source_alive(&self) -> bool {
+            self.state.gate.0.healthy.load(Ordering::Acquire)
+        }
+        fn consumed_modifiers_held(&self) -> bool {
+            self.state.suppressed_modifiers()
+        }
+        fn pointer(&mut self, _point: ReceivePoint) -> Result<(), NativeFailure> {
+            Ok(())
+        }
+        fn input(&mut self, event: Input) -> Result<(), NativeFailure> {
+            if matches!(
+                event,
+                Input::Key { down: false, .. } | Input::Button { down: false, .. }
+            ) {
+                *self.up_calls += 1;
+                if self.arm_ctrl_during_second_up && *self.up_calls == 2 {
+                    // The first failed cleanup already made outcome Required,
+                    // but Engine is still DRAINING during this SDK retry.
+                    let epoch = self.state.gate.receiving_epoch().unwrap();
+                    let control = self.state.gate.0.receive.get().unwrap();
+                    assert_eq!(control.outcome(), ReceiveAck::RecoveryRequired);
+                    assert!(!control.can_force_return(epoch));
+                    let callback = self.state.gate.begin_event();
+                    assert!(self.state.key_routed(0xe0, true, callback.route));
+                }
+                if self.fail_up {
+                    return Err(NativeFailure::PermissionLost);
+                }
+            }
+            Ok(())
+        }
+        fn leave_receiving(&mut self, epoch: CaptureEpoch) -> Result<(), NativeFailure> {
+            self.state
+                .gate
+                .leave_receiving(epoch, false)
+                .then_some(())
+                .ok_or(NativeFailure::TargetLost)
+        }
+        fn force_return(&mut self, epoch: CaptureEpoch) -> Result<(), NativeFailure> {
+            assert!(!self.state.suppressed_modifiers());
+            self.state
+                .gate
+                .leave_receiving(epoch, true)
+                .then_some(())
+                .ok_or(NativeFailure::TargetLost)?;
+            *self.force_calls += 1;
+            Ok(())
+        }
+    }
+    impl Rig {
+        fn new() -> Self {
+            let (tx, events) = mpsc::channel(16);
+            let (driver, engine) = channel(8, Arc::new(|| {})).unwrap();
+            let gate = CaptureGate::default();
+            assert!(gate.0.receive.set(driver.control()).is_ok());
+            Self {
+                state: HookState {
+                    pairs: PairLedger::default(),
+                    stopping: false,
+                    toggle_route: None,
+                    #[cfg(windows)]
+                    local_gestures: None,
+                    tx,
+                    gate,
+                    keys: Default::default(),
+                    buttons: Default::default(),
+                    toggle_armed: false,
+                    target: InputCapabilities::new(
+                        &(4..=0x73).chain(0xe0..=0xe7).collect::<Vec<_>>(),
+                        true,
+                        7,
+                        true,
+                    )
+                    .unwrap(),
+                },
+                driver,
+                engine,
+                fail_up: false,
+                force_calls: 0,
+                up_calls: 0,
+                arm_ctrl_during_second_up: false,
+                _events: events,
+            }
+        }
+        fn pump_parts(
+            engine: &mut ReceiveEngine,
+            state: &mut HookState,
+            fail_up: bool,
+            forces: &mut usize,
+            ups: &mut usize,
+            arm_during_retry: bool,
+        ) {
+            let mut backend = FakeBackend {
+                state,
+                fail_up,
+                force_calls: forces,
+                up_calls: ups,
+                arm_ctrl_during_second_up: arm_during_retry,
+            };
+            for _ in 0..32 {
+                if !engine.pump(&mut backend, now_ms(), false) {
+                    return;
+                }
+            }
+            panic!("bounded fake service did not quiesce");
+        }
+        fn pump(&mut self) {
+            Self::pump_parts(
+                &mut self.engine,
+                &mut self.state,
+                self.fail_up,
+                &mut self.force_calls,
+                &mut self.up_calls,
+                self.arm_ctrl_during_second_up,
+            );
+        }
+        async fn begin(&mut self) -> CaptureEpoch {
+            let mut pending = Box::pin(self.driver.begin());
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            Self::pump_parts(
+                &mut self.engine,
+                &mut self.state,
+                self.fail_up,
+                &mut self.force_calls,
+                &mut self.up_calls,
+                false,
+            );
+            pending.await.unwrap()
+        }
+        async fn own_remote_ctrl(&mut self, epoch: CaptureEpoch) {
+            let mut pending = Box::pin(self.driver.input(
+                epoch,
+                Input::Key {
+                    usage: 0xe0,
+                    down: true,
+                },
+                ReceivePoint { x: 0.5, y: 0.5 },
+            ));
+            poll_fn(|cx| {
+                assert!(pending.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            Self::pump_parts(
+                &mut self.engine,
+                &mut self.state,
+                self.fail_up,
+                &mut self.force_calls,
+                &mut self.up_calls,
+                false,
+            );
+            assert_eq!(pending.await.unwrap(), ReceiveAck::Submitted);
+        }
+        fn key(&mut self, usage: u16, down: bool) {
+            let callback = self.state.gate.begin_event();
+            assert!(
+                self.state.key_routed(usage, down, callback.route),
+                "protected trigger pair must stay consumed"
+            );
+        }
+        fn side_button(&mut self, down: bool) {
+            let callback = self.state.gate.begin_event();
+            assert!(self.state.unsupported_button(4, down, callback.route));
+        }
+        async fn fail_after_active_ctrl_down() -> (Self, CaptureEpoch) {
+            let mut rig = Self::new();
+            let epoch = rig.begin().await;
+            rig.own_remote_ctrl(epoch).await;
+            assert_eq!(rig.driver.snapshot(epoch), ReceiveSnapshot::Active);
+            assert!(!rig.driver.control().can_force_return(epoch));
+            rig.key(0xe0, true);
+            assert!(
+                !rig.state.pairs.force_armed,
+                "first chord began while ACTIVE"
+            );
+            rig.fail_up = true;
+            rig.pump();
+            assert_eq!(
+                rig.driver.snapshot(epoch),
+                ReceiveSnapshot::RecoveryRequired
+            );
+            assert!(rig.driver.control().can_force_return(epoch));
+            assert!(
+                !rig.engine.can_exit(),
+                "failed SDK cleanup still protects new input"
+            );
+            assert_eq!(rig.force_calls, 0);
+            (rig, epoch)
+        }
+        fn release_first_chord(&mut self) {
+            self.key(0x29, false);
+            self.key(0xe2, false);
+            self.key(0xe0, false);
+            self.pump();
+            assert_eq!(self.force_calls, 0);
+            assert!(!self.state.suppressed_modifiers());
+        }
+    }
+
+    #[tokio::test]
+    async fn active_first_chord_never_becomes_force_when_cleanup_fails_mid_chord_or_esc_repeats() {
+        let (mut rig, epoch) = Rig::fail_after_active_ctrl_down().await;
+        rig.key(0xe2, true);
+        rig.key(0x29, true);
+        rig.key(0x29, true); // repeat after FAILED does not create a fresh chord
+        rig.pump();
+        assert!(!rig.state.pairs.force_pending);
+        assert_eq!(rig.force_calls, 0);
+        rig.key(0x29, false);
+        rig.key(0x29, true); // fresh Esc, but original modifiers never released
+        rig.key(0x29, true);
+        rig.pump();
+        assert_eq!(rig.force_calls, 0);
+        rig.release_first_chord();
+        assert_eq!(
+            rig.driver.snapshot(epoch),
+            ReceiveSnapshot::RecoveryRequired
+        );
+        assert!(!rig.engine.can_exit());
+    }
+
+    #[tokio::test]
+    async fn only_a_new_complete_failed_escape_forces_once_and_preserves_old_pair_ups() {
+        let (mut rig, epoch) = Rig::fail_after_active_ctrl_down().await;
+        rig.key(0xe2, true);
+        rig.key(0x29, true);
+        rig.release_first_chord();
+        rig.side_button(true); // an unrelated already-consumed pair must survive force
+        rig.key(0xe0, true);
+        assert!(rig.state.pairs.force_armed);
+        rig.key(0xe2, true);
+        rig.key(0x29, true);
+        rig.key(0x29, true);
+        assert!(rig.state.pairs.force_pending);
+        rig.pump();
+        assert_eq!(rig.force_calls, 0, "Down/repeat alone cannot force");
+        rig.key(0x29, false);
+        rig.pump();
+        assert_eq!(rig.force_calls, 0, "consumed Ctrl/Alt are still held");
+        rig.key(0xe0, false);
+        rig.pump();
+        assert_eq!(rig.force_calls, 0, "consumed Alt is still held");
+        rig.key(0xe2, false);
+        assert!(!rig.state.pairs.force_pending);
+        assert!(!rig.state.pairs.force_armed);
+        rig.pump();
+        assert_eq!(rig.force_calls, 1);
+        rig.pump();
+        assert_eq!(
+            rig.force_calls, 1,
+            "no duplicate force request after the completed chord"
+        );
+        let control = rig.state.gate.0.control.load(Ordering::Acquire);
+        assert_ne!(control & ADMISSIONS_CLOSED, 0);
+        assert_eq!(control & STOPPED, 0, "force is not a source-loss claim");
+        assert!(rig.state.gate.0.healthy.load(Ordering::Acquire));
+        assert!(rig.state.gate.receiving_epoch().is_none());
+        assert!(!rig.state.gate.try_activate());
+        assert!(rig.state.gate.enter_receiving().is_none());
+        assert_eq!(
+            rig.driver.snapshot(epoch),
+            ReceiveSnapshot::RecoveryRequired
+        );
+        assert!(rig.engine.can_exit());
+        assert!(!rig.driver.control().can_force_return(epoch));
+        assert_eq!(rig.state.pairs.debt, 1);
+        assert!(
+            rig.state.keep_running(true),
+            "old consumed side-button Up still needs the original hook"
+        );
+        rig.side_button(false);
+        assert_eq!(rig.state.pairs.debt, 0);
+        assert!(!rig.state.keep_running(true));
+        assert!(rig.state.gate.0.healthy.load(Ordering::Acquire));
+        assert_eq!(rig.force_calls, 1);
+    }
+
+    // Required during a DRAINING retry cannot authorize a fresh FAILED chord.
+    #[tokio::test]
+    async fn a_chord_started_during_sdk_cleanup_retry_is_not_a_fresh_failed_chord() {
+        let mut rig = Rig::new();
+        let epoch = rig.begin().await;
+        rig.own_remote_ctrl(epoch).await;
+        rig.fail_up = true;
+        rig.arm_ctrl_during_second_up = true;
+        rig.driver.control().request_recovery(epoch);
+        rig.pump();
+        assert_eq!(
+            rig.driver.snapshot(epoch),
+            ReceiveSnapshot::RecoveryRequired
+        );
+        assert!(
+            !rig.state.pairs.force_armed,
+            "Required while DRAINING is not FAILED permission to start a force chord"
+        );
+        rig.key(0xe2, true);
+        rig.key(0x29, true);
+        rig.release_first_chord();
+        assert_eq!(rig.force_calls, 0);
     }
 }
