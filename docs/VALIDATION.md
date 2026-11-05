@@ -947,3 +947,32 @@ The isolated process exit codes, rather than a subsequent App query, prove clean
 See GUI_INTERACTIONS.zh-CN.md for details. This final documentation follow-up leaves
 runtime/tests/tools/workflow sources unchanged; exact-head CI is read back on #42.
 Physical C06, global G1, native effects and production data sharing remain pending.
+
+
+### 基础Win/Mac KVM收敛，0.2.1-dev（2026-11-05）
+
+用户指定Windows + macOS、每台一个主显示器；本版优先基础输入，G1/数据后置。
+main重新核对仍5d947637，以下增量未合并，不发布稳定版。本机cargo/rustc仍缺失，
+按用户决定不安装；local_preflight失败于工具缺失，不能写成本机构建通过。
+
+PR43 / 49379f1c695777c97b7229b5cd4f437d2932dedd通过完整五项
+[CI41959403280](https://github.com/ForceMind/PeerGlide/actions/runs/41959403280)：
+正常Up在定位/注入成功前保留归属，未知Up不定位/注入；接管事件不立即反向Acquire，
+hand-over/恢复后先interior再跨边。key/button定位/Up失败和不重放回归通过。
+
+PR44源码5cedae946bb36e83300948224c4c698cd1232069通过完整五项
+[CI41964917548](https://github.com/ForceMind/PeerGlide/actions/runs/41964917548)：
+三平台fmt、独立CLI、严格Clippy、工作区测试、Release、真实无原生输入probe/重连/
+只读上下文、Linux实际GUI、Mac多轮GUI、最低Rust1.95与审计全部通过。
+新增捕获域/epoch、固定pair、满队列/禁用/stop归属、原thread等Up、异步drain及
+source-lost回归均为软件证据，不是物理键鼠或OS效果证据。Readonly窄审发现新增
+incoming fence退休后Ping可续租的问题；已在每轮select前协调释放，回归确认不再
+续活，cleanup失败仍保留owned Up并报告Unknown。审查也撤销了“send无界”误报，
+因为原session本已有250ms timeout。Rust stable99的deprecated fetch_update已用
+兼容1.95的CAS替代；fmt/Clippy实际失败已修，没有豁免或删断言。
+
+最后文档跟进不改源码/测试/tools/workflow；精确文档head CI回读PR44。Phase2的
+Receiving首物理事件保护、独立Native loop串行接收/恢复仍在实现；仅域隔离不能
+防止先放行本地C再清远程Ctrl，也不能作为整版已可日常工作。后续软件候选需要
+匹配的Win/Mac包及同样完整检查，再由真实两端完成C06。当前未开启宿主捕获/注入、
+未改系统权限，双机、DPI、物理接管、拖拽、睡眠、权限变化均未运行；#10未定位。

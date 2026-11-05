@@ -73,6 +73,9 @@ pub fn capture(
     let thread = CaptureThread::spawn_reserved(
         move |stop| unsafe {
             let state = HookState {
+                pairs: PairLedger::default(),
+                stopping: false,
+                toggle_route: None,
                 tx,
                 gate,
                 keys: initial_keys(),
@@ -99,7 +102,11 @@ pub fn capture(
             CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             CGEventTapEnable(tap, true);
             let _ = ready.send(true);
-            while !stop.load(Ordering::Acquire) {
+            while STATE.with_borrow_mut(|state| {
+                state
+                    .as_mut()
+                    .is_some_and(|s| s.keep_running(stop.load(Ordering::Acquire)))
+            }) {
                 CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
             }
             CGEventTapEnable(tap, false);
@@ -121,9 +128,13 @@ pub fn capture(
 }
 unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
     if kind >= 0xffff_fffe {
-        STATE.with_borrow(|s| {
+        STATE.with_borrow_mut(|s| {
             if let Some(s) = s {
-                s.gate.disable();
+                if s.stopping && s.pairs.debt == 0 {
+                    s.gate.disable();
+                } else {
+                    s.source_lost();
+                }
                 s.emit(Captured::Emergency);
             }
         });
@@ -136,8 +147,8 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
         let Some(s) = s else {
             return false;
         };
-        let _callback = s.gate.begin_event();
-        let active = s.gate.active();
+        let callback = s.gate.begin_event();
+        let route = callback.route;
         match kind {
             10..=12 => {
                 let code = CGEventGetIntegerValueField(event, 9) as u16;
@@ -147,28 +158,43 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                     kind == 10
                 };
                 return match from_code(code) {
-                    Some(usage) => s.key(usage, down),
+                    Some(usage) => s.key_routed(usage, down, route),
                     None => s.unsupported_key(code, down),
                 };
             }
             5..=7 | 27 => {
-                if active {
-                    s.emit(Captured::Motion {
+                let captured = if route.remote() {
+                    Captured::Motion {
                         dx: CGEventGetDoubleValueField(event, 4),
                         dy: CGEventGetDoubleValueField(event, 5),
-                    });
+                        route,
+                    }
                 } else {
                     let p = CGEventGetLocation(event);
                     let b = CGDisplayBounds(CGMainDisplayID());
-                    s.emit(Captured::Position {
+                    Captured::Position {
                         x: p.x - b.origin.x,
                         y: p.y - b.origin.y,
                         width: b.size.width,
                         height: b.size.height,
-                    });
-                }
+                        route,
+                    }
+                };
+                return s.movement(captured, route);
             }
             1..=4 | 25 | 26 => {
+                if kind == 25 || kind == 26 {
+                    let number = CGEventGetIntegerValueField(event, 3);
+                    if number != 2 {
+                        if (3..=31).contains(&number) {
+                            let button = (number + 1) as u8;
+                            return s.unsupported_button(button, kind == 25, route);
+                        }
+                        s.gate.disable();
+                        s.emit(Captured::UnsupportedInput);
+                        return false;
+                    }
+                }
                 let (button, down) = match kind {
                     1 => (1, true),
                     2 => (1, false),
@@ -177,15 +203,18 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                     25 => (3, true),
                     _ => (3, false),
                 };
-                s.button(button, down);
+                return s.button_routed(button, down, route);
             }
-            22 => s.scroll(
-                CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
-                CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
-            ),
+            22 => {
+                return s.scroll_routed(
+                    CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
+                    CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
+                    route,
+                )
+            }
             _ => (),
         }
-        active && s.gate.active()
+        route.remote()
     });
     if block {
         null_mut()

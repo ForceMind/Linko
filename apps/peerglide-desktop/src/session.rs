@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
-use peerglide_platform::{self as platform, now_ms, Captured};
+use peerglide_platform::{self as platform, now_ms, CaptureEpoch, CaptureRoute, Captured};
 use peerglide_protocol::{
     decode, encode, worker::WorkerInputState, Edge, Input, InputCapabilities, Message, Motion,
 };
@@ -15,8 +15,22 @@ struct Recovery {
 }
 impl Recovery {
     fn release(&mut self) -> Result<()> {
+        let native = self.native;
+        self.release_with(|event| {
+            if native {
+                platform::inject(event)
+            } else {
+                Ok(())
+            }
+        })
+    }
+    fn release_with(&mut self, inject: impl FnMut(Input) -> Result<()>) -> Result<()> {
         self.pending_releases.extend(self.receiver.release());
-        self.flush_releases()
+        self.pending_releases.flush(inject).map_err(|remaining| {
+            anyhow::anyhow!(
+                "native input cleanup failed: {remaining} releases remain pending; session stopped"
+            )
+        })
     }
     fn finish(&mut self, lease: u64, cursor: Option<Motion>, now: u64) -> Result<()> {
         let native = self.native;
@@ -60,12 +74,6 @@ impl Recovery {
             )
         })?;
         pointer_result
-    }
-    fn flush_releases(&mut self) -> Result<()> {
-        let native = self.native;
-        self.pending_releases.flush(|event| {
-            if native { platform::inject(event) } else { Ok(()) }
-        }).map_err(|remaining| anyhow::anyhow!("native input cleanup failed: {remaining} releases remain pending; session stopped"))
     }
     fn input(&mut self, lease: u64, event: Input, cursor: Motion, now: u64) -> Result<bool> {
         let native = self.native;
@@ -138,6 +146,11 @@ pub struct Policy {
     pub local: InputCapabilities,
     pub peer: InputCapabilities,
 }
+#[derive(Clone, Copy)]
+struct Outgoing {
+    lease: u64,
+    epoch: CaptureEpoch,
+}
 /// State is emitted by this async session only. Routing is not OS/application
 /// completion, and a failed cleanup remains unconfirmed even if Drop retries it.
 struct InputStatus<'a> {
@@ -204,6 +217,40 @@ impl<'a> InputStatus<'a> {
         } else {
             WorkerInputState::Unavailable
         });
+    }
+}
+
+async fn drain_capture(
+    initial: (Result<bool>, bool),
+    mut poll: impl FnMut() -> (Result<bool>, bool),
+    status: &mut InputStatus<'_>,
+    started: std::time::Instant,
+    budget: Duration,
+) -> Result<()> {
+    let mut state = initial;
+    let mut failure = None;
+    loop {
+        let (result, pending) = state;
+        match result {
+            Ok(true) if !pending => return failure.map_or(Ok(()), Err),
+            Err(error) if failure.is_none() => {
+                failure = status.checked::<()>(Err(error)).err();
+            }
+            _ => (),
+        }
+        if !pending {
+            return Err(failure
+                .unwrap_or_else(|| anyhow::anyhow!("capture ended without confirmed cleanup")));
+        }
+        if started.elapsed() >= budget && failure.is_none() {
+            failure = status.checked::<()>(Err(anyhow::anyhow!(
+                "native capture cleanup is still pending; waiting for the original thread and reaper"
+            ))).err();
+        }
+        // The UI can still send stop or explicitly force the process. Ordinary
+        // stop must not kill a hook that still owes a suppressed physical Up.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        state = poll();
     }
 }
 
@@ -278,7 +325,8 @@ pub(super) async fn run_with_status(
         pending_releases: PendingReleases::default(),
     };
     let mut pending: Option<(u64, u64)> = None;
-    let mut outgoing: Option<u64> = None;
+    let mut outgoing: Option<Outgoing> = None;
+    let mut incoming_epoch: Option<CaptureEpoch> = None;
     let mut next_lease = 0u64;
     let mut sequence = 0u64;
     let mut position = (0.5, 0.5);
@@ -289,22 +337,30 @@ pub(super) async fn run_with_status(
     let mut tick = tokio::time::interval(Duration::from_millis(200));
     let result: Result<()> = async {
     loop {
+        // Queue pressure or an emergency can retire a capture fence without a
+        // queued takeover record. Do not keep renewing its old receive lease.
+        if let Some(lease)=capture.as_ref().and_then(|cap|retired_receiving_lease(recovery.receiver.active().zip(incoming_epoch),cap.gate.route())) {
+            edge_gate.require_interior();
+            input_status.release(&mut recovery)?;
+            incoming_epoch=None;
+            send(&mut tx,&Message::Release{lease,cursor:None}).await?;
+        }
         input_status.routing(outgoing.is_some(), recovery.receiver.active().is_some());
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
             _=c.closed()=>return Ok(()),
             _=tick.tick()=>{
                 let now=now_ms();
-                if recovery.receiver.expired(now){input_status.release(&mut recovery)?;}
+                if recovery.receiver.expired(now){input_status.release(&mut recovery)?;incoming_epoch=None;}
                 if pending.is_some_and(|(_,start)|now.saturating_sub(start)>1000){pending=None;}
-                if let Some(lease)=outgoing {
+                if let Some(Outgoing {lease,..})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
                     }else{send(&mut tx,&Message::Ping{lease}).await?;}
                 }
                 // A full native event queue disables capture in the callback. Reconcile protocol immediately.
-                if let (Some(cap),Some(lease))=(&capture,outgoing){if !cap.gate.active(){input_status.restore(Some(cap))?;outgoing=None;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}}
+                if let (Some(cap),Some(current))=(&capture,outgoing){if !cap.gate.is_current(CaptureRoute::Remote(current.epoch)){input_status.restore(Some(cap))?;outgoing=None;send(&mut tx,&Message::Release { lease: current.lease, cursor: None }).await?;}}
             },
             m=messages.recv()=>{
                 let Some(m)=m else{return Ok(());};
@@ -312,7 +368,11 @@ pub(super) async fn run_with_status(
                 let now=now_ms();
                 match m {
                     Message::Acquire{lease,edge:remote_edge,along}=>{
-                        let granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow && local.motion());
+                        let mut granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow && local.motion());
+                        if granted {
+                            incoming_epoch=capture.as_ref().and_then(|cap|cap.gate.try_local_epoch());
+                            if capture.is_some() && incoming_epoch.is_none(){input_status.release(&mut recovery)?;granted=false;}
+                        }
                         if granted {
                             edge_gate.require_interior();
                             position=entry_position(remote_edge.opposite(),along);
@@ -321,8 +381,8 @@ pub(super) async fn run_with_status(
                         }else{send(&mut tx,&Message::Denied{lease}).await?;}
                     },
                     Message::Granted{lease}=>{
-                        let activated=if pending.is_some_and(|(id,_)|id==lease) {if let Some(cap)=&capture{input_status.checked(cap.begin(local_return.0,local_return.1))?}else{false}}else{false};
-                        if activated{edge_gate.require_interior();pending=None;outgoing=Some(lease);sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
+                        let activated=if pending.is_some_and(|(id,_)|id==lease) {if let Some(cap)=&capture{input_status.checked(cap.begin_routed(local_return.0,local_return.1))?}else{None}}else{None};
+                        if let Some(epoch)=activated{edge_gate.require_interior();pending=None;outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
                         else{send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
                     Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;}},
@@ -331,12 +391,12 @@ pub(super) async fn run_with_status(
                         input_status.checked(recovery.input(lease,event,cursor,now))?;
                     },
                     Message::Release { lease, cursor }=>{
-                        if recovery.receiver.active()==Some(lease){input_status.recovering();}
+                        if recovery.receiver.active()==Some(lease){input_status.recovering();incoming_epoch=None;}
                         input_status.checked(recovery.finish(lease,cursor,now))?;
-                        if outgoing==Some(lease){outgoing=None;input_status.restore(capture.as_ref())?;}
+                        if outgoing.is_some_and(|current|current.lease==lease){outgoing=None;input_status.restore(capture.as_ref())?;}
                     },
                     Message::Ping{lease}=>{if lease==0 || recovery.receiver.heartbeat(lease,now){send(&mut tx,&Message::Pong{lease}).await?;}},
-                    Message::Pong{lease}=>{if outgoing==Some(lease){last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}},
+                    Message::Pong{lease}=>{if outgoing.is_some_and(|current|current.lease==lease){last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}},
                     Message::Hello{..}=>bail!("unexpected repeated handshake"),
                 }
             },
@@ -348,8 +408,10 @@ pub(super) async fn run_with_status(
             },
             e=input.recv(),if native=>{
                 let Some(e)=e else{bail!("native capture channel closed");};
-                if let Some(lease)=local_takeover(e,recovery.receiver.active(),&mut edge_gate) {
+                if let Some(route)=captured_route(e){if !capture.as_ref().is_some_and(|cap|cap.gate.is_current(route)){continue;}}
+                if let Some(lease)=local_takeover(e,recovery.receiver.active().zip(incoming_epoch),&mut edge_gate) {
                     input_status.release(&mut recovery)?;
+                    incoming_epoch=None;
                     send(&mut tx,&Message::Release { lease, cursor: None }).await?;
                     // This event only reclaims this computer. It cannot also
                     // request control of the peer in the same select iteration.
@@ -360,10 +422,11 @@ pub(super) async fn run_with_status(
                         edge_gate.require_interior();
                         if matches!(e,Captured::UnsupportedInput) {eprintln!("Unsupported input capability: stopping control; input was not forwarded.");}
                         input_status.restore(capture.as_ref())?;
-                        pending=None; if let Some(lease)=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
-                        if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery)?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        pending=None; if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery)?;incoming_epoch=None;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
-                    Captured::Position{x,y,width,height}=>{
+                    Captured::Position{x,y,width,height,route}=>{
+                        if !matches!(route,CaptureRoute::Local(_)){continue;}
                         size=(width.max(1.0),height.max(1.0));
                         let nx=(x/(size.0-1.0).max(1.0)).clamp(0.0,1.0);let ny=(y/(size.1-1.0).max(1.0)).clamp(0.0,1.0);
                         let cross=edge_gate.update(distance(edge,nx,ny)<=0.001,now_ms());
@@ -373,11 +436,11 @@ pub(super) async fn run_with_status(
                             pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
                         }
                     },
-                    Captured::Toggle=>{
-                        if let Some(lease)=outgoing.take(){input_status.restore(capture.as_ref())?;send(&mut tx,&Message::Release { lease, cursor: Some(Motion {lease,sequence,x:position.0,y:position.1}) }).await?;}
-                        else if peer.motion() && pending.is_none() && recovery.receiver.active().is_none(){next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;}
+                    Captured::Toggle{route}=>{
+                        if let Some(Outgoing{lease,..})=outgoing.take(){input_status.restore(capture.as_ref())?;send(&mut tx,&Message::Release { lease, cursor: Some(Motion {lease,sequence,x:position.0,y:position.1}) }).await?;}
+                        else if matches!(route,CaptureRoute::Local(_)) && peer.motion() && pending.is_none() && recovery.receiver.active().is_none(){next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;}
                     },
-                    Captured::Motion{dx,dy}=>{if let Some(lease)=outgoing {
+                    Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
                         if returned_to_source(edge, position.0, position.1) {
@@ -391,7 +454,7 @@ pub(super) async fn run_with_status(
                             let _=c.send_datagram(encode(&m)?.into());
                         }
                     }},
-                    Captured::Input(event)=>{if let Some(lease)=outgoing{
+                    Captured::Input{event,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)){
                         if !peer.supports(event) { input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let cursor=Motion{lease,sequence,x:position.0,y:position.1};
                         send(&mut tx,&Message::Input{lease,event,cursor}).await?;
@@ -405,14 +468,13 @@ pub(super) async fn run_with_status(
     // even when one fails; no canceled future bypasses this tail.
     input_status.recovering();
     let receiving = recovery.receiver.active();
-    let sending = outgoing.take();
+    let sending = outgoing.take().map(|current| current.lease);
     let cleanup = input_status.checked(recovery.release());
-    let shutdown = input_status.checked(
-        capture
-            .as_mut()
-            .map(|capture| capture.shutdown())
-            .transpose(),
-    );
+    let stop_started = std::time::Instant::now();
+    let first_shutdown = capture.as_mut().map(|capture| {
+        let result = capture.shutdown_poll();
+        (result, capture.shutdown_pending())
+    });
     // Notify a still-connected source/receiver after stopping local routing. A
     // queued Release is not an acknowledgement of the peer's native effects.
     let mut notification = Ok(());
@@ -431,6 +493,22 @@ pub(super) async fn run_with_status(
             }
         }
     }
+    let shutdown = if let (Some(capture), Some(first)) = (capture.as_mut(), first_shutdown) {
+        drain_capture(
+            first,
+            || {
+                let result = capture.shutdown_poll();
+                (result, capture.shutdown_pending())
+            },
+            &mut input_status,
+            stop_started,
+            Duration::from_millis(500),
+        )
+        .await
+    } else {
+        Ok(())
+    };
+    let shutdown = input_status.checked(shutdown);
     let clean = cleanup.is_ok() && shutdown.is_ok();
     input_status.finish(clean);
     cleanup?;
@@ -439,18 +517,46 @@ pub(super) async fn run_with_status(
     result
 }
 
+fn captured_route(event: Captured) -> Option<CaptureRoute> {
+    match event {
+        Captured::Position { route, .. }
+        | Captured::Motion { route, .. }
+        | Captured::Input { route, .. }
+        | Captured::Toggle { route } => Some(route),
+        Captured::Emergency | Captured::UnsupportedInput => None,
+    }
+}
+fn retired_receiving_lease(
+    receiving: Option<(u64, CaptureEpoch)>,
+    current: Option<CaptureRoute>,
+) -> Option<u64> {
+    let (lease, epoch) = receiving?;
+    (current != Some(CaptureRoute::Local(epoch))).then_some(lease)
+}
+fn forwarding_lease(
+    route: CaptureRoute,
+    outgoing: Option<Outgoing>,
+    gate: &platform::CaptureGate,
+) -> Option<u64> {
+    let current = outgoing?;
+    (route == CaptureRoute::Remote(current.epoch) && gate.is_current(route))
+        .then_some(current.lease)
+}
 fn local_takeover(
     event: Captured,
-    receiving: Option<u64>,
+    receiving: Option<(u64, CaptureEpoch)>,
     edge_gate: &mut EdgeGate,
 ) -> Option<u64> {
     if !matches!(
         event,
-        Captured::Position { .. } | Captured::Input(_) | Captured::Toggle
+        Captured::Position { .. } | Captured::Input { .. } | Captured::Toggle { .. }
     ) {
         return None;
     }
-    let lease = receiving?;
+    let (lease, epoch) = receiving?;
+    if captured_route(event) != Some(CaptureRoute::Local(epoch)) {
+        return None;
+    }
     edge_gate.require_interior();
     Some(lease)
 }
@@ -478,6 +584,60 @@ fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
 mod tests {
     use super::*;
     use transport::Identity;
+
+    #[tokio::test]
+    async fn shutdown_timeout_keeps_the_worker_future_alive_until_the_original_capture_drains() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for initial_failure in [false, true] {
+            let drained = AtomicBool::new(false);
+            let mut reporter = super::super::InputReporter::new(false);
+            {
+                let mut status = InputStatus::new(true, &mut reporter);
+                let first = if initial_failure {
+                    Err(anyhow::anyhow!("fake pending restore failure"))
+                } else {
+                    Ok(false)
+                };
+                let future = drain_capture(
+                    (first, true),
+                    || {
+                        let done = drained.load(Ordering::Acquire);
+                        (Ok(done), !done)
+                    },
+                    &mut status,
+                    std::time::Instant::now(),
+                    Duration::ZERO,
+                );
+                tokio::pin!(future);
+                tokio::select! {
+                    _ = &mut future => panic!("pending capture must not let the worker exit"),
+                    _ = tokio::time::sleep(Duration::from_millis(10)) => (),
+                }
+                drained.store(true, Ordering::Release);
+                assert!(future.await.is_err());
+            }
+            assert_eq!(reporter.last, Some(WorkerInputState::RecoveryUnconfirmed));
+        }
+    }
+    #[tokio::test]
+    async fn already_reaped_source_failure_does_not_wait_forever() {
+        let mut reporter = super::super::InputReporter::new(false);
+        let mut status = InputStatus::new(true, &mut reporter);
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            drain_capture(
+                (Err(anyhow::anyhow!("fake source lost after reap")), false),
+                || panic!("already reaped capture must not be polled again"),
+                &mut status,
+                std::time::Instant::now(),
+                Duration::ZERO,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err());
+        assert_eq!(reporter.last, Some(WorkerInputState::RecoveryUnconfirmed));
+    }
 
     #[test]
     fn diagnostic_mode_never_claims_native_ownership_even_for_simulated_leases() {
@@ -548,6 +708,8 @@ mod tests {
     fn physical_takeover_at_each_edge_cannot_immediately_reverse_control() {
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
             let mut gate = EdgeGate::default();
+            let capture = platform::CaptureGate::default();
+            let epoch = capture.try_local_epoch().unwrap();
             let (nx, ny) = match edge {
                 Edge::Left => (0.0, 0.5),
                 Edge::Right => (1.0, 0.5),
@@ -559,13 +721,130 @@ mod tests {
                 y: ny * 1079.0,
                 width: 1920.0,
                 height: 1080.0,
+                route: CaptureRoute::Local(epoch),
             };
-            assert_eq!(local_takeover(event, Some(7), &mut gate), Some(7));
+            assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
             assert!(!gate.update(distance(edge, nx, ny) <= 0.001, 1000));
             assert!(!gate.update(false, 1001));
             assert!(gate.update(true, 1002));
             assert_eq!(local_takeover(event, None, &mut gate), None);
         }
+    }
+    #[test]
+    fn queued_local_and_old_remote_routes_cannot_enter_a_new_outgoing_lease() {
+        let gate = platform::CaptureGate::default();
+        let local = gate.route().unwrap();
+        assert!(gate.try_activate());
+        let first = gate.route().unwrap();
+        let CaptureRoute::Remote(epoch) = first else {
+            panic!("expected remote route")
+        };
+        let outgoing = Some(Outgoing { lease: 1, epoch });
+        assert_eq!(forwarding_lease(local, outgoing, &gate), None);
+        assert_eq!(forwarding_lease(first, outgoing, &gate), Some(1));
+        gate.disable();
+        assert_eq!(forwarding_lease(first, outgoing, &gate), None);
+        assert!(gate.try_activate());
+        let second = gate.route().unwrap();
+        let CaptureRoute::Remote(epoch) = second else {
+            panic!("expected remote route")
+        };
+        let outgoing = Some(Outgoing { lease: 2, epoch });
+        assert_eq!(forwarding_lease(first, outgoing, &gate), None);
+        assert_eq!(forwarding_lease(local, outgoing, &gate), None);
+        assert_eq!(forwarding_lease(second, outgoing, &gate), Some(2));
+    }
+    #[test]
+    fn local_events_queued_before_an_incoming_fence_do_not_reclaim_it() {
+        let capture = platform::CaptureGate::default();
+        let old_route = capture.route().unwrap();
+        let epoch = capture.try_local_epoch().unwrap();
+        let mut gate = EdgeGate::default();
+        let event = Captured::Input {
+            event: Input::Key {
+                usage: 4,
+                down: false,
+            },
+            route: old_route,
+        };
+        assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), None);
+        let event = Captured::Input {
+            event: Input::Key {
+                usage: 4,
+                down: true,
+            },
+            route: CaptureRoute::Local(epoch),
+        };
+        assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
+    }
+    #[test]
+    fn retired_or_lost_capture_fence_releases_the_receiver_and_ping_cannot_revive_it() -> Result<()>
+    {
+        for lost in [false, true] {
+            let mut recovery = held_recovery();
+            let capture = platform::CaptureGate::default();
+            let epoch = capture.try_local_epoch().unwrap();
+            assert_eq!(
+                retired_receiving_lease(Some((1, epoch)), capture.route()),
+                None
+            );
+            capture.disable();
+            let route = if lost { None } else { capture.route() };
+            let lease = retired_receiving_lease(recovery.receiver.active().zip(Some(epoch)), route);
+            assert_eq!(lease, Some(1));
+            let mut reporter = super::super::InputReporter::new(false);
+            let mut status = InputStatus::new(false, &mut reporter);
+            status.release(&mut recovery)?;
+            assert!(recovery.receiver.active().is_none());
+            assert!(!recovery.receiver.heartbeat(1, 4));
+            assert!(recovery.receiver.release().is_empty());
+        }
+        assert_eq!(retired_receiving_lease(None, None), None);
+        Ok(())
+    }
+    #[test]
+    fn retired_fence_release_failure_stays_unconfirmed_and_retains_the_owned_up() -> Result<()> {
+        let mut recovery = held_recovery();
+        let capture = platform::CaptureGate::default();
+        let epoch = capture.try_local_epoch().unwrap();
+        capture.disable();
+        assert_eq!(
+            retired_receiving_lease(Some((1, epoch)), capture.route()),
+            Some(1)
+        );
+        let mut reporter = super::super::InputReporter::new(false);
+        {
+            let mut status = InputStatus::new(true, &mut reporter);
+            status.recovering();
+            assert!(status
+                .checked(
+                    recovery.release_with(|_| anyhow::bail!("fake retired-fence release rejected"))
+                )
+                .is_err());
+            assert!(!recovery.receiver.heartbeat(1, 3));
+            status.finish(true);
+        }
+        assert_eq!(reporter.last, Some(WorkerInputState::RecoveryUnconfirmed));
+        let mut released = Vec::new();
+        recovery
+            .pending_releases
+            .flush(|event| {
+                released.push(event);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            released.as_slice(),
+            [Input::Key {
+                usage: 0xe0,
+                down: false
+            }]
+        ));
+        recovery
+            .pending_releases
+            .flush(|_| -> Result<(), ()> { panic!("successful cleanup cannot replay") })
+            .unwrap();
+        Ok(())
     }
     fn held_recovery() -> Recovery {
         let mut recovery = Recovery {

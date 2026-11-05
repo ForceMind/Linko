@@ -189,6 +189,10 @@ impl CaptureThread {
             completed: None,
         }
     }
+    /// True until a shutdown poll has received the reaper's final result.
+    pub(super) fn pending(&self) -> bool {
+        self.completed.is_none()
+    }
     pub(super) fn shutdown(&mut self, timeout: Duration) -> bool {
         self.stop.store(true, Ordering::Release);
         if let Some(clean) = self.completed {
@@ -411,7 +415,9 @@ mod tests {
                     std::thread::yield_now();
                 }
             });
+            assert!(t.pending());
             assert!(t.shutdown(Duration::from_secs(1)));
+            assert!(!t.pending());
             assert_eq!(t.completed, Some(true));
             assert!(t.shutdown(Duration::ZERO));
         }

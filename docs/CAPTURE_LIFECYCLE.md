@@ -97,3 +97,27 @@ The next sealed Windows short-click library path is documented in
 [LOCAL_CLICK_RECOVERY.md](LOCAL_CLICK_RECOVERY.md). Its new atomics share this
 same capture lifecycle; source loss and pending injected ownership are not clean
 shutdown proof. It does not enable the product worker or macOS/keyboard recovery.
+
+
+## 基础KVM捕获域增量（0.2.1-dev，待候选CI/实机验收）
+
+Position、Motion、Input与Toggle携带捕获时的Local/Remote域及opaque CaptureEpoch。
+它由每个capture唯一instance及原子control中的generation组成，不序列化、不作为
+认证或网络lease。激活/本地域fence/禁用原子改变代次，旧队列事件不能被当前
+outgoing提升或误撤销新incoming；溢出/源丢失停止，不回绕复用。
+
+既有callback guard冻结一次路由，入队与抑制使用同一决定。固定HID/button表
+保留首次Down的Local/Remote/Consumed归属；repeat与Up继承，disable、队列满或
+stop不能把旧Remote Up改成本机Up。未支持侧键不冒充中键，不增加远端能力。
+没有新增hook、回调识别/IO/脚本或全局G1启用。
+
+begin_routed失败立即禁用捕获；保留原返还位置供清理。shutdown_poll只是不等
+join，不保证OS调用时长。原thread在stop后继续pump已抑制pair的Up；pending由
+reaper持有reservation。session先请求停和有界通知对端，再以timer轮询；从首个
+停请求500ms仍未完成时报告Unconfirmed，但普通停止不能因此自行退出进程杀hook。
+真实已reaped的source/restore错误作为Unknown结束，不假报clean或无条件永等。
+GUI仍可明确ForceStop并保留未知警告。
+
+本段是phase1软件契约，自动结果需按最终SHA记录。接收端首个物理事件在旧远程
+修饰键释放前被OS处理的P1尚需phase2 Receiving保护；当前域隔离不能宣称已解决。
+Win/Mac真实输入、DPI/权限/睡眠/故障、硬件Up与OS效果均仍属#3/C06。
