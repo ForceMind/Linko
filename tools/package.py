@@ -27,7 +27,7 @@ def bundle_info(version):
             "CFBundleShortVersionString": version.split("-")[0], "CFBundlePackageType": "APPL",
             "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "13.0", "NSBonjourServices": ["_peerglide._udp"],
-            "NSLocalNetworkUsageDescription": "屏跃使用本地网络发现其他电脑。发现设备不会自动登记信任或授予控制权限。"}
+            "NSLocalNetworkUsageDescription": "屏跃使用本地网络连接已核验的电脑，并转发用户明确同意的键鼠输入。发现设备不会自动登记信任或授予控制权限。"}
 
 
 def _display_signature(path, run):
