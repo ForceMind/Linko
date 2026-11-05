@@ -97,6 +97,7 @@ pub fn capture(
                 );
             }
             let state = HookState {
+                pairs: PairLedger::default(), stopping:false, toggle_route:None,
                 local_gestures,
                 tx,
                 gate,
@@ -153,7 +154,7 @@ pub fn capture(
                             // received; no competing hook or synthetic release.
                             broker.keep_running(stopping)
                         } else {
-                            !stopping
+                            s.keep_running(stopping)
                         }
                     })
                 });
@@ -184,6 +185,7 @@ pub fn capture(
                 if let Some(s) = state {
                     s.gate.disable();
                     if unexpected {
+                        s.source_lost();
                         if let Some(broker) = s.local_gestures.as_mut() {
                             broker.lost();
                         }
@@ -212,13 +214,15 @@ unsafe extern "system" fn key_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT {
                     } else {
                         None
                     };
+                    let route = _callback.as_ref().map(|callback|callback.route).unwrap_or_else(||s.gate.snapshot());
                     let down = w as u32 == WM_KEYDOWN || w as u32 == WM_SYSKEYDOWN;
-                    physical_key(
+                    physical_key_routed(
                         s,
                         e.vkCode as u16,
                         e.scanCode as u16,
                         e.flags & LLKHF_EXTENDED != 0,
                         down,
+                        route,
                     )
                 })
             });
@@ -303,53 +307,31 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                     }
                     return false;
                 }
-                let _callback = s.gate.begin_event();
-                let active = s.gate.active();
+                let callback = s.gate.begin_event();
+                let route=callback.route;
                 match w as u32 {
                     WM_MOUSEMOVE => {
-                        if active {
-                            let mut p = POINT { x: 0, y: 0 };
-                            GetCursorPos(&mut p);
-                            s.emit(Captured::Motion {
-                                dx: (e.pt.x - p.x) as f64,
-                                dy: (e.pt.y - p.y) as f64,
-                            });
-                        } else {
-                            s.emit(Captured::Position {
-                                x: e.pt.x as f64,
-                                y: e.pt.y as f64,
-                                width: GetSystemMetrics(SM_CXSCREEN) as f64,
-                                height: GetSystemMetrics(SM_CYSCREEN) as f64,
-                            });
-                        }
-                    }
-                    WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP
-                    | WM_MBUTTONDOWN | WM_MBUTTONUP => {
-                        let (button, down) = match w as u32 {
-                            WM_LBUTTONDOWN => (1, true),
-                            WM_LBUTTONUP => (1, false),
-                            WM_RBUTTONDOWN => (2, true),
-                            WM_RBUTTONUP => (2, false),
-                            WM_MBUTTONDOWN => (3, true),
-                            _ => (3, false),
+                        let event=if route.remote() {
+                            let mut p=POINT{x:0,y:0};GetCursorPos(&mut p);
+                            Captured::Motion{dx:(e.pt.x-p.x)as f64,dy:(e.pt.y-p.y)as f64,route}
+                        }else{
+                            Captured::Position{x:e.pt.x as f64,y:e.pt.y as f64,width:GetSystemMetrics(SM_CXSCREEN)as f64,height:GetSystemMetrics(SM_CYSCREEN)as f64,route}
                         };
-                        s.button(button, down);
+                        s.movement(event,route)
                     }
-                    WM_MOUSEWHEEL => s.scroll(
-                        0,
-                        WHEEL.with_borrow_mut(|r| {
-                            wheel_steps(&mut r[1], (e.mouseData >> 16) as i16)
-                        }),
-                    ),
-                    WM_MOUSEHWHEEL => s.scroll(
-                        WHEEL.with_borrow_mut(|r| {
-                            wheel_steps(&mut r[0], (e.mouseData >> 16) as i16)
-                        }),
-                        0,
-                    ),
-                    _ => (),
+                    WM_LBUTTONDOWN|WM_LBUTTONUP|WM_RBUTTONDOWN|WM_RBUTTONUP|WM_MBUTTONDOWN|WM_MBUTTONUP=>{
+                        let (button,down)=match w as u32{WM_LBUTTONDOWN=>(1,true),WM_LBUTTONUP=>(1,false),WM_RBUTTONDOWN=>(2,true),WM_RBUTTONUP=>(2,false),WM_MBUTTONDOWN=>(3,true),_=>(3,false)};
+                        s.button_routed(button,down,route)
+                    }
+                    WM_MOUSEWHEEL=>s.scroll_routed(0,WHEEL.with_borrow_mut(|r|wheel_steps(&mut r[1],(e.mouseData>>16)as i16)),route),
+                    WM_MOUSEHWHEEL=>s.scroll_routed(WHEEL.with_borrow_mut(|r|wheel_steps(&mut r[0],(e.mouseData>>16)as i16)),0,route),
+                    WM_XBUTTONDOWN|WM_XBUTTONUP=>match local_mouse_event(w as u32,e.mouseData){
+                        LocalMouseEvent::Button(button,down)=>s.unsupported_button(button,down,route),
+                        LocalMouseEvent::BothExtraButtons(down)=>{let a=s.unsupported_button(4,down,route);let b=s.unsupported_button(5,down,route);a||b},
+                        _=>{s.gate.disable();s.emit(Captured::UnsupportedInput);false}
+                    },
+                    _=>false,
                 }
-                active && s.gate.active()
             });
             if block {
                 return 1;
@@ -598,7 +580,9 @@ fn from_scan(scan: u16, extended: bool) -> Option<u16> {
         .map(|k| k.0)
 }
 const STARTUP_VK: u16 = 0x4000;
-fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: bool) -> bool {
+#[cfg(test)]
+fn physical_key(s:&mut HookState,vk:u16,scan:u16,extended:bool,down:bool)->bool {let route=s.gate.snapshot();physical_key_routed(s,vk,scan,extended,down,route)}
+fn physical_key_routed(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: bool, route:CaptureRoute) -> bool {
     let usage = if vk == VK_PAUSE || vk == VK_SNAPSHOT {
         None
     } else if vk == VK_NUMLOCK {
@@ -622,7 +606,7 @@ fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: boo
             if startup_held && down {
                 s.keys.insert(usage);
             }
-            s.key(usage, down)
+            s.key_routed(usage, down, route)
         }
         None => s.unsupported_key(vk, down),
     }
@@ -814,6 +798,7 @@ mod tests {
     fn startup_virtual_sample_repeat_is_not_a_fresh_switch_press() {
         let (tx, _rx) = mpsc::channel(16);
         let mut s = HookState {
+            pairs: PairLedger::default(), stopping:false, toggle_route:None,
             local_gestures: None,
             tx,
             gate: CaptureGate::default(),
@@ -830,6 +815,7 @@ mod tests {
     fn keypad_enter_release_clears_ambiguous_startup_sample() {
         let (tx, mut rx) = mpsc::channel(8);
         let mut s = HookState {
+            pairs: PairLedger::default(), stopping:false, toggle_route:None,
             local_gestures: None,
             tx,
             gate: CaptureGate::default(),
@@ -844,10 +830,10 @@ mod tests {
         assert!(s.gate.try_activate());
         assert!(matches!(
             rx.try_recv().unwrap(),
-            Captured::Input(Input::Key {
+            Captured::Input{event:Input::Key {
                 usage: 0x58,
                 down: false
-            })
+            },..}
         ));
     }
 }

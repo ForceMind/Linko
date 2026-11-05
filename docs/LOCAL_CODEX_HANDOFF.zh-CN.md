@@ -473,3 +473,44 @@ key/button故障/不重放回归；当前待CI编译与验证，不能记已通�
 待本批修复：接收端physical takeover不得同事件反向Acquire；capture时route/
 epoch必须防止队列中的旧本地事件或旧lease事件按处理时状态转发到新lease。
 后续基础软件检查与两平台包围绕这两项继续，具体CI及真实设备结果记VALIDATION。
+
+
+基础修复已分批提交推送：4e8ce93/d7d44c4为Up事务，6b5ace0/49379f1为接管
+后要求interior且同事件不反向Acquire。CI41959403280当前Linux/Mac/最低Rust/
+审计通过，Windows在打包；最终结果需回读。当前root未提交session WIP按约定
+CaptureEpoch/CaptureRoute与begin_routed消费，等待platform phase1接口落地后
+共同编译，不能把旧CI当此WIP已通过。platform worker独占lib/windows/mac及必要
+capture_thread，root独占core/session/GUI/docs，reviewer只读。Capture域必须
+记录捕获时的Local/Remote与代次，匹配当前outgoing才发送；Position/Toggle也
+要fence，旧本机事件不可撤销新incoming。Remote/Consumed Down的Up跨disable/
+队列满/stop仍归原域；普通stop若500ms未收齐Up，须保持worker/hook等候而不是
+main自行退出把原hook杀掉，GUI明确force除外。
+
+后续本版必修还包括接收端先保护再接管：remote修饰/按钮held时不能把第一个
+本地事件先放给OS再异步cleanup；拟首次物理对仅收回控制、不回放动作，clear
+保护须等旧账清理成功，Consumed pair仍等Up。Esc/watchdog/队列满/源失效须
+有明确恢复语义，不能靠清计数或不受控无限阻塞制造成功。Mac tapDisabled不应
+继续接受新控制，额外鼠标侧键不能别名成中键或被静默吞掉，begin失败须回滚。
+以上尚在实现，不是完成声明。发送背压无界的初步审查结论已撤销：既有session
+send本来有250ms超时，未发现绕过路径；自身pointer缺TAG/previous失步假设也未
+证实，不为这些假设重写路径。物理矩阵仍未运行，原权限与无Rust决定不变。
+
+
+PR43/49379f1的完整五项CI41959403280已通过，已转待审阅，范围只含Up事务与
+边缘接管，不称整版可用。当前保留全部WIP切到capture-route-ownership，叠加43，
+继续同一0.2.1-dev候选，不stash/reset。root session已接公开opaque CaptureEpoch/
+CaptureRoute、四种routed Captured、begin_routed、incoming本地域fence与精准
+outgoing代次匹配；并用shutdown_poll/shutdown_pending在首次停请求后500ms报告
+未知，但保持async worker等原thread/reaper，不因超时自行进程退出。已reaped的
+SourceLost/restore错误直接结束为Unknown，不永久死等。新增纯路由与async liveness
+回归，尚待完整集成CI。platform phase1正在编辑唯一生命周期及配对表，phase2
+Receiving首事件保护仍为已知必修。README补Win/Mac中文双端操作入口，仍标实机
+未验收与不可绕过系统防护；不是新能力声明。后续Git提交由root统一选择相关文件。
+
+
+platform phase1已在检查点冻结，root即将统一commit：CaptureRoute/epoch、固定
+pair账本、stop等Up、shutdown_poll/pending、begin回滚、tapDisabled源失效、额外
+侧键fail-open均已写入，只有静态证据，待CI。CAPTURE_LIFECYCLE补phase1契约，
+明确Receiving首事件P1仍开放。下一步先修真实fmt/编译/回归并独立只读复核，再
+推进phase2接收保护与watchdog/失败恢复，不能让保护模式变成无恢复通道的本机
+无限拦截。root统一Git；worker检查点后不得覆盖fmt修复。
