@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""CI-only idle GUI RSS diagnostic. Never enables input, networking or permissions.
+"""CI-only idle GUI RSS/optional Darwin footprint diagnostic. No input/network permissions.
 
 Run on a CI desktop (Linux: xvfb-run), not a user's active desktop. RSS is not
 Activity Monitor's total memory: compressed memory and some GPU allocations are
-not measured. A bounded sample passing does not establish that a 6 GB incident
-has been fixed. Only children created by this script are stopped/reaped.
+not measured by RSS. Darwin optionally adds vmmap physical-footprint values as
+separate OS accounting; unavailable values never become zero or a footprint pass.
+A bounded sample passing does not establish that a 6 GB incident has been fixed. Only children created by this script are stopped/reaped.
 """
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import math
+import re
+from decimal import Decimal, ROUND_CEILING
 import os
 from pathlib import Path
 import signal
@@ -80,6 +83,39 @@ def sample_rss_kib(pid):
     return rss
 
 
+
+def parse_footprint_summary(output):
+    """Extract only two finite numeric lines; discard all paths/summary text."""
+    if not isinstance(output, bytes) or len(output) > 256 * 1024:
+        raise ValueError("physical footprint unavailable")
+    values = {}
+    pattern = re.compile(r"^\s*Physical footprint(?P<peak> \(peak\))?:\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT])(?:B)?\s*$")
+    units = {"K": 1, "M": 1024, "G": 1024 ** 2, "T": 1024 ** 3}
+    for line in output.decode("utf-8", errors="replace").splitlines():
+        match = pattern.fullmatch(line)
+        if match is None:
+            continue
+        key = "reported_peak_kib" if match.group("peak") else "current_kib"
+        number, unit = match.group(2), match.group(3)
+        if key in values or len(number) > 20:
+            raise ValueError("physical footprint unavailable")
+        # Round upward to an integral KiB; never round a threshold breach down.
+        value = int((Decimal(number) * units[unit]).to_integral_value(rounding=ROUND_CEILING))
+        if not 0 <= value <= (1 << 63) - 1:
+            raise ValueError("physical footprint unavailable")
+        values[key] = value
+    if len(values) != 2:
+        raise ValueError("physical footprint unavailable")
+    return values
+
+
+def sample_footprint_kib(pid):
+    output = subprocess.check_output(
+        ["vmmap", "-summary", str(pid)], stderr=subprocess.DEVNULL, timeout=2
+    )
+    return parse_footprint_summary(output)
+
+
 def stop_child(child, timeout):
     """No process groups/killall: terminate, bounded wait, kill this child only."""
     if child.poll() is not None:
@@ -105,7 +141,7 @@ def exit_status(child):
 
 
 def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss_kib,
-            clock=time.monotonic, sleep=time.sleep, popen=subprocess.Popen):
+            clock=time.monotonic, sleep=time.sleep, popen=subprocess.Popen, footprint=None):
     """Injectable supervision; tests use fake RSS or a small Python child, no GUI."""
     stop = stop or StopFlag()
     result = {"scenario": scenario, "pid": None, "passed": False, "reason": "start_failed",
@@ -113,6 +149,15 @@ def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss
               "peak_growth_kib": 0, "post_warmup_samples": 0, "samples": [],
               "termination": "not_started", "normal_gui_close": False,
               "exit_status": {"returncode": None, "signal": None}, "stop_signal": 0}
+    physical = {"availability": "not_requested" if footprint is None else "unavailable",
+                "checks_passed": None, "baseline_kib": None, "baseline_reported_peak_kib": None,
+                "peak_kib": None, "reported_peak_kib": None, "peak_growth_kib": None,
+                "warmup_baseline_available": False, "final_sample_available": False,
+                "post_warmup_samples": 0, "samples": []}
+    result["physical_footprint"] = physical
+    next_footprint = 0
+    warmup_attempted = False
+    final_attempted = False
     child = None
     started = clock()
     try:
@@ -161,10 +206,51 @@ def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss
             if stop.signum:
                 result["reason"] = "interrupted"
                 break
-            if elapsed >= limits.duration:
+            is_warmup = elapsed >= limits.warmup and not warmup_attempted
+            is_final = elapsed >= limits.duration
+            if footprint is not None and (elapsed >= next_footprint or is_warmup or is_final):
+                warmup_attempted = warmup_attempted or is_warmup
+                final_attempted = final_attempted or is_final
+                next_footprint = elapsed + 15
+                item = {"elapsed_sec": round(elapsed, 3), "availability": "unavailable"}
+                try:
+                    measured = footprint(child.pid)
+                    current, peak = measured["current_kib"], measured["reported_peak_kib"]
+                    if not all(isinstance(value, int) and 0 <= value <= (1 << 63) - 1
+                               for value in (current, peak)):
+                        raise ValueError("physical footprint unavailable")
+                    item.update(availability="available", current_kib=current, reported_peak_kib=peak)
+                    physical["peak_kib"] = current if physical["peak_kib"] is None else max(physical["peak_kib"], current)
+                    physical["reported_peak_kib"] = peak if physical["reported_peak_kib"] is None else max(physical["reported_peak_kib"], peak)
+                    if is_warmup:
+                        physical["warmup_baseline_available"] = True
+                    if is_final:
+                        physical["final_sample_available"] = True
+                    if elapsed >= limits.warmup:
+                        physical["post_warmup_samples"] += 1
+                        if physical["baseline_kib"] is None:
+                            physical["baseline_kib"] = current
+                            physical["baseline_reported_peak_kib"] = peak
+                        growth = max(0, current - physical["baseline_kib"],
+                                     peak - physical["baseline_reported_peak_kib"])
+                        physical["peak_growth_kib"] = growth if physical["peak_growth_kib"] is None else max(physical["peak_growth_kib"], growth)
+                    if max(current, peak) > limits.rss_limit_mib * 1024:
+                        result["reason"] = "physical_footprint_limit"
+                    elif physical["peak_growth_kib"] is not None and physical["peak_growth_kib"] > limits.growth_limit_mib * 1024:
+                        result["reason"] = "physical_footprint_growth_limit"
+                except Exception:
+                    pass  # unavailable, never persist summary/paths/error text or invented zero
+                physical["samples"].append(item)
+                if result["reason"] in ("physical_footprint_limit", "physical_footprint_growth_limit"):
+                    break
+                elapsed = max(0, clock() - started)
+            if stop.signum:
+                result["reason"] = "interrupted"
+                break
+            if elapsed >= limits.duration and (footprint is None or final_attempted):
                 result["reason"] = "duration_reached"
                 break
-            sleep(min(limits.interval, limits.duration - elapsed))
+            sleep(min(limits.interval, max(0, limits.duration - elapsed)))
     except KeyboardInterrupt:
         stop.signum = signal.SIGINT
         result["reason"] = "interrupted"
@@ -177,8 +263,19 @@ def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss
         result["passed"] = (result["reason"] == "duration_reached"
                             and result["post_warmup_samples"] >= 2
                             and result["termination"] == "terminated")
+        result["rss_checks_passed"] = result["passed"]
         if result["reason"] == "duration_reached" and result["post_warmup_samples"] < 2:
             result["reason"] = "insufficient_post_warmup_samples"
+        if footprint is not None:
+            successful = sum(item["availability"] == "available" for item in physical["samples"])
+            complete = (physical["warmup_baseline_available"] and physical["final_sample_available"]
+                        and physical["post_warmup_samples"] >= 2
+                        and successful == len(physical["samples"]))
+            physical["availability"] = "available" if complete else "partial" if successful else "unavailable"
+            if result["reason"] in ("physical_footprint_limit", "physical_footprint_growth_limit"):
+                physical["checks_passed"] = False
+            elif result["passed"] and complete:
+                physical["checks_passed"] = True
     return result
 
 
@@ -232,12 +329,17 @@ def run_scenarios(binary_dir, limits, stop):
                 initialization = initialize_identity(
                     [str(binary_dir / "peerglide"), "init", "--identity", str(profile / "identity")],
                     limits, stop, env)
+                if initialization["reason"] == "identity_created":
+                    materials = [profile / "identity" / name for name in ("node.crt.der", "node.key.der")]
+                    if not all(path.is_file() and path.stat().st_size > 0 for path in materials):
+                        initialization["reason"] = "identity_files_missing"
                 if initialization["reason"] != "identity_created":
                     results.append({"scenario": scenario, "pid": None, "passed": False,
                                     "reason": "identity_init_failed", "initialization": initialization})
                     continue
             result = monitor([str(binary_dir / "peerglide-gui"), "--data-dir", str(profile)],
-                             limits, scenario=scenario, env=env, stop=stop)
+                             limits, scenario=scenario, env=env, stop=stop,
+                             footprint=sample_footprint_kib if sys.platform == "darwin" else None)
             if initialization is not None:
                 result["initialization"] = initialization
             results.append(result)
@@ -245,11 +347,18 @@ def run_scenarios(binary_dir, limits, stop):
 
 
 def report(limits, scenarios, reason):
-    return {"schema_version": 1, "scope": "isolated_ci_gui_rss", "measurement": "ps_rss_kib",
-            "limitations": ["compressed_memory_not_measured", "some_gpu_memory_not_measured",
-                            "resident_process_only_not_render_or_native_acceptance"],
+    physical_results = [item.get("physical_footprint", {}).get("checks_passed") for item in scenarios]
+    physical_passed = (False if False in physical_results else
+                       True if len(physical_results) == 2 and all(value is True for value in physical_results) else None)
+    coverage = "rss_and_physical_footprint" if physical_passed is True else "rss_only_or_partial_physical_footprint"
+    return {"schema_version": 1, "scope": "isolated_ci_gui_rss", "measurement": "ps_rss_kib", "optional_measurement": "vmmap_physical_footprint_kib",
+            "coverage": coverage, "physical_footprint_checks_passed": physical_passed,
+            "limitations": ["rss_excludes_compressed_memory", "some_gpu_memory_not_measured", "sampled_peak_not_process_lifetime_peak",
+                            "resident_process_only_not_render_or_native_acceptance", "rss_and_footprint_are_distinct_accounting_scopes"],
             "passed": reason == "completed" and len(scenarios) == 2
                       and all(item["passed"] for item in scenarios),
+            "rss_checks_passed": reason == "completed" and len(scenarios) == 2
+                                 and all(item.get("rss_checks_passed", False) for item in scenarios),
             "reason": reason, "limits": vars(limits), "scenarios": scenarios}
 
 
@@ -299,7 +408,11 @@ def main(argv=None):
             reason = "harness_failed"  # no external paths, logs or exception text
         value = report(limits, scenarios, reason)
         write_report(output, value)
-    print("PASS: isolated GUI RSS samples within limits" if value["passed"] else "FAIL: GUI RSS diagnostic")
+    if value["passed"]:
+        print("PASS: RSS and physical footprint sampled within limits" if value["physical_footprint_checks_passed"] is True
+              else "PASS: RSS only; physical footprint unavailable or incomplete")
+    else:
+        print("FAIL: GUI memory diagnostic")
     return 0 if value["passed"] else 1
 
 

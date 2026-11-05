@@ -1056,3 +1056,14 @@ macOS包artifact 13396158475外层/内层摘要与安全路径核对通过，无
 诊断待运行，两个profile均无native/权限/真实连接。512MiB绝对RSS及64MiB预热后增长
 是诊断中止阈值，不是已达成的产品预算；RSS不能完整反映压缩/GPU内存。未在用户Mac
 重启复现，不把新检查或历史CI当修复成功，不关闭C06或#10。
+
+
+首轮运行结果：b8d490f普通五项[CI42017317157](https://github.com/ForceMind/PeerGlide/actions/runs/42017317157)
+及隔离[驻留CI42017317320](https://github.com/ForceMind/PeerGlide/actions/runs/42017317320)通过。
+两场景各180秒：Mac空身份/已有身份峰RSS116320/120512KiB、增长0/3904KiB；Linux
+峰134636/136360KiB、增长0/0。Mac CI系统26.6.2/25G83与宿主26.2/25C56不同；测试
+只限RSS，仍未解释用户6.83GB。12条初始脚本回归实际在CI通过，未运行宿主新GUI。
+
+随后新增17条完整采样器回归（含vmmap解析/缺测/物理阈值）本地通过，只用fixture与
+小Python child。Darwin physical footprint采用同512/64MiB诊断cap，不以缺测零值或
+RSS成功冒充全内存验证。此增量尚待对应CI，应用源码仍与0.2.2相同，不声称修复。

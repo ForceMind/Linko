@@ -632,3 +632,12 @@ root检查应用与接线独立CI诊断，review_admission只读依赖，localiz
 有绝对cap及预热后增长cap，超限停止仅测试child；不启worker/native/网络/授权。
 RSS缺少压缩/GPU部分，macOS CI环境与真实Mac的差异必须记录。当前没有根因或修复
 结论，不发布新可用性承诺；继续观察CI/必要原生分配证据，不能以脚本通过关闭事故。
+
+
+首轮b8d490f普通五项CI42017317157与两平台驻留CI42017317320全过；未修改App代码。
+Mac180秒×2峰RSS116320/120512KiB，增长0/3904KiB；Linux峰134636/136360KiB，增长0。
+Mac CI为26.6.2/25G83，宿主26.2/25C56，不能把不复现当修复。PR46因事故退回草稿；
+PR47本批仅诊断也为草稿，Issue5评论6656842353跟踪。补Darwin vmmap每15秒及预热/
+末尾只取physical footprint和reported peak数值，timeout2秒；用同上限停止，缺测记
+unavailable/null，RSS-only不报全内存通过。17条纯/小child回归本地通过，真实新口径CI
+待跑；不要重新启动用户Mac GUI，不更改权限或系统环境，不作已修好结论。
