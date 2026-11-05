@@ -1228,7 +1228,10 @@ mod tests {
         for width in [300.0, 600.0] {
             let output = ctx.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 600.0))),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 600.0),
+                    )),
                     ..Default::default()
                 },
                 |root| {

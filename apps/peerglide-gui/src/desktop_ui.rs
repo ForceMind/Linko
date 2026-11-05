@@ -525,7 +525,7 @@ impl App {
             egui::Frame::group(ui.style()).inner_margin(16.0).show(ui,|ui|{ui.strong(self.input_label());ui.label("停止请求、进程退出或断开连接不能代替软件清理结果。未确认时不开始新的键鼠会话。");if ui.button("查看停止与恢复状态").clicked(){self.dialog=Some(Dialog::Recovery);}});
         }
     }
-    fn connection_exchange_ui(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn connection_exchange_ui(&mut self, ui: &mut egui::Ui) {
         if ui.button("复制本机公开连接信息").clicked() {
             match self.local_connection_info() {
                 Ok(text) => {
