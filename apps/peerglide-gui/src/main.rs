@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod config_store;
+mod connection_info;
 mod desktop_ui;
 mod discovery_panel;
 mod gesture_lab;
@@ -76,7 +77,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             peer_name: "另一台电脑".into(),
-            address: "192.168.1.10:24870".into(),
+            address: String::new(),
             listen: true,
             allow: false,
             native: false,
@@ -240,6 +241,10 @@ struct App {
     instance_lock: Option<config_store::Lock>,
     page: Page,
     import_path: String,
+    use_connection_info: bool,
+    connection_text: String,
+    loaded_connection_info: Option<blake3::Hash>,
+    connection_addresses: Vec<std::net::SocketAddr>,
     confirmed_fingerprint: Option<String>,
     notice: String,
     child: Option<Child>,
@@ -305,6 +310,10 @@ impl App {
             instance_lock,
             page: Page::Home,
             import_path: String::new(),
+            use_connection_info: false,
+            connection_text: String::new(),
+            loaded_connection_info: None,
+            connection_addresses: Vec::new(),
             confirmed_fingerprint: None,
             notice,
             child: None,
@@ -357,7 +366,56 @@ impl App {
         self.save_config()
     }
     fn candidate(&self) -> Result<Vec<u8>> {
-        transport::read_certificate(std::path::Path::new(self.import_path.trim()))
+        if self.use_connection_info {
+            anyhow::ensure!(self.loaded_connection_info == Some(blake3::hash(self.connection_text.as_bytes())), "请先读取当前连接信息，修改后需要重新核验");
+            Ok(connection_info::decode(&self.connection_text)?.certificate)
+        } else {
+            transport::read_certificate(std::path::Path::new(self.import_path.trim()))
+        }
+    }
+    fn read_connection_info(&mut self) -> Result<()> {
+        anyhow::ensure!(self.idle_writable(), "请先停止会话并恢复设置写入");
+        self.confirmed_fingerprint = None;
+        self.loaded_connection_info = None;
+        self.connection_addresses.clear();
+        let info = connection_info::decode(&self.connection_text)?;
+        let local = Identity::load(&self.identity_dir()).context("请先创建本机身份")?;
+        anyhow::ensure!(info.certificate != local.certificate, "这是本机信息，请粘贴另一台电脑的信息");
+        self.use_connection_info = true;
+        self.connection_addresses = info.addresses;
+        self.loaded_connection_info = Some(blake3::hash(self.connection_text.as_bytes()));
+        if !self.connection_addresses.is_empty() {
+            self.wizard_listen = false;
+            self.wizard_address = if self.connection_addresses.len() == 1 {
+                self.connection_addresses[0].to_string()
+            } else {
+                String::new()
+            };
+        } else {
+            self.wizard_listen = true;
+            self.wizard_address.clear();
+        }
+        // This is draft data only: no certificate/config writes or permissions.
+        self.wizard = Some(SetupStep::Verify);
+        Ok(())
+    }
+    fn local_connection_info(&self) -> Result<String> {
+        let identity = Identity::load(&self.identity_dir()).context("请先创建本机身份")?;
+        let mut addresses = Vec::new();
+        if self.wizard_listen {
+            for interface in if_addrs::get_if_addrs().context("无法读取本机网卡地址，请使用高级登记")? {
+                if let std::net::IpAddr::V4(ip) = interface.ip() {
+                    if !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast()
+                        && !ip.is_broadcast() && (ip.is_private() || ip.is_link_local()) {
+                        addresses.push(std::net::SocketAddr::from((ip, 24870)));
+                    }
+                }
+            }
+            addresses.sort_unstable();
+            addresses.dedup();
+            anyhow::ensure!(!addresses.is_empty(), "未找到局域网 IPv4，请检查网络或使用高级登记");
+        }
+        connection_info::encode(&identity.certificate, &addresses)
     }
     fn enroll(&mut self) -> Result<()> {
         anyhow::ensure!(
@@ -1143,6 +1201,91 @@ mod tests {
             fixture.path.clone()
         };
         assert!(!path.exists(), "RAII cleanup on early return");
+        Ok(())
+    }
+    #[test]
+    fn public_connection_exchange_enrolls_both_peers_without_candidate_files() -> Result<()> {
+        let waiting = Fixture::new()?;
+        let connecting = Fixture::new()?;
+        let mut a = App::load(waiting.path.clone());
+        let mut b = App::load(connecting.path.clone());
+        let identity_a = Identity::create(&a.identity_dir())?;
+        let identity_b = Identity::create(&b.identity_dir())?;
+        assert!(a.config.address.is_empty(), "no example IP may look like a real peer");
+        let address = "192.168.20.8:24870".parse()?;
+        b.connection_text = connection_info::encode(&identity_a.certificate, &[address])?;
+        b.read_connection_info()?;
+        assert!(!b.wizard_listen);
+        assert_eq!(b.wizard_address, address.to_string());
+        assert!(b.config.fingerprint.is_none());
+        assert!(!connecting.path.join("trusted-peer.crt.der").exists());
+        assert!(b.enroll().is_err(), "reading public data must not confer trust");
+        b.confirmed_fingerprint = Some(identity_a.fingerprint());
+        b.config.address = b.wizard_address.clone();
+        b.config.listen = b.wizard_listen;
+        b.enroll()?;
+        assert!(!b.config.allow && !b.config.native);
+        // The connector's reply needs no address, and selects the waiting role.
+        a.wizard_listen = false;
+        a.wizard_address = "192.168.20.99:24870".into();
+        a.connection_text = connection_info::encode(&identity_b.certificate, &[])?;
+        a.read_connection_info()?;
+        assert!(a.wizard_listen);
+        assert!(a.wizard_address.is_empty());
+        a.confirmed_fingerprint = Some(identity_b.fingerprint());
+        a.enroll()?;
+        assert!(!a.config.allow && !a.config.native);
+        assert_eq!(transport::read_certificate(&waiting.path.join("trusted-peer.crt.der"))?, identity_b.certificate);
+        assert_eq!(transport::read_certificate(&connecting.path.join("trusted-peer.crt.der"))?, identity_a.certificate);
+        assert_eq!(Identity::load(&a.identity_dir())?.certificate, identity_a.certificate);
+        assert_eq!(Identity::load(&b.identity_dir())?.certificate, identity_b.certificate);
+        Ok(())
+    }
+    #[test]
+    fn edited_unread_self_and_invalid_connection_info_cannot_reuse_confirmation() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let local = Identity::create(&app.identity_dir())?;
+        let peer = Identity::generate()?;
+        app.connection_text = connection_info::encode(&peer.certificate, &["192.168.20.8:24870".parse()?])?;
+        app.read_connection_info()?;
+        app.confirmed_fingerprint = Some(peer.fingerprint());
+        // Even editing just the address requires a fresh read and confirmation.
+        app.connection_text = connection_info::encode(&peer.certificate, &["192.168.20.9:24870".parse()?])?;
+        assert!(app.enroll().is_err());
+        assert!(!fixture.path.join("trusted-peer.crt.der").exists());
+        app.read_connection_info()?;
+        assert!(app.confirmed_fingerprint.is_none());
+        app.confirmed_fingerprint = Some(peer.fingerprint());
+        app.connection_text = "invalid public connection data".into();
+        assert!(app.read_connection_info().is_err());
+        assert!(app.loaded_connection_info.is_none());
+        assert!(app.confirmed_fingerprint.is_none());
+        assert!(app.enroll().is_err());
+        app.connection_text = connection_info::encode(&local.certificate, &[])?;
+        assert!(app.read_connection_info().is_err());
+        assert!(app.loaded_connection_info.is_none());
+        assert!(app.config.fingerprint.is_none());
+        assert!(!app.config.allow && !app.config.native);
+        Ok(())
+    }
+    #[test]
+    fn multihomed_connection_info_requires_explicit_address_selection() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        Identity::create(&app.identity_dir())?;
+        let peer = Identity::generate()?;
+        let addresses = ["192.168.20.8:24870".parse()?, "10.0.0.8:24870".parse()?];
+        app.connection_text = connection_info::encode(&peer.certificate, &addresses)?;
+        app.read_connection_info()?;
+        assert_eq!(app.connection_addresses, addresses);
+        assert!(app.wizard_address.is_empty());
+        assert!(!app.wizard_listen);
+        // A second GUI cannot import into a profile locked by the first.
+        let mut second = App::load(fixture.path.clone());
+        second.connection_text = app.connection_text.clone();
+        assert!(second.read_connection_info().is_err());
+        assert!(second.config.fingerprint.is_none());
         Ok(())
     }
     #[test]

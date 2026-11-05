@@ -50,6 +50,8 @@ impl App {
         self.wizard_address = self.config.address.clone();
         self.wizard_listen = self.config.listen;
         self.wizard_allow = false;
+        self.use_connection_info = true;
+        self.confirmed_fingerprint = None;
         self.wizard = Some(if self.local_fingerprint().is_some() {
             SetupStep::Find
         } else {
@@ -523,6 +525,31 @@ impl App {
             egui::Frame::group(ui.style()).inner_margin(16.0).show(ui,|ui|{ui.strong(self.input_label());ui.label("停止请求、进程退出或断开连接不能代替软件清理结果。未确认时不开始新的键鼠会话。");if ui.button("查看停止与恢复状态").clicked(){self.dialog=Some(Dialog::Recovery);}});
         }
     }
+    fn connection_exchange_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.button("复制本机公开连接信息").clicked() {
+            match self.local_connection_info() {
+                Ok(text) => {
+                    ui.ctx().copy_text(text);
+                    self.notice = "已复制公开证书与连接地址，不含私钥或权限。请通过可信渠道发送给另一端。".into();
+                }
+                Err(error) => self.notice = error.to_string(),
+            }
+        }
+        ui.weak("公开信息仍需在对端独立核对完整指纹；不要发送私钥。自动短码配对尚未提供。");
+        ui.label("粘贴另一台电脑的连接信息");
+        let changed = ui.add(egui::TextEdit::multiline(&mut self.connection_text)
+            .desired_rows(3).char_limit(connection_info::MAX_TEXT_BYTES)
+            .hint_text("PG-CONNECTION-1:…")).changed();
+        if changed {
+            self.confirmed_fingerprint = None;
+            self.connection_addresses.clear();
+            self.loaded_connection_info = None;
+        }
+        if ui.button("读取对端连接信息").clicked() {
+            let result = self.read_connection_info();
+            self.feedback(result, "公开信息已读取，尚未登记或授权。请核对下面的完整指纹。");
+        }
+    }
     fn setup_window(&mut self, ctx: &egui::Context) {
         let Some(step) = self.wizard else {
             return;
@@ -533,6 +560,8 @@ impl App {
             .collapsible(false)
             .resizable(true)
             .default_width(620.0)
+            .default_height(560.0)
+            .vscroll(true)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (value, text) in [
@@ -574,41 +603,68 @@ impl App {
                         }
                     }
                     SetupStep::Find => {
-                        ui.heading("先选择如何建立通信");
-                        ui.weak("发现结果不可信，使用地址后还需核验证书。");
-                        let own = self.local_fingerprint();
-                        let writable = self.writable();
-                        if let Some(address) = self.discovery.ui(ui, own, false, true, writable) {
-                            self.wizard_address = address.to_string();
-                            self.wizard_listen = false;
-                        }
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut self.wizard_listen, true, "本机等待对端连接");
-                            ui.selectable_value(&mut self.wizard_listen, false, "主动连接对端");
-                        });
-                        ui.label("对端IP地址与端口");
-                        ui.text_edit_singleline(&mut self.wizard_address);
-                        ui.weak(
-                            "两端选择相反方式；等待方默认24870端口。配对码/自动选择方式尚未实现。",
-                        );
-                        if ui.button("继续核验身份").clicked() {
-                            if self.wizard_listen
-                                || self.wizard_address.parse::<std::net::SocketAddr>().is_ok()
-                            {
-                                self.wizard = Some(SetupStep::Verify);
-                            } else {
-                                self.notice = "请输入有效IP地址与端口；原输入已保留。".into();
+                        ui.heading("复制连接信息，不用搬证书文件");
+                        ui.label("先在一端复制公开信息，粘贴到另一端；另一端再复制回传。两端各交换一次即可，之后保留登记。");
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.selectable_value(&mut self.wizard_listen, true, "这台先等待连接").changed()
+                                | ui.selectable_value(&mut self.wizard_listen, false, "这台连接另一台").changed() {
+                                self.confirmed_fingerprint = None;
                             }
-                        }
+                        });
+                        self.connection_exchange_ui(ui);
+                        egui::CollapsingHeader::new("高级：设备发现或手动证书登记").show(ui, |ui| {
+                            let own = self.local_fingerprint();
+                            let writable = self.writable();
+                            if let Some(address) = self.discovery.ui(ui, own, false, true, writable) {
+                                self.wizard_address = address.to_string();
+                                self.wizard_listen = false;
+                                self.confirmed_fingerprint = None;
+                            }
+                            ui.label("对端实际 IP 与端口（请勿照抄示例）");
+                            ui.add(egui::TextEdit::singleline(&mut self.wizard_address).hint_text("填写对端实际 IPv4:24870"));
+                            if ui.button("使用证书文件登记").clicked() {
+                                self.use_connection_info = false;
+                                self.confirmed_fingerprint = None;
+                                self.wizard = Some(SetupStep::Verify);
+                            }
+                        });
                     }
                     SetupStep::Verify => {
-                        ui.heading("在两台电脑上独立核对指纹");
+                        ui.heading("核验另一台电脑的身份");
                         ui.label("对端名称");
                         ui.text_edit_singleline(&mut self.wizard_name);
-                        ui.label("对端公钥证书文件路径（选择器尚未提供）");
-                        if ui.text_edit_singleline(&mut self.import_path).changed() {
-                            self.confirmed_fingerprint = None;
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.selectable_value(&mut self.use_connection_info, true, "粘贴连接信息").changed()
+                                | ui.selectable_value(&mut self.use_connection_info, false, "高级证书文件").changed() {
+                                self.confirmed_fingerprint = None;
+                            }
+                        });
+                        if self.use_connection_info {
+                            self.connection_exchange_ui(ui);
+                            if self.connection_addresses.len() > 1 {
+                                ui.label("对端有多个网卡：选择与你同一局域网的地址");
+                                egui::ComboBox::from_id_salt("peer-connection-address")
+                                    .selected_text(if self.wizard_address.is_empty() { "请选择实际局域网地址" } else { &self.wizard_address })
+                                    .show_ui(ui, |ui| {
+                                        for address in &self.connection_addresses {
+                                            let value = address.to_string();
+                                            if ui.selectable_value(&mut self.wizard_address, value.clone(), value).changed() {
+                                                self.confirmed_fingerprint = None;
+                                            }
+                                        }
+                                    });
+                            }
+                        } else {
+                            ui.label("对端公钥证书文件路径");
+                            if ui.text_edit_singleline(&mut self.import_path).changed() {
+                                self.confirmed_fingerprint = None;
+                            }
                         }
+                        ui.label(if self.wizard_listen {
+                            "本机等待连接；对端需选择连接本机。".to_owned()
+                        } else {
+                            format!("本机将连接：{}", if self.wizard_address.is_empty() { "尚未选择地址" } else { &self.wizard_address })
+                        });
                         let candidate = self
                             .candidate()
                             .ok()
@@ -616,7 +672,10 @@ impl App {
                         if let Some(fp) = &candidate {
                             ui.label("对端证书BLAKE3指纹");
                             ui.monospace(fp);
+                        } else {
+                            ui.weak("尚未读取有效的对端公开证书。连接信息不是短码配对，也不自动授信。");
                         }
+                        let address_valid = self.wizard_listen || self.wizard_address.parse::<std::net::SocketAddr>().is_ok_and(|address| address.port() != 0 && !address.ip().is_unspecified());
                         let mut compared =
                             candidate.is_some() && candidate == self.confirmed_fingerprint;
                         if !compared {
@@ -635,7 +694,7 @@ impl App {
                             self.confirmed_fingerprint = if compared { candidate } else { None };
                         }
                         if ui
-                            .add_enabled(compared, egui::Button::new("核验并登记设备"))
+                            .add_enabled(compared && address_valid, egui::Button::new("核验并登记设备"))
                             .clicked()
                         {
                             let old = self.config.clone();
