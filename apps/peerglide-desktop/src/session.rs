@@ -75,10 +75,18 @@ impl Recovery {
             cursor,
             now,
             |m| {
-                if native { platform::pointer(m.x, m.y) } else { Ok(()) }
+                if native {
+                    platform::pointer(m.x, m.y)
+                } else {
+                    Ok(())
+                }
             },
             |event| {
-                if native { platform::inject(event) } else { Ok(()) }
+                if native {
+                    platform::inject(event)
+                } else {
+                    Ok(())
+                }
             },
         )
     }
@@ -535,8 +543,26 @@ mod tests {
     #[test]
     fn normal_up_failures_keep_key_and_button_ownership_until_cleanup() -> Result<()> {
         for (down, up) in [
-            (Input::Key { usage: 0xe0, down: true }, Input::Key { usage: 0xe0, down: false }),
-            (Input::Button { button: 1, down: true }, Input::Button { button: 1, down: false }),
+            (
+                Input::Key {
+                    usage: 0xe0,
+                    down: true,
+                },
+                Input::Key {
+                    usage: 0xe0,
+                    down: false,
+                },
+            ),
+            (
+                Input::Button {
+                    button: 1,
+                    down: true,
+                },
+                Input::Button {
+                    button: 1,
+                    down: false,
+                },
+            ),
         ] {
             for fail_pointer in [true, false] {
                 let mut recovery = Recovery {
@@ -545,30 +571,55 @@ mod tests {
                     pending_releases: PendingReleases::default(),
                 };
                 assert!(recovery.receiver.acquire(1, 0, true));
-                let cursor = Motion { lease: 1, sequence: 1, x: 0.5, y: 0.5 };
+                let cursor = Motion {
+                    lease: 1,
+                    sequence: 1,
+                    x: 0.5,
+                    y: 0.5,
+                };
                 assert!(recovery.input_with(1, down, cursor, 1, |_| Ok(()), |_| Ok(()))?);
                 let mut up_attempts = 0;
-                assert!(recovery.input_with(
-                    1, up, Motion { sequence: 2, ..cursor }, 2,
-                    |_| {
-                        if fail_pointer { anyhow::bail!("fake pointer failure before Up"); }
-                        Ok(())
-                    },
-                    |_| {
-                        up_attempts += 1;
-                        anyhow::bail!("fake Up injection failure")
-                    },
-                ).is_err());
+                assert!(recovery
+                    .input_with(
+                        1,
+                        up,
+                        Motion {
+                            sequence: 2,
+                            ..cursor
+                        },
+                        2,
+                        |_| {
+                            if fail_pointer {
+                                anyhow::bail!("fake pointer failure before Up");
+                            }
+                            Ok(())
+                        },
+                        |_| {
+                            up_attempts += 1;
+                            anyhow::bail!("fake Up injection failure")
+                        },
+                    )
+                    .is_err());
                 assert_eq!(up_attempts, usize::from(!fail_pointer));
                 let mut released = Vec::new();
-                recovery.finish_with(1, None, 3, |_| Ok(()), |event| {
-                    released.push(event);
-                    Ok(())
-                })?;
+                recovery.finish_with(
+                    1,
+                    None,
+                    3,
+                    |_| Ok(()),
+                    |event| {
+                        released.push(event);
+                        Ok(())
+                    },
+                )?;
                 assert!(released == [up]);
-                recovery.finish_with(1, None, 4, |_| Ok(()), |_| {
-                    panic!("acknowledged cleanup must not replay an Up")
-                })?;
+                recovery.finish_with(
+                    1,
+                    None,
+                    4,
+                    |_| Ok(()),
+                    |_| panic!("acknowledged cleanup must not replay an Up"),
+                )?;
             }
         }
         Ok(())
@@ -576,16 +627,35 @@ mod tests {
     #[test]
     fn successful_up_and_unowned_up_never_move_or_release_again() -> Result<()> {
         let mut recovery = held_recovery();
-        let up = Input::Key { usage: 0xe0, down: false };
-        let cursor = Motion { lease: 1, sequence: 1, x: 0.5, y: 0.5 };
+        let up = Input::Key {
+            usage: 0xe0,
+            down: false,
+        };
+        let cursor = Motion {
+            lease: 1,
+            sequence: 1,
+            x: 0.5,
+            y: 0.5,
+        };
         assert!(recovery.input_with(1, up, cursor, 2, |_| Ok(()), |_| Ok(()))?);
-        assert!(!recovery.input_with(1, up, Motion { sequence: 2, ..cursor }, 3,
+        assert!(!recovery.input_with(
+            1,
+            up,
+            Motion {
+                sequence: 2,
+                ..cursor
+            },
+            3,
             |_| panic!("unowned Up must not position the pointer"),
             |_| panic!("unowned Up must not reach the native injector"),
         )?);
-        recovery.finish_with(1, None, 4, |_| Ok(()), |_| {
-            panic!("successful Up was already acknowledged")
-        })?;
+        recovery.finish_with(
+            1,
+            None,
+            4,
+            |_| Ok(()),
+            |_| panic!("successful Up was already acknowledged"),
+        )?;
         Ok(())
     }
     #[test]

@@ -62,11 +62,16 @@ impl Receiver {
         true
     }
     pub fn accepts_input(&self, lease: u64, event: Input, now: u64) -> bool {
-        self.accepts(lease, now) && event.valid() && match event {
-            Input::Key { usage, down: false } => self.keys.contains(&usage),
-            Input::Button { button, down: false } => self.buttons.contains(&button),
-            _ => true,
-        }
+        self.accepts(lease, now)
+            && event.valid()
+            && match event {
+                Input::Key { usage, down: false } => self.keys.contains(&usage),
+                Input::Button {
+                    button,
+                    down: false,
+                } => self.buttons.contains(&button),
+                _ => true,
+            }
     }
     /// Keep release ownership until the backend acknowledges the matching Up.
     /// A failed Down may have partially reached the OS, so cleanup retains it.
@@ -80,7 +85,10 @@ impl Receiver {
         if !self.accepts_input(lease, event, now) {
             return Ok(false);
         }
-        let releasing = matches!(event, Input::Key { down: false, .. } | Input::Button { down: false, .. });
+        let releasing = matches!(
+            event,
+            Input::Key { down: false, .. } | Input::Button { down: false, .. }
+        );
         if releasing {
             apply(event)?;
             Ok(self.input(lease, event, now))
@@ -325,12 +333,24 @@ mod recovery_tests {
     fn failed_down_and_up_remain_owned_and_repeat_down_is_allowed() {
         let mut receiver = Receiver::default();
         assert!(receiver.acquire(1, 0, true));
-        let down = Input::Key { usage: 0xe0, down: true };
-        let up = Input::Key { usage: 0xe0, down: false };
+        let down = Input::Key {
+            usage: 0xe0,
+            down: true,
+        };
+        let up = Input::Key {
+            usage: 0xe0,
+            down: false,
+        };
         assert_eq!(receiver.input_with(1, down, 1, |_| Err(())), Err(()));
         assert!(receiver.accepts_input(1, up, 2));
         let mut repeats = 0;
-        assert_eq!(receiver.input_with(1, down, 2, |_| { repeats += 1; Ok::<_, ()>(()) }), Ok(true));
+        assert_eq!(
+            receiver.input_with(1, down, 2, |_| {
+                repeats += 1;
+                Ok::<_, ()>(())
+            }),
+            Ok(true)
+        );
         assert_eq!(repeats, 1);
         assert_eq!(receiver.input_with(1, up, 3, |_| Err(())), Err(()));
         assert!(receiver.accepts_input(1, up, 4));
