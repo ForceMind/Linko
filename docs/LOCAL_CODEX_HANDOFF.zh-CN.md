@@ -704,3 +704,23 @@ worker诊断回归（Win3条）及7条打包回归过，Mac ZIP解压+篡改拒�
 新版重新确认一次系统授权；不要扩大宿主权限或重配设备。旧saved native=true只是偏好，
 allow=false，普通连接和只读诊断不启用Native。本批最后文档提交不改运行源码；保留
 c9307aa完整包用于实机复查，最终head CI及最新证据以PR48回读为准。
+
+
+## 28. 用户授权完整参考Oink，基础资源迭代（2026-11-05）
+
+用户给出oinkvm/oink并说明作者授权，随后明确确认原创代码可MIT集成/分发，第三方另计。
+已固定ignored target/reference/oink为3ca82127，15个crate/UI/原生附加/打包/测试的覆盖索引
+与安全差异在REFERENCE_RESEARCH。不运行对方源码或安装工具，不把full-trust/默认数据
+开启/签名字段存在当独立授权。采用现有技术栈/许可/中文/v5，当前独立实现没有复制代码。
+root负责集成与GUI活动调度，复用localize_panels只读平台/数据/UI和本批窄复核；网络片
+由review_admission完成，其后UI片capacity失败已由root/localize接手，不新增或递归代理。
+
+新分支idle-gui-activity从f931f4d，版本0.2.4-dev。去掉无工作GUI的100ms自循环，保留
+child/stop/reconnect/discovery/worker诊断/画布/layout-report的tick；postUI补首tick。
+关闭策略移到logic，隐藏也要合作stop并等待确认，恢复未知不自动close；普通通信退出
+等最终stdout EOF/ProbePassed，避免idle后丢报告。新增6条回归待CI，原生代码未改。
+
+用户后来解锁，c9307aa新包实际worker只读诊断已执行；GUI/worker均Denied，尚需对最终
+代码身份确认权限再进Native。设备身份/Windows配对不动，Mac不接收控制；不把签名或
+新诊断通过当实际KVM可用。当前GUI已结束，无活跃Native。先完成本批资源候选测试，
+再集中给用户最终包与必要系统确认步骤，避免中间包反复授权。GUI6.83GB根因仍未知。

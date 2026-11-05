@@ -176,6 +176,9 @@ pub struct Checker {
     result: Option<Outcome>,
 }
 impl Checker {
+    pub fn needs_poll(&self) -> bool {
+        self.receiver.is_some()
+    }
     pub fn poll(&mut self) {
         let Some(receiver) = &self.receiver else {
             return;

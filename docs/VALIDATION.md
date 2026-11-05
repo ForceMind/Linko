@@ -1147,3 +1147,24 @@ main identifier=com.peerglide.PeerGlide、Info.plist entries=11、资源seal ver
 未点击实际worker诊断；监测到3分钟结束停止空闲GUI，采样峰RSS126400KiB，无Native。
 等待用户手动解锁后继续实际helper/正常App责任链复查，旧授权不保证沿用。现阶段未
 完成物理输入，签名是候选修复，GUI6.83GB事故仍未定位；Windows旧会话可停止保留配对。
+
+
+### Oink完整参考与按活动刷新候选，0.2.4-dev（2026-11-05，待CI）
+
+Oink固定3ca82127源码的15个Rust crate、UI、FileProvider/音频插件、构建/测试入口已建立
+模块覆盖索引并核对关键状态链，见REFERENCE_RESEARCH。用户确认作者许可原创代码按MIT
+集成分发，第三方许可另计。本批没有移入Oink源码/资源/依赖，没有执行Oink或浏览器测试；
+参考不等于逐行安全审计或其CI/实机验收，也不把其full-trust默认共享/无界总线等迁入PG。
+
+独立实现PG现有GUI活动节拍：无异步工作/画布deadline时去掉应用自身固定10Hz重绘；
+会话、停止/重连、发现、worker诊断、画布录制和显式layout-report仍有100ms轮询；UI操作
+晚于logic启动新任务也安排首tick。画布在遮挡后取消。关闭拦截移入logic，使隐藏窗口
+仍能CancelClose→合作停止→等待清理再Close，未确认恢复保留警告。非Native进程退出也
+等stdout EOF并消费最后probe状态，不依赖下一次无条件UI重绘。原生watchdog/lease/回调/
+协议v5完全不变。新增6条资源/生命周期回归已写，尚未编译；本机preflight因Cargo缺失
+停止，保持不安装Rust。此为空闲资源收敛，不是6.83GB根因已证实或修复。
+
+0.2.3-c9307aa在用户解锁后已实际检查新UI的“实际工作进程权限”：报告可读取，GUI与
+worker均Denied，Secure Input inactive；没有申请权限或启动Native。新版代码身份变动
+需要用户对最后候选明确授权后再验，当前不反复让用户操作中间包。GUI只读检查后结束，
+既有设备身份/配对与Mac接收关闭状态保留。实际worker授权传递与物理C06仍待验。

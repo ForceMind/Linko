@@ -10,6 +10,9 @@ pub struct Panel {
     status: String,
 }
 impl Panel {
+    pub fn needs_poll(&self) -> bool {
+        self.handle.is_some() || self.stopping.is_some()
+    }
     pub fn poll(&mut self, listener_running: bool) {
         if let Some(stop) = &self.stopping {
             if stop.finished() {
