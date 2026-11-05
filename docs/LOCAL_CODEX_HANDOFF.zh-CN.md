@@ -641,3 +641,17 @@ PR47本批仅诊断也为草稿，Issue5评论6656842353跟踪。补Darwin vmmap
 末尾只取physical footprint和reported peak数值，timeout2秒；用同上限停止，缺测记
 unavailable/null，RSS-only不报全内存通过。17条纯/小child回归本地通过，真实新口径CI
 待跑；不要重新启动用户Mac GUI，不更改权限或系统环境，不作已修好结论。
+
+
+## 25. 用户恢复双机通信试跑（2026-11-05）
+
+用户要求再次连接Windows；采用已有0.2.2 CLI避开GUI驻留，不再要求搬证书文件。
+Windows公开连接信息实际收到并通过原有完整指纹核验，Mac原身份不变。用户在Windows
+登记Mac并开始监听后，Mac真实QUIC探针通过mutual TLS/v5/可靠往返，exit0，约0.63s，
+峰RSS10688KiB（guard15s/128MiB）；native/allow均false，探针已正常结束。真实材料与
+地址只在ignored target，本记录不复制私钥/地址/指纹。网络策略未改变。
+
+下一步原生输入的实际worker权限只读检查：辅助功能、输入监控均denied，Secure Input
+inactive；已集中请用户在Mac手动处理两项，等待回复“已开启”或“没有屏跃”。Windows
+暂不启用Native，物理C06全部仍未验收。不得把真实网络通过或CLI低RSS等同KVM已可
+日常工作/GUI内存修复。GUI事故PR46和诊断PR47仍保留草稿，#10根因未定位。

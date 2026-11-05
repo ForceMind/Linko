@@ -1067,3 +1067,23 @@ macOS包artifact 13396158475外层/内层摘要与安全路径核对通过，无
 随后新增17条完整采样器回归（含vmmap解析/缺测/物理阈值）本地通过，只用fixture与
 小Python child。Darwin physical footprint采用同512/64MiB诊断cap，不以缺测零值或
 RSS成功冒充全内存验证。此增量尚待对应CI，应用源码仍与0.2.2相同，不声称修复。
+
+
+### 真实 Windows ↔ macOS 无原生输入通信通过（2026-11-05）
+
+用户授权恢复连接试跑，Mac改用已有0.2.2-dev CLI，不重新启动存在内存事故的GUI。
+两端使用7d3e035/CI41987328608对应分发源码。用户通过可信聊天交换公开连接信息；
+Mac实际CLI解析Windows公钥并与此前独立提供的完整BLAKE3指纹逐字一致，本机原身份
+也保持一致。未交换私钥；候选材料/真实地址/完整日志仅保存在ignored本机试跑目录，
+不提交到仓库或Issue。没有修改代理、路由、防火墙或系统安全策略。
+
+真实Mac连接用户Windows监听端，mutual TLS、v5协议协商与可靠Ping/Pong往返均通过，
+事件顺序Authenticated → ProbePassed → Disabled(terminal) → Stopped。实际进程退出0，
+约0.63秒，采样峰RSS10688KiB；外部guard为15秒/128MiB，仅作用于本次自有CLI子进程。
+native=false、allow_control=false，未启动全局捕获或注入。此为真实两机网络通过，
+不是回环或CI模拟；探针结束后已断开，不表示持续会话或键鼠控制已开启。
+
+实际Mac worker随后只读diagnose-context：Accessibility/Input Monitoring均denied，
+Secure Input inactive，native_capture_started=false。下一步原生输入依赖用户明确手动
+处理权限，当前未运行四边/键盘/拖拽/滚轮/DPI/物理接管/断网/睡眠等C06项目。CLI
+低RSS不证明GUI6.83GB事故已修复，该事故仍开放；#10历史根因也不作结论。
