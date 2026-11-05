@@ -510,6 +510,8 @@ impl App {
             });
         }
         ui.weak("macOS按需要在系统设置中处理辅助功能/输入监控，再重新检查。Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
+        let idle = self.child.is_none() && self.stopping.is_none();
+        self.worker_permissions.ui(ui, idle);
         ui.add_space(16.0);
         ui.strong("后台运行");
         ui.weak("托盘/菜单栏尚未提供。关闭窗口会请求停止并等待清理，不暗示仍在后台运行。");

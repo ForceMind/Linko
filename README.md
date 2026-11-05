@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.2.2-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.2.3-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -50,10 +50,10 @@ connection. 本机鼠标 edits offline rules and tests window-local gestures; it
 G1 switch remains unavailable. See [actual GUI interactions](docs/GUI_INTERACTIONS.zh-CN.md).
 No config file editing is required.
 
-CI artifacts contain an unsigned Windows portable ZIP, macOS app bundle or
+CI artifacts contain an unsigned Windows portable ZIP, an ad-hoc integrity-signed macOS app bundle or
 Linux portable ZIP plus checksums and notices. Linux GUI runtime libraries
 include X11/XKB, EGL/OpenGL (or the corresponding Wayland stack). They are experimental builds,
-not stable installers. macOS signing/notarization and Windows code signing are
+not stable installers. macOS Developer ID signing/notarization and Windows code signing are
 pending; do not disable OS protections to open them. The Linux GUI can configure
 and probe connections, but Linux native input is not implemented.
 
@@ -81,6 +81,9 @@ peerglide diagnose-context --include-application-id
 ```
 
 Settings → 检查当前系统权限 also reads the GUI process's permission snapshot.
+“检查实际工作进程权限” additionally launches only the sibling CLI read-only diagnostic,
+with bounded output, cancellation and a deadline. GUI and worker snapshots are separate;
+neither enables input or replaces the worker's check at native startup.
 These checks never request OS permissions or authorize control/actions. See
 [native context](docs/NATIVE_CONTEXT.md) for privacy, supported OSes and limitations.
 
@@ -121,6 +124,13 @@ These checks never request OS permissions or authorize control/actions. See
 
 此顺序不替代四边、拖拽/滚轮、修饰键、接收端物理接管、不同DPI、断网/退出、
 睡眠唤醒与权限变化的实机矩阵。当前 G1、生产剪贴板/文件、配对码和托盘仍未提供。
+
+0.2.3-dev 修正 macOS 打包身份，并新增“设置 → 检查实际工作进程权限”。0.2.2 实机
+曾出现 GUI 两项权限已授予、worker 仍因辅助功能未获许可而退出；不能反复要求用户给
+旧应用加同一权限。macOS 包现在从内到外采用 ad-hoc 完整性签名并验证 plist/嵌套代码，
+没有 Developer ID 身份、没有公证；不同构建的系统授权不保证自动沿用。不要关闭防护。
+当前仍待签名候选的真实 worker/TCC 验证，不宣称该事故或 GUI 6.83GB 内存事故已修复。
+已通过真实双机无输入通信；物理键鼠 C06 仍未通过。此增量不改输入 v5/设备身份或授权。
 
 ## Explicit two-peer enrollment
 

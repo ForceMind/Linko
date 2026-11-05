@@ -670,3 +670,23 @@ c06-pilot-021/active-private-pilot.json。源码/签名不改，native/allow仍f
 核对目标PID，关闭后不再getApp。当前已请用户Windows启用接收偏好和Native监听，
 回复“开始试跑”才在Mac开启本次仅Mac→已核验Windows的短测；Mac不接收控制。
 实际worker权限自检和C06物理项尚未完成，GUI内存事故也未定位。不得提前宣称通过。
+
+
+## 27. 真实Native失败后的最小包身份修复（2026-11-05）
+
+用户已明确开始本次Mac→Windows短测。Mac GUI自身Granted，但spawn worker认证后
+AX前置检查失败exit1，未捕获原生输入；物理C06未跑。精确TCCsubject：GUI自身是
+bundleID允许，helper responsible为GUI却按GUI文件路径拒绝。旧包Info.plist not bound、
+无CodeResources、linker生成main identifier。不要再让用户给旧App重复授权或给宿主扩权。
+
+新分支macos-worker-permissions从5f87736，版本0.2.3-dev；root负责GUI实际worker只读
+Checker/版本/CI/文档，localize_panels独占package.py/test_package.py，review_admission只读
+复核。候选从helper到app ad-hoc签名，绑定plist/资源且strict验证；默认DR不放宽，无私有
+entitlement/DeveloperID/公证/凭据购买/全局安装/系统安全修改。7条打包mock回归过；root
+本机只对新临时App副本执行真实签名和验证过，旧artifact及身份不变，尚未验证TCC改善。
+GUI新增独立worker权限快照，仅固定diagnose-context，受限输出/3s截止/取消，不启输入。
+
+CI将跑原检查并解压包验证签名、篡改plist/helper负例。源码输入v5不变，Windows的v5
+包仍可协商；正式候选以完整测试包为准，不混用本机GUI/CLI。C06和GUI内存事故仍未过，
+真实新worker权限自检必须在正常应用启动且用户授权的候选上复验；旧ad-hoc授权不保证
+跨build自动沿用。当前无活跃Native，Windows可以停止旧会话保持配对，先等待候选。

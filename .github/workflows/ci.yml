@@ -43,6 +43,7 @@ jobs:
       - run: python tools/reconnect_smoke.py
       - run: python tools/context_smoke.py
       - run: python -m unittest discover -s tools -p test_third_party.py
+      - run: python -m unittest discover -s tools -p test_package.py
       - run: python tools/third_party.py
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
@@ -57,6 +58,9 @@ jobs:
           path: dist/peerglide-*.png
           if-no-files-found: error
       - run: python tools/package.py
+      - name: Verify extracted macOS identity and tamper rejection
+        if: runner.os == 'macOS'
+        run: python tools/verify_macos_package.py
       - uses: actions/upload-artifact@v4
         with:
           name: peerglide-prototype-${{ matrix.os }}
