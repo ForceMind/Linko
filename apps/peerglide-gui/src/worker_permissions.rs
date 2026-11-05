@@ -369,7 +369,9 @@ mod tests {
     fn dropping_checker_waits_for_its_real_diagnostic_child_to_exit() {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let marker = peerglide_transport::Identity::generate().unwrap().fingerprint();
+        let marker = peerglide_transport::Identity::generate()
+            .unwrap()
+            .fingerprint();
         let directory = std::env::temp_dir().join(format!("peerglide-check-close-{marker}"));
         std::fs::create_dir(&directory).unwrap();
         struct Cleanup(std::path::PathBuf);
@@ -393,11 +395,14 @@ mod tests {
         let mut checker = Checker::default();
         checker.start_path(script);
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !pid_file.exists() && Instant::now() < deadline {
+        let pid = loop {
+            match std::fs::read_to_string(&pid_file) {
+                Ok(value) if value.trim().parse::<u32>().is_ok() => break value,
+                _ => (),
+            }
+            assert!(Instant::now() < deadline, "diagnostic PID was not ready");
             std::thread::sleep(Duration::from_millis(5));
-        }
-        let pid = std::fs::read_to_string(pid_file).unwrap();
-        assert!(pid.trim().parse::<u32>().is_ok());
+        };
         drop(checker);
         let exists = Command::new("/bin/kill")
             .args(["-0", pid.trim()])
