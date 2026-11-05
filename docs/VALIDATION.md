@@ -1023,3 +1023,23 @@ apps/crates/tools/workflow/Cargo源码；精确最终head平台CI与PR就绪以P
 确认后登记的回归已写，尚未编译。local_preflight于d8557c5因cargo/rustc unavailable
 停于fmt；没有安装工具链，不代表代码fmt失败。待精确提交五项CI与对应产物验证。
 浏览器未验证；本机新GUI交互和Windows实机未运行。短码/一键配对尚未实现。
+
+
+运行源码7d3e035be3784c4b1cedda1cec1c4ca1b9a5677d已通过完整五项
+[CI 41987328608](https://github.com/ForceMind/PeerGlide/actions/runs/41987328608)：
+Windows/macOS/Linux fmt、严格Clippy、锁定Debug/Release构建与工作区测试、无原生输入
+probe/reconnect/context、GUI smoke/打包、最低Rust1.95和依赖审计。新增8条受限材料
+回归、3条GUI登记状态回归、1条长文本小窗口高度回归实际运行通过。输入协议仍v5，
+CLI/平台原生源码没有变化。PR46叠加未合并PR45，main未合并，不是稳定版。
+
+macOS包artifact 13396158475外层/内层摘要与安全路径核对通过，无用户身份/配置。
+宿主隔离目录实际启动0.2.2，复制公开信息获得网卡地址；复制后粘贴本机信息被拒绝；
+粘贴独立测试对端信息只生成草稿、多网卡不预选、完整指纹与该测试对端CLI独立输出
+一致。首包f7ff780发现TextEdit随全文长高，新增滚动限高后7d3e035宿主复验按钮保持
+可见。独立CLI仅绑定回环随机端口且native/allow为false，managed停止exit0。
+实际双机试跑身份未修改，旧0.2.1试跑GUI及首个0.2.2隔离GUI均正常exit0。
+
+宿主锁屏后无法继续GUI，未执行最后选择/勾选/登记，隔离测试窗口留在未登记草稿；
+此最后流程由自动回归覆盖，不写作宿主GUI验收通过。不绕过锁屏，不请求系统权限，
+未创建真实输入会话。浏览器未验证，Win↔Mac物理输入C06、实际跨机连接仍未验收。
+仅有针对性只读复核，不是完整独立安全审计；#10历史根因仍未确认。
