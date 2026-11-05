@@ -655,3 +655,18 @@ Windows公开连接信息实际收到并通过原有完整指纹核验，Mac原�
 inactive；已集中请用户在Mac手动处理两项，等待回复“已开启”或“没有屏跃”。Windows
 暂不启用Native，物理C06全部仍未验收。不得把真实网络通过或CLI低RSS等同KVM已可
 日常工作/GUI内存修复。GUI事故PR46和诊断PR47仍保留草稿，#10根因未定位。
+
+
+## 26. 用户已授予屏跃权限，等待短时原生试跑确认（2026-11-05）
+
+用户完成系统设置后，直接CLI的Denied来自TCC把responsible归给自动化宿主，不能
+继续让用户重复添加屏跃或扩大宿主权限。正常应用启动的GUI自身已核验AX/输入监控
+Granted、Secure Input未检测到。Documents内测试profile会触发额外目录权限提示，未
+接受；改用0700私有tmp同身份副本（原资料保留、文件0600），状态指针保存在ignored
+c06-pilot-021/active-private-pilot.json。源码/签名不改，native/allow仍false。
+
+有界GUI检查10s预热/256MiB绝对/64MiB增长/3min，采样峰118352KiB，未开Native即
+到期停止。CUA观察已关闭App会重开默认profile，已关该意外窗口且未编辑；以后先
+核对目标PID，关闭后不再getApp。当前已请用户Windows启用接收偏好和Native监听，
+回复“开始试跑”才在Mac开启本次仅Mac→已核验Windows的短测；Mac不接收控制。
+实际worker权限自检和C06物理项尚未完成，GUI内存事故也未定位。不得提前宣称通过。
