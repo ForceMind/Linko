@@ -616,3 +616,57 @@ Mac实际复制/粘贴、自身拒绝、多网卡草稿/独立CLI指纹一致已
 测试GUI留未登记草稿。无真实输入/授权/系统权限改变，实际Windows证书仍未取得，
 先不要继续要求用户搬文件。两端各复制一次的便利流程不是短码/一键配对，本目标
 未扩成新网络认证设计。最终文档提交与7d3e035运行源码一致，精确head CI继续回读。
+
+
+## 24. GUI空闲内存事故诊断（2026-11-05，未定位）
+
+用户截图屏跃6.83GB，明确只打开窗口、未操作。暂停双机试跑及在用户Mac继续启动GUI，
+不把它归因于用户粘贴或连接，也不建议清系统/加内存。当前ps未见本项目残留；上轮隔离
+GUI会话56338回读exit143。不能从退出码推断泄漏根因，旧02:24的0.2.0 ips不是本次证据。
+从PR46/5497542干净分支开gui-memory-diagnostics，main仍5d947637、PR46未合并，最终
+源码和CI仍有效但只短时GUI，不能代表长驻资源稳定。预检仍因Rust未装停止，不安装。
+
+root检查应用与接线独立CI诊断，review_admission只读依赖，localize_panels仅新增
+受保护CI内存采样脚本/对应测试，不递归。静态未证实按帧FullOutput/纹理/font缓存无界
+累加，不能先降低100ms重绘假称修复。将用隔离CI分别启动空身份/已有身份GUI，RSS
+有绝对cap及预热后增长cap，超限停止仅测试child；不启worker/native/网络/授权。
+RSS缺少压缩/GPU部分，macOS CI环境与真实Mac的差异必须记录。当前没有根因或修复
+结论，不发布新可用性承诺；继续观察CI/必要原生分配证据，不能以脚本通过关闭事故。
+
+
+首轮b8d490f普通五项CI42017317157与两平台驻留CI42017317320全过；未修改App代码。
+Mac180秒×2峰RSS116320/120512KiB，增长0/3904KiB；Linux峰134636/136360KiB，增长0。
+Mac CI为26.6.2/25G83，宿主26.2/25C56，不能把不复现当修复。PR46因事故退回草稿；
+PR47本批仅诊断也为草稿，Issue5评论6656842353跟踪。补Darwin vmmap每15秒及预热/
+末尾只取physical footprint和reported peak数值，timeout2秒；用同上限停止，缺测记
+unavailable/null，RSS-only不报全内存通过。17条纯/小child回归本地通过，真实新口径CI
+待跑；不要重新启动用户Mac GUI，不更改权限或系统环境，不作已修好结论。
+
+
+## 25. 用户恢复双机通信试跑（2026-11-05）
+
+用户要求再次连接Windows；采用已有0.2.2 CLI避开GUI驻留，不再要求搬证书文件。
+Windows公开连接信息实际收到并通过原有完整指纹核验，Mac原身份不变。用户在Windows
+登记Mac并开始监听后，Mac真实QUIC探针通过mutual TLS/v5/可靠往返，exit0，约0.63s，
+峰RSS10688KiB（guard15s/128MiB）；native/allow均false，探针已正常结束。真实材料与
+地址只在ignored target，本记录不复制私钥/地址/指纹。网络策略未改变。
+
+下一步原生输入的实际worker权限只读检查：辅助功能、输入监控均denied，Secure Input
+inactive；已集中请用户在Mac手动处理两项，等待回复“已开启”或“没有屏跃”。Windows
+暂不启用Native，物理C06全部仍未验收。不得把真实网络通过或CLI低RSS等同KVM已可
+日常工作/GUI内存修复。GUI事故PR46和诊断PR47仍保留草稿，#10根因未定位。
+
+
+## 26. 用户已授予屏跃权限，等待短时原生试跑确认（2026-11-05）
+
+用户完成系统设置后，直接CLI的Denied来自TCC把responsible归给自动化宿主，不能
+继续让用户重复添加屏跃或扩大宿主权限。正常应用启动的GUI自身已核验AX/输入监控
+Granted、Secure Input未检测到。Documents内测试profile会触发额外目录权限提示，未
+接受；改用0700私有tmp同身份副本（原资料保留、文件0600），状态指针保存在ignored
+c06-pilot-021/active-private-pilot.json。源码/签名不改，native/allow仍false。
+
+有界GUI检查10s预热/256MiB绝对/64MiB增长/3min，采样峰118352KiB，未开Native即
+到期停止。CUA观察已关闭App会重开默认profile，已关该意外窗口且未编辑；以后先
+核对目标PID，关闭后不再getApp。当前已请用户Windows启用接收偏好和Native监听，
+回复“开始试跑”才在Mac开启本次仅Mac→已核验Windows的短测；Mac不接收控制。
+实际worker权限自检和C06物理项尚未完成，GUI内存事故也未定位。不得提前宣称通过。
