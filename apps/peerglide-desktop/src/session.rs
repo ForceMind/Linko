@@ -67,11 +67,48 @@ impl Recovery {
             if native { platform::inject(event) } else { Ok(()) }
         }).map_err(|remaining| anyhow::anyhow!("native input cleanup failed: {remaining} releases remain pending; session stopped"))
     }
-    fn input(&mut self, event: Input) -> Result<()> {
-        if self.native {
-            platform::inject(event)?;
+    fn input(&mut self, lease: u64, event: Input, cursor: Motion, now: u64) -> Result<bool> {
+        let native = self.native;
+        self.input_with(
+            lease,
+            event,
+            cursor,
+            now,
+            |m| {
+                if native {
+                    platform::pointer(m.x, m.y)
+                } else {
+                    Ok(())
+                }
+            },
+            |event| {
+                if native {
+                    platform::inject(event)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+    }
+    fn input_with(
+        &mut self,
+        lease: u64,
+        event: Input,
+        cursor: Motion,
+        now: u64,
+        pointer: impl FnOnce(Motion) -> Result<()>,
+        inject: impl FnOnce(Input) -> Result<()>,
+    ) -> Result<bool> {
+        if !self.receiver.accepts_input(lease, event, now)
+            || cursor.lease != lease
+            || !self.receiver.anchor(cursor, now)
+        {
+            return Ok(false);
         }
-        Ok(())
+        // Positioning can fail before injection. Never retire an owned release
+        // before either operation succeeds; session cleanup must still retry it.
+        pointer(cursor)?;
+        self.receiver.input_with(lease, event, now, inject)
     }
     fn pointer(&self, x: f64, y: f64) -> Result<()> {
         if self.native {
@@ -277,6 +314,7 @@ pub(super) async fn run_with_status(
                     Message::Acquire{lease,edge:remote_edge,along}=>{
                         let granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow && local.motion());
                         if granted {
+                            edge_gate.require_interior();
                             position=entry_position(remote_edge.opposite(),along);
                             input_status.checked(recovery.pointer(position.0,position.1))?;
                             send(&mut tx,&Message::Granted{lease}).await?;
@@ -284,15 +322,13 @@ pub(super) async fn run_with_status(
                     },
                     Message::Granted{lease}=>{
                         let activated=if pending.is_some_and(|(id,_)|id==lease) {if let Some(cap)=&capture{input_status.checked(cap.begin(local_return.0,local_return.1))?}else{false}}else{false};
-                        if activated{pending=None;outgoing=Some(lease);sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
+                        if activated{edge_gate.require_interior();pending=None;outgoing=Some(lease);sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
                         else{send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
                     Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;}},
                     Message::Input{lease,event,cursor}=>{
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
-                        if event.valid() && cursor.lease==lease && recovery.receiver.anchor(cursor,now) && recovery.receiver.input(lease,event,now) {
-                            input_status.checked(recovery.pointer(cursor.x,cursor.y))?;input_status.checked(recovery.input(event))?;
-                        }
+                        input_status.checked(recovery.input(lease,event,cursor,now))?;
                     },
                     Message::Release { lease, cursor }=>{
                         if recovery.receiver.active()==Some(lease){input_status.recovering();}
@@ -312,11 +348,16 @@ pub(super) async fn run_with_status(
             },
             e=input.recv(),if native=>{
                 let Some(e)=e else{bail!("native capture channel closed");};
-                if matches!(e,Captured::Position{..}|Captured::Input(_)|Captured::Toggle) {
-                    if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery)?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                if let Some(lease)=local_takeover(e,recovery.receiver.active(),&mut edge_gate) {
+                    input_status.release(&mut recovery)?;
+                    send(&mut tx,&Message::Release { lease, cursor: None }).await?;
+                    // This event only reclaims this computer. It cannot also
+                    // request control of the peer in the same select iteration.
+                    continue;
                 }
                 match e {
                     Captured::Emergency|Captured::UnsupportedInput=>{
+                        edge_gate.require_interior();
                         if matches!(e,Captured::UnsupportedInput) {eprintln!("Unsupported input capability: stopping control; input was not forwarded.");}
                         input_status.restore(capture.as_ref())?;
                         pending=None; if let Some(lease)=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
@@ -398,6 +439,21 @@ pub(super) async fn run_with_status(
     result
 }
 
+fn local_takeover(
+    event: Captured,
+    receiving: Option<u64>,
+    edge_gate: &mut EdgeGate,
+) -> Option<u64> {
+    if !matches!(
+        event,
+        Captured::Position { .. } | Captured::Input(_) | Captured::Toggle
+    ) {
+        return None;
+    }
+    let lease = receiving?;
+    edge_gate.require_interior();
+    Some(lease)
+}
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
     distance(source_edge.opposite(), x, y) <= 0.001
 }
@@ -488,6 +544,29 @@ mod tests {
             assert!(returned_to_source(edge, boundary.0, boundary.1));
         }
     }
+    #[test]
+    fn physical_takeover_at_each_edge_cannot_immediately_reverse_control() {
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            let mut gate = EdgeGate::default();
+            let (nx, ny) = match edge {
+                Edge::Left => (0.0, 0.5),
+                Edge::Right => (1.0, 0.5),
+                Edge::Top => (0.5, 0.0),
+                Edge::Bottom => (0.5, 1.0),
+            };
+            let event = Captured::Position {
+                x: nx * 1919.0,
+                y: ny * 1079.0,
+                width: 1920.0,
+                height: 1080.0,
+            };
+            assert_eq!(local_takeover(event, Some(7), &mut gate), Some(7));
+            assert!(!gate.update(distance(edge, nx, ny) <= 0.001, 1000));
+            assert!(!gate.update(false, 1001));
+            assert!(gate.update(true, 1002));
+            assert_eq!(local_takeover(event, None, &mut gate), None);
+        }
+    }
     fn held_recovery() -> Recovery {
         let mut recovery = Recovery {
             receiver: Receiver::default(),
@@ -504,6 +583,124 @@ mod tests {
             1
         ));
         recovery
+    }
+    #[test]
+    fn normal_up_failures_keep_key_and_button_ownership_until_cleanup() -> Result<()> {
+        for (down, up) in [
+            (
+                Input::Key {
+                    usage: 0xe0,
+                    down: true,
+                },
+                Input::Key {
+                    usage: 0xe0,
+                    down: false,
+                },
+            ),
+            (
+                Input::Button {
+                    button: 1,
+                    down: true,
+                },
+                Input::Button {
+                    button: 1,
+                    down: false,
+                },
+            ),
+        ] {
+            for fail_pointer in [true, false] {
+                let mut recovery = Recovery {
+                    receiver: Receiver::default(),
+                    native: false,
+                    pending_releases: PendingReleases::default(),
+                };
+                assert!(recovery.receiver.acquire(1, 0, true));
+                let cursor = Motion {
+                    lease: 1,
+                    sequence: 1,
+                    x: 0.5,
+                    y: 0.5,
+                };
+                assert!(recovery.input_with(1, down, cursor, 1, |_| Ok(()), |_| Ok(()))?);
+                let mut up_attempts = 0;
+                assert!(recovery
+                    .input_with(
+                        1,
+                        up,
+                        Motion {
+                            sequence: 2,
+                            ..cursor
+                        },
+                        2,
+                        |_| {
+                            if fail_pointer {
+                                anyhow::bail!("fake pointer failure before Up");
+                            }
+                            Ok(())
+                        },
+                        |_| {
+                            up_attempts += 1;
+                            anyhow::bail!("fake Up injection failure")
+                        },
+                    )
+                    .is_err());
+                assert_eq!(up_attempts, usize::from(!fail_pointer));
+                let mut released = Vec::new();
+                recovery.finish_with(
+                    1,
+                    None,
+                    3,
+                    |_| Ok(()),
+                    |event| {
+                        released.push(event);
+                        Ok(())
+                    },
+                )?;
+                assert!(released == [up]);
+                recovery.finish_with(
+                    1,
+                    None,
+                    4,
+                    |_| Ok(()),
+                    |_| panic!("acknowledged cleanup must not replay an Up"),
+                )?;
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn successful_up_and_unowned_up_never_move_or_release_again() -> Result<()> {
+        let mut recovery = held_recovery();
+        let up = Input::Key {
+            usage: 0xe0,
+            down: false,
+        };
+        let cursor = Motion {
+            lease: 1,
+            sequence: 1,
+            x: 0.5,
+            y: 0.5,
+        };
+        assert!(recovery.input_with(1, up, cursor, 2, |_| Ok(()), |_| Ok(()))?);
+        assert!(!recovery.input_with(
+            1,
+            up,
+            Motion {
+                sequence: 2,
+                ..cursor
+            },
+            3,
+            |_| panic!("unowned Up must not position the pointer"),
+            |_| panic!("unowned Up must not reach the native injector"),
+        )?);
+        recovery.finish_with(
+            1,
+            None,
+            4,
+            |_| Ok(()),
+            |_| panic!("successful Up was already acknowledged"),
+        )?;
+        Ok(())
     }
     #[test]
     fn terminal_pointer_failure_still_releases_pressed_input() {

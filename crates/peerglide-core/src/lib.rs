@@ -37,6 +37,7 @@ impl Receiver {
         self.deadline = now.saturating_add(LEASE_MS);
         true
     }
+    /// Record an acknowledged event. Native delivery uses input_with instead.
     pub fn input(&mut self, lease: u64, event: Input, now: u64) -> bool {
         if !self.accepts(lease, now) || !event.valid() {
             return false;
@@ -59,6 +60,45 @@ impl Receiver {
             Input::Scroll { .. } => (),
         }
         true
+    }
+    pub fn accepts_input(&self, lease: u64, event: Input, now: u64) -> bool {
+        self.accepts(lease, now)
+            && event.valid()
+            && match event {
+                Input::Key { usage, down: false } => self.keys.contains(&usage),
+                Input::Button {
+                    button,
+                    down: false,
+                } => self.buttons.contains(&button),
+                _ => true,
+            }
+    }
+    /// Keep release ownership until the backend acknowledges the matching Up.
+    /// A failed Down may have partially reached the OS, so cleanup retains it.
+    pub fn input_with<E>(
+        &mut self,
+        lease: u64,
+        event: Input,
+        now: u64,
+        apply: impl FnOnce(Input) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        if !self.accepts_input(lease, event, now) {
+            return Ok(false);
+        }
+        let releasing = matches!(
+            event,
+            Input::Key { down: false, .. } | Input::Button { down: false, .. }
+        );
+        if releasing {
+            apply(event)?;
+            Ok(self.input(lease, event, now))
+        } else {
+            let accepted = self.input(lease, event, now);
+            if accepted {
+                apply(event)?;
+            }
+            Ok(accepted)
+        }
     }
     pub fn motion(&mut self, m: Motion, now: u64) -> bool {
         if !self.accepts(m.lease, now) || !m.valid() || m.sequence <= self.sequence {
@@ -121,6 +161,10 @@ pub struct EdgeGate {
     last: u64,
 }
 impl EdgeGate {
+    /// A handover/recovery cannot reuse a pointer already resting on an edge.
+    pub fn require_interior(&mut self) {
+        self.latched = true;
+    }
     pub fn update(&mut self, at_edge: bool, now: u64) -> bool {
         if !at_edge {
             self.latched = false;
@@ -204,6 +248,17 @@ mod tests {
         assert!(!g.update(true, 900));
         g.update(false, 1000);
         assert!(g.update(true, 1100));
+    }
+    #[test]
+    fn handover_requires_interior_even_without_an_earlier_edge_crossing() {
+        let mut gate = EdgeGate::default();
+        gate.require_interior();
+        assert!(!gate.update(true, 1000));
+        assert!(!gate.update(true, 5000));
+        assert!(!gate.update(false, 5001));
+        assert!(gate.update(true, 5002));
+        gate.require_interior();
+        assert!(!gate.update(true, 9000));
     }
 }
 
@@ -289,6 +344,35 @@ impl PendingReleases {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+    #[test]
+    fn failed_down_and_up_remain_owned_and_repeat_down_is_allowed() {
+        let mut receiver = Receiver::default();
+        assert!(receiver.acquire(1, 0, true));
+        let down = Input::Key {
+            usage: 0xe0,
+            down: true,
+        };
+        let up = Input::Key {
+            usage: 0xe0,
+            down: false,
+        };
+        assert_eq!(receiver.input_with(1, down, 1, |_| Err(())), Err(()));
+        assert!(receiver.accepts_input(1, up, 2));
+        let mut repeats = 0;
+        assert_eq!(
+            receiver.input_with(1, down, 2, |_| {
+                repeats += 1;
+                Ok::<_, ()>(())
+            }),
+            Ok(true)
+        );
+        assert_eq!(repeats, 1);
+        assert_eq!(receiver.input_with(1, up, 3, |_| Err(())), Err(()));
+        assert!(receiver.accepts_input(1, up, 4));
+        assert_eq!(receiver.input_with(1, up, 4, |_| Ok::<_, ()>(())), Ok(true));
+        assert!(!receiver.accepts_input(1, up, 5));
+        assert!(receiver.release().is_empty());
+    }
     fn key() -> Input {
         Input::Key {
             usage: 0xe0,
