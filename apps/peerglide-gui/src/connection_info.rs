@@ -102,8 +102,8 @@ pub fn encode(certificate: &[u8], addresses: &[SocketAddr]) -> Result<String> {
         certificate_hex: encode_hex(certificate),
         addresses: addresses.to_vec(),
     };
-    let json = serde_json::to_string(&envelope)
-        .map_err(|_| anyhow::anyhow!("无法编码公开连接信息"))?;
+    let json =
+        serde_json::to_string(&envelope).map_err(|_| anyhow::anyhow!("无法编码公开连接信息"))?;
     let text = format!("{PREFIX}{json}");
     ensure!(text.len() <= MAX_TEXT_BYTES, "连接信息超过 40 KiB 限制");
     Ok(text)
@@ -157,7 +157,8 @@ mod tests {
     }
 
     #[test]
-    fn public_material_roundtrips_and_empty_addresses_are_a_certificate_return_card() -> Result<()> {
+    fn public_material_roundtrips_and_empty_addresses_are_a_certificate_return_card() -> Result<()>
+    {
         let cert = certificate()?;
         let addresses = [address("192.168.1.2:4242"), address("169.254.2.3:65535")];
         let encoded = encode(&cert, &addresses)?;
@@ -171,7 +172,11 @@ mod tests {
         assert_eq!(card.certificate, cert);
         assert!(card.addresses.is_empty());
         let keys: Value = serde_json::from_str(encoded.strip_prefix(PREFIX).unwrap())?;
-        assert_eq!(keys.as_object().unwrap().len(), 4, "only the four public fields are exported");
+        assert_eq!(
+            keys.as_object().unwrap().len(),
+            4,
+            "only the four public fields are exported"
+        );
         Ok(())
     }
 
@@ -182,14 +187,19 @@ mod tests {
         assert_eq!(at_limit.len(), MAX_TEXT_BYTES);
         assert!(decode(&at_limit).is_ok());
         assert!(decode(&(at_limit + " ")).is_err());
-        assert!(decode(&"é".repeat(MAX_TEXT_BYTES / 2 + 1)).is_err(), "limit counts UTF-8 bytes");
+        assert!(
+            decode(&"é".repeat(MAX_TEXT_BYTES / 2 + 1)).is_err(),
+            "limit counts UTF-8 bytes"
+        );
         Ok(())
     }
 
     #[test]
     fn address_count_duplicates_and_disallowed_families_are_rejected_on_both_paths() -> Result<()> {
         let cert = certificate()?;
-        let sixteen: Vec<_> = (1..=16).map(|last| address(&format!("10.0.0.{last}:1"))).collect();
+        let sixteen: Vec<_> = (1..=16)
+            .map(|last| address(&format!("10.0.0.{last}:1")))
+            .collect();
         assert_eq!(decode(&encode(&cert, &sixteen)?)?.addresses, sixteen);
         let mut too_many = sixteen;
         too_many.push(address("10.0.0.17:1"));
@@ -197,9 +207,17 @@ mod tests {
         external["addresses"] = json!(too_many);
         assert!(encode(&cert, &too_many).is_err());
         assert!(decode(&text(&external)).is_err());
-        for invalid in ["127.0.0.1:4242", "127.1.2.3:4242", "0.0.0.0:4242", "224.0.0.1:4242",
-            "239.255.255.250:1900", "255.255.255.255:4242", "192.168.1.2:0", "[::1]:4242",
-            "[::ffff:192.168.1.2]:4242"] {
+        for invalid in [
+            "127.0.0.1:4242",
+            "127.1.2.3:4242",
+            "0.0.0.0:4242",
+            "224.0.0.1:4242",
+            "239.255.255.250:1900",
+            "255.255.255.255:4242",
+            "192.168.1.2:0",
+            "[::1]:4242",
+            "[::ffff:192.168.1.2]:4242",
+        ] {
             external["addresses"] = json!([invalid]);
             assert!(encode(&cert, &[address(invalid)]).is_err());
             assert!(decode(&text(&external)).is_err());
@@ -218,8 +236,12 @@ mod tests {
     #[test]
     fn future_or_other_schema_and_input_versions_are_not_imported() -> Result<()> {
         let cert = certificate()?;
-        for (field, version) in [("schema_version", 0), ("schema_version", 2),
-            ("input_version", 0), ("input_version", u64::from(peerglide_protocol::VERSION) + 1)] {
+        for (field, version) in [
+            ("schema_version", 0),
+            ("schema_version", 2),
+            ("input_version", 0),
+            ("input_version", u64::from(peerglide_protocol::VERSION) + 1),
+        ] {
             let mut external = envelope(&cert);
             external[field] = json!(version);
             assert!(decode(&text(&external)).is_err());
@@ -230,16 +252,28 @@ mod tests {
     }
 
     #[test]
-    fn private_unknown_missing_or_duplicate_fields_and_trailing_documents_are_rejected() -> Result<()> {
+    fn private_unknown_missing_or_duplicate_fields_and_trailing_documents_are_rejected(
+    ) -> Result<()> {
         let cert = certificate()?;
-        for field in ["private_key_hex", "private_key", "permissions", "device_name", "unexpected"] {
+        for field in [
+            "private_key_hex",
+            "private_key",
+            "permissions",
+            "device_name",
+            "unexpected",
+        ] {
             let mut external = envelope(&cert);
             external[field] = json!("external-private-marker");
             let error = decode(&text(&external)).err().unwrap();
             assert!(!format!("{error:#}").contains("external-private-marker"));
             assert!(!format!("{error:#}").contains(field));
         }
-        for field in ["schema_version", "input_version", "certificate_hex", "addresses"] {
+        for field in [
+            "schema_version",
+            "input_version",
+            "certificate_hex",
+            "addresses",
+        ] {
             let mut external = envelope(&cert);
             external.as_object_mut().unwrap().remove(field);
             assert!(decode(&text(&external)).is_err());
@@ -262,7 +296,11 @@ mod tests {
         let mut external = envelope(&cert);
         external["certificate_hex"] = json!(encode_hex(&cert).to_uppercase());
         assert_eq!(decode(&text(&external))?.certificate, cert);
-        for invalid in [Vec::new(), vec![0; MAX_CERTIFICATE_BYTES], vec![0; MAX_CERTIFICATE_BYTES + 1]] {
+        for invalid in [
+            Vec::new(),
+            vec![0; MAX_CERTIFICATE_BYTES],
+            vec![0; MAX_CERTIFICATE_BYTES + 1],
+        ] {
             assert!(encode(&invalid, &[]).is_err());
             external["certificate_hex"] = json!(encode_hex(&invalid));
             assert!(decode(&text(&external)).is_err());
@@ -273,15 +311,25 @@ mod tests {
     #[test]
     fn malformed_addresses_and_parser_errors_do_not_echo_untrusted_contents() -> Result<()> {
         let cert = certificate()?;
-        for invalid in ["untrusted-private-marker:4242", "999.1.1.1:4242", "192.168.1.2",
-            "https://192.168.1.2:4242", "192.168.1.2:65536"] {
+        for invalid in [
+            "untrusted-private-marker:4242",
+            "999.1.1.1:4242",
+            "192.168.1.2",
+            "https://192.168.1.2:4242",
+            "192.168.1.2:65536",
+        ] {
             let mut external = envelope(&cert);
             external["addresses"] = json!([invalid]);
             let error = decode(&text(&external)).err().unwrap();
             assert!(!format!("{error:#}").contains(invalid));
         }
-        for invalid in ["", "PG-CONNECTION-1:untrusted-private-marker", "PG-CONNECTION-1:[]",
-            "PG-CONNECTION-1:null", "PG-CONNECTION-1:{\"private_key\":\"untrusted-private-marker\"}"] {
+        for invalid in [
+            "",
+            "PG-CONNECTION-1:untrusted-private-marker",
+            "PG-CONNECTION-1:[]",
+            "PG-CONNECTION-1:null",
+            "PG-CONNECTION-1:{\"private_key\":\"untrusted-private-marker\"}",
+        ] {
             let error = decode(invalid).err().unwrap();
             assert!(!format!("{error:#}").contains("untrusted-private-marker"));
         }
@@ -289,7 +337,8 @@ mod tests {
     }
 
     #[test]
-    fn replacement_certificate_is_a_distinct_snapshot_requiring_callers_confirmation_again() -> Result<()> {
+    fn replacement_certificate_is_a_distinct_snapshot_requiring_callers_confirmation_again(
+    ) -> Result<()> {
         let original = certificate()?;
         let replacement = certificate()?;
         assert_ne!(original, replacement);
@@ -297,9 +346,15 @@ mod tests {
         let first = decode(&encode(&original, &addresses)?)?;
         let confirmed = fingerprint(&first.certificate);
         let replaced = decode(&encode(&replacement, &addresses)?)?;
-        assert_ne!(fingerprint(&replaced.certificate), confirmed,
-            "the codec must not preserve a previous certificate's confirmation identity");
-        assert_eq!(first.certificate, original, "the first candidate is an owned snapshot");
+        assert_ne!(
+            fingerprint(&replaced.certificate),
+            confirmed,
+            "the codec must not preserve a previous certificate's confirmation identity"
+        );
+        assert_eq!(
+            first.certificate, original,
+            "the first candidate is an owned snapshot"
+        );
         assert_eq!(replaced.certificate, replacement);
         assert_eq!(replaced.addresses, addresses);
         Ok(())

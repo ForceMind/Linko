@@ -4,7 +4,7 @@ impl App {
     fn writable(&self) -> bool {
         self.instance_lock.is_some() && self.config_store.is_some()
     }
-    fn idle_writable(&self) -> bool {
+    pub(super) fn idle_writable(&self) -> bool {
         self.writable() && self.child.is_none() && self.stopping.is_none()
     }
     pub(super) fn input_label(&self) -> &'static str {
@@ -530,16 +530,23 @@ impl App {
             match self.local_connection_info() {
                 Ok(text) => {
                     ui.ctx().copy_text(text);
-                    self.notice = "已复制公开证书与连接地址，不含私钥或权限。请通过可信渠道发送给另一端。".into();
+                    self.notice =
+                        "已复制公开证书与连接地址，不含私钥或权限。请通过可信渠道发送给另一端。"
+                            .into();
                 }
                 Err(error) => self.notice = error.to_string(),
             }
         }
         ui.weak("公开信息仍需在对端独立核对完整指纹；不要发送私钥。自动短码配对尚未提供。");
         ui.label("粘贴另一台电脑的连接信息");
-        let changed = ui.add(egui::TextEdit::multiline(&mut self.connection_text)
-            .desired_rows(3).char_limit(connection_info::MAX_TEXT_BYTES)
-            .hint_text("PG-CONNECTION-1:…")).changed();
+        let changed = ui
+            .add(
+                egui::TextEdit::multiline(&mut self.connection_text)
+                    .desired_rows(3)
+                    .char_limit(connection_info::MAX_TEXT_BYTES)
+                    .hint_text("PG-CONNECTION-1:…"),
+            )
+            .changed();
         if changed {
             self.confirmed_fingerprint = None;
             self.connection_addresses.clear();
@@ -547,7 +554,10 @@ impl App {
         }
         if ui.button("读取对端连接信息").clicked() {
             let result = self.read_connection_info();
-            self.feedback(result, "公开信息已读取，尚未登记或授权。请核对下面的完整指纹。");
+            self.feedback(
+                result,
+                "公开信息已读取，尚未登记或授权。请核对下面的完整指纹。",
+            );
         }
     }
     fn setup_window(&mut self, ctx: &egui::Context) {

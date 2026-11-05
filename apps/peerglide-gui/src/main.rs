@@ -367,7 +367,10 @@ impl App {
     }
     fn candidate(&self) -> Result<Vec<u8>> {
         if self.use_connection_info {
-            anyhow::ensure!(self.loaded_connection_info == Some(blake3::hash(self.connection_text.as_bytes())), "请先读取当前连接信息，修改后需要重新核验");
+            anyhow::ensure!(
+                self.loaded_connection_info == Some(blake3::hash(self.connection_text.as_bytes())),
+                "请先读取当前连接信息，修改后需要重新核验"
+            );
             Ok(connection_info::decode(&self.connection_text)?.certificate)
         } else {
             transport::read_certificate(std::path::Path::new(self.import_path.trim()))
@@ -380,7 +383,10 @@ impl App {
         self.connection_addresses.clear();
         let info = connection_info::decode(&self.connection_text)?;
         let local = Identity::load(&self.identity_dir()).context("请先创建本机身份")?;
-        anyhow::ensure!(info.certificate != local.certificate, "这是本机信息，请粘贴另一台电脑的信息");
+        anyhow::ensure!(
+            info.certificate != local.certificate,
+            "这是本机信息，请粘贴另一台电脑的信息"
+        );
         self.use_connection_info = true;
         self.connection_addresses = info.addresses;
         self.loaded_connection_info = Some(blake3::hash(self.connection_text.as_bytes()));
@@ -403,17 +409,26 @@ impl App {
         let identity = Identity::load(&self.identity_dir()).context("请先创建本机身份")?;
         let mut addresses = Vec::new();
         if self.wizard_listen {
-            for interface in if_addrs::get_if_addrs().context("无法读取本机网卡地址，请使用高级登记")? {
+            for interface in
+                if_addrs::get_if_addrs().context("无法读取本机网卡地址，请使用高级登记")?
+            {
                 if let std::net::IpAddr::V4(ip) = interface.ip() {
-                    if !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast()
-                        && !ip.is_broadcast() && (ip.is_private() || ip.is_link_local()) {
+                    if !ip.is_loopback()
+                        && !ip.is_unspecified()
+                        && !ip.is_multicast()
+                        && !ip.is_broadcast()
+                        && (ip.is_private() || ip.is_link_local())
+                    {
                         addresses.push(std::net::SocketAddr::from((ip, 24870)));
                     }
                 }
             }
             addresses.sort_unstable();
             addresses.dedup();
-            anyhow::ensure!(!addresses.is_empty(), "未找到局域网 IPv4，请检查网络或使用高级登记");
+            anyhow::ensure!(
+                !addresses.is_empty(),
+                "未找到局域网 IPv4，请检查网络或使用高级登记"
+            );
         }
         connection_info::encode(&identity.certificate, &addresses)
     }
@@ -1211,7 +1226,10 @@ mod tests {
         let mut b = App::load(connecting.path.clone());
         let identity_a = Identity::create(&a.identity_dir())?;
         let identity_b = Identity::create(&b.identity_dir())?;
-        assert!(a.config.address.is_empty(), "no example IP may look like a real peer");
+        assert!(
+            a.config.address.is_empty(),
+            "no example IP may look like a real peer"
+        );
         let address = "192.168.20.8:24870".parse()?;
         b.connection_text = connection_info::encode(&identity_a.certificate, &[address])?;
         b.read_connection_info()?;
@@ -1219,7 +1237,10 @@ mod tests {
         assert_eq!(b.wizard_address, address.to_string());
         assert!(b.config.fingerprint.is_none());
         assert!(!connecting.path.join("trusted-peer.crt.der").exists());
-        assert!(b.enroll().is_err(), "reading public data must not confer trust");
+        assert!(
+            b.enroll().is_err(),
+            "reading public data must not confer trust"
+        );
         b.confirmed_fingerprint = Some(identity_a.fingerprint());
         b.config.address = b.wizard_address.clone();
         b.config.listen = b.wizard_listen;
@@ -1235,10 +1256,22 @@ mod tests {
         a.confirmed_fingerprint = Some(identity_b.fingerprint());
         a.enroll()?;
         assert!(!a.config.allow && !a.config.native);
-        assert_eq!(transport::read_certificate(&waiting.path.join("trusted-peer.crt.der"))?, identity_b.certificate);
-        assert_eq!(transport::read_certificate(&connecting.path.join("trusted-peer.crt.der"))?, identity_a.certificate);
-        assert_eq!(Identity::load(&a.identity_dir())?.certificate, identity_a.certificate);
-        assert_eq!(Identity::load(&b.identity_dir())?.certificate, identity_b.certificate);
+        assert_eq!(
+            transport::read_certificate(&waiting.path.join("trusted-peer.crt.der"))?,
+            identity_b.certificate
+        );
+        assert_eq!(
+            transport::read_certificate(&connecting.path.join("trusted-peer.crt.der"))?,
+            identity_a.certificate
+        );
+        assert_eq!(
+            Identity::load(&a.identity_dir())?.certificate,
+            identity_a.certificate
+        );
+        assert_eq!(
+            Identity::load(&b.identity_dir())?.certificate,
+            identity_b.certificate
+        );
         Ok(())
     }
     #[test]
@@ -1247,11 +1280,13 @@ mod tests {
         let mut app = App::load(fixture.path.clone());
         let local = Identity::create(&app.identity_dir())?;
         let peer = Identity::generate()?;
-        app.connection_text = connection_info::encode(&peer.certificate, &["192.168.20.8:24870".parse()?])?;
+        app.connection_text =
+            connection_info::encode(&peer.certificate, &["192.168.20.8:24870".parse()?])?;
         app.read_connection_info()?;
         app.confirmed_fingerprint = Some(peer.fingerprint());
         // Even editing just the address requires a fresh read and confirmation.
-        app.connection_text = connection_info::encode(&peer.certificate, &["192.168.20.9:24870".parse()?])?;
+        app.connection_text =
+            connection_info::encode(&peer.certificate, &["192.168.20.9:24870".parse()?])?;
         assert!(app.enroll().is_err());
         assert!(!fixture.path.join("trusted-peer.crt.der").exists());
         app.read_connection_info()?;
