@@ -10,12 +10,12 @@ use tokio::sync::mpsc;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
-#[cfg(test)]
-pub mod receive_driver;
 #[cfg(any(windows, test))]
 pub mod gesture_capture;
 #[cfg(any(windows, test))]
 mod gesture_queue;
+#[cfg(test)]
+pub mod receive_driver;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
 
