@@ -5,6 +5,7 @@ mod desktop_ui;
 mod discovery_panel;
 mod gesture_lab;
 mod gesture_rules;
+mod worker_permissions;
 use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, RichText, Vec2};
@@ -232,6 +233,7 @@ struct App {
     close_requested: bool,
     exit_confirmed: bool,
     permission_report: Option<peerglide_platform::context::PermissionReport>,
+    worker_permissions: worker_permissions::Checker,
     discovery: discovery_panel::Panel,
     gesture_lab: gesture_lab::GestureLab,
     gesture_rules: gesture_rules::RuleEditor,
@@ -301,6 +303,7 @@ impl App {
             close_requested: false,
             exit_confirmed: false,
             permission_report: None,
+            worker_permissions: worker_permissions::Checker::default(),
             discovery: discovery_panel::Panel::default(),
             gesture_lab: gesture_lab::GestureLab::new(&dir),
             gesture_rules: gesture_rules::RuleEditor::new(&dir),
@@ -687,6 +690,7 @@ impl App {
         self.save_config().context("保存设备信任撤销结果")
     }
     fn poll(&mut self) {
+        self.worker_permissions.poll();
         self.discovery
             .poll(self.child.is_some() && self.stopping.is_none() && self.config.listen);
         if let Some(rx) = &self.events {

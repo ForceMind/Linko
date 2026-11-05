@@ -54,3 +54,20 @@ addresses. Loading or editing it never saves trust or enables input; confirmatio
 cannot follow edited/unread text. Copying is explicit and never exports the key.
 No input transport or ALPN changes, network enrollment or accept-any verifier are
 introduced by this convenience format.
+
+
+macOS prototypes now sign freshly assembled nested worker code and the complete
+app with local ad-hoc integrity signatures, binding Info.plist and resource seals.
+They have no Developer ID publisher identity or notarization. Default designated
+requirements remain intact; fixed identifiers do not guarantee TCC continuity
+between builds. No identifier-only requirements or private TCC entitlements are
+used. Signing, strict validation and metadata failures prevent packaging; the
+extracted ZIP must validate and modified plist/helper fixtures must fail. Existing
+installed/artifact bytes, device keys, trust and OS permissions are never rewritten.
+
+GUI diagnostics can separately query the actual sibling worker using only
+`diagnose-context`, with bounded output, cancellation and a deadline. A diagnostic
+snapshot grants no authority; native startup still checks the real permissions.
+Launching a CLI from an automation host can have a different TCC responsible code
+than normal app launch. Diagnose that attribution before asking users to expand
+permissions. Do not reset TCC or disable OS protections as a workaround.
