@@ -539,14 +539,20 @@ impl App {
         }
         ui.weak("公开信息仍需在对端独立核对完整指纹；不要发送私钥。自动短码配对尚未提供。");
         ui.label("粘贴另一台电脑的连接信息");
-        let changed = ui
-            .add(
-                egui::TextEdit::multiline(&mut self.connection_text)
-                    .desired_rows(3)
-                    .char_limit(connection_info::MAX_TEXT_BYTES)
-                    .hint_text("PG-CONNECTION-1:…"),
-            )
-            .changed();
+        let changed = egui::ScrollArea::vertical()
+            .id_salt("connection-info-text")
+            .max_height(96.0)
+            .show(ui, |ui| {
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.connection_text)
+                        .desired_width(ui.available_width())
+                        .desired_rows(3)
+                        .char_limit(connection_info::MAX_TEXT_BYTES)
+                        .hint_text("PG-CONNECTION-1:…"),
+                )
+                .changed()
+            })
+            .inner;
         if changed {
             self.confirmed_fingerprint = None;
             self.connection_addresses.clear();

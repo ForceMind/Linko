@@ -1219,6 +1219,31 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn pasted_connection_material_keeps_following_controls_within_a_small_window() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.connection_text = connection_info::encode(&Identity::generate()?.certificate, &[])?;
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        for width in [300.0, 600.0] {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 600.0))),
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        let top = ui.cursor().min.y;
+                        app.connection_exchange_ui(ui);
+                        assert!(ui.cursor().min.y - top < 400.0, "pasted certificate pushed read/confirmation controls below a small window");
+                    });
+                },
+            );
+            output.drop_without_applying_deltas();
+        }
+        Ok(())
+    }
+    #[test]
     fn public_connection_exchange_enrolls_both_peers_without_candidate_files() -> Result<()> {
         let waiting = Fixture::new()?;
         let connecting = Fixture::new()?;
