@@ -396,13 +396,21 @@ mod tests {
         // Model a local canvas action starting after this frame's logic phase.
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
             app.logic_tick(ctx);
-            app.gesture_lab.begin(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300., 260.)), egui::pos2(10., 10.), 0.);
+            app.gesture_lab.begin(
+                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300., 260.)),
+                egui::pos2(10., 10.),
+                0.,
+            );
             app.request_activity_tick(ctx);
         });
         assert!(app.gesture_lab.needs_tick());
         assert!(ticks.load(std::sync::atomic::Ordering::SeqCst) > 0);
         let mut hidden = egui::RawInput::default();
-        hidden.viewports.entry(egui::ViewportId::ROOT).or_default().occluded = Some(true);
+        hidden
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .occluded = Some(true);
         let _ = ctx.run_logic(&hidden, |ctx| app.logic_tick(ctx));
         assert!(!app.gesture_lab.needs_tick());
         assert!(!app.gesture_lab.completed);

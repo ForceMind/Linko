@@ -788,7 +788,8 @@ impl App {
                                 "进程已退出，正在读取最终输入状态"
                             } else {
                                 "进程已退出，正在读取最终通信状态"
-                            }.into();
+                            }
+                            .into();
                             return;
                         }
                         // The reader can publish its final probe result between
@@ -1604,14 +1605,22 @@ mod lifecycle_tests {
     }
     fn logic_frames(app: &mut App, ctx: &egui::Context, occluded: bool) {
         let mut input = egui::RawInput::default();
-        input.viewports.entry(egui::ViewportId::ROOT).or_default().occluded = Some(occluded);
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .occluded = Some(occluded);
         for _ in 0..4 {
             let _ = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
         }
     }
     fn managed_child() -> Result<Child> {
         Ok(Command::new(std::env::current_exe()?)
-            .args(["--exact", "lifecycle_tests::managed_test_child", "--nocapture"])
+            .args([
+                "--exact",
+                "lifecycle_tests::managed_test_child",
+                "--nocapture",
+            ])
             .env("PEERGLIDE_GUI_LIFECYCLE_HELPER", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
@@ -1625,11 +1634,18 @@ mod lifecycle_tests {
         let ctx = egui::Context::default();
         let ticks = count_activity_ticks(&ctx);
         logic_frames(&mut app, &ctx, false);
-        assert_eq!(ticks.load(Ordering::SeqCst), 0, "idle GUI retained its 10Hz clock");
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            0,
+            "idle GUI retained its 10Hz clock"
+        );
         app.child = Some(managed_child()?);
         app.active_mode = Some(SessionMode::Communication);
         logic_frames(&mut app, &ctx, true);
-        assert!(ticks.load(Ordering::SeqCst) > 0, "hidden worker status polling stopped");
+        assert!(
+            ticks.load(Ordering::SeqCst) > 0,
+            "hidden worker status polling stopped"
+        );
         app.stop();
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.child.is_some() && Instant::now() < deadline {
@@ -1640,7 +1656,11 @@ mod lifecycle_tests {
         assert!(!app.recovery_blocked);
         let settled = ticks.load(Ordering::SeqCst);
         logic_frames(&mut app, &ctx, true);
-        assert_eq!(ticks.load(Ordering::SeqCst), settled, "finished work retained periodic polling");
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            settled,
+            "finished work retained periodic polling"
+        );
         drop(app);
         fixture.close()?;
         Ok(())
@@ -1657,15 +1677,26 @@ mod lifecycle_tests {
         viewport.occluded = Some(true);
         viewport.events.push(egui::ViewportEvent::Close);
         let output = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
-        assert!(output.viewport_commands.get(&egui::ViewportId::ROOT).is_some_and(|commands| commands.contains(&egui::ViewportCommand::CancelClose)));
+        assert!(output
+            .viewport_commands
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|commands| commands.contains(&egui::ViewportCommand::CancelClose)));
         assert!(app.close_requested && app.stopping.is_some());
         assert!(!app.exit_confirmed);
-        input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().events.clear();
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .events
+            .clear();
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut close_sent = false;
         while app.child.is_some() && Instant::now() < deadline {
             let output = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
-            close_sent |= output.viewport_commands.get(&egui::ViewportId::ROOT).is_some_and(|commands| commands.contains(&egui::ViewportCommand::Close));
+            close_sent |= output
+                .viewport_commands
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|commands| commands.contains(&egui::ViewportCommand::Close));
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(app.child.is_none() && app.exit_confirmed && close_sent);
@@ -1686,7 +1717,10 @@ mod lifecycle_tests {
         viewport.occluded = Some(true);
         viewport.events.push(egui::ViewportEvent::Close);
         let output = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
-        assert!(output.viewport_commands.get(&egui::ViewportId::ROOT).is_some_and(|commands| commands.contains(&egui::ViewportCommand::CancelClose)));
+        assert!(output
+            .viewport_commands
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|commands| commands.contains(&egui::ViewportCommand::CancelClose)));
         assert!(app.close_requested && !app.exit_confirmed && app.recovery_blocked);
         assert!(app.dialog == Some(Dialog::Recovery));
         drop(app);
@@ -1712,7 +1746,10 @@ mod lifecycle_tests {
         drop(tx);
         logic_frames(&mut app, &ctx, true);
         assert!(app.child.is_none() && app.events.is_none());
-        assert_eq!(app.logs.back().map(String::as_str), Some("final diagnostic fixture"));
+        assert_eq!(
+            app.logs.back().map(String::as_str),
+            Some("final diagnostic fixture")
+        );
         let settled = ticks.load(Ordering::SeqCst);
         logic_frames(&mut app, &ctx, true);
         assert_eq!(ticks.load(Ordering::SeqCst), settled);
@@ -1732,7 +1769,10 @@ mod lifecycle_tests {
         let snapshot = Arc::new(WorkerSnapshot::default());
         app.worker_state = Some(snapshot.clone());
         app.poll();
-        assert!(app.child.is_some(), "exited process discarded pending stdout state");
+        assert!(
+            app.child.is_some(),
+            "exited process discarded pending stdout state"
+        );
         snapshot.publish(WorkerState::ProbePassed);
         snapshot.publish_input(WorkerInputState::Disabled, true);
         snapshot.2.store(true, Ordering::Release);
