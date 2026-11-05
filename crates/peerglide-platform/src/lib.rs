@@ -95,9 +95,21 @@ pub struct CaptureGate(Arc<GateState>);
 impl Default for CaptureGate {
     fn default() -> Self {
         // Construction is outside callbacks. No ID is ever reused after wrap.
-        let instance = NEXT_CAPTURE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .unwrap_or(0);
+        let mut observed = NEXT_CAPTURE.load(Ordering::Relaxed);
+        let instance = loop {
+            let Some(next) = observed.checked_add(1) else {
+                break 0;
+            };
+            match NEXT_CAPTURE.compare_exchange_weak(
+                observed,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break observed,
+                Err(current) => observed = current,
+            }
+        };
         Self(Arc::new(GateState {
             instance,
             deadline: AtomicU64::new(0),
