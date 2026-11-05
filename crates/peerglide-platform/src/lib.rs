@@ -829,7 +829,11 @@ impl HookState {
         }
         if key && (0xe0..=0xe7).contains(&index) && !self.suppressed_modifiers() {
             self.pairs.force_armed = self.gate.receiving_epoch().is_some_and(|epoch| {
-                self.gate.0.receive.get().is_some_and(|control| control.can_force_return(epoch))
+                self.gate
+                    .0
+                    .receive
+                    .get()
+                    .is_some_and(|control| control.can_force_return(epoch))
             });
         }
         self.pairs.replace(key, index, PairOwner::Protected(route));
@@ -1849,7 +1853,10 @@ mod fresh_escape_tests {
     use super::*;
     use crate::receive_driver::{channel, ReceiveBackend, ReceiveEngine};
     use peerglide_actions::execution::NativeFailure;
-    use std::{future::{poll_fn, Future}, task::Poll};
+    use std::{
+        future::{poll_fn, Future},
+        task::Poll,
+    };
 
     struct Rig {
         state: HookState,
@@ -1870,7 +1877,10 @@ mod fresh_escape_tests {
     }
     impl ReceiveBackend for FakeBackend<'_> {
         fn enter_receiving(&mut self) -> Result<CaptureEpoch, NativeFailure> {
-            self.state.gate.enter_receiving().ok_or(NativeFailure::BeforeSubmission)
+            self.state
+                .gate
+                .enter_receiving()
+                .ok_or(NativeFailure::BeforeSubmission)
         }
         fn is_current(&self, epoch: CaptureEpoch) -> bool {
             self.state.gate.receiving_epoch() == Some(epoch)
@@ -1885,7 +1895,10 @@ mod fresh_escape_tests {
             Ok(())
         }
         fn input(&mut self, event: Input) -> Result<(), NativeFailure> {
-            if matches!(event, Input::Key { down: false, .. } | Input::Button { down: false, .. }) {
+            if matches!(
+                event,
+                Input::Key { down: false, .. } | Input::Button { down: false, .. }
+            ) {
                 *self.up_calls += 1;
                 if self.arm_ctrl_during_second_up && *self.up_calls == 2 {
                     // The first failed cleanup already made outcome Required,
@@ -1897,17 +1910,25 @@ mod fresh_escape_tests {
                     let callback = self.state.gate.begin_event();
                     assert!(self.state.key_routed(0xe0, true, callback.route));
                 }
-                if self.fail_up { return Err(NativeFailure::PermissionLost); }
+                if self.fail_up {
+                    return Err(NativeFailure::PermissionLost);
+                }
             }
             Ok(())
         }
         fn leave_receiving(&mut self, epoch: CaptureEpoch) -> Result<(), NativeFailure> {
-            self.state.gate.leave_receiving(epoch, false).then_some(())
+            self.state
+                .gate
+                .leave_receiving(epoch, false)
+                .then_some(())
                 .ok_or(NativeFailure::TargetLost)
         }
         fn force_return(&mut self, epoch: CaptureEpoch) -> Result<(), NativeFailure> {
             assert!(!self.state.suppressed_modifiers());
-            self.state.gate.leave_receiving(epoch, true).then_some(())
+            self.state
+                .gate
+                .leave_receiving(epoch, true)
+                .then_some(())
                 .ok_or(NativeFailure::TargetLost)?;
             *self.force_calls += 1;
             Ok(())
@@ -1932,8 +1953,12 @@ mod fresh_escape_tests {
                     buttons: Default::default(),
                     toggle_armed: false,
                     target: InputCapabilities::new(
-                        &(4..=0x73).chain(0xe0..=0xe7).collect::<Vec<_>>(), true, 7, true,
-                    ).unwrap(),
+                        &(4..=0x73).chain(0xe0..=0xe7).collect::<Vec<_>>(),
+                        true,
+                        7,
+                        true,
+                    )
+                    .unwrap(),
                 },
                 driver,
                 engine,
@@ -1944,44 +1969,85 @@ mod fresh_escape_tests {
                 _events: events,
             }
         }
-        fn pump_parts(engine: &mut ReceiveEngine, state: &mut HookState, fail_up: bool,
-            forces: &mut usize, ups: &mut usize, arm_during_retry: bool) {
-            let mut backend = FakeBackend { state, fail_up, force_calls: forces, up_calls: ups,
-                arm_ctrl_during_second_up: arm_during_retry };
+        fn pump_parts(
+            engine: &mut ReceiveEngine,
+            state: &mut HookState,
+            fail_up: bool,
+            forces: &mut usize,
+            ups: &mut usize,
+            arm_during_retry: bool,
+        ) {
+            let mut backend = FakeBackend {
+                state,
+                fail_up,
+                force_calls: forces,
+                up_calls: ups,
+                arm_ctrl_during_second_up: arm_during_retry,
+            };
             for _ in 0..32 {
-                if !engine.pump(&mut backend, now_ms(), false) { return; }
+                if !engine.pump(&mut backend, now_ms(), false) {
+                    return;
+                }
             }
             panic!("bounded fake service did not quiesce");
         }
         fn pump(&mut self) {
-            Self::pump_parts(&mut self.engine, &mut self.state, self.fail_up,
-                &mut self.force_calls, &mut self.up_calls, self.arm_ctrl_during_second_up);
+            Self::pump_parts(
+                &mut self.engine,
+                &mut self.state,
+                self.fail_up,
+                &mut self.force_calls,
+                &mut self.up_calls,
+                self.arm_ctrl_during_second_up,
+            );
         }
         async fn begin(&mut self) -> CaptureEpoch {
             let mut pending = Box::pin(self.driver.begin());
             poll_fn(|cx| {
                 assert!(pending.as_mut().poll(cx).is_pending());
                 Poll::Ready(())
-            }).await;
-            Self::pump_parts(&mut self.engine, &mut self.state, self.fail_up,
-                &mut self.force_calls, &mut self.up_calls, false);
+            })
+            .await;
+            Self::pump_parts(
+                &mut self.engine,
+                &mut self.state,
+                self.fail_up,
+                &mut self.force_calls,
+                &mut self.up_calls,
+                false,
+            );
             pending.await.unwrap()
         }
         async fn own_remote_ctrl(&mut self, epoch: CaptureEpoch) {
-            let mut pending = Box::pin(self.driver.input(epoch,
-                Input::Key { usage: 0xe0, down: true }, ReceivePoint { x: 0.5, y: 0.5 }));
+            let mut pending = Box::pin(self.driver.input(
+                epoch,
+                Input::Key {
+                    usage: 0xe0,
+                    down: true,
+                },
+                ReceivePoint { x: 0.5, y: 0.5 },
+            ));
             poll_fn(|cx| {
                 assert!(pending.as_mut().poll(cx).is_pending());
                 Poll::Ready(())
-            }).await;
-            Self::pump_parts(&mut self.engine, &mut self.state, self.fail_up,
-                &mut self.force_calls, &mut self.up_calls, false);
+            })
+            .await;
+            Self::pump_parts(
+                &mut self.engine,
+                &mut self.state,
+                self.fail_up,
+                &mut self.force_calls,
+                &mut self.up_calls,
+                false,
+            );
             assert_eq!(pending.await.unwrap(), ReceiveAck::Submitted);
         }
         fn key(&mut self, usage: u16, down: bool) {
             let callback = self.state.gate.begin_event();
-            assert!(self.state.key_routed(usage, down, callback.route),
-                "protected trigger pair must stay consumed");
+            assert!(
+                self.state.key_routed(usage, down, callback.route),
+                "protected trigger pair must stay consumed"
+            );
         }
         fn side_button(&mut self, down: bool) {
             let callback = self.state.gate.begin_event();
@@ -1994,12 +2060,21 @@ mod fresh_escape_tests {
             assert_eq!(rig.driver.snapshot(epoch), ReceiveSnapshot::Active);
             assert!(!rig.driver.control().can_force_return(epoch));
             rig.key(0xe0, true);
-            assert!(!rig.state.pairs.force_armed, "first chord began while ACTIVE");
+            assert!(
+                !rig.state.pairs.force_armed,
+                "first chord began while ACTIVE"
+            );
             rig.fail_up = true;
             rig.pump();
-            assert_eq!(rig.driver.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
+            assert_eq!(
+                rig.driver.snapshot(epoch),
+                ReceiveSnapshot::RecoveryRequired
+            );
             assert!(rig.driver.control().can_force_return(epoch));
-            assert!(!rig.engine.can_exit(), "failed SDK cleanup still protects new input");
+            assert!(
+                !rig.engine.can_exit(),
+                "failed SDK cleanup still protects new input"
+            );
             assert_eq!(rig.force_calls, 0);
             (rig, epoch)
         }
@@ -2028,7 +2103,10 @@ mod fresh_escape_tests {
         rig.pump();
         assert_eq!(rig.force_calls, 0);
         rig.release_first_chord();
-        assert_eq!(rig.driver.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
+        assert_eq!(
+            rig.driver.snapshot(epoch),
+            ReceiveSnapshot::RecoveryRequired
+        );
         assert!(!rig.engine.can_exit());
     }
 
@@ -2059,7 +2137,10 @@ mod fresh_escape_tests {
         rig.pump();
         assert_eq!(rig.force_calls, 1);
         rig.pump();
-        assert_eq!(rig.force_calls, 1, "no duplicate force request after the completed chord");
+        assert_eq!(
+            rig.force_calls, 1,
+            "no duplicate force request after the completed chord"
+        );
         let control = rig.state.gate.0.control.load(Ordering::Acquire);
         assert_ne!(control & ADMISSIONS_CLOSED, 0);
         assert_eq!(control & STOPPED, 0, "force is not a source-loss claim");
@@ -2067,11 +2148,17 @@ mod fresh_escape_tests {
         assert!(rig.state.gate.receiving_epoch().is_none());
         assert!(!rig.state.gate.try_activate());
         assert!(rig.state.gate.enter_receiving().is_none());
-        assert_eq!(rig.driver.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
+        assert_eq!(
+            rig.driver.snapshot(epoch),
+            ReceiveSnapshot::RecoveryRequired
+        );
         assert!(rig.engine.can_exit());
         assert!(!rig.driver.control().can_force_return(epoch));
         assert_eq!(rig.state.pairs.debt, 1);
-        assert!(rig.state.keep_running(true), "old consumed side-button Up still needs the original hook");
+        assert!(
+            rig.state.keep_running(true),
+            "old consumed side-button Up still needs the original hook"
+        );
         rig.side_button(false);
         assert_eq!(rig.state.pairs.debt, 0);
         assert!(!rig.state.keep_running(true));
@@ -2089,9 +2176,14 @@ mod fresh_escape_tests {
         rig.arm_ctrl_during_second_up = true;
         rig.driver.control().request_recovery(epoch);
         rig.pump();
-        assert_eq!(rig.driver.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
-        assert!(!rig.state.pairs.force_armed,
-            "Required while DRAINING is not FAILED permission to start a force chord");
+        assert_eq!(
+            rig.driver.snapshot(epoch),
+            ReceiveSnapshot::RecoveryRequired
+        );
+        assert!(
+            !rig.state.pairs.force_armed,
+            "Required while DRAINING is not FAILED permission to start a force chord"
+        );
         rig.key(0xe2, true);
         rig.key(0x29, true);
         rig.release_first_chord();

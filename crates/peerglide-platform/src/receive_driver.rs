@@ -2113,7 +2113,7 @@ mod implementation {
     }
 }
 
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) use implementation::{channel, ReceiveBackend, ReceiveEngine};
 #[cfg(any(windows, target_os = "macos", test))]
 pub use implementation::{ReceiveControl, ReceiveDriver};
