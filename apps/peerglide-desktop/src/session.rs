@@ -439,8 +439,15 @@ pub(super) async fn run_with_status(
     result
 }
 
-fn local_takeover(event: Captured, receiving: Option<u64>, edge_gate: &mut EdgeGate) -> Option<u64> {
-    if !matches!(event, Captured::Position { .. } | Captured::Input(_) | Captured::Toggle) {
+fn local_takeover(
+    event: Captured,
+    receiving: Option<u64>,
+    edge_gate: &mut EdgeGate,
+) -> Option<u64> {
+    if !matches!(
+        event,
+        Captured::Position { .. } | Captured::Input(_) | Captured::Toggle
+    ) {
         return None;
     }
     let lease = receiving?;
@@ -547,7 +554,12 @@ mod tests {
                 Edge::Top => (0.5, 0.0),
                 Edge::Bottom => (0.5, 1.0),
             };
-            let event = Captured::Position { x: nx * 1919.0, y: ny * 1079.0, width: 1920.0, height: 1080.0 };
+            let event = Captured::Position {
+                x: nx * 1919.0,
+                y: ny * 1079.0,
+                width: 1920.0,
+                height: 1080.0,
+            };
             assert_eq!(local_takeover(event, Some(7), &mut gate), Some(7));
             assert!(!gate.update(distance(edge, nx, ny) <= 0.001, 1000));
             assert!(!gate.update(false, 1001));
