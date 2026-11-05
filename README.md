@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.2.1-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.2.2-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -94,12 +94,15 @@ These checks never request OS permissions or authorize control/actions. See
    macOS 保留完整 app 包。不要混用旧 CLI 和新 GUI，也不要覆盖既有身份或配置。
    安全策略拒绝未签名程序时保留防护，不关闭 Gatekeeper、UAC 或防火墙。
 2. 在两端打开“设备与屏幕 → 添加／重新核验”，各自创建不同的本机身份。
-   展开“本机公钥与指纹”，只交换 `node.crt.der`，绝不交换 `node.key.der` 或整个身份目录。
-3. 选择一台“本机等待对端连接”，另一台“主动连接对端”，填等待方的局域网 IP 与
-   端口（默认 UDP 24870）。发现结果仅供填地址，不能代替证书核验。
-4. 在各端填写对端公钥证书路径（文件选择器尚未提供），通过独立可信渠道核对
-   完整指纹，再登记。登记不会自动允许输入；在“本设备权限”分别选择是否接收
-   对端键鼠。双向控制需要两端分别同意，剪贴板和文件仍不开放。
+   一端保留“这台先等待连接”，点击“复制本机公开连接信息”，通过可信渠道发送给另一端。
+   连接信息只含公开证书、协议版本和等待方的局域网 IPv4，不含私钥或权限。
+3. 另一端粘贴并点击“读取对端连接信息”，自动选择连接角色及地址；多个网卡时选择
+   与等待方同一局域网的实际地址。再复制本机公开连接信息回传，等待方粘贴读取。
+   两端各交换一次，不用搬证书文件、填文件路径或照抄示例 IP。已有登记保持可用。
+4. 两端通过独立可信渠道对照对方“本机公钥与指纹”的完整 BLAKE3 指纹，一致后
+   才勾选确认并登记。读取信息不授信，修改后需重新读取和核对；连接信息不是短码认证。
+   在“本设备权限”分别选择是否接收对端键鼠，双向控制需要两端分别同意。
+   剪贴板和文件仍不开放。高级区域保留原有证书路径登记及未认证发现提示。
 5. 先由等待方建立“仅通信连接”，主动连接方运行“通信探针”。看到探针通过并
    正常退出后，再设置“屏幕布局”：例如 Windows 在左、Mac 在右，则 Windows
    选“右侧”、Mac 选“左侧”。这是相对方向，不是多显示器精细拓扑。

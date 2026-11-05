@@ -42,3 +42,15 @@ Before stable release: independent security review, fuzzing/rate limiting, OS
 key store, revocation UI, advisory/license review, signed/notarized packages.
 Use private vulnerability reporting if available. Never put secrets or captured
 input into public issues.
+
+
+The GUI can exchange bounded versioned public connection information instead of
+certificate files. It contains only a public DER certificate, input protocol
+version and optional IPv4 endpoints. It is not an authentication token, pairing
+code or grant. Imported endpoints and certificates remain untrusted until the
+existing independent full-fingerprint comparison and explicit enrollment. The
+parser rejects unknown fields/versions, oversized or malformed certificates and
+addresses. Loading or editing it never saves trust or enables input; confirmation
+cannot follow edited/unread text. Copying is explicit and never exports the key.
+No input transport or ALPN changes, network enrollment or accept-any verifier are
+introduced by this convenience format.
