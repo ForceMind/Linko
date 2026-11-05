@@ -314,6 +314,7 @@ pub(super) async fn run_with_status(
                     Message::Acquire{lease,edge:remote_edge,along}=>{
                         let granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow && local.motion());
                         if granted {
+                            edge_gate.require_interior();
                             position=entry_position(remote_edge.opposite(),along);
                             input_status.checked(recovery.pointer(position.0,position.1))?;
                             send(&mut tx,&Message::Granted{lease}).await?;
@@ -321,7 +322,7 @@ pub(super) async fn run_with_status(
                     },
                     Message::Granted{lease}=>{
                         let activated=if pending.is_some_and(|(id,_)|id==lease) {if let Some(cap)=&capture{input_status.checked(cap.begin(local_return.0,local_return.1))?}else{false}}else{false};
-                        if activated{pending=None;outgoing=Some(lease);sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
+                        if activated{edge_gate.require_interior();pending=None;outgoing=Some(lease);sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
                         else{send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
                     Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;}},
@@ -347,11 +348,16 @@ pub(super) async fn run_with_status(
             },
             e=input.recv(),if native=>{
                 let Some(e)=e else{bail!("native capture channel closed");};
-                if matches!(e,Captured::Position{..}|Captured::Input(_)|Captured::Toggle) {
-                    if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery)?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                if let Some(lease)=local_takeover(e,recovery.receiver.active(),&mut edge_gate) {
+                    input_status.release(&mut recovery)?;
+                    send(&mut tx,&Message::Release { lease, cursor: None }).await?;
+                    // This event only reclaims this computer. It cannot also
+                    // request control of the peer in the same select iteration.
+                    continue;
                 }
                 match e {
                     Captured::Emergency|Captured::UnsupportedInput=>{
+                        edge_gate.require_interior();
                         if matches!(e,Captured::UnsupportedInput) {eprintln!("Unsupported input capability: stopping control; input was not forwarded.");}
                         input_status.restore(capture.as_ref())?;
                         pending=None; if let Some(lease)=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
@@ -433,6 +439,14 @@ pub(super) async fn run_with_status(
     result
 }
 
+fn local_takeover(event: Captured, receiving: Option<u64>, edge_gate: &mut EdgeGate) -> Option<u64> {
+    if !matches!(event, Captured::Position { .. } | Captured::Input(_) | Captured::Toggle) {
+        return None;
+    }
+    let lease = receiving?;
+    edge_gate.require_interior();
+    Some(lease)
+}
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
     distance(source_edge.opposite(), x, y) <= 0.001
 }
@@ -521,6 +535,24 @@ mod tests {
                 Edge::Bottom => (0.5, 0.0),
             };
             assert!(returned_to_source(edge, boundary.0, boundary.1));
+        }
+    }
+    #[test]
+    fn physical_takeover_at_each_edge_cannot_immediately_reverse_control() {
+        for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
+            let mut gate = EdgeGate::default();
+            let (nx, ny) = match edge {
+                Edge::Left => (0.0, 0.5),
+                Edge::Right => (1.0, 0.5),
+                Edge::Top => (0.5, 0.0),
+                Edge::Bottom => (0.5, 1.0),
+            };
+            let event = Captured::Position { x: nx * 1919.0, y: ny * 1079.0, width: 1920.0, height: 1080.0 };
+            assert_eq!(local_takeover(event, Some(7), &mut gate), Some(7));
+            assert!(!gate.update(distance(edge, nx, ny) <= 0.001, 1000));
+            assert!(!gate.update(false, 1001));
+            assert!(gate.update(true, 1002));
+            assert_eq!(local_takeover(event, None, &mut gate), None);
         }
     }
     fn held_recovery() -> Recovery {

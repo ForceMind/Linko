@@ -161,6 +161,10 @@ pub struct EdgeGate {
     last: u64,
 }
 impl EdgeGate {
+    /// A handover/recovery cannot reuse a pointer already resting on an edge.
+    pub fn require_interior(&mut self) {
+        self.latched = true;
+    }
     pub fn update(&mut self, at_edge: bool, now: u64) -> bool {
         if !at_edge {
             self.latched = false;
@@ -244,6 +248,17 @@ mod tests {
         assert!(!g.update(true, 900));
         g.update(false, 1000);
         assert!(g.update(true, 1100));
+    }
+    #[test]
+    fn handover_requires_interior_even_without_an_earlier_edge_crossing() {
+        let mut gate = EdgeGate::default();
+        gate.require_interior();
+        assert!(!gate.update(true, 1000));
+        assert!(!gate.update(true, 5000));
+        assert!(!gate.update(false, 5001));
+        assert!(gate.update(true, 5002));
+        gate.require_interior();
+        assert!(!gate.update(true, 9000));
     }
 }
 
