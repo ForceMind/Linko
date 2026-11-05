@@ -514,3 +514,17 @@ pair账本、stop等Up、shutdown_poll/pending、begin回滚、tapDisabled源失
 明确Receiving首事件P1仍开放。下一步先修真实fmt/编译/回归并独立只读复核，再
 推进phase2接收保护与watchdog/失败恢复，不能让保护模式变成无恢复通道的本机
 无限拦截。root统一Git；worker检查点后不得覆盖fmt修复。
+
+
+Phase1源码5cedae946bb36e83300948224c4c698cd1232069完整五项CI41964917548
+全过，Native/typed tests三平台、smokes/GUI/Release/最低1.95/审计均通过。
+incoming退休fence永久续租的新P1已由Root补前置协调+成功/失败回归，readonly
+复核通过；SourceLoop异步drain计时从首次shutdown_poll前开始，不额外宽限send。
+Native父四文件继续冻结，worker只在新增receive_driver.rs准备phase2 Driver/Engine/
+Backend与fake回归（不接mod，未入phase1）。未来Snapshot用Active/Draining/
+Retired/RecoveryRequired，异步命令250ms截止+取消序号fence，heartbeat带epoch/
+observed_at；Native loop独立owned ledger恢复，Core退账不得重复OS Up。Mac
+Submitted只指SDK请求，不是OS或应用效果。接收保护必须有独立逃生/失败返回通道。
+用户已确认Win+Mac且每端一个主屏；不扩多屏。当前文档跟进不改运行源码，最终
+文档head CI以PR44为准；随后小分支接phase2，仍同0.2.1-dev目标，不把phase1
+绿灯宣称可日常工作。真实C06/宿主权限/无Rust决定保持不变。
