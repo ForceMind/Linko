@@ -1147,3 +1147,82 @@ main identifier=com.peerglide.PeerGlide、Info.plist entries=11、资源seal ver
 未点击实际worker诊断；监测到3分钟结束停止空闲GUI，采样峰RSS126400KiB，无Native。
 等待用户手动解锁后继续实际helper/正常App责任链复查，旧授权不保证沿用。现阶段未
 完成物理输入，签名是候选修复，GUI6.83GB事故仍未定位；Windows旧会话可停止保留配对。
+
+
+### Oink完整参考与按活动刷新候选，0.2.4-dev（2026-11-05，待CI）
+
+Oink固定3ca82127源码的15个Rust crate、UI、FileProvider/音频插件、构建/测试入口已建立
+模块覆盖索引并核对关键状态链，见REFERENCE_RESEARCH。用户确认作者许可原创代码按MIT
+集成分发，第三方许可另计。本批没有移入Oink源码/资源/依赖，没有执行Oink或浏览器测试；
+参考不等于逐行安全审计或其CI/实机验收，也不把其full-trust默认共享/无界总线等迁入PG。
+
+独立实现PG现有GUI活动节拍：无异步工作/画布deadline时去掉应用自身固定10Hz重绘；
+会话、停止/重连、发现、worker诊断、画布录制和显式layout-report仍有100ms轮询；UI操作
+晚于logic启动新任务也安排首tick。画布在遮挡后取消。关闭拦截移入logic，使隐藏窗口
+仍能CancelClose→合作停止→等待清理再Close，未确认恢复保留警告。非Native进程退出也
+等stdout EOF并消费最后probe状态，不依赖下一次无条件UI重绘。原生watchdog/lease/回调/
+协议v5完全不变。新增6条资源/生命周期回归已写，尚未编译；本机preflight因Cargo缺失
+停止，保持不安装Rust。此为空闲资源收敛，不是6.83GB根因已证实或修复。
+
+0.2.3-c9307aa在用户解锁后已实际检查新UI的“实际工作进程权限”：报告可读取，GUI与
+worker均Denied，Secure Input inactive；没有申请权限或启动Native。新版代码身份变动
+需要用户对最后候选明确授权后再验，当前不反复让用户操作中间包。GUI只读检查后结束，
+既有设备身份/配对与Mac接收关闭状态保留。实际worker授权传递与物理C06仍待验。
+
+
+#### 0.2.4运行候选结果（2026-11-06）
+
+fd8c071084afd19047df7354a6eb32b07b278dc6已通过完整五项
+[CI42058770247](https://github.com/ForceMind/PeerGlide/actions/runs/42058770247)：三平台fmt/
+严格Clippy/locked测试和Debug+Release、进程probe/reconnect/context、GUI smoke/打包、
+最低Rust1.95、依赖审计、Mac解压签名与篡改拒绝。新增6条软件资源/生命周期回归通过。
+[驻留42058770207](https://github.com/ForceMind/PeerGlide/actions/runs/42058770207)的Mac任务
+排队中取消后仅重跑未执行项，最终两平台任务均success；这不是取消失败来制造绿色。
+
+Mac两场景各约181秒：RSS峰116368/116784KiB，预热后增长0/112KiB；所取physical
+footprint峰40141/38912KiB，工具reported peak均48128KiB。第一场景partial，第二available，
+整体physical检查仍null。不可把success解释为全部GPU/压缩内存验证或长驻事故修复。
+
+Mac artifact13431955670外层sha256=a22a963780f4c56a6c5ad990f6ef6827aa81b81c071dbfe63041102ecd180336，
+内层摘要、安全解压/无用户身份配置、本机codesign strict和metadata均已验证；Windows
+匹配artifact13430926303已由CI产出，本机不运行Windows程序。运行候选保留在ignored
+idle-activity-fd8c071，最终记录更新不改变受测代码，也不要求为纯文档更换试跑二进制。
+
+另只读核对0.2.3实际诊断worker的TCC记录：responsible和subject已统一为应用ID，
+不再是旧GUI二进制路径式查询；authValue为未授予状态，与新ad-hoc代码身份需用户确认
+相符。未改OS授权/重置TCC，仍需最终候选真正获许可后再测试Native。没有物理C06通过，
+没有新部署/稳定发布，没有把Oink源码测试当PG验证或把CI当独立安全审查。
+
+#### 最终候选用户授权后的只读复查（2026-11-06）
+
+用户回复最新版两项已开启后，通过正常应用入口启动同一fd8c071完整包，显式沿用已有
+私有试跑profile/设备身份；没有启动Native、通信或发现，也没有修改系统权限。实际
+worker只读快照和GUI自身检查均报告辅助功能/输入监控未授予，Secure Input未检测到。
+本次worker的TCC responsible/subject仍为应用ID，不能把GUI签名完整性当作OS许可。
+
+随后只读检查系统设置：两项列表中的PeerGlide均为on，但各自“在访达中显示”都选中
+旧0.1.0包（8f3847a候选），并非本次0.2.4包。这是已观察到的应用副本关联差异；尚未
+读取系统授权记录中的签名条件，不能宣称完整拒绝根因已证实或重加后必然可用。
+已在访达选中实际0.2.4候选，集中请用户仅移除这两项旧屏跃授权条目、重新添加该候选
+并开启；不删除应用/身份/配对，不重置TCC、不扩大宿主权限，等待用户手动确认。
+
+本次只读GUI运行约66.94秒，采样RSS峰116288KiB；通过窗口关闭正常结束，监测回读
+无候选GUI/worker残留。短时RSS不覆盖GPU/压缩内存，也不证明6.83GB事故已修复。
+真实Native与所有物理C06项目仍未验收，本机Rust继续不安装。
+
+另回读上一文档head f148116的自动CI：完整五项
+[42065590838](https://github.com/ForceMind/PeerGlide/actions/runs/42065590838)与两平台驻留
+[42065590740](https://github.com/ForceMind/PeerGlide/actions/runs/42065590740)均success。
+应用/工具/依赖/CI源码与fd8c071差异为空；仍保留同一运行包，不因本次记录更换代码身份。
+
+#### 移除旧条目并重新登记后的实际worker结果（2026-11-06）
+
+用户回复“两项已重新添加”后，正常入口启动同一fd8c071完整0.2.4包与原私有试跑
+profile。“设置→检查实际工作进程权限”实际返回：辅助功能Granted、输入监控Granted、
+输入桌面无需同名权限，未检测到Secure Input。此次重新登记后实际worker许可检查
+已通过；没有另行用GUI自身快照替代worker，也不证明未来构建无需再次确认OS许可。
+
+本轮未启Native、通信或发现，用户随后要求完整Oink整合方案，因此先结束只读检查。
+通过窗口关闭正常退出；监测约154.71秒、RSS峰115632KiB，退出回读无候选GUI/worker
+残留，没有强杀活跃Native。没有观察到真实输入效果，C06所有物理项目仍未验收，
+6.83GB内存事故根因仍未知。本批仅补实测记录，应用、签名、身份与配对均未改变。

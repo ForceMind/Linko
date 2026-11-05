@@ -704,3 +704,58 @@ worker诊断回归（Win3条）及7条打包回归过，Mac ZIP解压+篡改拒�
 新版重新确认一次系统授权；不要扩大宿主权限或重配设备。旧saved native=true只是偏好，
 allow=false，普通连接和只读诊断不启用Native。本批最后文档提交不改运行源码；保留
 c9307aa完整包用于实机复查，最终head CI及最新证据以PR48回读为准。
+
+
+## 28. 用户授权完整参考Oink，基础资源迭代（2026-11-05）
+
+用户给出oinkvm/oink并说明作者授权，随后明确确认原创代码可MIT集成/分发，第三方另计。
+已固定ignored target/reference/oink为3ca82127，15个crate/UI/原生附加/打包/测试的覆盖索引
+与安全差异在REFERENCE_RESEARCH。不运行对方源码或安装工具，不把full-trust/默认数据
+开启/签名字段存在当独立授权。采用现有技术栈/许可/中文/v5，当前独立实现没有复制代码。
+root负责集成与GUI活动调度，复用localize_panels只读平台/数据/UI和本批窄复核；网络片
+由review_admission完成，其后UI片capacity失败已由root/localize接手，不新增或递归代理。
+
+新分支idle-gui-activity从f931f4d，版本0.2.4-dev。去掉无工作GUI的100ms自循环，保留
+child/stop/reconnect/discovery/worker诊断/画布/layout-report的tick；postUI补首tick。
+关闭策略移到logic，隐藏也要合作stop并等待确认，恢复未知不自动close；普通通信退出
+等最终stdout EOF/ProbePassed，避免idle后丢报告。新增6条回归待CI，原生代码未改。
+
+用户后来解锁，c9307aa新包实际worker只读诊断已执行；GUI/worker均Denied，尚需对最终
+代码身份确认权限再进Native。设备身份/Windows配对不动，Mac不接收控制；不把签名或
+新诊断通过当实际KVM可用。当前GUI已结束，无活跃Native。先完成本批资源候选测试，
+再集中给用户最终包与必要系统确认步骤，避免中间包反复授权。GUI6.83GB根因仍未知。
+
+
+0.2.4运行源fd8c071五项42058770247全过，资源42058770207的Mac排队取消后重跑通过，
+Linux也通过；新增6条idle/hidden-close/late-output/canvas回归全过。Mac RSS峰116368/
+116784KiB，physical第一场景partial，整体null，不宣称全内存通过。Mac包13431955670
+已取回ignored idle-activity-fd8c071/mac并在本机严格核验摘要/完整签名/无用户材料。
+Windows匹配包13430926303由CI产出。保留fd8完整运行包，最后文档更新不改应用或CI源码。
+
+本机0.2.3只读worker的TCC responsible/subject已成为com.peerglide.PeerGlide，authValue0，
+包身份查询归属差异已核对；实际权限仍未授予新版，不等于Native可用。所有试跑GUI/
+worker当前无残留，设备身份和配对保持。下一步集中让用户针对最终0.2.4明确系统授权，
+先只读复查实际worker，随后再约单向物理短测；不自动捕获/不扩宿主权限/不重配证书。
+Oink参考阶段覆盖/授权/机制选择和首批独立落地已完成，物理C06、GUI6.83GB根因以及
+G1/数据生产接线等后续范围仍未完成。PR49叠加PR48，main未合并，最新CI和实际证据
+以PR49/VALIDATION为准；不要把参考阶段完成当整个PeerGlide研发目标完成。
+
+### 最终候选用户授权后的复查（2026-11-06）
+
+用户回复最新版两项已开启，正常入口启动同一fd8c071的0.2.4包及原私有profile，GUI和
+实际worker只读检查仍均Denied、Secure Input未检测到；未启Native/通信/发现。随后
+在系统设置分别核对两项PeerGlide on条目的“在访达中显示”：均指向8f3847a旧0.1.0包。
+这是实测应用副本关联差异，不是已证实全部TCC签名拒绝根因。已在访达选中真正0.2.4，
+异步请用户仅从两项列表移除旧屏跃条目、重新加入选中候选并开启，待其手动完成后再
+只读复查。不得重置TCC、删除旧包或改配对，不要求给宿主扩权，不能跳过Native权限门。
+
+本次GUI约66.94秒/RSS峰116288KiB，通过关闭窗口正常退出，监测/ps无候选进程残留；
+资源事故和物理C06仍未过。f148116完整五项42065590838和资源两项42065590740回读
+全success，应用/工具/依赖/CI同fd8，当前只补记录、不换运行包或升级版本。
+
+用户随后完成两项旧条目移除/重新添加。同一fd8c071的0.2.4通过正常入口和原私有
+profile启动，实际worker只读检查已返回辅助功能/输入监控均Granted、Secure Input
+未检测到。此次权限前置已通过，不代表Native或物理C06通过，也不保证未来构建沿用
+ad-hoc授权。用户此时要求完整Oink功能/设计整合方案；本轮未启Native/通信/发现，
+正常关闭GUI，监测154.71秒/RSS峰115632KiB且无残留。先交付整合方案，后续真实
+短测仍需按当时Windows准备状态和明确同意继续，不重做配对或更换受测包。

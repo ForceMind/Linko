@@ -693,13 +693,24 @@ impl App {
         self.worker_permissions.poll();
         self.discovery
             .poll(self.child.is_some() && self.stopping.is_none() && self.config.listen);
-        if let Some(rx) = &self.events {
-            while let Ok(line) = rx.try_recv() {
-                self.logs.push_back(line);
-                if self.logs.len() > 100 {
-                    self.logs.pop_front();
+        let diagnostics_complete = if let Some(rx) = &self.events {
+            loop {
+                match rx.try_recv() {
+                    Ok(line) => {
+                        self.logs.push_back(line);
+                        if self.logs.len() > 100 {
+                            self.logs.pop_front();
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break false,
+                    Err(mpsc::TryRecvError::Disconnected) => break true,
                 }
             }
+        } else {
+            false
+        };
+        if diagnostics_complete {
+            self.events = None;
         }
         if let Some(snapshot) = &self.worker_state {
             let (state, probe_passed) = snapshot.take();
@@ -771,20 +782,33 @@ impl App {
                         format!("工作进程已退出：{exit}")
                     };
                     let native = self.active_mode == Some(SessionMode::Native);
-                    if native {
-                        if let Some(snapshot) = self.worker_state.as_ref() {
-                            if !snapshot.2.load(Ordering::Acquire) {
-                                self.status = "进程已退出，正在读取最终输入状态".into();
-                                return;
+                    if let Some(snapshot) = self.worker_state.as_ref() {
+                        if !snapshot.2.load(Ordering::Acquire) {
+                            self.status = if native {
+                                "进程已退出，正在读取最终输入状态"
+                            } else {
+                                "进程已退出，正在读取最终通信状态"
                             }
-                            if let Some((input, terminal)) = snapshot.take_input() {
-                                self.input_terminal = terminal;
-                                if input == WorkerInputState::RecoveryUnconfirmed {
-                                    self.recovery_blocked = true;
-                                }
-                                self.input_state = Some(input);
-                            }
+                            .into();
+                            return;
                         }
+                        // The reader can publish its final probe result between
+                        // the earlier snapshot read and this EOF observation.
+                        let (_, probe_passed) = snapshot.take();
+                        if probe_passed {
+                            self.notice = "通信探针通过，未注入任何输入。".into();
+                        }
+                        if let Some((input, terminal)) = snapshot.take_input() {
+                            self.input_terminal = terminal;
+                            if input == WorkerInputState::RecoveryUnconfirmed {
+                                self.recovery_blocked = true;
+                            }
+                            self.input_state = Some(input);
+                        }
+                    }
+                    if self.events.is_some() {
+                        self.status = "进程已退出，正在读取最终诊断".into();
+                        return;
                     }
                     let clean = if native {
                         self.native_cleanup_reported()
@@ -822,16 +846,57 @@ impl App {
         };
     }
 }
-impl eframe::App for App {
-    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+impl App {
+    fn request_activity_tick(&self, ctx: &egui::Context) {
+        // Native capture/watchdogs stay in the worker. GUI polling is needed
+        // only while local asynchronous work or canvas deadlines are pending.
+        if self.child.is_some()
+            || self.events.is_some()
+            || self.stopping.is_some()
+            || self.pending_start.is_some()
+            || self.discovery.needs_poll()
+            || self.worker_permissions.needs_poll()
+            || self.gesture_lab.needs_tick()
+            || self.layout_report.is_some()
+        {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+    fn logic_tick(&mut self, ctx: &egui::Context) {
         self.poll();
-        if ctx.input(|i| !i.focused || i.viewport().minimized.unwrap_or(false)) {
+        if ctx.input(|i| {
+            !i.focused
+                || i.viewport().minimized.unwrap_or(false)
+                || i.viewport().occluded.unwrap_or(false)
+        }) {
             self.gesture_lab.cancel();
         }
-        ctx.request_repaint_after(Duration::from_millis(100));
+        if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
+            if self.child.is_some() || self.recovery_blocked {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.close_requested = true;
+                self.stop();
+                self.dialog = Some(Dialog::Recovery);
+            } else {
+                self.exit_confirmed = true;
+            }
+        }
+        if self.close_requested && self.child.is_none() && !self.recovery_blocked {
+            self.exit_confirmed = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        self.request_activity_tick(ctx);
+    }
+}
+impl eframe::App for App {
+    fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.logic_tick(ctx);
     }
     fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
         self.desktop(root);
+        // UI actions may start work after logic ran for this frame. Schedule
+        // its first poll even if the app was completely idle before the click.
+        self.request_activity_tick(root.ctx());
     }
 }
 impl Drop for App {
@@ -1528,6 +1593,197 @@ mod lifecycle_tests {
             .get_or_insert_with(|| Arc::new(WorkerSnapshot::default()))
             .publish(state);
     }
+    fn count_activity_ticks(ctx: &egui::Context) -> Arc<std::sync::atomic::AtomicUsize> {
+        let ticks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = ticks.clone();
+        ctx.set_request_repaint_callback(move |request| {
+            if request.delay == Duration::from_millis(100) {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        ticks
+    }
+    fn logic_frames(app: &mut App, ctx: &egui::Context, occluded: bool) {
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .occluded = Some(occluded);
+        for _ in 0..4 {
+            let _ = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
+        }
+    }
+    fn managed_child() -> Result<Child> {
+        Ok(Command::new(std::env::current_exe()?)
+            .args([
+                "--exact",
+                "lifecycle_tests::managed_test_child",
+                "--nocapture",
+            ])
+            .env("PEERGLIDE_GUI_LIFECYCLE_HELPER", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?)
+    }
+    #[test]
+    fn idle_logic_stops_periodic_paints_but_hidden_worker_and_stop_keep_ticking() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let ctx = egui::Context::default();
+        let ticks = count_activity_ticks(&ctx);
+        logic_frames(&mut app, &ctx, false);
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            0,
+            "idle GUI retained its 10Hz clock"
+        );
+        app.child = Some(managed_child()?);
+        app.active_mode = Some(SessionMode::Communication);
+        logic_frames(&mut app, &ctx, true);
+        assert!(
+            ticks.load(Ordering::SeqCst) > 0,
+            "hidden worker status polling stopped"
+        );
+        app.stop();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.child.is_some() && Instant::now() < deadline {
+            logic_frames(&mut app, &ctx, true);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.child.is_none(), "cooperative stop was starved");
+        assert!(!app.recovery_blocked);
+        let settled = ticks.load(Ordering::SeqCst);
+        logic_frames(&mut app, &ctx, true);
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            settled,
+            "finished work retained periodic polling"
+        );
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn hidden_close_cancels_window_exit_until_cooperative_worker_stop() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.child = Some(managed_child()?);
+        app.active_mode = Some(SessionMode::Communication);
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        viewport.occluded = Some(true);
+        viewport.events.push(egui::ViewportEvent::Close);
+        let output = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
+        assert!(output
+            .viewport_commands
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|commands| commands.contains(&egui::ViewportCommand::CancelClose)));
+        assert!(app.close_requested && app.stopping.is_some());
+        assert!(!app.exit_confirmed);
+        input
+            .viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .events
+            .clear();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut close_sent = false;
+        while app.child.is_some() && Instant::now() < deadline {
+            let output = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
+            close_sent |= output
+                .viewport_commands
+                .get(&egui::ViewportId::ROOT)
+                .is_some_and(|commands| commands.contains(&egui::ViewportCommand::Close));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(app.child.is_none() && app.exit_confirmed && close_sent);
+        assert!(!app.recovery_blocked);
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn hidden_close_preserves_unconfirmed_recovery_without_claiming_exit() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.recovery_blocked = true;
+        app.input_state = Some(WorkerInputState::RecoveryUnconfirmed);
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        viewport.occluded = Some(true);
+        viewport.events.push(egui::ViewportEvent::Close);
+        let output = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
+        assert!(output
+            .viewport_commands
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|commands| commands.contains(&egui::ViewportCommand::CancelClose)));
+        assert!(app.close_requested && !app.exit_confirmed && app.recovery_blocked);
+        assert!(app.dialog == Some(Dialog::Recovery));
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn late_diagnostics_finish_before_exit_and_idle_timer_settles() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let mut child = managed_child()?;
+        child.stdin.as_mut().unwrap().write_all(b"stop\n")?;
+        assert!(child.wait()?.success());
+        app.child = Some(child);
+        app.active_mode = Some(SessionMode::Communication);
+        let (tx, rx) = mpsc::sync_channel(2);
+        app.events = Some(rx);
+        let ctx = egui::Context::default();
+        let ticks = count_activity_ticks(&ctx);
+        logic_frames(&mut app, &ctx, true);
+        assert!(app.child.is_some() && ticks.load(Ordering::SeqCst) > 0);
+        tx.send("final diagnostic fixture".into())?;
+        drop(tx);
+        logic_frames(&mut app, &ctx, true);
+        assert!(app.child.is_none() && app.events.is_none());
+        assert_eq!(
+            app.logs.back().map(String::as_str),
+            Some("final diagnostic fixture")
+        );
+        let settled = ticks.load(Ordering::SeqCst);
+        logic_frames(&mut app, &ctx, true);
+        assert_eq!(ticks.load(Ordering::SeqCst), settled);
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn communication_exit_waits_for_its_final_probe_report_before_becoming_idle() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let mut child = managed_child()?;
+        child.stdin.as_mut().unwrap().write_all(b"stop\n")?;
+        assert!(child.wait()?.success());
+        app.child = Some(child);
+        app.active_mode = Some(SessionMode::Probe);
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        app.worker_state = Some(snapshot.clone());
+        app.poll();
+        assert!(
+            app.child.is_some(),
+            "exited process discarded pending stdout state"
+        );
+        snapshot.publish(WorkerState::ProbePassed);
+        snapshot.publish_input(WorkerInputState::Disabled, true);
+        snapshot.2.store(true, Ordering::Release);
+        app.poll();
+        assert!(app.child.is_none());
+        assert!(app.notice.contains("通信探针通过"));
+        assert_eq!(app.input_state, Some(WorkerInputState::Disabled));
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
     #[test]
     fn coalescing_keeps_latest_state_and_completed_probe() {
         let snapshot = WorkerSnapshot::default();
@@ -1561,6 +1817,7 @@ mod lifecycle_tests {
         let (tx, rx) = mpsc::sync_channel(128);
         app.events = Some(rx);
         tx.send("Authenticated peer connected".into())?;
+        drop(tx);
         app.poll();
         assert!(!app.connected);
         drop(app);
@@ -1609,6 +1866,7 @@ mod lifecycle_tests {
         let (tx, rx) = mpsc::sync_channel(1);
         tx.send("queued diagnostic".into())?;
         assert!(tx.try_send("dropped diagnostic".into()).is_err());
+        drop(tx);
         app.events = Some(rx);
         app.connected = true;
         set_state(&mut app, WorkerState::Authenticated);

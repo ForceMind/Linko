@@ -853,20 +853,6 @@ impl App {
             self.stop();
             self.gesture_lab.cancel();
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
-            if self.child.is_some() || self.recovery_blocked {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.close_requested = true;
-                self.stop();
-                self.dialog = Some(Dialog::Recovery);
-            } else {
-                self.exit_confirmed = true;
-            }
-        }
-        if self.close_requested && self.child.is_none() && !self.recovery_blocked {
-            self.exit_confirmed = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
         egui::Panel::left("navigation")
             .exact_size(190.0)
             .show(root, |ui| {

@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.2.3-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.2.4-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -131,6 +131,11 @@ These checks never request OS permissions or authorize control/actions. See
 没有 Developer ID 身份、没有公证；不同构建的系统授权不保证自动沿用。不要关闭防护。
 当前仍待签名候选的真实 worker/TCC 验证，不宣称该事故或 GUI 6.83GB 内存事故已修复。
 已通过真实双机无输入通信；物理键鼠 C06 仍未通过。此增量不改输入 v5/设备身份或授权。
+
+0.2.4-dev 在没有会话、停止/重连、发现、工作进程诊断或画布超时时，不再强制每100ms
+重绘。活动工作仍保持状态轮询，隐藏窗口仍处理停止与最终输出；窗口内画布遮挡后取消。
+这是空闲资源改进，不代表此前GUI6.83GB根因已定位。Oink全模块参考、用户确认的原创
+MIT授权范围和安全差异见[参考研究](docs/REFERENCE_RESEARCH.md)。
 
 ## Explicit two-peer enrollment
 

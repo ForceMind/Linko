@@ -72,6 +72,9 @@ impl GestureLab {
             inspection: None,
         }
     }
+    pub fn needs_tick(&self) -> bool {
+        self.active.is_some()
+    }
     pub fn set_export_open(&mut self, open: bool) {
         self.export_open = open;
         self.inspection = None;
@@ -371,6 +374,50 @@ mod tests {
             pressed,
             modifiers: Default::default(),
         }
+    }
+    #[test]
+    fn post_ui_stroke_starts_its_clock_and_occlusion_cancels_without_execution() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = crate::App::load(fixture.path.clone());
+        app.page = crate::Page::GestureLab;
+        app.mouse_tab = crate::MouseTab::Practice;
+        let ctx = egui::Context::default();
+        let ticks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = ticks.clone();
+        ctx.set_request_repaint_callback(move |request| {
+            if request.delay == Duration::from_millis(100) {
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        for _ in 0..4 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic_tick(ctx));
+        }
+        assert_eq!(ticks.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // Model a local canvas action starting after this frame's logic phase.
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.logic_tick(ctx);
+            app.gesture_lab.begin(
+                Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300., 260.)),
+                egui::pos2(10., 10.),
+                0.,
+            );
+            app.request_activity_tick(ctx);
+        });
+        assert!(app.gesture_lab.needs_tick());
+        assert!(ticks.load(std::sync::atomic::Ordering::SeqCst) > 0);
+        let mut hidden = egui::RawInput::default();
+        hidden
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .occluded = Some(true);
+        let _ = ctx.run_logic(&hidden, |ctx| app.logic_tick(ctx));
+        assert!(!app.gesture_lab.needs_tick());
+        assert!(!app.gesture_lab.completed);
+        assert!(app.child.is_none());
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
     #[test]
     fn egui_pointer_frames_draw_and_recognize_without_a_worker_or_identity() {
