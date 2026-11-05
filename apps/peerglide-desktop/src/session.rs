@@ -1,11 +1,11 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
 use peerglide_platform::{self as platform, now_ms, CaptureEpoch, CaptureRoute, Captured};
-use platform::{ReceiveAck, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot};
 use peerglide_protocol::{
     decode, encode, worker::WorkerInputState, Edge, Input, InputCapabilities, Message, Motion,
 };
 use peerglide_transport as transport;
+use platform::{ReceiveAck, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -24,14 +24,23 @@ impl Recovery {
         }
     }
     fn outcome(&self) -> ReceiveAck {
-        self.driver.as_ref().map_or(ReceiveAck::Retired, |driver| driver.control().outcome())
+        self.driver
+            .as_ref()
+            .map_or(ReceiveAck::Retired, |driver| driver.control().outcome())
     }
     fn protection_pending(&self) -> bool {
-        self.native && (self.snapshot() != ReceiveSnapshot::Retired || self.outcome() != ReceiveAck::Retired)
+        self.native
+            && (self.snapshot() != ReceiveSnapshot::Retired
+                || self.outcome() != ReceiveAck::Retired)
     }
     async fn begin_receive(&mut self) -> Result<bool> {
-        if !self.native { return Ok(true); }
-        let driver = self.driver.as_mut().ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
+        if !self.native {
+            return Ok(true);
+        }
+        let driver = self
+            .driver
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
         match driver.begin().await {
             Ok(epoch) => {
                 self.receive_epoch = Some(epoch);
@@ -42,16 +51,29 @@ impl Recovery {
         }
     }
     async fn release(&mut self) -> Result<()> {
-        if !self.native { return self.release_with(|_| Ok(())); }
+        if !self.native {
+            return self.release_with(|_| Ok(()));
+        }
         // Core owns protocol intent only. The Native loop is the sole OS owner,
         // including after the async worker stalls or an acknowledgement is lost.
         let _ = self.receiver.release();
         if let Some(epoch) = self.receive_epoch {
-            let driver = self.driver.as_mut().ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired { self.receive_epoch = None; return Ok(()); }
+            let driver = self
+                .driver
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
+            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
+                self.receive_epoch = None;
+                return Ok(());
+            }
             let ack = driver.release(epoch, None).await?;
-            anyhow::ensure!(ack != ReceiveAck::RecoveryRequired, "native receive cleanup requires recovery");
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired { self.receive_epoch = None; }
+            anyhow::ensure!(
+                ack != ReceiveAck::RecoveryRequired,
+                "native receive cleanup requires recovery"
+            );
+            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
+                self.receive_epoch = None;
+            }
         }
         Ok(())
     }
@@ -64,17 +86,32 @@ impl Recovery {
         })
     }
     async fn finish(&mut self, lease: u64, cursor: Option<Motion>, now: u64) -> Result<()> {
-        if !self.native { return self.finish_with(lease, cursor, now, |_| Ok(()), |_| Ok(())); }
-        let Some(end) = self.receiver.finish(lease, cursor, now) else { return Ok(()); };
+        if !self.native {
+            return self.finish_with(lease, cursor, now, |_| Ok(()), |_| Ok(()));
+        }
+        let Some(end) = self.receiver.finish(lease, cursor, now) else {
+            return Ok(());
+        };
         // Never replay Core's release list into the OS. Native already retains
         // and retires actual submitted Downs, independently of this ledger.
         if let Some(epoch) = self.receive_epoch {
-            let driver = self.driver.as_mut().ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired { self.receive_epoch = None; return Ok(()); }
+            let driver = self
+                .driver
+                .as_mut()
+                .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
+            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
+                self.receive_epoch = None;
+                return Ok(());
+            }
             let terminal = end.cursor.map(|m| ReceivePoint { x: m.x, y: m.y });
             let ack = driver.release(epoch, terminal).await?;
-            anyhow::ensure!(ack != ReceiveAck::RecoveryRequired, "native receive cleanup requires recovery");
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired { self.receive_epoch = None; }
+            anyhow::ensure!(
+                ack != ReceiveAck::RecoveryRequired,
+                "native receive cleanup requires recovery"
+            );
+            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
+                self.receive_epoch = None;
+            }
         }
         Ok(())
     }
@@ -100,22 +137,56 @@ impl Recovery {
         pointer_result
     }
     async fn input(&mut self, lease: u64, event: Input, cursor: Motion, now: u64) -> Result<bool> {
-        if !self.native { return self.input_with(lease, event, cursor, now, |_| Ok(()), |_| Ok(())); }
-        if !self.receiver.accepts_input(lease, event, now) || cursor.lease != lease || !self.receiver.anchor(cursor, now) {
+        if !self.native {
+            return self.input_with(lease, event, cursor, now, |_| Ok(()), |_| Ok(()));
+        }
+        if !self.receiver.accepts_input(lease, event, now)
+            || cursor.lease != lease
+            || !self.receiver.anchor(cursor, now)
+        {
             return Ok(false);
         }
-        let Some(epoch) = self.receive_epoch else { return Ok(false); };
-        let driver = self.driver.as_mut().ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-        let ack = match driver.input(epoch, event, ReceivePoint { x: cursor.x, y: cursor.y }).await {
+        let Some(epoch) = self.receive_epoch else {
+            return Ok(false);
+        };
+        let driver = self
+            .driver
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
+        let ack = match driver
+            .input(
+                epoch,
+                event,
+                ReceivePoint {
+                    x: cursor.x,
+                    y: cursor.y,
+                },
+            )
+            .await
+        {
             Ok(ack) => ack,
-            Err(ReceiveError::Stale) if matches!(driver.snapshot(epoch), ReceiveSnapshot::Draining | ReceiveSnapshot::Retired) => return Ok(false),
-            Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => return Ok(false),
+            Err(ReceiveError::Stale)
+                if matches!(
+                    driver.snapshot(epoch),
+                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
+                ) =>
+            {
+                return Ok(false)
+            }
+            Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => {
+                return Ok(false)
+            }
             Err(error) => return Err(error.into()),
         };
-        anyhow::ensure!(ack != ReceiveAck::RecoveryRequired, "native receive submission requires recovery");
+        anyhow::ensure!(
+            ack != ReceiveAck::RecoveryRequired,
+            "native receive submission requires recovery"
+        );
         if ack == ReceiveAck::Submitted && driver.is_current(epoch) {
             Ok(self.receiver.input(lease, event, now))
-        } else { Ok(false) }
+        } else {
+            Ok(false)
+        }
     }
     fn input_with(
         &mut self,
@@ -138,27 +209,51 @@ impl Recovery {
         self.receiver.input_with(lease, event, now, inject)
     }
     async fn pointer(&mut self, x: f64, y: f64) -> Result<bool> {
-        if !self.native { return Ok(true); }
-        let Some(epoch) = self.receive_epoch else { return Ok(false); };
-        let driver = self.driver.as_mut().ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
+        if !self.native {
+            return Ok(true);
+        }
+        let Some(epoch) = self.receive_epoch else {
+            return Ok(false);
+        };
+        let driver = self
+            .driver
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
         let ack = match driver.pointer(epoch, ReceivePoint { x, y }).await {
             Ok(ack) => ack,
-            Err(ReceiveError::Stale) if matches!(driver.snapshot(epoch), ReceiveSnapshot::Draining | ReceiveSnapshot::Retired) => return Ok(false),
-            Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => return Ok(false),
+            Err(ReceiveError::Stale)
+                if matches!(
+                    driver.snapshot(epoch),
+                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
+                ) =>
+            {
+                return Ok(false)
+            }
+            Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => {
+                return Ok(false)
+            }
             Err(error) => return Err(error.into()),
         };
-        anyhow::ensure!(ack != ReceiveAck::RecoveryRequired, "native receive pointer requires recovery");
+        anyhow::ensure!(
+            ack != ReceiveAck::RecoveryRequired,
+            "native receive pointer requires recovery"
+        );
         Ok(ack == ReceiveAck::Submitted && driver.is_current(epoch))
     }
     fn heartbeat(&mut self, lease: u64, now: u64) -> bool {
-        if !self.receiver.accepts(lease, now) { return false; }
+        if !self.receiver.accepts(lease, now) {
+            return false;
+        }
         if self.native {
-            let (Some(driver), Some(epoch)) = (&mut self.driver, self.receive_epoch) else { return false; };
-            if !driver.heartbeat(epoch) { return false; }
+            let (Some(driver), Some(epoch)) = (&mut self.driver, self.receive_epoch) else {
+                return false;
+            };
+            if !driver.heartbeat(epoch) {
+                return false;
+            }
         }
         self.receiver.heartbeat(lease, now)
     }
-
 }
 impl Drop for Recovery {
     fn drop(&mut self) {
@@ -350,9 +445,9 @@ pub(super) async fn run_with_status(
         },
         None => (None, None),
     };
-    let _native_stop = driver.as_ref().map(|driver| {
-        super::NativeRecoveryRegistration::new(driver.control(), *stop.borrow())
-    });
+    let _native_stop = driver
+        .as_ref()
+        .map(|driver| super::NativeRecoveryRegistration::new(driver.control(), *stop.borrow()));
     let (mtx, mut messages) = mpsc::channel(64);
     let reader = tokio::spawn(async move {
         loop {
@@ -726,8 +821,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_receiver_ledger_transitions_are_separate_from_connection_and_cleanup_failure_is_sticky()
-    {
+    async fn real_receiver_ledger_transitions_are_separate_from_connection_and_cleanup_failure_is_sticky(
+    ) {
         // Reporting is exercised against a real Receiver ledger and fake native
         // effects. No hook, OS injection, permissions or current input are used.
         let mut recovery = held_recovery();
@@ -846,8 +941,8 @@ mod tests {
         };
         assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
     }
-    #[test]
-    fn retired_or_lost_capture_fence_releases_the_receiver_and_ping_cannot_revive_it() -> Result<()>
+    #[tokio::test]
+    async fn retired_or_lost_capture_fence_releases_the_receiver_and_ping_cannot_revive_it() -> Result<()>
     {
         for lost in [false, true] {
             let mut recovery = held_recovery();

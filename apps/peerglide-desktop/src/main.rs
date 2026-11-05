@@ -2,16 +2,24 @@ mod reconnect;
 mod session;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use peerglide_platform::ReceiveControl;
 use peerglide_protocol::{
     worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState},
     Edge, InputCapabilities, Message, VERSION,
 };
 use peerglide_transport as transport;
-use std::{net::SocketAddr, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
-use peerglide_platform::ReceiveControl;
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 static NATIVE_RECOVERY: Mutex<Option<Arc<ReceiveControl>>> = Mutex::new(None);
-struct NativeRecoveryRegistration { control: Arc<ReceiveControl>, registered: bool }
+struct NativeRecoveryRegistration {
+    control: Arc<ReceiveControl>,
+    registered: bool,
+}
 impl NativeRecoveryRegistration {
     fn new(control: ReceiveControl, already_stopping: bool) -> Self {
         let control = Arc::new(control);
@@ -28,16 +36,26 @@ impl NativeRecoveryRegistration {
             control.request_stop();
             control.wake_loop();
         }
-        Self { control, registered }
+        Self {
+            control,
+            registered,
+        }
     }
 }
 impl Drop for NativeRecoveryRegistration {
     fn drop(&mut self) {
-        if !self.registered { return; }
+        if !self.registered {
+            return;
+        }
         let previous = NATIVE_RECOVERY.lock().ok().and_then(|mut slot| {
-            if slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, &self.control)) {
+            if slot
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &self.control))
+            {
                 slot.take()
-            } else { None }
+            } else {
+                None
+            }
         });
         drop(previous);
     }
