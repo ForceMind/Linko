@@ -233,7 +233,8 @@ async fn drain_capture(
             _ => (),
         }
         if !pending {
-            return Err(failure.unwrap_or_else(|| anyhow::anyhow!("capture ended without confirmed cleanup")));
+            return Err(failure
+                .unwrap_or_else(|| anyhow::anyhow!("capture ended without confirmed cleanup")));
         }
         if started.elapsed() >= budget && failure.is_none() {
             failure = status.checked::<()>(Err(anyhow::anyhow!(
@@ -479,10 +480,17 @@ pub(super) async fn run_with_status(
         }
     }
     let shutdown = if let (Some(capture), Some(first)) = (capture.as_mut(), first_shutdown) {
-        drain_capture(first, || {
-            let result = capture.shutdown_poll();
-            (result, capture.shutdown_pending())
-        }, &mut input_status, stop_started, Duration::from_millis(500)).await
+        drain_capture(
+            first,
+            || {
+                let result = capture.shutdown_poll();
+                (result, capture.shutdown_pending())
+            },
+            &mut input_status,
+            stop_started,
+            Duration::from_millis(500),
+        )
+        .await
     } else {
         Ok(())
     };
@@ -497,17 +505,31 @@ pub(super) async fn run_with_status(
 
 fn captured_route(event: Captured) -> Option<CaptureRoute> {
     match event {
-        Captured::Position { route, .. } | Captured::Motion { route, .. }
-            | Captured::Input { route, .. } | Captured::Toggle { route } => Some(route),
+        Captured::Position { route, .. }
+        | Captured::Motion { route, .. }
+        | Captured::Input { route, .. }
+        | Captured::Toggle { route } => Some(route),
         Captured::Emergency | Captured::UnsupportedInput => None,
     }
 }
-fn forwarding_lease(route: CaptureRoute, outgoing: Option<Outgoing>, gate: &platform::CaptureGate) -> Option<u64> {
+fn forwarding_lease(
+    route: CaptureRoute,
+    outgoing: Option<Outgoing>,
+    gate: &platform::CaptureGate,
+) -> Option<u64> {
     let current = outgoing?;
-    (route == CaptureRoute::Remote(current.epoch) && gate.is_current(route)).then_some(current.lease)
+    (route == CaptureRoute::Remote(current.epoch) && gate.is_current(route))
+        .then_some(current.lease)
 }
-fn local_takeover(event: Captured, receiving: Option<(u64, CaptureEpoch)>, edge_gate: &mut EdgeGate) -> Option<u64> {
-    if !matches!(event, Captured::Position { .. } | Captured::Input { .. } | Captured::Toggle { .. }) {
+fn local_takeover(
+    event: Captured,
+    receiving: Option<(u64, CaptureEpoch)>,
+    edge_gate: &mut EdgeGate,
+) -> Option<u64> {
+    if !matches!(
+        event,
+        Captured::Position { .. } | Captured::Input { .. } | Captured::Toggle { .. }
+    ) {
         return None;
     }
     let (lease, epoch) = receiving?;
@@ -550,11 +572,21 @@ mod tests {
             let mut reporter = super::super::InputReporter::new(false);
             {
                 let mut status = InputStatus::new(true, &mut reporter);
-                let first = if initial_failure { Err(anyhow::anyhow!("fake pending restore failure")) } else { Ok(false) };
-                let future = drain_capture((first, true), || {
-                    let done = drained.load(Ordering::Acquire);
-                    (Ok(done), !done)
-                }, &mut status, std::time::Instant::now(), Duration::ZERO);
+                let first = if initial_failure {
+                    Err(anyhow::anyhow!("fake pending restore failure"))
+                } else {
+                    Ok(false)
+                };
+                let future = drain_capture(
+                    (first, true),
+                    || {
+                        let done = drained.load(Ordering::Acquire);
+                        (Ok(done), !done)
+                    },
+                    &mut status,
+                    std::time::Instant::now(),
+                    Duration::ZERO,
+                );
                 tokio::pin!(future);
                 tokio::select! {
                     _ = &mut future => panic!("pending capture must not let the worker exit"),
@@ -570,11 +602,18 @@ mod tests {
     async fn already_reaped_source_failure_does_not_wait_forever() {
         let mut reporter = super::super::InputReporter::new(false);
         let mut status = InputStatus::new(true, &mut reporter);
-        let result = tokio::time::timeout(Duration::from_secs(1), drain_capture(
-            (Err(anyhow::anyhow!("fake source lost after reap")), false),
-            || panic!("already reaped capture must not be polled again"),
-            &mut status, std::time::Instant::now(), Duration::ZERO,
-        )).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            drain_capture(
+                (Err(anyhow::anyhow!("fake source lost after reap")), false),
+                || panic!("already reaped capture must not be polled again"),
+                &mut status,
+                std::time::Instant::now(),
+                Duration::ZERO,
+            ),
+        )
+        .await
+        .unwrap();
         assert!(result.is_err());
         assert_eq!(reporter.last, Some(WorkerInputState::RecoveryUnconfirmed));
     }
@@ -676,7 +715,9 @@ mod tests {
         let local = gate.route().unwrap();
         assert!(gate.try_activate());
         let first = gate.route().unwrap();
-        let CaptureRoute::Remote(epoch) = first else { panic!("expected remote route") };
+        let CaptureRoute::Remote(epoch) = first else {
+            panic!("expected remote route")
+        };
         let outgoing = Some(Outgoing { lease: 1, epoch });
         assert_eq!(forwarding_lease(local, outgoing, &gate), None);
         assert_eq!(forwarding_lease(first, outgoing, &gate), Some(1));
@@ -684,7 +725,9 @@ mod tests {
         assert_eq!(forwarding_lease(first, outgoing, &gate), None);
         assert!(gate.try_activate());
         let second = gate.route().unwrap();
-        let CaptureRoute::Remote(epoch) = second else { panic!("expected remote route") };
+        let CaptureRoute::Remote(epoch) = second else {
+            panic!("expected remote route")
+        };
         let outgoing = Some(Outgoing { lease: 2, epoch });
         assert_eq!(forwarding_lease(first, outgoing, &gate), None);
         assert_eq!(forwarding_lease(local, outgoing, &gate), None);
@@ -696,9 +739,21 @@ mod tests {
         let old_route = capture.route().unwrap();
         let epoch = capture.try_local_epoch().unwrap();
         let mut gate = EdgeGate::default();
-        let event = Captured::Input { event: Input::Key { usage: 4, down: false }, route: old_route };
+        let event = Captured::Input {
+            event: Input::Key {
+                usage: 4,
+                down: false,
+            },
+            route: old_route,
+        };
         assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), None);
-        let event = Captured::Input { event: Input::Key { usage: 4, down: true }, route: CaptureRoute::Local(epoch) };
+        let event = Captured::Input {
+            event: Input::Key {
+                usage: 4,
+                down: true,
+            },
+            route: CaptureRoute::Local(epoch),
+        };
         assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
     }
     fn held_recovery() -> Recovery {

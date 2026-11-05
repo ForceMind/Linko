@@ -190,7 +190,9 @@ impl CaptureThread {
         }
     }
     /// True until a shutdown poll has received the reaper's final result.
-    pub(super) fn pending(&self) -> bool { self.completed.is_none() }
+    pub(super) fn pending(&self) -> bool {
+        self.completed.is_none()
+    }
     pub(super) fn shutdown(&mut self, timeout: Duration) -> bool {
         self.stop.store(true, Ordering::Release);
         if let Some(clean) = self.completed {

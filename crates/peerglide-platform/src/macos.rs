@@ -73,7 +73,9 @@ pub fn capture(
     let thread = CaptureThread::spawn_reserved(
         move |stop| unsafe {
             let state = HookState {
-                pairs: PairLedger::default(), stopping:false, toggle_route:None,
+                pairs: PairLedger::default(),
+                stopping: false,
+                toggle_route: None,
                 tx,
                 gate,
                 keys: initial_keys(),
@@ -100,7 +102,11 @@ pub fn capture(
             CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             CGEventTapEnable(tap, true);
             let _ = ready.send(true);
-            while STATE.with_borrow_mut(|state|state.as_mut().is_some_and(|s|s.keep_running(stop.load(Ordering::Acquire)))) {
+            while STATE.with_borrow_mut(|state| {
+                state
+                    .as_mut()
+                    .is_some_and(|s| s.keep_running(stop.load(Ordering::Acquire)))
+            }) {
                 CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
             }
             CGEventTapEnable(tap, false);
@@ -124,7 +130,11 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
     if kind >= 0xffff_fffe {
         STATE.with_borrow_mut(|s| {
             if let Some(s) = s {
-                if s.stopping && s.pairs.debt==0 {s.gate.disable();} else {s.source_lost();}
+                if s.stopping && s.pairs.debt == 0 {
+                    s.gate.disable();
+                } else {
+                    s.source_lost();
+                }
                 s.emit(Captured::Emergency);
             }
         });
@@ -153,23 +163,36 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 };
             }
             5..=7 | 27 => {
-                let captured=if route.remote(){
-                    Captured::Motion{dx:CGEventGetDoubleValueField(event,4),dy:CGEventGetDoubleValueField(event,5),route}
-                }else{
-                    let p=CGEventGetLocation(event);let b=CGDisplayBounds(CGMainDisplayID());
-                    Captured::Position{x:p.x-b.origin.x,y:p.y-b.origin.y,width:b.size.width,height:b.size.height,route}
+                let captured = if route.remote() {
+                    Captured::Motion {
+                        dx: CGEventGetDoubleValueField(event, 4),
+                        dy: CGEventGetDoubleValueField(event, 5),
+                        route,
+                    }
+                } else {
+                    let p = CGEventGetLocation(event);
+                    let b = CGDisplayBounds(CGMainDisplayID());
+                    Captured::Position {
+                        x: p.x - b.origin.x,
+                        y: p.y - b.origin.y,
+                        width: b.size.width,
+                        height: b.size.height,
+                        route,
+                    }
                 };
-                return s.movement(captured,route);
+                return s.movement(captured, route);
             }
             1..=4 | 25 | 26 => {
-                if kind==25||kind==26 {
-                    let number=CGEventGetIntegerValueField(event,3);
-                    if number!=2 {
+                if kind == 25 || kind == 26 {
+                    let number = CGEventGetIntegerValueField(event, 3);
+                    if number != 2 {
                         if (3..=31).contains(&number) {
-                            let button=(number+1)as u8;
-                            return s.unsupported_button(button,kind==25,route);
+                            let button = (number + 1) as u8;
+                            return s.unsupported_button(button, kind == 25, route);
                         }
-                        s.gate.disable();s.emit(Captured::UnsupportedInput);return false;
+                        s.gate.disable();
+                        s.emit(Captured::UnsupportedInput);
+                        return false;
                     }
                 }
                 let (button, down) = match kind {
@@ -182,11 +205,13 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 };
                 return s.button_routed(button, down, route);
             }
-            22 => return s.scroll_routed(
-                CGEventGetIntegerValueField(event,12).clamp(-1200,1200)as i16,
-                CGEventGetIntegerValueField(event,11).clamp(-1200,1200)as i16,
-                route,
-            ),
+            22 => {
+                return s.scroll_routed(
+                    CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
+                    CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
+                    route,
+                )
+            }
             _ => (),
         }
         route.remote()
