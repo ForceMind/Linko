@@ -17,13 +17,19 @@ impl Recovery {
     fn release(&mut self) -> Result<()> {
         let native = self.native;
         self.release_with(|event| {
-            if native { platform::inject(event) } else { Ok(()) }
+            if native {
+                platform::inject(event)
+            } else {
+                Ok(())
+            }
         })
     }
     fn release_with(&mut self, inject: impl FnMut(Input) -> Result<()>) -> Result<()> {
         self.pending_releases.extend(self.receiver.release());
         self.pending_releases.flush(inject).map_err(|remaining| {
-            anyhow::anyhow!("native input cleanup failed: {remaining} releases remain pending; session stopped")
+            anyhow::anyhow!(
+                "native input cleanup failed: {remaining} releases remain pending; session stopped"
+            )
         })
     }
     fn finish(&mut self, lease: u64, cursor: Option<Motion>, now: u64) -> Result<()> {
@@ -522,7 +528,10 @@ fn captured_route(event: Captured) -> Option<CaptureRoute> {
         Captured::Emergency | Captured::UnsupportedInput => None,
     }
 }
-fn retired_receiving_lease(receiving: Option<(u64, CaptureEpoch)>, current: Option<CaptureRoute>) -> Option<u64> {
+fn retired_receiving_lease(
+    receiving: Option<(u64, CaptureEpoch)>,
+    current: Option<CaptureRoute>,
+) -> Option<u64> {
     let (lease, epoch) = receiving?;
     (current != Some(CaptureRoute::Local(epoch))).then_some(lease)
 }
@@ -771,12 +780,16 @@ mod tests {
         assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
     }
     #[test]
-    fn retired_or_lost_capture_fence_releases_the_receiver_and_ping_cannot_revive_it() -> Result<()> {
+    fn retired_or_lost_capture_fence_releases_the_receiver_and_ping_cannot_revive_it() -> Result<()>
+    {
         for lost in [false, true] {
             let mut recovery = held_recovery();
             let capture = platform::CaptureGate::default();
             let epoch = capture.try_local_epoch().unwrap();
-            assert_eq!(retired_receiving_lease(Some((1, epoch)), capture.route()), None);
+            assert_eq!(
+                retired_receiving_lease(Some((1, epoch)), capture.route()),
+                None
+            );
             capture.disable();
             let route = if lost { None } else { capture.route() };
             let lease = retired_receiving_lease(recovery.receiver.active().zip(Some(epoch)), route);
@@ -797,20 +810,42 @@ mod tests {
         let capture = platform::CaptureGate::default();
         let epoch = capture.try_local_epoch().unwrap();
         capture.disable();
-        assert_eq!(retired_receiving_lease(Some((1, epoch)), capture.route()), Some(1));
+        assert_eq!(
+            retired_receiving_lease(Some((1, epoch)), capture.route()),
+            Some(1)
+        );
         let mut reporter = super::super::InputReporter::new(false);
         {
             let mut status = InputStatus::new(true, &mut reporter);
             status.recovering();
-            assert!(status.checked(recovery.release_with(|_| anyhow::bail!("fake retired-fence release rejected"))).is_err());
+            assert!(status
+                .checked(
+                    recovery.release_with(|_| anyhow::bail!("fake retired-fence release rejected"))
+                )
+                .is_err());
             assert!(!recovery.receiver.heartbeat(1, 3));
             status.finish(true);
         }
         assert_eq!(reporter.last, Some(WorkerInputState::RecoveryUnconfirmed));
         let mut released = Vec::new();
-        recovery.pending_releases.flush(|event| { released.push(event); Ok::<_, ()>(()) }).unwrap();
-        assert!(matches!(released.as_slice(), [Input::Key { usage: 0xe0, down: false }]));
-        recovery.pending_releases.flush(|_| -> Result<(), ()> { panic!("successful cleanup cannot replay") }).unwrap();
+        recovery
+            .pending_releases
+            .flush(|event| {
+                released.push(event);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+        assert!(matches!(
+            released.as_slice(),
+            [Input::Key {
+                usage: 0xe0,
+                down: false
+            }]
+        ));
+        recovery
+            .pending_releases
+            .flush(|_| -> Result<(), ()> { panic!("successful cleanup cannot replay") })
+            .unwrap();
         Ok(())
     }
     fn held_recovery() -> Recovery {
