@@ -233,10 +233,8 @@ async fn drain_capture(
         let (result, pending) = state;
         match result {
             Ok(true) if !pending => return failure.map_or(Ok(()), Err),
-            Err(error) => {
-                if failure.is_none() {
-                    failure = status.checked::<()>(Err(error)).err();
-                }
+            Err(error) if failure.is_none() => {
+                failure = status.checked::<()>(Err(error)).err();
             }
             _ => (),
         }
