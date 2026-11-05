@@ -1127,3 +1127,23 @@ not bound且无资源seal。这些是明确差异，完整app签名是修复候�
 修改plist/helper的独立副本拒绝通过。新GUI诊断的格式/模式/输出界限/进程截止回归待CI。
 新版仍无DeveloperID/公证，默认DR不放宽；旧授权不保证沿用。真实新worker授权、
 物理C06及GUI6.83GB事故均未解决/未验收，不把签名或CI等同原生成功。
+
+
+运行候选c9307aa44b79f21298d4eb48ad0afb9a7f263811通过完整五项
+[CI42039285409](https://github.com/ForceMind/PeerGlide/actions/runs/42039285409)及两平台
+[驻留诊断42039285155](https://github.com/ForceMind/PeerGlide/actions/runs/42039285155)。
+新增worker诊断5条回归（Unix含真实子进程超时/关闭回收；Windows为3条纯/命令回归）
+与7条打包回归实际通过，Mac解压签名复验和plist/helper篡改拒绝通过。针对性复核发现
+的诊断线程退出孤儿风险已用cancel+join及PID消失回归修正；测试等待可解析PID而非
+仅文件存在，避免空文件竞态。该复核不是完整安全审计。
+
+Mac artifact13419264044外层sha256为f0bb70138528893d1f847903ffa0ecc20ae7ce96821e23dbf0417a08f3f19221，
+内层摘要、安全解压路径、无用户身份/配置及本机codesign strict/metadata复验已过：
+main identifier=com.peerglide.PeerGlide、Info.plist entries=11、资源seal version2；helper
+作为嵌套代码密封。此本机检查只验证完整性，不等于DeveloperID、公证或TCC授权。
+
+同身份私有profile曾保存用户前次明确选择的native偏好true，但allow=false；普通启动
+不会因此开启Native，诊断命令也不读取该偏好来授权。本次新候选只读启动遇到宿主锁屏，
+未点击实际worker诊断；监测到3分钟结束停止空闲GUI，采样峰RSS126400KiB，无Native。
+等待用户手动解锁后继续实际helper/正常App责任链复查，旧授权不保证沿用。现阶段未
+完成物理输入，签名是候选修复，GUI6.83GB事故仍未定位；Windows旧会话可停止保留配对。

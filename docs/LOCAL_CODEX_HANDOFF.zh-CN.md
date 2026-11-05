@@ -690,3 +690,17 @@ CI将跑原检查并解压包验证签名、篡改plist/helper负例。源码输
 包仍可协商；正式候选以完整测试包为准，不混用本机GUI/CLI。C06和GUI内存事故仍未过，
 真实新worker权限自检必须在正常应用启动且用户授权的候选上复验；旧ad-hoc授权不保证
 跨build自动沿用。当前无活跃Native，Windows可以停止旧会话保持配对，先等待候选。
+
+
+0.2.3运行候选c9307aa的五项CI42039285409与两平台驻留42039285155均过；5条GUI
+worker诊断回归（Win3条）及7条打包回归过，Mac ZIP解压+篡改拒绝过。Mac包artifact
+13419264044已下载至ignored worker-permissions-c9307aa/mac并在本机strict/metadata验证。
+新包main ID和plist绑定/资源seal正确；这不是已验证TCC修复或物理C06成功。
+
+本机尝试只读复查遇到锁屏，已异步请用户手动解锁，尚未得到回复；不要尝试代解锁。
+该新GUI受监测到期停止（峰126400KiB），无Native/worker诊断执行。解锁后先查精确PID，
+不存在则使用正常应用入口并显式带active-private-pilot.json所指profile，切勿让CUA默认
+重开无参数profile。检查“设置→检查实际工作进程权限”后，才能决定是否需要用户对
+新版重新确认一次系统授权；不要扩大宿主权限或重配设备。旧saved native=true只是偏好，
+allow=false，普通连接和只读诊断不启用Native。本批最后文档提交不改运行源码；保留
+c9307aa完整包用于实机复查，最终head CI及最新证据以PR48回读为准。
