@@ -1,8 +1,9 @@
 use super::*;
-use anyhow::{bail, ensure};
+use anyhow::ensure;
 use std::{cell::RefCell, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::*,
+    System::Threading::GetCurrentThreadId,
     UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
 
@@ -68,7 +69,35 @@ fn local_mouse_event(message: u32, data: u32) -> LocalMouseEvent {
     }
 }
 
-thread_local! { static WHEEL:RefCell<[i32; 2]>=const {RefCell::new([0; 2])}; }
+#[derive(Default)]
+struct WheelState { route: Option<CaptureRoute>, remainder: [i32; 2] }
+impl WheelState {
+    fn steps(&mut self, route: CaptureRoute, axis: usize, delta: i16) -> i16 {
+        if self.route != Some(route) { self.remainder = [0; 2]; self.route = Some(route); }
+        wheel_steps(&mut self.remainder[axis], delta)
+    }
+}
+thread_local! { static WHEEL:RefCell<WheelState>=const {RefCell::new(WheelState{route:None,remainder:[0;2]})}; }
+#[derive(Default)]
+pub(super) struct ReceiveWake { thread: std::sync::Mutex<Option<u32>> }
+impl ReceiveWake {
+    pub(super) fn wake(&self) {
+        if let Ok(thread) = self.thread.lock() {
+            if let Some(thread) = *thread {
+                // The lock synchronizes registration teardown and prevents an
+                // old command from targeting a subsequently reused thread ID.
+                unsafe { PostThreadMessageW(thread, WM_APP + 41, 0, 0); }
+            }
+        }
+    }
+}
+struct WakeRegistration(Arc<ReceiveWake>);
+impl Drop for WakeRegistration {
+    fn drop(&mut self) { if let Ok(mut thread) = self.0.thread.lock() { *thread = None; } }
+}
+pub(super) fn suppressed_modifiers_held() -> bool {
+    STATE.with_borrow(|state| state.as_ref().is_none_or(HookState::suppressed_modifiers))
+}
 thread_local! { static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)}; }
 pub fn capture(
     tx: mpsc::Sender<Captured>,
@@ -76,11 +105,30 @@ pub fn capture(
     target: InputCapabilities,
     local_gestures: Option<gesture_capture::CallbackBroker>,
 ) -> Result<CaptureThread> {
+    capture_impl(tx, gate, target, local_gestures, None)
+}
+pub(super) fn capture_receiving(tx: mpsc::Sender<Captured>, gate: CaptureGate,
+    target: InputCapabilities, engine: receive_driver::ReceiveEngine, wake: Arc<ReceiveWake>) -> Result<CaptureThread> {
+    capture_impl(tx, gate, target, None, Some((engine, wake)))
+}
+fn capture_impl(tx: mpsc::Sender<Captured>, gate: CaptureGate, target: InputCapabilities,
+    local_gestures: Option<gesture_capture::CallbackBroker>,
+    receive: Option<(receive_driver::ReceiveEngine, Arc<ReceiveWake>)>) -> Result<CaptureThread> {
     let reservation = capture_thread::Reservation::acquire()?;
     let (ready, rx) = std::sync::mpsc::sync_channel(1);
     let thread = CaptureThread::spawn_reserved(
         move |stop| unsafe {
             SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let receive_gate = gate.clone();
+            let mut receive = receive;
+            let mut source_health = SourceHealth::new();
+            let mut receive_backend = NativeReceiveBackend { gate: receive_gate.clone(), observation: source_health.observation };
+            let mut queue: MSG = std::mem::zeroed();
+            PeekMessageW(&mut queue, null_mut(), 0, 0, PM_NOREMOVE);
+            let _wake_registration = receive.as_ref().map(|(_, wake)| {
+                if let Ok(mut thread) = wake.thread.lock() { *thread = Some(GetCurrentThreadId()); }
+                WakeRegistration(wake.clone())
+            });
             let keys = initial_keys();
             let buttons = initial_buttons();
             let mut local_gestures = local_gestures;
@@ -130,6 +178,15 @@ pub fn capture(
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
             let unexpected = loop {
+                if receive.is_some() {
+                    let debt = STATE.with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
+                        || receive_gate.receiving_epoch().is_some();
+                    source_health.sample(&mut receive_backend, debt);
+                }
+                // Native effects may synchronously reenter our hooks. This
+                // engine and its backend live outside the STATE RefCell borrow.
+                let immediate = receive.as_mut().is_some_and(|(engine, _)|
+                    engine.pump(&mut receive_backend, now_ms(), stop.load(Ordering::Acquire)));
                 let cleanup = STATE.with_borrow_mut(|state| {
                     state
                         .as_mut()
@@ -147,7 +204,8 @@ pub fn capture(
                         }
                     });
                 }
-                let stopping = stop.load(Ordering::Acquire);
+                let stopping = stop.load(Ordering::Acquire) || receive.as_ref()
+                    .is_some_and(|(engine, _)| engine.control().stop_requested());
                 let keep_running = STATE.with_borrow_mut(|state| {
                     state.as_mut().is_some_and(|s| {
                         if let Some(broker) = s.local_gestures.as_mut() {
@@ -160,17 +218,18 @@ pub fn capture(
                         }
                     })
                 });
-                if !keep_running {
+                if !keep_running && receive.as_ref().is_none_or(|(engine, _)| engine.can_exit()) {
                     break false;
                 }
+                if !receive_gate.0.healthy.load(Ordering::Acquire) { break true; }
                 if PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0 {
                     if msg.message == WM_QUIT {
                         break true;
                     }
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
-                } else {
-                    // Input wakes immediately; the timeout bounds cooperative shutdown.
+                } else if !immediate {
+                    // Input/typed commands wake immediately; the timeout bounds cooperative shutdown.
                     if MsgWaitForMultipleObjectsEx(
                         0,
                         std::ptr::null(),
@@ -194,6 +253,10 @@ pub fn capture(
                     }
                 }
             });
+            if let Some((engine, _)) = receive.as_mut() {
+                engine.pump(&mut receive_backend, now_ms(), true);
+                let _ = engine.outcome(); // Preserve failure in the shared control.
+            }
             UnhookWindowsHookEx(mouse);
             UnhookWindowsHookEx(keyboard);
         },
@@ -350,13 +413,13 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                     WM_MOUSEWHEEL => s.scroll_routed(
                         0,
                         WHEEL.with_borrow_mut(|r| {
-                            wheel_steps(&mut r[1], (e.mouseData >> 16) as i16)
+                            r.steps(route, 1, (e.mouseData >> 16) as i16)
                         }),
                         route,
                     ),
                     WM_MOUSEHWHEEL => s.scroll_routed(
                         WHEEL.with_borrow_mut(|r| {
-                            wheel_steps(&mut r[0], (e.mouseData >> 16) as i16)
+                            r.steps(route, 0, (e.mouseData >> 16) as i16)
                         }),
                         0,
                         route,
@@ -436,80 +499,68 @@ fn wheel_steps(remainder: &mut i32, delta: i16) -> i16 {
     (total / 120) as i16
 }
 pub fn inject(event: Input) -> Result<()> {
-    unsafe {
-        let mut input: INPUT = std::mem::zeroed();
-        match event {
-            Input::Key { usage, down } => {
-                input.r#type = INPUT_KEYBOARD;
-                input.Anonymous.ki = key_input(usage, down)?;
-            }
-            Input::Button { button, down } => {
-                input.r#type = INPUT_MOUSE;
-                let flags = match (button, down) {
-                    (1, true) => MOUSEEVENTF_LEFTDOWN,
-                    (1, false) => MOUSEEVENTF_LEFTUP,
-                    (2, true) => MOUSEEVENTF_RIGHTDOWN,
-                    (2, false) => MOUSEEVENTF_RIGHTUP,
-                    (3, true) => MOUSEEVENTF_MIDDLEDOWN,
-                    (3, false) => MOUSEEVENTF_MIDDLEUP,
-                    _ => bail!("unsupported mouse button"),
-                };
-                input.Anonymous.mi = MOUSEINPUT {
-                    dx: 0,
-                    dy: 0,
-                    mouseData: 0,
-                    dwFlags: flags,
-                    time: 0,
-                    dwExtraInfo: TAG,
-                };
-            }
-            Input::Scroll { x, y } => {
-                if x != 0 && y != 0 {
-                    inject(Input::Scroll { x, y: 0 })?;
-                }
-                input.r#type = INPUT_MOUSE;
-                input.Anonymous.mi = MOUSEINPUT {
-                    dx: 0,
-                    dy: 0,
-                    mouseData: (if y != 0 { y } else { x } as i32 * 120) as u32,
-                    dwFlags: if y != 0 {
-                        MOUSEEVENTF_WHEEL
-                    } else {
-                        MOUSEEVENTF_HWHEEL
-                    },
-                    time: 0,
-                    dwExtraInfo: TAG,
-                };
+    receive_inject(event).map_err(|error| anyhow::anyhow!("native input request failed: {error:?}"))
+}
+pub(super) fn receive_inject(event: Input) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    let (inputs, count) = input_packets(event)?;
+    submit_inputs(&inputs[..count])
+}
+fn input_packets(event: Input) -> std::result::Result<([INPUT; 2], usize), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    if !event.valid() { return Err(NativeFailure::BeforeSubmission); }
+    // Fully initialized fixed packets, constructed on the Native owner thread.
+    let mut inputs: [INPUT; 2] = unsafe { std::mem::zeroed() };
+    let mut count = 1;
+    match event {
+        Input::Key { usage, down } => {
+            inputs[0].r#type = INPUT_KEYBOARD;
+            inputs[0].Anonymous.ki = key_input(usage, down).map_err(|_| NativeFailure::BeforeSubmission)?;
+        }
+        Input::Button { button, down } => {
+            let flags = match (button, down) {
+                (1,true) => MOUSEEVENTF_LEFTDOWN, (1,false) => MOUSEEVENTF_LEFTUP,
+                (2,true) => MOUSEEVENTF_RIGHTDOWN, (2,false) => MOUSEEVENTF_RIGHTUP,
+                (3,true) => MOUSEEVENTF_MIDDLEDOWN, (3,false) => MOUSEEVENTF_MIDDLEUP,
+                _ => return Err(NativeFailure::BeforeSubmission),
+            };
+            inputs[0] = mouse_packet(flags, 0);
+        }
+        Input::Scroll { x, y } => {
+            inputs[0] = mouse_packet(if y != 0 { MOUSEEVENTF_WHEEL } else { MOUSEEVENTF_HWHEEL },
+                (i32::from(if y != 0 { y } else { x }) * 120) as u32);
+            if x != 0 && y != 0 {
+                inputs[1] = mouse_packet(MOUSEEVENTF_HWHEEL, (i32::from(x) * 120) as u32);
+                count = 2;
             }
         }
-        ensure!(
-            SendInput(1, &input, size_of::<INPUT>() as i32) == 1,
-            "SendInput rejected (integrity level / secure desktop)"
-        );
-        Ok(())
     }
+    Ok((inputs, count))
+}
+fn mouse_packet(flags: u32, data: u32) -> INPUT {
+    INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi: MOUSEINPUT {
+        dx:0, dy:0, mouseData:data, dwFlags:flags, time:0, dwExtraInfo:TAG,
+    } } }
+}
+fn submit_inputs(inputs: &[INPUT]) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    // The result counts SDK submissions only. UIPI/secure-desktop restrictions
+    // are not bypassed and GetLastError cannot reliably identify UIPI failure.
+    let count = unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+    let _error = unsafe { GetLastError() };
+    if count == inputs.len() as u32 { Ok(()) }
+    else if count == 0 { Err(NativeFailure::BeforeSubmission) }
+    else { Err(NativeFailure::UnknownOutcome) }
 }
 pub fn pointer(x: f64, y: f64) -> Result<()> {
-    unsafe {
-        let input = INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dx: (x * 65535.0).round() as i32,
-                    dy: (y * 65535.0).round() as i32,
-                    mouseData: 0,
-                    dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
-                    time: 0,
-                    dwExtraInfo: TAG,
-                },
-            },
-        };
-        ensure!(
-            SendInput(1, &input, size_of::<INPUT>() as i32) == 1,
-            "pointer injection rejected"
-        );
-        Ok(())
-    }
+    receive_pointer(x, y).map_err(|error| anyhow::anyhow!("native pointer request failed: {error:?}"))
+}
+pub(super) fn receive_pointer(x: f64, y: f64) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    if !(ReceivePoint { x, y }).valid() { return Err(peerglide_actions::execution::NativeFailure::BeforeSubmission); }
+    let mut input = mouse_packet(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, 0);
+    // The active union member is initialized by mouse_packet above.
+    input.Anonymous.mi.dx = (x * 65535.0).round() as i32;
+    input.Anonymous.mi.dy = (y * 65535.0).round() as i32;
+    submit_inputs(&[input])
 }
 // Set-1 physical scan positions; E0 distinguishes keypad/navigation and modifiers.
 const KEYS: &[(u16, u16, bool)] = &[
@@ -816,6 +867,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn wheel_remainders_do_not_cross_route_or_epoch_boundaries() {
+        let gate=CaptureGate::default();
+        let local=gate.route().unwrap();
+        let mut wheel=WheelState::default();
+        assert_eq!(wheel.steps(local,1,60),0);
+        let remote=CaptureRoute::Remote(gate.publish(true).unwrap());
+        assert_eq!(wheel.steps(remote,1,60),0);
+        assert_eq!(wheel.steps(remote,1,60),1);
+        assert_eq!(wheel.steps(remote,0,60),0);
+        gate.disable();
+        let next=CaptureRoute::Remote(gate.publish(true).unwrap());
+        assert_eq!(wheel.steps(next,0,60),0);
+        assert_eq!(wheel.steps(next,0,60),1);
+    }
+    #[test]
+    fn receiver_packets_keep_owned_tags_and_two_axis_submission_is_one_finite_batch() {
+        let (inputs,count)=input_packets(Input::Scroll{x:1,y:-2}).unwrap();
+        assert_eq!(count,2);
+        unsafe {
+            assert_eq!(inputs[0].Anonymous.mi.dwFlags,MOUSEEVENTF_WHEEL);
+            assert_eq!(inputs[1].Anonymous.mi.dwFlags,MOUSEEVENTF_HWHEEL);
+            for input in inputs { assert_eq!(input.Anonymous.mi.dwExtraInfo,TAG); }
+        }
+        let (inputs,count)=input_packets(Input::Key{usage:4,down:false}).unwrap();
+        assert_eq!(count,1);
+        unsafe { assert_eq!(inputs[0].Anonymous.ki.dwExtraInfo,TAG);
+            assert_ne!(inputs[0].Anonymous.ki.dwFlags & KEYEVENTF_KEYUP,0); }
+    }
     #[test]
     fn high_resolution_wheel_preserves_remainder_and_direction() {
         let mut remainder = 0;

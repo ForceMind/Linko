@@ -1,35 +1,12 @@
 //! Finite, epoch-bound KVM receive service for the existing Native loop.
 //! No hooks, G1, wire commands, logging or OS calls are installed by this module.
 //! Only Engine/Backend submit effects; callbacks use precloned Control atomics.
-use crate::{now_ms, CaptureEpoch};
+use crate::CaptureEpoch;
 use peerglide_actions::execution::NativeFailure;
 use peerglide_protocol::Input;
-use std::{
-    cell::Cell,
-    fmt,
-    marker::PhantomData,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
-        mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError},
-        Arc,
-    },
-    time::Duration,
-};
-use tokio::sync::oneshot;
+use std::{fmt, time::Duration};
 
 pub const COMMAND_TIMEOUT: Duration = Duration::from_millis(250);
-const COMMAND_MS: u64 = 250;
-const WATCHDOG_MS: u64 = 1000;
-const BUDGET: usize = 32;
-const RETRIES: u8 = 3;
-const IDLE: u8 = 0;
-const ACTIVE: u8 = 1;
-const DRAINING: u8 = 2;
-const FAILED: u8 = 3;
-const FORCED: u8 = 4;
-
-type Wake = Arc<dyn Fn() + Send + Sync>;
-
 #[derive(Clone, Copy)]
 pub struct ReceivePoint {
     pub x: f64,
@@ -80,6 +57,31 @@ impl fmt::Display for ReceiveError {
     }
 }
 impl std::error::Error for ReceiveError {}
+
+
+// The production Engine only exists where there is a Native loop. Tests use
+// this same implementation with injected backends on every CI platform.
+#[cfg(any(windows, target_os = "macos", test))]
+mod implementation {
+use super::*;
+use crate::now_ms;
+use std::{cell::Cell, marker::PhantomData, sync::{
+    atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+    mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError}, Arc,
+}};
+use tokio::sync::oneshot;
+const COMMAND_MS: u64 = 250;
+const WATCHDOG_MS: u64 = 1000;
+const BUDGET: usize = 32;
+const RETRIES: u8 = 3;
+const IDLE: u8 = 0;
+const ACTIVE: u8 = 1;
+const DRAINING: u8 = 2;
+const FAILED: u8 = 3;
+const FORCED: u8 = 4;
+
+
+type Wake = Arc<dyn Fn() + Send + Sync>;
 
 struct Shared {
     phase: AtomicU8,
@@ -630,14 +632,13 @@ impl ReceiveEngine {
         if self.control.shared.phase.load(Ordering::Acquire) == FAILED {
             if self.control.shared.force.load(Ordering::Acquire) >= epoch.generation
                 && !backend.consumed_modifiers_held()
+                && backend.force_return(epoch).is_ok()
             {
-                if backend.force_return(epoch).is_ok() {
-                    if let Some(active) = &mut self.active {
-                        active.protected = false;
-                    }
-                    self.control.shared.stop.store(true, Ordering::Release);
-                    self.control.shared.phase.store(FORCED, Ordering::Release);
+                if let Some(active) = &mut self.active {
+                    active.protected = false;
                 }
+                self.control.shared.stop.store(true, Ordering::Release);
+                self.control.shared.phase.store(FORCED, Ordering::Release);
             }
             return;
         }
@@ -704,10 +705,10 @@ impl ReceiveEngine {
                 if let Some(active) = &self.active {
                     if active.epoch == epoch && !active.draining && !self.poisoned {
                         if let Some(point) = cursor {
-                            if self.data_guard(backend, epoch, request, expires, now) {
-                                if backend.pointer(point).is_err() {
-                                    self.fail();
-                                }
+                            if self.data_guard(backend, epoch, request, expires, now)
+                                && backend.pointer(point).is_err()
+                            {
+                                self.fail();
                             }
                         }
                     }
@@ -733,7 +734,11 @@ impl ReceiveEngine {
                 } else {
                     match backend.enter_receiving() {
                         Err(NativeFailure::BeforeSubmission) => Err(ReceiveError::Busy),
-                        Err(error) => Err(ReceiveError::Native(error)),
+                        Err(error) => {
+                            self.fail();
+                            self.control.shared.phase.store(FAILED, Ordering::Release);
+                            Err(ReceiveError::Native(error))
+                        }
                         Ok(epoch) => {
                             let scope = self.control.shared.instance.load(Ordering::Acquire);
                             let previous = self.control.shared.generation.load(Ordering::Acquire);
@@ -1014,12 +1019,17 @@ mod tests {
     struct Fake {
         generation: u64,
         epoch: Option<CaptureEpoch>,
+        enter_error: Option<NativeFailure>,
         alive: bool,
+        observation: Option<crate::SourceObservation>,
         modifiers: bool,
         clock: u64,
         advance_pointer: u64,
+        advance_input: u64,
         recover_in_pointer: Option<ReceiveControl>,
         fail_down: Option<NativeFailure>,
+        fail_pointer: bool,
+        up_failures_remaining: usize,
         fail_up: bool,
         fail_key_up: Option<u16>,
         effects: Vec<Effect>,
@@ -1029,12 +1039,17 @@ mod tests {
             Self {
                 generation: 0,
                 epoch: None,
+                enter_error: None,
                 alive: true,
+                observation: None,
                 modifiers: false,
                 clock: 0,
                 advance_pointer: 0,
+                advance_input: 0,
                 recover_in_pointer: None,
                 fail_down: None,
+                fail_pointer: false,
+                up_failures_remaining: 0,
                 fail_up: false,
                 fail_key_up: None,
                 effects: Vec::new(),
@@ -1043,6 +1058,7 @@ mod tests {
     }
     impl ReceiveBackend for Fake {
         fn enter_receiving(&mut self) -> Result<CaptureEpoch, NativeFailure> {
+            if let Some(error) = self.enter_error { return Err(error); }
             if self.epoch.is_some() {
                 return Err(NativeFailure::BeforeSubmission);
             }
@@ -1059,13 +1075,15 @@ mod tests {
             self.epoch == Some(epoch)
         }
         fn source_alive(&self) -> bool {
-            self.alive
+            self.alive && self.observation.is_none_or(|observation| observation.fresh_at(
+                self.clock, std::time::SystemTime::UNIX_EPOCH+Duration::from_millis(self.clock)))
         }
         fn consumed_modifiers_held(&self) -> bool {
             self.modifiers
         }
         fn pointer(&mut self, _point: ReceivePoint) -> Result<(), NativeFailure> {
             self.effects.push(Effect::Pointer);
+            if self.fail_pointer { return Err(NativeFailure::BeforeSubmission); }
             self.clock = self.clock.saturating_add(self.advance_pointer);
             if let (Some(control), Some(epoch)) = (&self.recover_in_pointer, self.epoch) {
                 control.request_recovery(epoch);
@@ -1073,6 +1091,7 @@ mod tests {
             Ok(())
         }
         fn input(&mut self, event: Input) -> Result<(), NativeFailure> {
+            self.clock = self.clock.saturating_add(self.advance_input);
             match event {
                 Input::Key { usage, down } => {
                     self.effects.push(Effect::Key(usage, down));
@@ -1080,13 +1099,16 @@ mod tests {
                         if let Some(error) = self.fail_down {
                             return Err(error);
                         }
-                    } else if self.fail_up || self.fail_key_up == Some(usage) {
+                    } else if self.fail_up || self.fail_key_up == Some(usage) || self.up_failures_remaining != 0 {
+                        self.up_failures_remaining = self.up_failures_remaining.saturating_sub(1);
                         return Err(NativeFailure::PermissionLost);
                     }
                 }
                 Input::Button { button, down } => {
                     self.effects.push(Effect::Button(button, down));
-                    if !down && self.fail_up {
+                    if down { if let Some(error) = self.fail_down { return Err(error); } }
+                    else if self.fail_up || self.up_failures_remaining != 0 {
+                        self.up_failures_remaining = self.up_failures_remaining.saturating_sub(1);
                         return Err(NativeFailure::PermissionLost);
                     }
                 }
@@ -1722,6 +1744,126 @@ mod tests {
         assert!(engine.can_exit());
     }
 
+    #[test]
+    fn a_slow_pointer_cannot_hide_a_source_gap_before_owned_modifier_cleanup() {
+        let (mut driver,mut engine,mut backend,_)=setup(8);
+        backend.observation=Some(crate::SourceObservation::at(0,std::time::SystemTime::UNIX_EPOCH));
+        let epoch=begin(&mut driver,&mut engine,&mut backend,0);
+        input(&mut driver,&mut engine,&mut backend,epoch,Input::Key{usage:0xe0,down:true},1).unwrap();
+        backend.advance_pointer=1501;
+        let (_,mut reply)=enqueue(&mut driver,Kind::Pointer{epoch,point:point()},2);
+        pump(&mut engine,&mut backend,2);
+        // The in-flight SDK request may already have completed; this check
+        // promises only to reject subsequent effects, never to interrupt it.
+        assert!(matches!(reply.try_recv().unwrap(),Ok(Reply::Ack(ReceiveAck::Submitted))));
+        assert_eq!(driver.snapshot(epoch),ReceiveSnapshot::RecoveryRequired);
+        assert!(engine.can_exit(),"source loss detaches instead of waiting for an unobservable physical Up");
+        assert!(engine.active.as_ref().unwrap().ledger.held(Input::Key{usage:0xe0,down:true}));
+        assert!(!backend.effects.contains(&Effect::Key(0xe0,false)),"no blind owned Up after the 1.5s gap");
+    }
+    #[test]
+    fn cleanup_checks_the_same_observation_after_each_sdk_return_and_stops_before_modifier_up() {
+        let (mut driver,mut engine,mut backend,_)=setup(8);
+        backend.observation=Some(crate::SourceObservation::at(0,std::time::SystemTime::UNIX_EPOCH));
+        let epoch=begin(&mut driver,&mut engine,&mut backend,0);
+        input(&mut driver,&mut engine,&mut backend,epoch,Input::Key{usage:0xe0,down:true},1).unwrap();
+        input(&mut driver,&mut engine,&mut backend,epoch,Input::Key{usage:4,down:true},2).unwrap();
+        backend.advance_input=1501;
+        driver.control().request_recovery(epoch);
+        pump(&mut engine,&mut backend,3);
+        assert!(backend.effects.contains(&Effect::Key(4,false)),"the first cleanup SDK call was already in flight");
+        assert!(!backend.effects.contains(&Effect::Key(0xe0,false)),"the next owned modifier Up must not be submitted");
+        assert_eq!(driver.snapshot(epoch),ReceiveSnapshot::RecoveryRequired);
+        assert!(engine.can_exit());
+        assert!(engine.active.as_ref().unwrap().ledger.held(Input::Key{usage:0xe0,down:true}));
+    }
+    #[test]
+    fn begin_refusal_is_busy_only_before_publication_and_permission_failure_stays_required() {
+        let (mut driver,mut engine,mut backend,_)=setup(8);
+        backend.enter_error=Some(NativeFailure::BeforeSubmission);
+        let (_,mut reply)=enqueue(&mut driver,Kind::Begin,0);
+        pump(&mut engine,&mut backend,0);
+        assert!(matches!(reply.try_recv().unwrap(),Err(ReceiveError::Busy)));
+        assert!(backend.epoch.is_none());
+        assert!(backend.effects.is_empty());
+        assert_eq!(driver.control().outcome(),ReceiveAck::Retired);
+        backend.enter_error=None;
+        let epoch=begin(&mut driver,&mut engine,&mut backend,1);
+        assert!(driver.is_current(epoch),"ordinary physical-held refusal can be retried");
+
+        let (mut driver,mut engine,mut backend,_)=setup(8);
+        backend.enter_error=Some(NativeFailure::PermissionLost);
+        let (_,mut reply)=enqueue(&mut driver,Kind::Begin,0);
+        pump(&mut engine,&mut backend,0);
+        assert!(matches!(reply.try_recv().unwrap(),Err(ReceiveError::Native(NativeFailure::PermissionLost))));
+        assert!(backend.epoch.is_none());
+        assert!(backend.effects.is_empty());
+        assert_eq!(driver.control().outcome(),ReceiveAck::RecoveryRequired);
+    }
+    fn pair(down: bool, button: bool) -> Input {
+        if button { Input::Button {button:1,down} } else { Input::Key {usage:4,down} }
+    }
+    fn up_count(backend: &Fake, button: bool) -> usize {
+        let expected=if button { Effect::Button(1,false) } else { Effect::Key(4,false) };
+        backend.effects.iter().filter(|effect| **effect==expected).count()
+    }
+    #[test]
+    fn owned_normal_up_survives_cursor_failure_and_successful_cleanup_up_is_not_replayed() {
+        for button in [false,true] {
+            let (mut driver,mut engine,mut backend,_)=setup(8);
+            let epoch=begin(&mut driver,&mut engine,&mut backend,0);
+            input(&mut driver,&mut engine,&mut backend,epoch,pair(true,button),1).unwrap();
+            backend.fail_pointer=true;
+            assert_eq!(input(&mut driver,&mut engine,&mut backend,epoch,pair(false,button),2),
+                Err(ReceiveError::Native(NativeFailure::BeforeSubmission)));
+            assert_eq!(up_count(&backend,button),1,"failed cursor skipped normal Up, so Native cleanup still owns one Up");
+            assert!(!engine.active.as_ref().unwrap().ledger.held(pair(false,button)));
+            pump(&mut engine,&mut backend,3);
+            assert_eq!(up_count(&backend,button),1);
+            assert_eq!(driver.snapshot(epoch),ReceiveSnapshot::RecoveryRequired,"error remains visible even after cleanup SDK request");
+        }
+    }
+    #[test]
+    fn failed_normal_up_retains_owned_debt_for_cleanup_but_successful_up_never_repeats() {
+        for button in [false,true] {
+            let (mut driver,mut engine,mut backend,_)=setup(8);
+            let epoch=begin(&mut driver,&mut engine,&mut backend,0);
+            input(&mut driver,&mut engine,&mut backend,epoch,pair(true,button),1).unwrap();
+            backend.up_failures_remaining=1;
+            assert_eq!(input(&mut driver,&mut engine,&mut backend,epoch,pair(false,button),2),
+                Err(ReceiveError::Native(NativeFailure::PermissionLost)));
+            assert_eq!(up_count(&backend,button),2,"one failed normal submission and one owned cleanup request");
+            assert!(!engine.active.as_ref().unwrap().ledger.held(pair(false,button)));
+            pump(&mut engine,&mut backend,3);
+            assert_eq!(up_count(&backend,button),2);
+
+            let (mut driver,mut engine,mut backend,_)=setup(8);
+            let epoch=begin(&mut driver,&mut engine,&mut backend,0);
+            input(&mut driver,&mut engine,&mut backend,epoch,pair(true,button),1).unwrap();
+            input(&mut driver,&mut engine,&mut backend,epoch,pair(false,button),2).unwrap();
+            driver.control().request_recovery(epoch);
+            pump(&mut engine,&mut backend,3);
+            pump(&mut engine,&mut backend,4);
+            assert_eq!(up_count(&backend,button),1,"successfully submitted normal Up retired the owned bit");
+            assert_eq!(driver.snapshot(epoch),ReceiveSnapshot::Retired);
+        }
+    }
+    #[test]
+    fn definite_before_submission_rolls_back_only_new_down_and_preserves_repeat_owned_debt() {
+        for button in [false,true] {
+            for already_owned in [false,true] {
+                let (mut driver,mut engine,mut backend,_)=setup(8);
+                let epoch=begin(&mut driver,&mut engine,&mut backend,0);
+                if already_owned { input(&mut driver,&mut engine,&mut backend,epoch,pair(true,button),1).unwrap(); }
+                backend.fail_down=Some(NativeFailure::BeforeSubmission);
+                assert_eq!(input(&mut driver,&mut engine,&mut backend,epoch,pair(true,button),2),
+                    Err(ReceiveError::Native(NativeFailure::BeforeSubmission)));
+                assert_eq!(up_count(&backend,button),usize::from(already_owned),
+                    "fresh rejected Down invents no Up; rejected repeat retains the original Down");
+                assert_eq!(driver.snapshot(epoch),ReceiveSnapshot::RecoveryRequired);
+            }
+        }
+    }
     #[tokio::test]
     async fn actual_async_driver_gets_a_reply_without_fixed_per_event_sleep() {
         let (mut driver, mut engine, mut backend, wakes) = setup(8);
@@ -1760,3 +1902,48 @@ mod tests {
         assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
     }
 }
+
+}
+
+#[cfg(any(windows, target_os = "macos", test))]
+pub use implementation::{ReceiveControl, ReceiveDriver};
+#[cfg(any(windows, target_os = "macos", test))]
+pub(crate) use implementation::{channel, ReceiveBackend, ReceiveEngine};
+
+// Unsupported hosts still compile the public session API. They never construct
+// a native service, report ready, allocate an input queue or submit an OS event.
+#[cfg(not(any(windows, target_os = "macos", test)))]
+mod unsupported {
+    use super::*;
+    use std::{cell::Cell, marker::PhantomData, sync::{Arc, atomic::{AtomicBool, Ordering}}};
+    #[derive(Clone)]
+    pub struct ReceiveControl { stop: Arc<AtomicBool> }
+    impl ReceiveControl {
+        pub fn snapshot(&self, _epoch: CaptureEpoch) -> ReceiveSnapshot { ReceiveSnapshot::RecoveryRequired }
+        pub fn outcome(&self) -> ReceiveAck { ReceiveAck::RecoveryRequired }
+        pub fn request_recovery(&self, _epoch: CaptureEpoch) {}
+        pub fn request_stop(&self) { self.stop.store(true, Ordering::Release); }
+        pub fn stop_requested(&self) -> bool { self.stop.load(Ordering::Acquire) }
+        pub fn request_force_return(&self, _epoch: CaptureEpoch) -> bool { false }
+        pub fn wake_loop(&self) {}
+    }
+    pub struct ReceiveDriver { control: ReceiveControl, _single: PhantomData<Cell<()>> }
+    impl ReceiveDriver {
+        pub fn control(&self) -> ReceiveControl { self.control.clone() }
+        pub fn snapshot(&self, epoch: CaptureEpoch) -> ReceiveSnapshot { self.control.snapshot(epoch) }
+        pub fn is_current(&self, _epoch: CaptureEpoch) -> bool { false }
+        pub async fn begin(&mut self) -> Result<CaptureEpoch, ReceiveError> { Err(ReceiveError::Closed) }
+        pub async fn pointer(&mut self, _epoch: CaptureEpoch, point: ReceivePoint) -> Result<ReceiveAck, ReceiveError> {
+            if !point.valid() { return Err(ReceiveError::Invalid); } Err(ReceiveError::Closed)
+        }
+        pub async fn input(&mut self, _epoch: CaptureEpoch, event: Input, point: ReceivePoint) -> Result<ReceiveAck, ReceiveError> {
+            if !point.valid() || !event.valid() { return Err(ReceiveError::Invalid); } Err(ReceiveError::Closed)
+        }
+        pub async fn release(&mut self, _epoch: CaptureEpoch, point: Option<ReceivePoint>) -> Result<ReceiveAck, ReceiveError> {
+            if point.is_some_and(|point| !point.valid()) { return Err(ReceiveError::Invalid); } Err(ReceiveError::Closed)
+        }
+        pub fn heartbeat(&mut self, _epoch: CaptureEpoch) -> bool { false }
+    }
+}
+#[cfg(not(any(windows, target_os = "macos", test)))]
+pub use unsupported::{ReceiveControl, ReceiveDriver};

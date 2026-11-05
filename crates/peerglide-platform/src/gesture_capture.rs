@@ -917,6 +917,8 @@ pub fn capture(source: ActionTriggerSource) -> anyhow::Result<(GestureCapture, G
         gate,
         _thread: thread,
         return_position: std::sync::Mutex::new(None),
+        receive_driver: None,
+        receive_control: None,
     };
     Ok((GestureCapture { control, session }, receiver))
 }

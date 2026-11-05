@@ -55,23 +55,86 @@ extern "C" {
     fn CFMachPortCreateRunLoopSource(allocator: Ref, port: Ref, order: isize) -> Ref;
     fn CFRunLoopGetCurrent() -> Ref;
     fn CFRunLoopAddSource(loop_: Ref, source: Ref, mode: Ref);
+    fn CFRunLoopRemoveSource(loop_: Ref, source: Ref, mode: Ref);
+    fn CFRunLoopSourceCreate(allocator: Ref, order: isize, context: *mut SourceContext) -> Ref;
+    fn CFRunLoopSourceSignal(source: Ref);
+    fn CFRunLoopWakeUp(loop_: Ref);
+    fn CFRetain(value: *const c_void) -> Ref;
     fn CFRunLoopRunInMode(mode: Ref, seconds: f64, return_after_source: bool) -> i32;
     static kCFRunLoopDefaultMode: Ref;
     fn CFRelease(value: *const c_void);
 }
+// ABI from Apple's CFRunLoop.h, version-0 source. The perform callback has
+// no input/state work; it just makes RunInMode(returnAfterSource=true) return.
+#[repr(C)]
+struct SourceContext {
+    version: isize, info: Ref,
+    retain: Option<unsafe extern "C" fn(*const c_void) -> *const c_void>,
+    release: Option<unsafe extern "C" fn(*const c_void)>,
+    description: Option<unsafe extern "C" fn(*const c_void) -> Ref>,
+    equal: Option<unsafe extern "C" fn(*const c_void, *const c_void) -> bool>,
+    hash: Option<unsafe extern "C" fn(*const c_void) -> usize>,
+    schedule: Option<unsafe extern "C" fn(Ref, Ref, Ref)>,
+    cancel: Option<unsafe extern "C" fn(Ref, Ref, Ref)>,
+    perform: Option<unsafe extern "C" fn(Ref)>,
+}
+unsafe extern "C" fn wake_perform(_: Ref) {}
+#[derive(Default)]
+pub(super) struct ReceiveWake { refs: Mutex<Option<(usize, usize)>> }
+impl ReceiveWake {
+    pub(super) fn wake(&self) {
+        if let Ok(refs) = self.refs.lock() {
+            if let Some((loop_, source)) = *refs {
+                // Registration owns retained refs while this mutex is held.
+                // Signal+WakeUp are CoreFoundation's cross-thread wake path.
+                unsafe { CFRunLoopSourceSignal(source as Ref); CFRunLoopWakeUp(loop_ as Ref); }
+            }
+        }
+    }
+    unsafe fn register(self: &Arc<Self>) -> Option<WakeRegistration> {
+        let mut context = SourceContext { version:0, info:null_mut(), retain:None, release:None,
+            description:None, equal:None, hash:None, schedule:None, cancel:None, perform:Some(wake_perform) };
+        let source = CFRunLoopSourceCreate(null_mut(), 0, &mut context);
+        if source.is_null() { return None; }
+        let loop_ = CFRetain(CFRunLoopGetCurrent());
+        CFRunLoopAddSource(loop_, source, kCFRunLoopCommonModes);
+        match self.refs.lock() {
+            Ok(mut refs) => { *refs = Some((loop_ as usize, source as usize)); }
+            Err(_) => { CFRunLoopRemoveSource(loop_, source, kCFRunLoopCommonModes); CFRelease(source); CFRelease(loop_); return None; }
+        }
+        Some(WakeRegistration { wake:self.clone(), loop_, source })
+    }
+}
+struct WakeRegistration { wake: Arc<ReceiveWake>, loop_: Ref, source: Ref }
+impl Drop for WakeRegistration {
+    fn drop(&mut self) {
+        // First detach cross-thread users, then release on the owning thread.
+        *self.wake.refs.lock().unwrap_or_else(|error| error.into_inner()) = None;
+        unsafe { CFRunLoopRemoveSource(self.loop_, self.source, kCFRunLoopCommonModes);
+            CFRelease(self.source); CFRelease(self.loop_); }
+    }
+}
+pub(super) fn suppressed_modifiers_held() -> bool {
+    STATE.with_borrow(|state| state.as_ref().is_none_or(HookState::suppressed_modifiers))
+}
 thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)};}
 static MODIFIERS: Mutex<u64> = Mutex::new(0);
 static BUTTONS: AtomicU64 = AtomicU64::new(0);
-pub fn capture(
+pub(super) fn capture_receiving(
     tx: mpsc::Sender<Captured>,
     gate: CaptureGate,
     target: InputCapabilities,
+    mut engine: receive_driver::ReceiveEngine,
+    wake: Arc<ReceiveWake>,
 ) -> Result<CaptureThread> {
     ensure!(unsafe {AXIsProcessTrusted()},"grant Accessibility and Input Monitoring permissions in System Settings, then restart PeerGlide");
     let reservation = capture_thread::Reservation::acquire()?;
     let (ready, rx) = std::sync::mpsc::sync_channel(1);
     let thread = CaptureThread::spawn_reserved(
         move |stop| unsafe {
+            let receive_gate = gate.clone();
+            let mut source_health = SourceHealth::new();
+            let mut backend = NativeReceiveBackend { gate: gate.clone(), observation: source_health.observation };
             let state = HookState {
                 pairs: PairLedger::default(),
                 stopping: false,
@@ -100,21 +163,35 @@ pub fn capture(
                 return;
             }
             CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+            let Some(_wake_registration) = wake.register() else {
+                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+                CFRelease(source); CFRelease(tap);
+                let _ = ready.send(false); return;
+            };
             CGEventTapEnable(tap, true);
             let _ = ready.send(true);
-            while STATE.with_borrow_mut(|state| {
-                state
-                    .as_mut()
-                    .is_some_and(|s| s.keep_running(stop.load(Ordering::Acquire)))
-            }) {
-                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+            loop {
+                let debt = STATE.with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
+                    || receive_gate.receiving_epoch().is_some();
+                source_health.sample(&mut backend, debt);
+                // SDK posts can reenter callback; never hold STATE across pump.
+                let immediate = engine.pump(&mut backend, now_ms(), stop.load(Ordering::Acquire));
+                let stopping = stop.load(Ordering::Acquire) || engine.control().stop_requested();
+                let keep = STATE.with_borrow_mut(|state| state.as_mut().is_some_and(|s| s.keep_running(stopping)));
+                if !keep && engine.can_exit() { break; }
+                if !receive_gate.0.healthy.load(Ordering::Acquire) { break; }
+                let result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, if immediate {0.0} else {0.05}, true);
+                if result == 1 || result == 2 { receive_gate.source_lost(); break; }
             }
+            engine.pump(&mut backend, now_ms(), true);
+            let _ = engine.outcome();
             CGEventTapEnable(tap, false);
             STATE.with_borrow(|s| {
                 if let Some(s) = s {
                     s.gate.disable();
                 }
             });
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             CFRelease(source);
             CFRelease(tap);
         },
@@ -152,12 +229,15 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
         match kind {
             10..=12 => {
                 let code = CGEventGetIntegerValueField(event, 9) as u16;
+                let usage = from_code(code);
                 let down = if kind == 12 {
-                    CGEventSourceKeyState(0, code)
-                } else {
-                    kind == 10
-                };
-                return match from_code(code) {
+                    // Own-tagged posts were filtered above. Modifier transition
+                    // events do not repeat; combined key state may still contain
+                    // our remote synthetic modifier and is not a physical Up.
+                    match usage { Some(usage) if (0xe0..=0xe7).contains(&usage) => !s.physical_key_held(usage),
+                        _ => CGEventSourceKeyState(0, code) }
+                } else { kind == 10 };
+                return match usage {
                     Some(usage) => s.key_routed(usage, down, route),
                     None => s.unsupported_key(code, down),
                 };
@@ -214,6 +294,7 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
             }
             _ => (),
         }
+        if matches!(route, CaptureRoute::Receiving(_)) { s.gate.request_takeover(route); return true; }
         route.remote()
     });
     if block {
@@ -222,88 +303,93 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
         event
     }
 }
-unsafe fn post(event: Ref) -> Result<()> {
-    ensure!(!event.is_null(), "CoreGraphics rejected event creation");
-    CGEventSetIntegerValueField(event, 42, TAG);
-    CGEventPost(0, event);
-    CFRelease(event);
-    Ok(())
+struct OwnedEvent(Ref);
+impl OwnedEvent {
+    fn created(event: Ref) -> std::result::Result<Self, peerglide_actions::execution::NativeFailure> {
+        if event.is_null() { Err(peerglide_actions::execution::NativeFailure::BeforeSubmission) }
+        else { Ok(Self(event)) }
+    }
+    unsafe fn submit(&self, flags: u64) {
+        CGEventSetFlags(self.0, flags);
+        CGEventSetIntegerValueField(self.0, 42, TAG);
+        // CGEventPost has no result. This is an SDK request, never confirmation
+        // that the OS/app accepted it or that a physical key has been released.
+        CGEventPost(0, self.0);
+    }
+}
+impl Drop for OwnedEvent {
+    fn drop(&mut self) { unsafe { CFRelease(self.0); } }
+}
+fn next_button_state(current: u64, button: u8, down: bool) -> u64 {
+    let bit = 1u64 << (button - 1);
+    if down { current | bit } else { current & !bit }
+}
+fn commit_created<T>(created: Option<T>, commit: impl FnOnce(&T)) -> std::result::Result<T, peerglide_actions::execution::NativeFailure> {
+    let event = created.ok_or(peerglide_actions::execution::NativeFailure::BeforeSubmission)?;
+    commit(&event);
+    Ok(event)
 }
 pub fn pointer(x: f64, y: f64) -> Result<()> {
+    receive_pointer(x,y).map_err(|error| anyhow::anyhow!("native pointer request failed: {error:?}"))
+}
+pub(super) fn receive_pointer(x: f64, y: f64) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    if !(ReceivePoint {x,y}).valid() { return Err(NativeFailure::BeforeSubmission); }
     unsafe {
         let b = CGDisplayBounds(CGMainDisplayID());
         let buttons = BUTTONS.load(Ordering::Acquire);
-        let (kind, button) = if buttons & 1 != 0 {
-            (6, 0)
-        } else if buttons & 2 != 0 {
-            (7, 1)
-        } else if buttons & 4 != 0 {
-            (27, 2)
-        } else {
-            (5, 0)
-        };
-        post(CGEventCreateMouseEvent(
-            null_mut(),
-            kind,
-            Point {
-                x: b.origin.x + x * (b.size.width - 1.0),
-                y: b.origin.y + y * (b.size.height - 1.0),
-            },
-            button,
-        ))
+        let (kind, button) = if buttons & 1 != 0 { (6,0) } else if buttons & 2 != 0 { (7,1) }
+            else if buttons & 4 != 0 { (27,2) } else { (5,0) };
+        let event = OwnedEvent::created(CGEventCreateMouseEvent(null_mut(), kind, Point {
+            x:b.origin.x + x*(b.size.width-1.0), y:b.origin.y+y*(b.size.height-1.0),
+        }, button))?;
+        let modifiers = MODIFIERS.lock().map_err(|_| NativeFailure::BeforeSubmission)?;
+        event.submit(modifier_flags(*modifiers));
+        Ok(())
     }
 }
 pub fn inject(event: Input) -> Result<()> {
+    receive_inject(event).map_err(|error| anyhow::anyhow!("native input request failed: {error:?}"))
+}
+pub(super) fn receive_inject(event: Input) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    if !event.valid() { return Err(NativeFailure::BeforeSubmission); }
     unsafe {
+        // The RAII event exists before any state commit, so allocation failure
+        // or a poisoned modifier lock cannot pollute BUTTONS/MODIFIERS or leak.
         match event {
-            Input::Key { usage, down } => {
-                let code = to_code(usage).ok_or_else(|| anyhow::anyhow!("unsupported HID key"))?;
-                let e = CGEventCreateKeyboardEvent(null_mut(), code, down);
-                ensure!(!e.is_null(), "keyboard event unavailable");
-                let mut modifiers = MODIFIERS
-                    .lock()
-                    .map_err(|_| anyhow::anyhow!("modifier lock poisoned"))?;
+            Input::Key {usage,down} => {
+                let code = to_code(usage).ok_or(NativeFailure::BeforeSubmission)?;
+                let event = OwnedEvent::created(CGEventCreateKeyboardEvent(null_mut(),code,down))?;
+                let mut modifiers = MODIFIERS.lock().map_err(|_| NativeFailure::BeforeSubmission)?;
+                let mut next = *modifiers;
                 if (0xe0..=0xe7).contains(&usage) {
-                    let bit = 1u64 << (usage - 0xe0);
-                    if down {
-                        *modifiers |= bit;
-                    } else {
-                        *modifiers &= !bit;
-                    }
+                    let bit = 1u64 << (usage-0xe0);
+                    if down { next |= bit; } else { next &= !bit; }
                 }
-                CGEventSetFlags(e, modifier_flags(*modifiers));
-                post(e)
+                *modifiers = next;
+                event.submit(modifier_flags(next));
             }
-            Input::Button { button, down } => {
-                let pos = CGEventCreate(null_mut());
-                ensure!(!pos.is_null(), "pointer state unavailable");
-                let point = CGEventGetLocation(pos);
-                CFRelease(pos);
-                let (kind, b) = match (button, down) {
-                    (1, true) => (1, 0),
-                    (1, false) => (2, 0),
-                    (2, true) => (3, 1),
-                    (2, false) => (4, 1),
-                    (3, true) => (25, 2),
-                    (3, false) => (26, 2),
-                    _ => anyhow::bail!("unsupported button"),
+            Input::Button {button,down} => {
+                let (kind, b) = match (button,down) {
+                    (1,true)=>(1,0),(1,false)=>(2,0),(2,true)=>(3,1),(2,false)=>(4,1),
+                    (3,true)=>(25,2),(3,false)=>(26,2),_=>return Err(NativeFailure::BeforeSubmission),
                 };
-                let bit = 1u64 << (button - 1);
-                if down {
-                    BUTTONS.fetch_or(bit, Ordering::Release);
-                } else {
-                    BUTTONS.fetch_and(!bit, Ordering::Release);
-                }
-                post(CGEventCreateMouseEvent(null_mut(), kind, point, b))
+                let pos = OwnedEvent::created(CGEventCreate(null_mut()))?;
+                let point = CGEventGetLocation(pos.0);
+                let modifiers = MODIFIERS.lock().map_err(|_| NativeFailure::BeforeSubmission)?;
+                let next = next_button_state(BUTTONS.load(Ordering::Acquire),button,down);
+                let event = OwnedEvent::created(CGEventCreateMouseEvent(null_mut(),kind,point,b)).ok();
+                let event = commit_created(event, |_| BUTTONS.store(next,Ordering::Release))?;
+                event.submit(modifier_flags(*modifiers));
             }
-            Input::Scroll { x, y } => post(CGEventCreateScrollWheelEvent(
-                null_mut(),
-                1,
-                2,
-                y as i32,
-                x as i32,
-            )),
+            Input::Scroll {x,y} => {
+                let event = OwnedEvent::created(CGEventCreateScrollWheelEvent(null_mut(),1,2,i32::from(y),i32::from(x)))?;
+                let modifiers = MODIFIERS.lock().map_err(|_| NativeFailure::BeforeSubmission)?;
+                event.submit(modifier_flags(*modifiers));
+            }
         }
+        Ok(())
     }
 }
 // USB HID usages to documented macOS virtual key positions; intentionally finite MVP coverage.
@@ -450,6 +536,20 @@ unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_button_event_creation_does_not_commit_drag_state() {
+        use std::cell::Cell;
+        let buttons=Cell::new(1u64);
+        let next=super::next_button_state(buttons.get(),2,true);
+        let result=super::commit_created::<()>(None, |_|buttons.set(next));
+        assert_eq!(result,Err(peerglide_actions::execution::NativeFailure::BeforeSubmission));
+        assert_eq!(buttons.get(),1);
+        super::commit_created(Some(()), |_|buttons.set(next)).unwrap();
+        assert_eq!(buttons.get(),3);
+        let next=super::next_button_state(buttons.get(),1,false);
+        assert_eq!(next,2,"releasing one button preserves another owned drag");
+    }
+
     use super::*;
     #[test]
     fn key_positions_roundtrip() {
