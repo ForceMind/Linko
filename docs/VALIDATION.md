@@ -976,3 +976,40 @@ Receiving首物理事件保护、独立Native loop串行接收/恢复仍在实�
 防止先放行本地C再清远程Ctrl，也不能作为整版已可日常工作。后续软件候选需要
 匹配的Win/Mac包及同样完整检查，再由真实两端完成C06。当前未开启宿主捕获/注入、
 未改系统权限，双机、DPI、物理接管、拖拽、睡眠、权限变化均未运行；#10未定位。
+
+
+### 基础接收闭环最终软件候选，0.2.1-dev（2026-11-05）
+
+PR45运行候选746b07e1022c2939627f09ff048cca89955e7dd6完整五项
+[CI41974906260](https://github.com/ForceMind/PeerGlide/actions/runs/41974906260)全部
+通过。三平台除fmt/独立CLI/严格Clippy/workspace test/Release外，新增普通
+cargo build --workspace --locked（Debug）也通过；真实无原生输入probe/reconnect/
+只读context、Linux实际GUI与显式样本导出、Mac多轮GUI、最低Rust1.95和审计均通过。
+Engine20项fake、Parent配对/源健康/滚轮/新鲜FAILED逃生等软件回归已实际运行。
+最终检查点无跳过断言或warnings豁免；Linux测试只移除未使用的Native别名导出，
+Engine实现及其Linux fake测试仍编译执行。
+
+两平台artifact绑定同一746b07e，外层/内层ZIP的SHA-256已核对，安全路径/无symlink/
+无用户key/profile、MIT、Mac中文plist与0.2.1版本、Win双PE程序均已检查。候选为
+未签名开发包，Windows amd64、Mac arm64，不是稳定发布；不得关闭OS防护打开。
+Mac同包在本机执行smoke/reconnect/context脚本全过：真实独立进程和身份、认证
+QUIC probe、pin替换拒绝、cooperative stop和可取消backoff，均未开启原生输入。
+
+Mac GUI用原0.2.0隔离测试profile实际启动，显示0.2.1中文；既有peer可读而不会
+自启Native。键鼠确认默认未勾选、确认按钮禁用，新首次物理动作只接管不回放的
+说明可见；取消后检查GUI权限为AX/输入监控未授予、SecureInput未检测到。没有
+申请/更改权限。关闭窗口后exit0，无task GUI/worker残留；原测试identity两个
+文件字节哈希与启动前一致，native/allow仍false。退出后不再查询App以免CUA
+自动重开默认窗口。宿主截图/配置/密钥不提交，样本与报告留ignored target。
+
+| 分类 | 本版状态 |
+|---|---|
+| 已实现并自动验证 | Core松键事务、capture域/配对、Receiving/Native单owner、独立watchdog/恢复、取消/截止、源观测、中文GUI与无Native进程闭环 |
+| 已实现但原生未验收 | 真实Win↔Mac输入、首动作Consumed实际效果、混合DPI、拖拽/滚轮、物理接管、权限/睡眠/故障与SDK请求到OS/app效果 |
+| 尚未实现 | G1全局、生产剪贴板/文件、配对码、托盘、多显示器精细拓扑；本版不扩 |
+| 客观受阻 | 当前只有本机Mac可操作，AX/输入监控未授予，Windows双机受控环境与用户手动原生权限/操作待提供 |
+
+用户已确认Win+Mac、各一个主显示器。匹配包与步骤已准备，已请求实际双机试跑
+可用性；C06所有物理框仍未关闭，不能因此说已可稳定日常工作。最后文档跟进不改
+apps/crates/tools/workflow/Cargo源码；精确最终head平台CI与PR就绪以PR45回读为准。
+#10历史根因未确认，针对性只读复核不是完整独立安全审计，不购买审查额度。

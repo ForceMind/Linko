@@ -580,3 +580,18 @@ can_force_return(exact epoch, phase==FAILED)；DRAINING第一次cleanup失败后
 假后端回归（ACTIVE/DRAINING中途失败、旧mods/重复Esc、全新FAILED完整chord一次
 force、ADMISSIONS_CLOSED健康仍true与旧Up归属），代码已写，未编译。临时旧patch
 在/private/tmp不再apply，源码包含新版。Root将统一提交并用CI修实际失败。
+
+
+本版完整软件候选746b07e1022c2939627f09ff048cca89955e7dd6五项CI41974906260
+已全过，含三平台Debug+Release/严格检查/工作区回归/真实无Native smokes、GUI/
+最低1.95/审计；Engine20与Parent freshEsc/观测/配对等现为实际自动验证。Readonly
+源观测/force入场问题已修并复核，不是独立安全审计。Win/Mac artifact及内层ZIP
+摘要核对且无用户身份/配置，未签名开发包。Mac包smoke/reconnect/context在本机
+全过；GUI用旧0.2.0隔离profile启动0.2.1，中文新说明/默认未勾选确认/取消/只读
+权限/exit0已验，旧identity字节未变，native/allow仍false，无任务进程残留。
+Mac AX/IM仍未授予，无真实捕获/注入；Win机器不可操作。匹配包在ignored target
+basic-kvm-746b07e/mac和win，已给用户入口并异步问现在能否双机试跑，回答待到。
+此为进入C06前的具体候选，不能mark整个双机工作Goal完成或C06通过。最终记录
+详VALIDATION/GUI_INTERACTIONS；本次最后文档提交不改运行源码，精确head CI与
+PR45待审阅状态下一步回读。main未合并、MIT/v5/单hook不改、G1/数据仍后置。
+Native设备/系统权限必须用户手动明确处理，不装Rust、不绕过防护、不发布稳定版。

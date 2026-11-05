@@ -36,3 +36,19 @@ GUI与CLI本批开发版本统一0.2.0-dev，package标签/Info.plist取workspac
 且未编辑其设置/身份，退出证据以原隔离进程exit0及参数回读为准。普通GUI不
 自动生成截图/样本；私钥和测试配置不提交。最后文档提交的精确候选五项CI以
 PR #42回读为准；运行、测试及CI脚本与c0a1882保持一致。
+
+
+## 0.2.1-dev基础KVM后续
+
+本版先Win+Mac各单主屏，G1/数据后置。Receiving物理首动作只用于收回控制，不
+执行或回放；切回本机先松开全部物理键/按钮，避免旧修饰域影响新组合。该说明
+已在设备卡/键鼠确认与README中文步骤中展示。恢复失败后，只有在明确FAILED后
+全新按下并松开的完整Ctrl+Alt+Esc才可请求强制返回；重复键、旧modifier未松或
+DRAINING中途失败的首chord不能升级为force。警告保留，不证明OS按键已释放。
+
+Native收尾由同一Native loop负责，Core账本不再重复OS Up；Driver Submitted只
+指SDK请求或接受清理，Draining仍显示恢复，Retired才表示该epoch保护撤除。stdin
+停止可独立唤醒Native恢复。源码746b07e的五项CI41974906260全部通过，同包Mac
+真实进程probe/重连/只读检查与中文GUI启动/未勾选确认/取消/退出已验，旧隔离
+测试身份字节未变且input许可仍关。最终文档跟进源码一致，精确head见PR45。
+没有宿主真实捕获/注入或改权限；Win↔Mac物理效果/DPI/睡眠/权限仍需C06。
