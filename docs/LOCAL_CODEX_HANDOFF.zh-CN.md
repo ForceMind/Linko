@@ -569,3 +569,14 @@ scroll已接。Root将统一commit push整批（此前705/d540只是test-only入
 fake，源已不可确认就不盲补剩余CtrlUp。Readonly Parent其余未见确定新缺陷，
 建议补fresh第二次Esc完整路径回归（当前还没跑/不视作关闭）。普通cancel最终guard
 之后仍可有in-flight本次SDK，但owner保证后续收尾无迟到新Down，不夸零调用。
+
+
+共同接线已commit push bbc3f1e；首轮1.95只报一个旧回归fn非async，Root修为tokio
+async并应用115个fmt hunks后f680c3b；再按CI修签名格式610dc90。完整Native接线
+的Linux类型检查已过，三平台检查仍待继续，不得声称新20/Parent测试已运行。
+Writer当前窄修真实HookState强制返回：不再用全局required/outcome准备chord，改
+can_force_return(exact epoch, phase==FAILED)；DRAINING第一次cleanup失败后required
+虽true，也不能让中途开始的chord提前force。新增3个真实HookState/Control/Engine
+假后端回归（ACTIVE/DRAINING中途失败、旧mods/重复Esc、全新FAILED完整chord一次
+force、ADMISSIONS_CLOSED健康仍true与旧Up归属），代码已写，未编译。临时旧patch
+在/private/tmp不再apply，源码包含新版。Root将统一提交并用CI修实际失败。

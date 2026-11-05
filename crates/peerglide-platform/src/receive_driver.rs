@@ -187,10 +187,15 @@ mod implementation {
         pub fn stop_requested(&self) -> bool {
             self.shared.stop.load(Ordering::Acquire)
         }
+        /// Only exact FAILED permits starting a fresh physical force chord.
+        /// RecoveryRequired alone also describes an SDK retry still DRAINING.
+        pub fn can_force_return(&self, epoch: CaptureEpoch) -> bool {
+            self.shared.exact(epoch) && self.shared.phase.load(Ordering::Acquire) == FAILED
+        }
         /// Native wiring must only call after failed recovery, release of consumed
         /// modifiers, and a new complete physical escape chord (never autorepeat).
         pub fn request_force_return(&self, epoch: CaptureEpoch) -> bool {
-            if self.shared.exact(epoch) && self.shared.phase.load(Ordering::Acquire) == FAILED {
+            if self.can_force_return(epoch) {
                 self.shared
                     .force
                     .fetch_max(epoch.generation, Ordering::AcqRel);
@@ -2143,6 +2148,9 @@ mod unsupported {
         }
         pub fn stop_requested(&self) -> bool {
             self.stop.load(Ordering::Acquire)
+        }
+        pub fn can_force_return(&self, _epoch: CaptureEpoch) -> bool {
+            false
         }
         pub fn request_force_return(&self, _epoch: CaptureEpoch) -> bool {
             false
