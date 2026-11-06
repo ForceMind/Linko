@@ -1672,3 +1672,17 @@ sibling worker的只读诊断，在工作区呈现明确本机原因，并在确
 当前尚待Rust编译/格式/严格Clippy/测试/build及平台CI；本机预检仍因缺cargo/rustc
 失败，按用户决定不安装。浏览器/宿主新GUI/真实双机与物理撤权未验收，无TCC或
 现用App/身份/配对更改，输入v5和独立授权保持。最新精确候选状态须回读相关PR。
+
+后续验证：0e0db90的fmt及最低Rust测试构造曾失败；测试以显式字段构造保留Drop
+回收，没有删回收或跳测试。ec0d987/42282898368的Mac与Linux完整通过，最低1.95、
+审计与三平台严格Clippy成功。新增post-release专项tools/worker_permission_check.py
+真正用匹配Release CLI运行GUI Checker：有界只读报告、完成时新鲜度、子进程reap、
+报告不会替代独立同意，不写设置/创建身份/启动Native；Mac/Linux均明确1 passed/
+0 ignored。默认workspace里的ignored不算通过，CI三平台须另行严格执行该专项。
+
+同次Windows唯一失败是“完成前1ns”用例返回Ready；其精确30秒到期断言已过。
+测试原先假设1ns可在所有系统形成严格先后；39435a1改为1ms输入并先断言实际
+Instant顺序，仍要求未来时间/精确到期均Unchecked，未改生产30秒期限或放宽断言。
+Rust说明Instant封装系统类型、行为随平台不同（见[官方Instant说明](https://doc.rust-lang.org/std/time/struct.Instant.html#os-specific-behaviors)）；此处只
+修正该跨平台测试输入，不归因历史#10/6.83GB。新候选仍需完整Windows与最终精确
+HEAD CI回读。394项外部依赖未变，最终结果集中在PR60，不将这个中间记录当全通过。

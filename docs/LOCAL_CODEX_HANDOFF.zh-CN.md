@@ -1198,3 +1198,11 @@ native-readiness/0.3.7基于PR59最终2a7d698；后者五项42278760621、驻留
 不把时间/状态当凭据。新增边界与状态优先回归，现有子进程回收测试沿用。源码待
 CI编译/格式/Clippy/全测试/build；本机预检缺Rust不安装。新GUI/双机/权限撤销实测
 未验收，现用App/身份/配对/TCC不动；记录精确CI及后续修复后再交付。
+
+ec0d987已修0e测试Drop类型构造/格式：42282898368的Mac/Linux完整成功，最低1.95、
+审计/三平台Clippy过。新增真实Release CLI→GUI Checker必跑专项，严格1 passed/
+0 ignored；Mac/Linux均已执行，默认workspace ignored不计通过。Windows唯一失败
+是测试以“完成前1ns”构造未来时刻却得到Ready，精确30秒到期已过；39435a1仅改
+测试输入为1ms并明确断言Instant先后，保持未来/到期拒绝和生产30秒期限。须继续
+完整Windows及最终HEAD CI，不把该测试问题归因旧#10/内存；394项外部依赖不变。
+最终精确状态集中回读PR60，避免为记录反复更换App/权限；物理C06仍未验收。

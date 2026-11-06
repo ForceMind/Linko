@@ -464,18 +464,12 @@ mod tests {
         let before_expiry = finished + FRESHNESS - Duration::from_millis(1);
         let before_observation = finished - Duration::from_millis(1);
         assert!(before_observation < finished && before_expiry < finished + FRESHNESS);
-        assert_eq!(
-            checker.readiness_at(before_expiry),
-            Readiness::Ready
-        );
+        assert_eq!(checker.readiness_at(before_expiry), Readiness::Ready);
         assert_eq!(
             checker.readiness_at(finished + FRESHNESS),
             Readiness::Unchecked
         );
-        assert_eq!(
-            checker.readiness_at(before_observation),
-            Readiness::Unchecked
-        );
+        assert_eq!(checker.readiness_at(before_observation), Readiness::Unchecked);
         assert_eq!(checker.readiness(), Readiness::Unchecked);
         assert!(checker.expires_in().is_none() && !checker.needs_poll());
         checker.result = Some(Observation {
