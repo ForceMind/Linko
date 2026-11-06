@@ -84,9 +84,15 @@ with tempfile.TemporaryDirectory(prefix="peerglide-initial-wait-") as folder:
     def listener(identity, address):
         log = root / ("server-" + str(len(children)) + ".log")
         child = launch(["listen", "--identity", str(identity), "--peer-cert", str(a / "node.crt.der"),
-                        "--bind", address], log)
+                        "--bind", address, "--managed"], log, True)
         wait_for(lambda: "Listening on " in log.read_text(), child, log)
         return child
+
+    def graceful_stop(child):
+        if child.poll() is None:
+            child.stdin.write(b"stop\n")
+            child.stdin.flush()
+        assert child.wait(timeout=5) == 0, "cooperative no-input server stop failed"
 
     try:
         address = free_address()
@@ -94,7 +100,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-initial-wait-") as folder:
         wait_for(lambda: states(log).count("WaitingForPeer") >= 2, client, log)
         server = listener(b, address)
         wait_for(lambda: "Authenticated" in states(log), client, log)
-        terminate(server)
+        graceful_stop(server)
         assert client.wait(timeout=10) == 0, log.read_text()
         assert states(log).count("Authenticated") == 1 and "Reconnecting" not in states(log)
         no_input(log, True)
@@ -111,6 +117,17 @@ with tempfile.TemporaryDirectory(prefix="peerglide-initial-wait-") as folder:
         no_input(log, True)
         terminate(server)
         print("PASS: startup deadline cannot cancel an established session")
+
+        address = free_address()
+        server = listener(b, address)
+        client, log = connector(address, 15)
+        wait_for(lambda: "Authenticated" in states(log), client, log)
+        terminate(server)
+        assert client.wait(timeout=10) != 0, log.read_text()
+        assert states(log)[-1] == "Failed" and "Reconnecting" not in states(log)
+        assert states(log).count("Authenticated") == 1
+        no_input(log, True)
+        print("PASS: unclean peer loss stays a failure and does not enable reconnect")
 
         client, log = connector(free_address(), 2)
         assert client.wait(timeout=6) != 0, log.read_text()
