@@ -1318,6 +1318,8 @@ mod tests {
         step(&mut app, &ctx, 0.6, press(right));
         step(&mut app, &ctx, 0.7, vec![button(right, false)]);
         assert_eq!(app.config.edge, "right");
+        // Paint the new position before pressing it: egui hit testing uses painted geometry.
+        step(&mut app, &ctx, 0.75, vec![]);
         step(
             &mut app,
             &ctx,
