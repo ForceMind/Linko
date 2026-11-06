@@ -53,13 +53,13 @@ class FakeChild:
 
 
 class MemorySmoke(unittest.TestCase):
-    def monitor_fake(self, values, *, limits=None, child=None, stop=None, footprint=None):
+    def monitor_fake(self, values, *, limits=None, child=None, stop=None, footprint=None, cpu=None):
         clock = Clock()
         child = child or FakeChild()
         samples = iter(values)
         result = smoke.monitor(["fixture"], limits or smoke.Limits(duration=4, warmup=1),
                                scenario="fixture", stop=stop, sample=lambda _pid: next(samples),
-                               clock=clock, sleep=clock.sleep, popen=lambda *_a, **_k: child, footprint=footprint)
+                               clock=clock, sleep=clock.sleep, popen=lambda *_a, **_k: child, footprint=footprint, cpu=cpu)
         return result, child, clock
 
     def test_absolute_cap_applies_during_warmup_and_stops_without_sleeping(self):
@@ -211,7 +211,7 @@ class MemorySmoke(unittest.TestCase):
                 (identity / name).write_bytes(b"fixture")
             return {"reason": "identity_created", "pid": 2, "termination": "already_exited",
                     "exit_status": {"returncode": 0, "signal": None}}
-        def inspect(command, _limits, *, scenario, env, stop, footprint):
+        def inspect(command, _limits, *, scenario, env, stop, footprint, cpu):
             self.assertEqual(len(command), 3)
             self.assertEqual(command[1], "--data-dir")
             profile = Path(command[2])
@@ -220,6 +220,7 @@ class MemorySmoke(unittest.TestCase):
             self.assertEqual((profile / "identity").exists(), scenario == "existing_identity")
             self.assertEqual(Path(env["XDG_DATA_HOME"]).parent, profile.parent)
             self.assertEqual(stop.signum, 0)
+            self.assertIs(cpu, smoke.sample_cpu_time_ns)
             return {"scenario": scenario, "pid": 1, "passed": True}
         with patch.object(smoke, "initialize_identity", side_effect=initialize), \
                 patch.object(smoke, "monitor", side_effect=inspect):
@@ -228,6 +229,100 @@ class MemorySmoke(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertNotEqual(profiles[0], profiles[1])
         self.assertTrue(all(not profile.exists() for profile in profiles))
+
+    def test_cpu_time_parser_keeps_platform_precision_and_rejects_unbounded_or_private_text(self):
+        for text, seconds in [(b"0:01.25", 1.25), (b"01:02:03", 3723), (b"1-02:03:04.5", 93784.5),
+                              (b"125:00.00", 7500), (b"00:00:00", 0)]:
+            self.assertEqual(smoke.parse_cpu_time_ns(text), int(seconds * 1_000_000_000))
+        for text in [b"", b"1\n2", b"private/user/path", b"1:60", b"1:99:00", b"1-24:00:00",
+                     b"1-01:02", b"NaN", b"-1:00", b"00:00.1234567890", b"9" * 65]:
+            with self.assertRaises(ValueError) as error:
+                smoke.parse_cpu_time_ns(text)
+            self.assertNotIn("private", str(error.exception))
+        with patch.object(smoke.subprocess, "check_output", return_value=b" 0:01.25\n") as query:
+            self.assertEqual(smoke.sample_cpu_time_ns(555), 1_250_000_000)
+            self.assertEqual(query.call_args.args[0], ["ps", "-o", "time=", "-p", "555"])
+            self.assertEqual(query.call_args.kwargs["timeout"], 2)
+
+    def test_cpu_curves_use_counter_deltas_and_allow_more_than_one_core(self):
+        counters = iter([0, 2_000_000_000, 4_000_000_000, 4_000_000_000, 5_000_000_000])
+        result, _child, _clock = self.monitor_fake([1024] * 5, cpu=lambda _pid: next(counters))
+        cpu = result["cpu_usage"]
+        self.assertTrue(result["passed"] and result["rss_checks_passed"])
+        self.assertTrue(cpu["sampling_complete"])
+        self.assertEqual(cpu["peak_interval_percent"], 200)
+        self.assertEqual(cpu["average_percent"], 125)
+        self.assertEqual(cpu["observed_cpu_sec"], 5)
+        self.assertEqual(cpu["covered_wall_sec"], 4)
+        self.assertEqual(cpu["samples"][0]["interval_percent"], None)
+        self.assertEqual(cpu["samples"][3]["interval_percent"], 0)
+
+    def test_missing_or_regressed_cpu_does_not_turn_rss_success_into_resource_success(self):
+        for bad in [None, -1, True, 1 << 64]:
+            counters = iter([0, 1_000_000_000, bad, 3_000_000_000, 4_000_000_000])
+            result, child, _clock = self.monitor_fake([1024] * 5, cpu=lambda _pid: next(counters))
+            self.assertFalse(result["passed"])
+            self.assertTrue(result["rss_checks_passed"])
+            self.assertEqual(result["reason"], "cpu_sample_incomplete")
+            self.assertEqual(result["cpu_usage"]["availability"], "partial")
+            self.assertIsNone(result["cpu_usage"]["samples"][2]["interval_percent"])
+            self.assertIsNone(result["cpu_usage"]["samples"][3]["interval_percent"])
+            self.assertEqual(child.terminates, 1)
+        counters = iter([0, 2_000_000_000, 1_000_000_000, 3_000_000_000, 4_000_000_000])
+        result, _child, _clock = self.monitor_fake([1024] * 5, cpu=lambda _pid: next(counters))
+        self.assertFalse(result["cpu_usage"]["sampling_complete"])
+
+    def test_rss_guard_precedes_cpu_query_and_report_identifies_cpu_coverage(self):
+        with patch.object(smoke, "sample_cpu_time_ns") as query:
+            result, child, _clock = self.monitor_fake([513 * 1024], cpu=query)
+            query.assert_not_called()
+        self.assertEqual(result["reason"], "rss_limit")
+        self.assertIsNone(result["cpu_usage"]["average_percent"])
+        value = smoke.report(smoke.Limits(), [result, result], "completed")
+        self.assertEqual(value["schema_version"], 2)
+        self.assertFalse(value["cpu_sampling_complete"])
+        self.assertFalse(value["passed"])
+        self.assertIn("owned_gui_process_only_not_worker_tree", value["limitations"])
+
+    def test_missing_cpu_queries_are_not_zero_or_a_resource_pass(self):
+        def unavailable(_pid):
+            raise subprocess.TimeoutExpired("private/user/path", 2, output=b"private material")
+        result, child, _clock = self.monitor_fake([1024] * 5, cpu=unavailable)
+        self.assertTrue(result["rss_checks_passed"])
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["cpu_usage"]["availability"], "unavailable")
+        self.assertIsNone(result["cpu_usage"]["average_percent"])
+        self.assertNotIn("private", json.dumps(result))
+        self.assertEqual(child.terminates, 1)
+        no_cpu, _child, _clock = self.monitor_fake([1024] * 5)
+        value = smoke.report(smoke.Limits(), [no_cpu, no_cpu], "completed")
+        self.assertIsNone(value["cpu_sampling_complete"])
+        self.assertFalse(value["passed"])
+
+    def test_stop_during_cpu_query_precedes_other_queries_and_reaps(self):
+        stop = smoke.StopFlag()
+        def interrupted(_pid):
+            stop.signum = signal.SIGTERM
+            return 0
+        with patch.object(smoke, "sample_footprint_kib") as footprint:
+            result, child, _clock = self.monitor_fake([1024], cpu=interrupted, stop=stop, footprint=footprint)
+            footprint.assert_not_called()
+        self.assertEqual(result["reason"], "interrupted")
+        self.assertFalse(result["passed"])
+        self.assertEqual(child.terminates, 1)
+
+    @unittest.skipUnless(sys.platform in ("darwin", "linux"), "ps CPU sampling platform")
+    def test_real_owned_python_child_cpu_query_is_finite_and_reaped(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            first = smoke.sample_cpu_time_ns(child.pid)
+            second = smoke.sample_cpu_time_ns(child.pid)
+            self.assertIs(type(first), int)
+            self.assertGreaterEqual(second, first)
+        finally:
+            self.assertIn(smoke.stop_child(child, 1), ("terminated", "already_exited"))
+        self.assertIsNotNone(child.poll())
 
     def test_vmmap_summary_extracts_only_finite_numeric_units_and_never_paths(self):
         for unit, expected in [("K", 2), ("M", 1536), ("G", 1572864), ("T", 1610612736)]:
