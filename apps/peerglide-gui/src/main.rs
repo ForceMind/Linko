@@ -663,9 +663,20 @@ impl App {
     }
     fn start_mode(&mut self, mode: SessionMode) -> Result<()> {
         if self.resource_check_mode {
-            anyhow::ensure!(mode == SessionMode::Communication && !self.config.native && !self.config.allow
-                && !self.config.reconnect && !self.config.listen
-                && self.config.address.parse::<std::net::SocketAddr>()?.ip().is_loopback(), "资源检查仅允许回环无输入通信");
+            anyhow::ensure!(
+                mode == SessionMode::Communication
+                    && !self.config.native
+                    && !self.config.allow
+                    && !self.config.reconnect
+                    && !self.config.listen
+                    && self
+                        .config
+                        .address
+                        .parse::<std::net::SocketAddr>()?
+                        .ip()
+                        .is_loopback(),
+                "资源检查仅允许回环无输入通信"
+            );
         }
         self.ensure_pairing_ready()?;
         anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会启动设备会话");
@@ -698,7 +709,9 @@ impl App {
                 .parse::<std::net::SocketAddr>()
                 .context("请输入对端 IP 地址和端口")?;
         }
-        if !self.resource_check_mode { self.save_config()?; }
+        if !self.resource_check_mode {
+            self.save_config()?;
+        }
         let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
             "peerglide.exe"
         } else {
@@ -787,9 +800,14 @@ impl App {
         if self.config.listen && !probe {
             cmd.arg("listen");
         } else {
-            cmd.arg("connect")
-                .arg(&self.config.address)
-                .args(["--bind", if self.resource_check_mode { "127.0.0.1:0" } else { "0.0.0.0:0" }]);
+            cmd.arg("connect").arg(&self.config.address).args([
+                "--bind",
+                if self.resource_check_mode {
+                    "127.0.0.1:0"
+                } else {
+                    "0.0.0.0:0"
+                },
+            ]);
         }
         cmd.arg("--identity")
             .arg(self.identity_dir())
@@ -1353,7 +1371,11 @@ impl App {
                 ctx.request_repaint_after(Duration::from_millis(50));
                 return;
             }
-            if self.resource_check.as_ref().is_some_and(|check| !check.finished()) {
+            if self
+                .resource_check
+                .as_ref()
+                .is_some_and(|check| !check.finished())
+            {
                 ctx.request_repaint_after(Duration::from_millis(50));
                 return;
             }
@@ -1401,10 +1423,24 @@ impl Drop for App {
 }
 fn main() -> eframe::Result<()> {
     let options = Options::parse();
-    let resource_check = options.ci_resource_spec.as_ref().map(|spec| {
-        resource_check::Check::prepare(options.data_dir.as_deref().expect("clap requires an isolated directory"), spec,
-            std::env::var("CI").is_ok_and(|value| value == "true" || value == "1"))
-    }).transpose().unwrap_or_else(|error| { eprintln!("资源检查无法开始：{error:#}"); std::process::exit(2); });
+    let resource_check = options
+        .ci_resource_spec
+        .as_ref()
+        .map(|spec| {
+            resource_check::Check::prepare(
+                options
+                    .data_dir
+                    .as_deref()
+                    .expect("clap requires an isolated directory"),
+                spec,
+                std::env::var("CI").is_ok_and(|value| value == "true" || value == "1"),
+            )
+        })
+        .transpose()
+        .unwrap_or_else(|error| {
+            eprintln!("资源检查无法开始：{error:#}");
+            std::process::exit(2);
+        });
     let quit_check = options
         .macos_quit_check_report
         .as_ref()
@@ -1437,7 +1473,10 @@ fn main() -> eframe::Result<()> {
             app.quit_check_mode = quit_check.is_some();
             app.quit_check = quit_check;
             if let Some(mut check) = resource_check {
-                if let Err(error) = check.setup(&mut app) { eprintln!("资源检查无法初始化：{error:#}"); std::process::exit(2); }
+                if let Err(error) = check.setup(&mut app) {
+                    eprintln!("资源检查无法初始化：{error:#}");
+                    std::process::exit(2);
+                }
                 check.listen_stdin();
                 app.resource_check = Some(check);
             }
