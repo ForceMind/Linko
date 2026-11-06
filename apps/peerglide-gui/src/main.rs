@@ -1905,6 +1905,8 @@ mod lifecycle_tests {
     fn retrying_child_cannot_remain_connected_or_override_stop() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
+        // Enrolled presentation fixture only; this child never authenticates a peer.
+        app.config.fingerprint = Some("lifecycle-presentation-only".into());
         app.child = Some(
             Command::new(std::env::current_exe()?)
                 .args([
