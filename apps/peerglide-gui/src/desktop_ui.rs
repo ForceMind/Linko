@@ -332,7 +332,7 @@ impl App {
                     .checkbox(&mut self.config.allow, "允许已核验的电脑控制本机键鼠")
                     .changed()
                 {
-                self.native_confirmation = false;
+                    self.native_confirmation = false;
                     self.save();
                 }
             },
