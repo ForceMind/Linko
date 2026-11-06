@@ -1779,3 +1779,13 @@ RSS成功判整体通过；无CPU预算达标结论。物理内存缺测仍独�
 CPU口径参考[procps手册](https://man7.org/linux/man-pages/man1/ps.1.html)及
 [Apple ps手册源码](https://github.com/apple-oss-distributions/adv_cmds/blob/main/ps/ps.1)；
 区间占用由累计差值计算，不使用ps的进程寿命平均pcpu作为瞬时值。
+
+f8e4f21完整五项42308474238与新驻留42308474354均成功。两平台24项采样/回收
+回归通过（实际ps测试只查询自有Python child）；新报告schema2四场景CPU完整性
+均true，未把物理内存缺测变0。已下载并核对artifact摘要/原始JSON/样本与区间数：
+Mac artifact13547252763两场景约181.08/181.50秒，平均CPU0.688943%/0.327514%，
+峰区间28.021948%/22.944585%，峰RSS113.609/113.688MiB；物理覆盖partial/available。
+Linux artifact13548645117各约180.01秒，峰RSS132.176/133.719MiB，CPU区间178个。
+Linux ps整秒计数未跨刻度，曲线算0，仅是其量化分辨率内的结果，不证明完全不耗CPU。
+这些是隔离CI/no-session GUI短窗数据，不解释用户6.83GB，也不证明隐藏/worker/
+Native或8h/24h耐久。App源码/版本和冻结包不变，最终纯记录HEAD结果集中回读PR63。
