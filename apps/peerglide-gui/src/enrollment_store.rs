@@ -174,6 +174,12 @@ fn apply(
     }
     checkpoint(Step::SettingsReplaced)?;
     anyhow::ensure!(
+        config_store::read(settings)?.as_deref() == Some(&proposal.next_settings)
+            && public_certificate(&peer_path)? == proposal.next_peer
+            && public_certificate(&dir.join("identity/node.crt.der"))? == proposal.local_certificate,
+        "登记提交后文件再次变化，已保留收尾记录"
+    );
+    anyhow::ensure!(
         read_bounded(&path(settings)?, MAX_JOURNAL)?.as_deref() == Some(bytes),
         "登记收尾记录已变化，原件已保留"
     );
@@ -516,6 +522,26 @@ mod tests {
         let app = App::load(f.path.clone());
         assert_eq!(app.config.fingerprint, config.fingerprint);
         assert!(!app.config.allow && !app.config.native && app.config_store.is_some());
+        Ok(())
+    }
+    #[test]
+    fn late_file_change_cannot_report_commit_complete_or_remove_the_journal() -> Result<()> {
+        let f = Fixture::new()?;
+        paired(&f.path)?;
+        let (mut store, config, peer) = next(&f.path, false)?;
+        let replacement = Identity::generate()?.certificate;
+        assert!(commit_with(&mut store, &config, peer.as_deref(), |step| {
+            if step == Step::SettingsReplaced {
+                fs::write(f.path.join("trusted-peer.crt.der"), &replacement)?;
+            }
+            Ok(())
+        })
+        .is_err());
+        assert!(f.path.join(NAME).is_file());
+        assert_eq!(fs::read(f.path.join("trusted-peer.crt.der"))?, replacement);
+        let app = App::load(f.path.clone());
+        assert!(app.config_store.is_none());
+        assert_eq!(fs::read(f.path.join("trusted-peer.crt.der"))?, replacement);
         Ok(())
     }
 }
