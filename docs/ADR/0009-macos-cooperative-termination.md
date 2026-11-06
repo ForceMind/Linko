@@ -1,6 +1,8 @@
 # ADR-0009: Chinese application menu and cooperative macOS termination
 
-Status: implementing; platform and native acceptance pending.
+Status: implemented; platform CI, host real-AppKit check, Chinese menu/communication/
+Cmd+Q and user Dock exit accepted without native input. Physical KVM recovery and
+full OS shutdown/logout acceptance remain pending.
 
 ## Problem
 

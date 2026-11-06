@@ -1473,3 +1473,24 @@ bridge/registry，Pending禁止Close和owner拆卸。返回后才能出回执，
 native/allow/reconnect仍false，最终无残留。并未点击实际Dock退出，也未做隐藏后
 菜单栏唤回或真实键鼠。私有脚本/回执在ignored safe-quit-c22713a，测试身份不得用于
 真实Windows配对。主Goal有新实现/CI/失败诊断/本机UI证据，继续active，不合并/发布。
+
+a791445a6e3c69cbd958ccc7e12c91127da4d680运行源码已通过完整五项42209777020与两平台
+RSS驻留42209777128，含真正AppKit调用→同一邮箱Quit→健康保护→GUI逻辑关闭的
+严格回执；缺回执/abort不算通过。Mac artifact13498951503外层4a1ff2ac739913e5b04b9dd237d88c70503e73ac7259204d31ba4f5e090060a4、
+内层c173e2e6298dfc4214d6453a5d2b0e8a5a84060884c1e9413e2007d6d5f4e68e，安全解压/strict
+签名/metadata过。同一宿主26.2用新包重做真实API检查，退出0、running/returned/
+quit/ownerHealthy/noInput全true；确认当前辅助检查的GUI回调内同步调用重入已通过
+主队列修正，不关闭状态保存或winit保护；#10历史根因和6.83GB仍未定位。
+
+用户解锁后，普通GUI在close-to-tray=true时⌘Q退出0（80.09秒、无会话）；之前锁屏
+90秒保护到时-15保留为未完成。随后用户实际Dock右键退出，同一受监测普通GUI退出0
+（61.16秒，无会话/Native、无残留）。这补齐无Native系统退出入口，不是实际KVM
+按键释放或睡眠/撤权/8h耐久验收。收据在ignored safe-quit-a791445子目录；Cua闭窗
+后只读app清单/ps，未自动重开默认资料。窗口/工具观察不替代进程退出码。
+
+运行包固定a791445，不因后续纯文档更新替换或重复授权。正常默认入口已显示原Windows
+配对，实际同包worker只读诊断AX/IM均Denied，Secure Input Inactive；未开启Native，
+Mac接收仍关。用户已收到本次冻结App两项权限手动重新添加请求；授权不是输入同意，
+需重新核对实际worker，并另获本次Mac→已核验Windows短测准备确认。Windows当前
+就绪/版本仍待核对，不再交换证书或重生成身份。最终文档候选精确CI/远端在PR55回读；
+相对a791只改记录。主Goal仍active，全路线/物理C06未完成，不合并或稳定发布。

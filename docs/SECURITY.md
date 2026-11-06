@@ -79,3 +79,12 @@ snapshot grants no authority; native startup still checks the real permissions.
 Launching a CLI from an automation host can have a different TCC responsible code
 than normal app launch. Diagnose that attribution before asking users to expand
 permissions. Do not reset TCC or disable OS protections as a workaround.
+
+The macOS GUI now routes its Chinese application menu and normal AppKit terminate
+requests through the existing Stop/terminal/EOF recovery flow. The reviewed winit
+delegate is retained; only its missing termination veto is added, with lockfile/
+runtime ABI and ownership checks. Unknown exit protection blocks new native starts.
+This process-local UI bridge is not an input hook or network authority. Force Quit,
+SIGKILL, physical releases and full shutdown/logout guarantees remain outside this
+claim; see [ADR-0009](ADR/0009-macos-cooperative-termination.md). Permission snapshots,
+OS grants and explicit native-session consent remain separate requirements.
