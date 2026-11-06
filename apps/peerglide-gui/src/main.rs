@@ -763,7 +763,7 @@ impl App {
                     }
                     Some(WorkerState::Stopped | WorkerState::Failed) => {
                         self.connected = false;
-                        self.last_failure = state == Some(WorkerState::Failed);
+                        self.last_failure |= state == Some(WorkerState::Failed);
                         self.status = "工作进程已停止".into();
                     }
                     _ => (),
@@ -780,7 +780,7 @@ impl App {
             match child.try_wait() {
                 Ok(Some(exit)) => {
                     self.connected = false;
-                    self.last_failure = !exit.success();
+                    self.last_failure |= !exit.success();
                     self.status = if exit.success() {
                         "离线".into()
                     } else {
@@ -1152,9 +1152,15 @@ mod tests {
         assert_eq!(app.dialog, Some(Dialog::Recovery));
         let mut readonly = App::load(fixture.path.clone());
         readonly.config.fingerprint = app.config.fingerprint.clone();
-        for action in [desktop_state::Action::StartInput, desktop_state::Action::Connect, desktop_state::Action::AddDevice] {
+        for action in [
+            desktop_state::Action::StartInput,
+            desktop_state::Action::Connect,
+            desktop_state::Action::AddDevice,
+        ] {
             readonly.workspace_action(action);
-            assert!(readonly.child.is_none() && readonly.dialog.is_none() && readonly.wizard.is_none());
+            assert!(
+                readonly.child.is_none() && readonly.dialog.is_none() && readonly.wizard.is_none()
+            );
         }
         Ok(())
     }
@@ -1928,6 +1934,13 @@ mod lifecycle_tests {
         set_state(&mut app, WorkerState::Reconnecting);
         app.poll();
         assert_eq!(app.status, "正在重连可信设备");
+        set_state(&mut app, WorkerState::Failed);
+        app.poll();
+        assert!(app.last_failure);
+        set_state(&mut app, WorkerState::Stopped);
+        app.poll();
+        assert!(app.last_failure, "a final stop must not hide the earlier failure");
+        assert_eq!(app.workspace_view().title, "连接未完成，正在结束");
         app.stop();
         set_state(&mut app, WorkerState::Authenticated);
         app.poll();

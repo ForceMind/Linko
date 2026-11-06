@@ -70,7 +70,12 @@ fn tone_colors(dark: bool, tone: Tone) -> (Color32, Color32) {
 /// Apply once at startup/theme changes. Keep the existing Chinese font setup.
 pub(super) fn install(ctx: &egui::Context, dark: bool) {
     let colors = palette(dark);
-    let mut style = (*ctx.style()).clone();
+    let theme = if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    };
+    let mut style = (*ctx.style_of(theme)).clone();
     let mut visuals = if dark {
         egui::Visuals::dark()
     } else {
@@ -122,12 +127,23 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     style.spacing.interact_size = egui::vec2(32.0, 32.0);
     style.spacing.window_margin = egui::Margin::same(18);
     style.spacing.menu_margin = egui::Margin::same(8);
-    style.text_styles.insert(TextStyle::Heading, FontId::proportional(24.0));
-    style.text_styles.insert(TextStyle::Body, FontId::proportional(14.0));
-    style.text_styles.insert(TextStyle::Button, FontId::proportional(14.0));
-    style.text_styles.insert(TextStyle::Small, FontId::proportional(12.0));
-    style.text_styles.insert(TextStyle::Monospace, FontId::monospace(13.0));
-    ctx.set_style(style);
+    style
+        .text_styles
+        .insert(TextStyle::Heading, FontId::proportional(24.0));
+    style
+        .text_styles
+        .insert(TextStyle::Body, FontId::proportional(14.0));
+    style
+        .text_styles
+        .insert(TextStyle::Button, FontId::proportional(14.0));
+    style
+        .text_styles
+        .insert(TextStyle::Small, FontId::proportional(12.0));
+    style
+        .text_styles
+        .insert(TextStyle::Monospace, FontId::monospace(13.0));
+    ctx.set_style_of(theme, style);
+    ctx.set_theme(theme);
 }
 
 pub(super) fn card(ui: &egui::Ui) -> egui::Frame {
@@ -152,11 +168,16 @@ pub(super) fn pill(ui: &mut egui::Ui, label: &str, tone: Tone) {
 }
 
 pub(super) fn primary(label: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(label.to_owned()).size(14.0).strong().color(Color32::WHITE))
-        .fill(Color32::from_rgb(45, 94, 196))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(38, 80, 170)))
-        .corner_radius(egui::CornerRadius::same(9))
-        .min_size(egui::vec2(112.0, 36.0))
+    egui::Button::new(
+        RichText::new(label.to_owned())
+            .size(14.0)
+            .strong()
+            .color(Color32::WHITE),
+    )
+    .fill(Color32::from_rgb(45, 94, 196))
+    .stroke(Stroke::new(1.0, Color32::from_rgb(38, 80, 170)))
+    .corner_radius(egui::CornerRadius::same(9))
+    .min_size(egui::vec2(112.0, 36.0))
 }
 
 /// Draw one illustrative main monitor inside `rect`, including its stand.
@@ -169,7 +190,9 @@ pub(super) fn monitor(
     active: bool,
     dark: bool,
 ) {
-    if ![rect.min.x, rect.min.y, rect.max.x, rect.max.y].iter().all(|v| v.is_finite())
+    if ![rect.min.x, rect.min.y, rect.max.x, rect.max.y]
+        .iter()
+        .all(|v| v.is_finite())
         || !rect.width().is_finite()
         || !rect.height().is_finite()
         || rect.width() < 64.0
@@ -188,7 +211,12 @@ pub(super) fn monitor(
     let line = if active { colors.accent } else { colors.line };
     painter.rect_filled(screen.translate(egui::vec2(0.0, 2.0)), 10.0, colors.soft);
     painter.rect_filled(screen, 10.0, colors.surface);
-    painter.rect_stroke(screen, 10.0, Stroke::new(if active { 2.0 } else { 1.2 }, line), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        screen,
+        10.0,
+        Stroke::new(if active { 2.0 } else { 1.2 }, line),
+        egui::StrokeKind::Inside,
+    );
     let glass = screen.shrink(5.0);
     let glass_color = match (dark, local) {
         (false, true) => Color32::from_rgb(235, 242, 252),
@@ -229,7 +257,11 @@ pub(super) fn monitor(
         labels.text(
             glass.center() + egui::vec2(0.0, 14.0),
             egui::Align2::CENTER_CENTER,
-            if local { "本机 · 主屏示意" } else { "对端 · 主屏示意" },
+            if local {
+                "本机 · 主屏示意"
+            } else {
+                "对端 · 主屏示意"
+            },
             FontId::proportional(11.0),
             colors.muted,
         );

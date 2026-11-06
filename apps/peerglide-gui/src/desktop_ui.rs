@@ -100,11 +100,23 @@ impl App {
     }
     fn connection_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(self.idle_writable() && self.config.fingerprint.is_some(), egui::Button::new("只连接，不开启键鼠")).clicked() {
+            if ui
+                .add_enabled(
+                    self.idle_writable() && self.config.fingerprint.is_some(),
+                    egui::Button::new("只连接，不开启键鼠"),
+                )
+                .clicked()
+            {
                 let result = self.start(false);
                 self.feedback(result, "正在建立连接，键鼠尚未开启。");
             }
-            if ui.add_enabled(self.idle_writable() && self.config.fingerprint.is_some(), egui::Button::new("检查两台电脑的连接")).clicked() {
+            if ui
+                .add_enabled(
+                    self.idle_writable() && self.config.fingerprint.is_some(),
+                    egui::Button::new("检查两台电脑的连接"),
+                )
+                .clicked()
+            {
                 let result = self.start(true);
                 self.feedback(result, "正在检查连接，不读取或控制键鼠。");
             }
@@ -118,7 +130,9 @@ impl App {
         ui.add_space(12.0);
         ui.horizontal_wrapped(|ui| {
             if view.action != desktop_state::Action::None
-                && ui.add(desktop_style::primary(view.action.label())).clicked()
+                && ui
+                    .add(desktop_style::primary(view.action.label()))
+                    .clicked()
             {
                 self.workspace_action(view.action);
             }
@@ -131,7 +145,11 @@ impl App {
         });
     }
     pub(super) fn home(&mut self, ui: &mut egui::Ui) {
-        Self::heading(ui, "你的协作空间", "两台电脑，一套键鼠。先连接，再自然地跨过屏幕边缘。");
+        Self::heading(
+            ui,
+            "你的协作空间",
+            "两台电脑，一套键鼠。先连接，再自然地跨过屏幕边缘。",
+        );
         self.workspace(ui);
         ui.add_space(20.0);
         ui.heading("也可以只用这台电脑");
@@ -173,7 +191,19 @@ impl App {
                 ui.weak("这台电脑");
                 ui.heading(local_device_name());
                 ui.add_space(8.0);
-                desktop_style::pill(ui, if this.config.allow { "接收偏好：允许" } else { "接收偏好：关闭" }, if this.config.allow { desktop_style::Tone::Good } else { desktop_style::Tone::Neutral });
+                desktop_style::pill(
+                    ui,
+                    if this.config.allow {
+                        "接收偏好：允许"
+                    } else {
+                        "接收偏好：关闭"
+                    },
+                    if this.config.allow {
+                        desktop_style::Tone::Good
+                    } else {
+                        desktop_style::Tone::Neutral
+                    },
+                );
                 ui.add_space(6.0);
                 ui.weak("键鼠权限由本机决定");
                 if ui.button("管理本机接收权限").clicked() {
@@ -187,10 +217,25 @@ impl App {
                 ui.weak("另一台电脑");
                 ui.heading(&this.config.peer_name);
                 ui.add_space(8.0);
-                desktop_style::pill(ui, if this.child.is_some() && this.connected { "已连接" } else { "已记住这台电脑" }, if this.child.is_some() && this.connected { desktop_style::Tone::Good } else { desktop_style::Tone::Neutral });
+                desktop_style::pill(
+                    ui,
+                    if this.child.is_some() && this.connected {
+                        "已连接"
+                    } else {
+                        "已记住这台电脑"
+                    },
+                    if this.child.is_some() && this.connected {
+                        desktop_style::Tone::Good
+                    } else {
+                        desktop_style::Tone::Neutral
+                    },
+                );
                 ui.add_space(6.0);
                 ui.weak("对方是否允许控制，以连接时的实际结果为准");
-                if ui.add_enabled(this.idle_writable(), egui::Button::new("重新核验身份…")).clicked() {
+                if ui
+                    .add_enabled(this.idle_writable(), egui::Button::new("重新核验身份…"))
+                    .clicked()
+                {
                     this.open_setup();
                 }
             });
@@ -214,7 +259,11 @@ impl App {
         self.recovery_panel(ui);
     }
     pub(super) fn devices(&mut self, ui: &mut egui::Ui) {
-        Self::heading(ui, "设备与屏幕", "把电脑摆成桌面上的样子，选择需要的协作方式。");
+        Self::heading(
+            ui,
+            "设备与屏幕",
+            "把电脑摆成桌面上的样子，选择需要的协作方式。",
+        );
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.device_tab, DeviceTab::Device, "工作空间");
             ui.selectable_value(&mut self.device_tab, DeviceTab::Layout, "摆放屏幕");
@@ -233,15 +282,26 @@ impl App {
         ui.add_space(16.0);
         egui::CollapsingHeader::new("高级连接与身份").show(ui, |ui| {
             ui.label(format!("连接详情：{}", self.status));
-            ui.label(if self.config.listen { "连接方式：等待另一台电脑" } else { "连接方式：连接另一台电脑" });
+            ui.label(if self.config.listen {
+                "连接方式：等待另一台电脑"
+            } else {
+                "连接方式：连接另一台电脑"
+            });
             if !self.config.address.is_empty() {
                 ui.monospace(&self.config.address);
             }
             self.connection_actions(ui);
-            if ui.add_enabled(self.idle_writable(), egui::Button::new("添加或重新核验电脑…")).clicked() {
+            if ui
+                .add_enabled(
+                    self.idle_writable(),
+                    egui::Button::new("添加或重新核验电脑…"),
+                )
+                .clicked()
+            {
                 self.open_setup();
             }
-            if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked() {
+            if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
+            {
                 self.dialog = Some(Dialog::Revoke);
             }
             let own = self.local_fingerprint();
@@ -266,13 +326,21 @@ impl App {
     fn device_permissions(&mut self, ui: &mut egui::Ui) {
         ui.heading("让另一台电脑控制我");
         ui.label("只影响这台电脑接收键鼠；对方是否接受你的控制，需要它自己同意。");
-        ui.add_enabled_ui(self.idle_writable() && self.config.fingerprint.is_some(), |ui| {
-            if ui.checkbox(&mut self.config.allow, "允许已核验的电脑控制本机键鼠").changed() {
-                self.save();
-            }
-        });
+        ui.add_enabled_ui(
+            self.idle_writable() && self.config.fingerprint.is_some(),
+            |ui| {
+                if ui
+                    .checkbox(&mut self.config.allow, "允许已核验的电脑控制本机键鼠")
+                    .changed()
+                {
+                    self.save();
+                }
+            },
+        );
         ui.weak("修改用于下一次键鼠会话，不会自动开启控制。");
-        if self.child.is_some() && self.active_mode == Some(SessionMode::Native) && self.config.allow
+        if self.child.is_some()
+            && self.active_mode == Some(SessionMode::Native)
+            && self.config.allow
             && ui.button("撤回接收许可并停止协同").clicked()
         {
             self.config.allow = false;
@@ -290,30 +358,71 @@ impl App {
         ui.strong("屏幕的位置");
         ui.weak("拖动另一台电脑的屏幕，或直接选择方向。位置用于下一次会话。");
         let registered = self.config.fingerprint.is_some();
-        let editable = self.idle_writable() && registered && self.wizard.is_none() && self.dialog.is_none();
+        let editable =
+            self.idle_writable() && registered && self.wizard.is_none() && self.dialog.is_none();
         let width = ui.available_width().max(1.0);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 230.0), egui::Sense::hover());
         let (local, peer) = screen_rects(rect, &self.config.edge);
-        if !editable || !ui.input(|i| i.focused) || self.screen_drag.is_some_and(|(_, _, old)| old != rect) {
+        if !editable
+            || !ui.input(|i| i.focused)
+            || self.screen_drag.is_some_and(|(_, _, old)| old != rect)
+        {
             self.screen_drag = None;
         }
-        let response = ui.interact(peer, ui.scope_id().with("peer-display"), if editable { egui::Sense::drag() } else { egui::Sense::hover() });
+        let response = ui.interact(
+            peer,
+            ui.scope_id().with("peer-display"),
+            if editable {
+                egui::Sense::drag()
+            } else {
+                egui::Sense::hover()
+            },
+        );
         if response.drag_started() {
             if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
                 self.screen_drag = Some((origin - peer.center(), peer.center(), rect));
             }
         }
         if response.dragged() {
-            if let (Some((offset, center, _)), Some(pointer)) = (self.screen_drag.as_mut(), response.interact_pointer_pos()) {
+            if let (Some((offset, center, _)), Some(pointer)) =
+                (self.screen_drag.as_mut(), response.interact_pointer_pos())
+            {
                 *center = pointer - *offset;
             }
         }
-        let displayed = self.screen_drag.map_or(peer, |(_, center, _)| egui::Rect::from_center_size(center, peer.size()));
+        let displayed = self.screen_drag.map_or(peer, |(_, center, _)| {
+            egui::Rect::from_center_size(center, peer.size())
+        });
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 12.0, ui.visuals().faint_bg_color);
-        painter.line_segment([local.center(), displayed.center()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
-        desktop_style::monitor(&painter, local, local_device_name(), true, self.child.is_some() && self.active_mode == Some(SessionMode::Native) && self.input_state == Some(WorkerInputState::Local), self.config.dark);
-        desktop_style::monitor(&painter, displayed, if registered { &self.config.peer_name } else { "等待添加电脑" }, false, self.child.is_some() && self.connected && self.input_state == Some(WorkerInputState::ControllingRemote), self.config.dark);
+        painter.line_segment(
+            [local.center(), displayed.center()],
+            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        );
+        desktop_style::monitor(
+            &painter,
+            local,
+            local_device_name(),
+            true,
+            self.child.is_some()
+                && self.active_mode == Some(SessionMode::Native)
+                && self.input_state == Some(WorkerInputState::Local),
+            self.config.dark,
+        );
+        desktop_style::monitor(
+            &painter,
+            displayed,
+            if registered {
+                &self.config.peer_name
+            } else {
+                "等待添加电脑"
+            },
+            false,
+            self.child.is_some()
+                && self.connected
+                && self.input_state == Some(WorkerInputState::ControllingRemote),
+            self.config.dark,
+        );
         if response.drag_stopped() {
             if let Some((_, center, _)) = self.screen_drag.take() {
                 if editable && rect.contains(center) {
@@ -329,7 +438,10 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 ui.label("另一台电脑在我的");
                 for side in ["left", "right", "top", "bottom"] {
-                    if ui.selectable_value(&mut self.config.edge, side.into(), edge_label(side)).changed() {
+                    if ui
+                        .selectable_value(&mut self.config.edge, side.into(), edge_label(side))
+                        .changed()
+                    {
                         self.save();
                     }
                 }
@@ -435,8 +547,13 @@ impl App {
         if !self.writable() {
             desktop_style::card(ui).show(ui, |ui| {
                 desktop_style::pill(ui, "设置只读，原资料已保留", desktop_style::Tone::Warning);
-                ui.label("可能是另一窗口正在使用资料，或设置需要恢复。恢复前会备份，不改变本机身份。");
-                if self.instance_lock.is_some() && self.config_store.is_none() && ui.button("备份并恢复设置…").clicked() {
+                ui.label(
+                    "可能是另一窗口正在使用资料，或设置需要恢复。恢复前会备份，不改变本机身份。",
+                );
+                if self.instance_lock.is_some()
+                    && self.config_store.is_none()
+                    && ui.button("备份并恢复设置…").clicked()
+                {
                     self.dialog = Some(Dialog::Reset);
                 }
             });
@@ -451,7 +568,10 @@ impl App {
                 }
             });
             ui.add_enabled_ui(self.idle_writable(), |ui| {
-                if ui.checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑").changed() {
+                if ui
+                    .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
+                    .changed()
+                {
                     self.save();
                 }
             });
@@ -856,7 +976,10 @@ impl App {
                     let selected = self.page == page
                         || (page == Page::Devices && self.page == Page::Displays)
                         || (page == Page::GestureLab && self.page == Page::GestureRules);
-                    if ui.selectable_label(selected, RichText::new(label).size(15.0)).clicked() {
+                    if ui
+                        .selectable_label(selected, RichText::new(label).size(15.0))
+                        .clicked()
+                    {
                         self.page = page;
                     }
                     ui.add_space(10.0);
@@ -874,10 +997,16 @@ impl App {
                 if self.child.is_some() && ui.button("停止协同").clicked() {
                     self.stop();
                 }
-                if (self.stopping.is_some() || self.recovery_blocked) && ui.button("查看恢复状态").clicked() {
+                if (self.stopping.is_some() || self.recovery_blocked)
+                    && ui.button("查看恢复状态").clicked()
+                {
                     self.dialog = Some(Dialog::Recovery);
                 }
-                if ui.button("紧急恢复本机").on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认").clicked() {
+                if ui
+                    .button("紧急恢复本机")
+                    .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
+                    .clicked()
+                {
                     self.stop();
                     self.gesture_lab.cancel();
                 }
@@ -899,20 +1028,26 @@ impl App {
         {
             self.gesture_lab.cancel();
         }
-        egui::CentralPanel::default().frame(egui::Frame::default().inner_margin(20.0).fill(root.visuals().panel_fill)).show(root, |ui| {
-            ui.add_space(4.0);
-            egui::ScrollArea::vertical().show(ui, |ui| match self.page {
-                Page::Home => self.home(ui),
-                Page::Devices => self.devices(ui),
-                Page::Displays => {
-                    self.device_tab = DeviceTab::Layout;
-                    self.devices(ui);
-                }
-                Page::Settings => self.settings(ui, &ctx),
-                Page::GestureLab | Page::GestureRules => self.mouse(ui),
-                Page::Transfers => self.collaboration(ui),
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .inner_margin(20.0)
+                    .fill(root.visuals().panel_fill),
+            )
+            .show(root, |ui| {
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().show(ui, |ui| match self.page {
+                    Page::Home => self.home(ui),
+                    Page::Devices => self.devices(ui),
+                    Page::Displays => {
+                        self.device_tab = DeviceTab::Layout;
+                        self.devices(ui);
+                    }
+                    Page::Settings => self.settings(ui, &ctx),
+                    Page::GestureLab | Page::GestureRules => self.mouse(ui),
+                    Page::Transfers => self.collaboration(ui),
+                });
             });
-        });
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
         if let Some((canvas, save)) = self.gesture_lab.inspection() {
@@ -935,12 +1070,19 @@ impl App {
     }
 }
 
-
 fn local_device_name() -> &'static str {
-    if cfg!(target_os = "macos") { "这台 Mac" } else if cfg!(windows) { "这台 Windows 电脑" } else { "这台电脑" }
+    if cfg!(target_os = "macos") {
+        "这台 Mac"
+    } else if cfg!(windows) {
+        "这台 Windows 电脑"
+    } else {
+        "这台电脑"
+    }
 }
 fn screen_rects(canvas: egui::Rect, edge: &str) -> (egui::Rect, egui::Rect) {
-    let scale = (canvas.width() / 470.0).min(canvas.height() / 260.0).clamp(0.0, 1.0);
+    let scale = (canvas.width() / 470.0)
+        .min(canvas.height() / 260.0)
+        .clamp(0.0, 1.0);
     let size = Vec2::new(166.0, 112.0) * scale;
     let offset = match edge {
         "left" => Vec2::new(-(size.x + 26.0 * scale) / 2.0, 0.0),
@@ -948,12 +1090,27 @@ fn screen_rects(canvas: egui::Rect, edge: &str) -> (egui::Rect, egui::Rect) {
         "bottom" => Vec2::new(0.0, (size.y + 14.0 * scale) / 2.0),
         _ => Vec2::new((size.x + 26.0 * scale) / 2.0, 0.0),
     };
-    (egui::Rect::from_center_size(canvas.center() - offset, size), egui::Rect::from_center_size(canvas.center() + offset, size))
+    (
+        egui::Rect::from_center_size(canvas.center() - offset, size),
+        egui::Rect::from_center_size(canvas.center() + offset, size),
+    )
 }
 fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
-    if !center.x.is_finite() || !center.y.is_finite() || local.expand(10.0).contains(center) { return None; }
+    if !center.x.is_finite() || !center.y.is_finite() || local.expand(10.0).contains(center) {
+        return None;
+    }
     let d = center - local.center();
-    Some(if d.x.abs() >= d.y.abs() { if d.x < 0.0 { "left" } else { "right" } } else if d.y < 0.0 { "top" } else { "bottom" })
+    Some(if d.x.abs() >= d.y.abs() {
+        if d.x < 0.0 {
+            "left"
+        } else {
+            "right"
+        }
+    } else if d.y < 0.0 {
+        "top"
+    } else {
+        "bottom"
+    })
 }
 
 #[cfg(test)]
@@ -965,7 +1122,8 @@ mod layout_tests {
             let canvas = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), Vec2::new(width, 260.0));
             for edge in ["left", "right", "top", "bottom"] {
                 let (local, peer) = screen_rects(canvas, edge);
-                assert!(canvas.contains_rect(local)); assert!(canvas.contains_rect(peer));
+                assert!(canvas.contains_rect(local));
+                assert!(canvas.contains_rect(peer));
                 assert_eq!(dropped_edge(peer.center(), local), Some(edge));
                 assert_eq!(dropped_edge(local.center(), local), None);
                 assert!(!local.intersects(peer));
@@ -975,7 +1133,13 @@ mod layout_tests {
     #[test]
     fn dropping_over_local_screen_or_nonfinite_position_cannot_change_layout() {
         let local = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(166.0, 112.0));
-        for center in [local.center(), local.min, local.max, egui::pos2(f32::NAN, 0.0), egui::pos2(0.0, f32::INFINITY)] {
+        for center in [
+            local.center(),
+            local.min,
+            local.max,
+            egui::pos2(f32::NAN, 0.0),
+            egui::pos2(0.0, f32::INFINITY),
+        ] {
             assert_eq!(dropped_edge(center, local), None);
         }
     }
