@@ -1,0 +1,30 @@
+name: Pairing dependency lock proposal
+on:
+  pull_request:
+    paths:
+      - crates/peerglide-transport/Cargo.toml
+      - .github/workflows/pairing-lock-proposal.yml
+permissions:
+  contents: read
+jobs:
+  proposal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - name: Resolve additions while retaining existing lock entries
+        run: cargo metadata --format-version 1 > pairing-dependencies.json
+      - name: Propose canonical formatting without accepting it as validation
+        run: |
+          cargo fmt --all
+          git diff -- crates/peerglide-transport > pairing-rustfmt.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pairing-lock-proposal
+          path: |
+            Cargo.lock
+            pairing-dependencies.json
+            pairing-rustfmt.patch
+          if-no-files-found: error
