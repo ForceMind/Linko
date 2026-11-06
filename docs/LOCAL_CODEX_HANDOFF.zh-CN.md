@@ -1034,3 +1034,37 @@ Input Monitoring Granted、Secure Input未检测到。未启动Native/通信，M
 当前等待Windows就绪和本次Mac→Windows最多45秒短测确认，不重新交换证书或生成
 身份。daff5a9文档候选五项42214599991与驻留两项42214600196全过；本次相对a791
 仍仅改记录。主Goal仍active，全路线/物理C06未完成，不合并或稳定发布。
+
+## 44. B2认证网络接线开发中（2026-11-06）
+
+authenticated-pairing分支以137471b为基线；该基线完整五项42222992626和驻留两项
+42222992322均已成功。Mac短测继续保留实际已获权a791445包，等待Windows就绪确认。
+新pairing模块正在实现真实TCP→标准OPAQUE4.0.1→同一socket严格双向TLS1.3→双向
+context确认，独立ALPN、不改输入v5、不写盘/授输入。设计及有限审查范围见ADR-0010。
+已有真实网络/错误码/有界解码/取消/预算回归源码，尚未编译运行，GUI和登记提交未接。
+本机不装Rust，预检仍报告工具缺失；临时lock-proposal工作流只产出新增依赖lock和
+rustfmt候选，不能当locked验收。须回收核对lock/格式、删除临时工作流并完成严格CI，
+随后继续中文向导和两端提交回执，不能把当前网络模块当生产短码已完成。
+
+锁提案42224702730/13504124291摘要已核对，所有原依赖版本/源/校验和保留，新增
+34包，临时提案workflow已删除。898d33c实际locked CI42225212344已过最低Rust和
+Linux/macOS工作区测试，审计失败为新增crypto-bigint0.5.5的RUSTSEC-2026-0387，
+不能ignore。当前查兼容上游修复/标准PAKE替代，未接GUI或生产。后续12c2c66补了
+成功Offer→Session取消责任交接、服务端绑定快照（固定TripleDh的finish只用预存MAC，
+不会重核额外context参数）、真实OPAQUE替换/重放、TLS负例及KE3/TLS/ready迟到取消。
+该批初次平台fmt失败，已按官方差异修正；新回归仍需实际运行，未把范围复核当审计。
+
+审计修复资格候选固定官方027abbc91115baa38b70ad3af7f5a22f072f978b，非追main/同名
+已发布pre2。官方精确CI42108218606通过且保留RFC/4.0.1兼容fixture；这仍是dalek5/
+Argon2.6/voprf.6pre2等重大依赖迁移，仅可先实验验证，未接GUI。新增独立固定源码
+上游测试job，临时proposal重算新依赖锁和PG固定Argon2参数旧版输出fixture，随后
+须提交核对结果、删除临时workflow、完整PG检查/严格审计与资格复核，不能提前授信。
+
+3f7d57b锁已回收/摘要校验，bigint0.7.10替代受影响版本，基础依赖未升级；临时提案
+workflow已删除。CI42228351335已核对完整五项成功（Win/Mac/Linux、最低1.95、审计）。
+独立上游42228351494已成功，84unit/3兼容/1注册/
+19doc；2个上游ignored doc不算通过。PG13项网络负例/取消/CPU预算/固定Argon2
+fixture已实际在Mac执行成功。详VALIDATION新节；预发布voprf及GUI冻结边界保留。
+下一批不能把Session伪造成手工确认，需独立后台网络worker、带代次私有stdin/stdout、
+原身份/配置快照复查、ADR0008两端提交及回执未知；成功Offer handoff后关闭/换代要
+显式cancel。代码和权限异常/后台panic须终态失败，配对不自动开启输入或接收。
