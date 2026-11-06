@@ -8,7 +8,11 @@ use crate::{Identity, MAX_CERTIFICATE_BYTES};
 use anyhow::{Context, Result};
 use rand::{rngs::OsRng, Rng, RngCore};
 use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
-use tokio::{net::{TcpListener, TcpStream}, sync::watch, time::Instant};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::watch,
+    time::Instant,
+};
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 use zeroize::Zeroizing;
 
@@ -36,7 +40,13 @@ struct Lifetime {
 impl Lifetime {
     fn new(deadline: Instant) -> (Self, Cancellation) {
         let (tx, rx) = watch::channel(false);
-        (Self { deadline, cancelled: rx }, Cancellation(tx))
+        (
+            Self {
+                deadline,
+                cancelled: rx,
+            },
+            Cancellation(tx),
+        )
     }
     fn check(&self) -> Result<()> {
         anyhow::ensure!(!*self.cancelled.borrow(), "pairing cancelled");
@@ -48,8 +58,12 @@ impl Lifetime {
         let mut cancelled = self.cancelled.clone();
         let wait = async {
             loop {
-                if *cancelled.borrow_and_update() { break; }
-                if cancelled.changed().await.is_err() { break; }
+                if *cancelled.borrow_and_update() {
+                    break;
+                }
+                if cancelled.changed().await.is_err() {
+                    break;
+                }
             }
         };
         let result = tokio::select! {
@@ -80,8 +94,14 @@ impl Binding {
         let server = *blake3::hash(server).as_bytes();
         anyhow::ensure!(client != server, "cannot pair local identity with itself");
         let mut context = DOMAIN.to_vec();
-        for field in [&client, &server, &offer, &attempt] { context.extend_from_slice(field); }
-        Ok(Self { client, server, context })
+        for field in [&client, &server, &offer, &attempt] {
+            context.extend_from_slice(field);
+        }
+        Ok(Self {
+            client,
+            server,
+            context,
+        })
     }
 }
 fn random_id() -> [u8; 32] {
@@ -109,54 +129,95 @@ impl Offer {
             code: Zeroizing::new(format!("{:08}", OsRng.gen_range(0..100_000_000u32))),
             id: random_id(),
             local_certificate: identity.certificate.clone(),
-            lifetime, cancellation, attempts: 0, completed: false,
+            lifetime,
+            cancellation,
+            attempts: 0,
+            completed: false,
         })
     }
     /// Display locally only. Never log, persist, discover, or send this value.
     pub fn code(&self) -> Result<&str> {
         self.lifetime.check()?;
-        anyhow::ensure!(!self.completed && self.attempts < ATTEMPT_LIMIT, "pairing offer exhausted");
+        anyhow::ensure!(
+            !self.completed && self.attempts < ATTEMPT_LIMIT,
+            "pairing offer exhausted"
+        );
         Ok(&self.code)
     }
-    pub fn cancellation(&self) -> Cancellation { self.cancellation.clone() }
-    pub fn attempts_remaining(&self) -> u8 { ATTEMPT_LIMIT.saturating_sub(self.attempts) }
+    pub fn cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
+    }
+    pub fn attempts_remaining(&self) -> u8 {
+        ATTEMPT_LIMIT.saturating_sub(self.attempts)
+    }
 
-    pub async fn accept(&mut self, listener: &TcpListener, identity: Arc<Identity>) -> Result<PairingSession> {
+    pub async fn accept(
+        &mut self,
+        listener: &TcpListener,
+        identity: Arc<Identity>,
+    ) -> Result<PairingSession> {
         self.code()?;
-        anyhow::ensure!(identity.certificate == self.local_certificate, "pairing identity changed");
-        let (mut socket, _) = self.lifetime.run(async { Ok(listener.accept().await?) }).await?;
+        anyhow::ensure!(
+            identity.certificate == self.local_certificate,
+            "pairing identity changed"
+        );
+        let (mut socket, _) = self
+            .lifetime
+            .run(async { Ok(listener.accept().await?) })
+            .await?;
         // Charge before reading any attacker-controlled bytes or running KSF.
         // Malformed frames, disconnect after KE2 and changed IP all consume it.
         self.attempts += 1;
         let attempt_lifetime = self.lifetime.attempt();
-        let result = attempt_lifetime.run(async {
-            socket.set_nodelay(true)?;
-            let hello = wire::read(&mut socket, wire::CLIENT_HELLO, MAX_FRAME).await?;
-            let (attempt, peer) = wire::parse_hello(&hello)?;
-            let binding = Binding::new(&peer, &identity.certificate, self.id, attempt)?;
-            wire::write(&mut socket, wire::SERVER_HELLO, &wire::hello(&self.id, &identity.certificate)?).await?;
-            let ke1 = wire::read(&mut socket, wire::KE1, 1024).await?;
-            let code = self.code.clone();
-            let bound = binding.clone();
-            let (state, ke2) = crypto::compute(move || crypto::server_start(code.as_bytes(), &bound, &ke1)).await?;
-            wire::write(&mut socket, wire::KE2, &ke2).await?;
-            let ke3 = wire::read(&mut socket, wire::KE3, 1024).await?;
-            crypto::server_finish(state, &binding, &ke3)?;
-            // Exact reads above leave any pipelined ClientHello in this socket.
-            let tls = TlsAcceptor::from(Arc::new(server_config(&identity, &peer)?)).accept(socket).await?;
-            let mut stream = TlsStream::Server(tls);
-            verify_tls(&stream, &peer)?;
-            wire::write(&mut stream, wire::SERVER_READY, &binding.context).await?;
-            let ready = wire::read(&mut stream, wire::CLIENT_READY, MAX_FRAME).await?;
-            wire::verify_ready(&ready, &binding)?;
-            Ok(PairingSession { stream, peer_certificate: peer, binding, lifetime: self.lifetime.clone(), cancellation: self.cancellation.clone() })
-        }).await;
-        if result.is_ok() { self.completed = true; }
+        let result = attempt_lifetime
+            .run(async {
+                socket.set_nodelay(true)?;
+                let hello = wire::read(&mut socket, wire::CLIENT_HELLO, MAX_FRAME).await?;
+                let (attempt, peer) = wire::parse_hello(&hello)?;
+                let binding = Binding::new(&peer, &identity.certificate, self.id, attempt)?;
+                wire::write(
+                    &mut socket,
+                    wire::SERVER_HELLO,
+                    &wire::hello(&self.id, &identity.certificate)?,
+                )
+                .await?;
+                let ke1 = wire::read(&mut socket, wire::KE1, 1024).await?;
+                let code = self.code.clone();
+                let bound = binding.clone();
+                let (state, ke2) =
+                    crypto::compute(move || crypto::server_start(code.as_bytes(), &bound, &ke1))
+                        .await?;
+                wire::write(&mut socket, wire::KE2, &ke2).await?;
+                let ke3 = wire::read(&mut socket, wire::KE3, 1024).await?;
+                crypto::server_finish(state, &binding, &ke3)?;
+                // Exact reads above leave any pipelined ClientHello in this socket.
+                let tls = TlsAcceptor::from(Arc::new(server_config(&identity, &peer)?))
+                    .accept(socket)
+                    .await?;
+                let mut stream = TlsStream::Server(tls);
+                verify_tls(&stream, &peer)?;
+                wire::write(&mut stream, wire::SERVER_READY, &binding.context).await?;
+                let ready = wire::read(&mut stream, wire::CLIENT_READY, MAX_FRAME).await?;
+                wire::verify_ready(&ready, &binding)?;
+                Ok(PairingSession {
+                    stream,
+                    peer_certificate: peer,
+                    binding,
+                    lifetime: self.lifetime.clone(),
+                    cancellation: self.cancellation.clone(),
+                })
+            })
+            .await;
+        if result.is_ok() {
+            self.completed = true;
+        }
         result
     }
 }
 impl Drop for Offer {
-    fn drop(&mut self) { self.cancellation.cancel(); }
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 
 /// One explicit code submission, consumed by one connection attempt. No automatic
@@ -169,37 +230,68 @@ pub struct CodeEntry {
 impl CodeEntry {
     pub fn new(code: String) -> Result<Self> {
         let code = Zeroizing::new(code);
-        anyhow::ensure!(code.len() == CODE_DIGITS && code.bytes().all(|b| b.is_ascii_digit()), "expected eight digit pairing code");
+        anyhow::ensure!(
+            code.len() == CODE_DIGITS && code.bytes().all(|b| b.is_ascii_digit()),
+            "expected eight digit pairing code"
+        );
         let (lifetime, cancellation) = Lifetime::new(Instant::now() + OFFER_LIFETIME);
-        Ok(Self { code, lifetime, cancellation })
+        Ok(Self {
+            code,
+            lifetime,
+            cancellation,
+        })
     }
-    pub fn cancellation(&self) -> Cancellation { self.cancellation.clone() }
-    pub async fn connect(self, address: SocketAddr, identity: Arc<Identity>) -> Result<PairingSession> {
+    pub fn cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
+    }
+    pub async fn connect(
+        self,
+        address: SocketAddr,
+        identity: Arc<Identity>,
+    ) -> Result<PairingSession> {
         let limit = self.lifetime.attempt();
-        limit.run(async {
-            let mut socket = TcpStream::connect(address).await?;
-            socket.set_nodelay(true)?;
-            let attempt = random_id();
-            wire::write(&mut socket, wire::CLIENT_HELLO, &wire::hello(&attempt, &identity.certificate)?).await?;
-            let hello = wire::read(&mut socket, wire::SERVER_HELLO, MAX_FRAME).await?;
-            let (offer, peer) = wire::parse_hello(&hello)?;
-            let binding = Binding::new(&identity.certificate, &peer, offer, attempt)?;
-            let (state, ke1) = crypto::client_start(self.code.as_bytes())?;
-            wire::write(&mut socket, wire::KE1, &ke1).await?;
-            let ke2 = wire::read(&mut socket, wire::KE2, 1024).await?;
-            let code = self.code.clone();
-            let bound = binding.clone();
-            let ke3 = crypto::compute(move || crypto::client_finish(state, code.as_bytes(), &bound, &ke2)).await?;
-            wire::write(&mut socket, wire::KE3, &ke3).await?;
-            let name = rustls::pki_types::ServerName::try_from("peerglide.local")?;
-            let tls = TlsConnector::from(Arc::new(client_config(&identity, &peer)?)).connect(name, socket).await?;
-            let mut stream = TlsStream::Client(tls);
-            verify_tls(&stream, &peer)?;
-            wire::write(&mut stream, wire::CLIENT_READY, &binding.context).await?;
-            let ready = wire::read(&mut stream, wire::SERVER_READY, MAX_FRAME).await?;
-            wire::verify_ready(&ready, &binding)?;
-            Ok(PairingSession { stream, peer_certificate: peer, binding, lifetime: self.lifetime.clone(), cancellation: self.cancellation.clone() })
-        }).await
+        limit
+            .run(async {
+                let mut socket = TcpStream::connect(address).await?;
+                socket.set_nodelay(true)?;
+                let attempt = random_id();
+                wire::write(
+                    &mut socket,
+                    wire::CLIENT_HELLO,
+                    &wire::hello(&attempt, &identity.certificate)?,
+                )
+                .await?;
+                let hello = wire::read(&mut socket, wire::SERVER_HELLO, MAX_FRAME).await?;
+                let (offer, peer) = wire::parse_hello(&hello)?;
+                let binding = Binding::new(&identity.certificate, &peer, offer, attempt)?;
+                let (state, ke1) = crypto::client_start(self.code.as_bytes())?;
+                wire::write(&mut socket, wire::KE1, &ke1).await?;
+                let ke2 = wire::read(&mut socket, wire::KE2, 1024).await?;
+                let code = self.code.clone();
+                let bound = binding.clone();
+                let ke3 = crypto::compute(move || {
+                    crypto::client_finish(state, code.as_bytes(), &bound, &ke2)
+                })
+                .await?;
+                wire::write(&mut socket, wire::KE3, &ke3).await?;
+                let name = rustls::pki_types::ServerName::try_from("peerglide.local")?;
+                let tls = TlsConnector::from(Arc::new(client_config(&identity, &peer)?))
+                    .connect(name, socket)
+                    .await?;
+                let mut stream = TlsStream::Client(tls);
+                verify_tls(&stream, &peer)?;
+                wire::write(&mut stream, wire::CLIENT_READY, &binding.context).await?;
+                let ready = wire::read(&mut stream, wire::SERVER_READY, MAX_FRAME).await?;
+                wire::verify_ready(&ready, &binding)?;
+                Ok(PairingSession {
+                    stream,
+                    peer_certificate: peer,
+                    binding,
+                    lifetime: self.lifetime.clone(),
+                    cancellation: self.cancellation.clone(),
+                })
+            })
+            .await
     }
 }
 
@@ -213,7 +305,9 @@ pub struct PairingSession {
     cancellation: Cancellation,
 }
 impl PairingSession {
-    pub fn cancellation(&self) -> Cancellation { self.cancellation.clone() }
+    pub fn cancellation(&self) -> Cancellation {
+        self.cancellation.clone()
+    }
     pub fn peer_certificate(&self) -> Result<&[u8]> {
         self.lifetime.check()?;
         verify_tls(&self.stream, &self.peer_certificate)?;
@@ -227,7 +321,11 @@ impl PairingSession {
 
 fn server_config(identity: &Identity, peer: &[u8]) -> Result<rustls::ServerConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(Arc::new(crate::roots(peer)?), provider.clone()).build()?;
+    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(crate::roots(peer)?),
+        provider.clone(),
+    )
+    .build()?;
     let mut config = rustls::ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_client_cert_verifier(verifier)
@@ -239,10 +337,12 @@ fn server_config(identity: &Identity, peer: &[u8]) -> Result<rustls::ServerConfi
     Ok(config)
 }
 fn client_config(identity: &Identity, peer: &[u8]) -> Result<rustls::ClientConfig> {
-    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_root_certificates(crate::roots(peer)?)
-        .with_client_auth_cert(vec![identity.cert()], identity.key())?;
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])?
+    .with_root_certificates(crate::roots(peer)?)
+    .with_client_auth_cert(vec![identity.cert()], identity.key())?;
     config.alpn_protocols = vec![ALPN.to_vec()];
     config.resumption = rustls::client::Resumption::disabled();
     config.enable_early_data = false;
@@ -250,10 +350,19 @@ fn client_config(identity: &Identity, peer: &[u8]) -> Result<rustls::ClientConfi
 }
 fn verify_tls(stream: &TlsStream<TcpStream>, peer: &[u8]) -> Result<()> {
     let (_, connection) = stream.get_ref();
-    anyhow::ensure!(connection.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3)
-        && connection.alpn_protocol() == Some(ALPN), "pairing TLS version/ALPN mismatch");
-    anyhow::ensure!(connection.peer_certificates().and_then(|chain| chain.first()).map(|cert| cert.as_ref()) == Some(peer),
-        "pairing TLS certificate mismatch");
+    anyhow::ensure!(
+        connection.protocol_version() == Some(rustls::ProtocolVersion::TLSv1_3)
+            && connection.alpn_protocol() == Some(ALPN),
+        "pairing TLS version/ALPN mismatch"
+    );
+    anyhow::ensure!(
+        connection
+            .peer_certificates()
+            .and_then(|chain| chain.first())
+            .map(|cert| cert.as_ref())
+            == Some(peer),
+        "pairing TLS certificate mismatch"
+    );
     Ok(())
 }
 

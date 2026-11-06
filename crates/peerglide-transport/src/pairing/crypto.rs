@@ -18,7 +18,8 @@ impl CipherSuite for Suite {
 }
 
 fn ksf() -> Result<Argon2<'static>> {
-    let params = Params::new(64 * 1024, 3, 1, None).map_err(|_| anyhow::anyhow!("invalid fixed KSF"))?;
+    let params =
+        Params::new(64 * 1024, 3, 1, None).map_err(|_| anyhow::anyhow!("invalid fixed KSF"))?;
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 fn identifiers(binding: &Binding) -> Identifiers<'_> {
@@ -48,26 +49,28 @@ pub(super) fn server_start(
     let request = CredentialRequest::<Suite>::deserialize(bytes)
         .map_err(|_| anyhow::anyhow!("invalid pairing request"))?;
     // opaque-ke's field-prefix decoder must not admit trailing bytes.
-    anyhow::ensure!(request.serialize().as_slice() == bytes, "noncanonical pairing request");
+    anyhow::ensure!(
+        request.serialize().as_slice() == bytes,
+        "noncanonical pairing request"
+    );
     let setup = ServerSetup::<Suite>::new(&mut OsRng);
     let registration = ClientRegistration::<Suite>::start(&mut OsRng, code)
         .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
-    let response = ServerRegistration::<Suite>::start(
-        &setup,
-        registration.message,
-        &binding.context,
-    )
-    .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
+    let response =
+        ServerRegistration::<Suite>::start(&setup, registration.message, &binding.context)
+            .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     // The displaying endpoint knows the short code. Registration stays entirely
     // within this process, with standard OPAQUE identifiers and fixed Argon2id.
     let ksf = ksf()?;
-    let mut registered = registration.state.finish(
-        &mut OsRng,
-        code,
-        response.message,
-        ClientRegistrationFinishParameters::new(identifiers(binding), Some(&ksf)),
-    )
-    .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
+    let mut registered = registration
+        .state
+        .finish(
+            &mut OsRng,
+            code,
+            response.message,
+            ClientRegistrationFinishParameters::new(identifiers(binding), Some(&ksf)),
+        )
+        .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     use zeroize::Zeroize;
     registered.export_key.zeroize();
     let record = ServerRegistration::<Suite>::finish(registered.message);
@@ -91,15 +94,23 @@ pub(super) fn client_finish(
 ) -> Result<Vec<u8>> {
     let response = CredentialResponse::<Suite>::deserialize(bytes)
         .map_err(|_| anyhow::anyhow!("invalid pairing response"))?;
-    anyhow::ensure!(response.serialize().as_slice() == bytes, "noncanonical pairing response");
+    anyhow::ensure!(
+        response.serialize().as_slice() == bytes,
+        "noncanonical pairing response"
+    );
     let ksf = ksf()?;
-    let mut finish = state.finish(
-        &mut OsRng,
-        code,
-        response,
-        ClientLoginFinishParameters::new(Some(&binding.context), identifiers(binding), Some(&ksf)),
-    )
-    .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
+    let mut finish = state
+        .finish(
+            &mut OsRng,
+            code,
+            response,
+            ClientLoginFinishParameters::new(
+                Some(&binding.context),
+                identifiers(binding),
+                Some(&ksf),
+            ),
+        )
+        .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     use zeroize::Zeroize;
     finish.session_key.zeroize();
     finish.export_key.zeroize();
@@ -113,8 +124,12 @@ pub(super) fn server_finish(
 ) -> Result<()> {
     let message = CredentialFinalization::<Suite>::deserialize(bytes)
         .map_err(|_| anyhow::anyhow!("invalid pairing finalization"))?;
-    anyhow::ensure!(message.serialize().as_slice() == bytes, "noncanonical pairing finalization");
-    let mut finish = state.finish(message, parameters(binding))
+    anyhow::ensure!(
+        message.serialize().as_slice() == bytes,
+        "noncanonical pairing finalization"
+    );
+    let mut finish = state
+        .finish(message, parameters(binding))
         .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     use zeroize::Zeroize;
     finish.session_key.zeroize();
@@ -127,7 +142,10 @@ static CPU: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 pub(super) async fn compute<T: Send + 'static>(
     task: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    let permit = CPU.acquire().await.context("pairing computation unavailable")?;
+    let permit = CPU
+        .acquire()
+        .await
+        .context("pairing computation unavailable")?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         task()

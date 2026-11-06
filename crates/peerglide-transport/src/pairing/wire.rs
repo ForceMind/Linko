@@ -20,7 +20,10 @@ pub(super) async fn read(
     limit: usize,
 ) -> Result<Vec<u8>> {
     let size = stream.read_u32().await? as usize;
-    anyhow::ensure!(size > 1 && size <= limit.min(MAX_FRAME) + 1, "invalid pairing frame size");
+    anyhow::ensure!(
+        size > 1 && size <= limit.min(MAX_FRAME) + 1,
+        "invalid pairing frame size"
+    );
     anyhow::ensure!(stream.read_u8().await? == kind, "unexpected pairing frame");
     let mut bytes = vec![0; size - 1];
     stream.read_exact(&mut bytes).await?;
@@ -31,7 +34,10 @@ pub(super) async fn write(
     kind: u8,
     bytes: &[u8],
 ) -> Result<()> {
-    anyhow::ensure!(!bytes.is_empty() && bytes.len() <= MAX_FRAME, "invalid pairing frame size");
+    anyhow::ensure!(
+        !bytes.is_empty() && bytes.len() <= MAX_FRAME,
+        "invalid pairing frame size"
+    );
     stream.write_u32((bytes.len() + 1) as u32).await?;
     stream.write_u8(kind).await?;
     stream.write_all(bytes).await?;
@@ -48,16 +54,26 @@ pub(super) fn hello(id: &[u8; 32], cert: &[u8]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 pub(super) fn parse_hello(bytes: &[u8]) -> Result<([u8; 32], Vec<u8>)> {
-    anyhow::ensure!(bytes.len() >= 44 && &bytes[..8] == MAGIC, "unsupported pairing version");
+    anyhow::ensure!(
+        bytes.len() >= 44 && &bytes[..8] == MAGIC,
+        "unsupported pairing version"
+    );
     let size = u32::from_be_bytes(bytes[40..44].try_into()?) as usize;
-    anyhow::ensure!(size > 0 && size <= MAX_CERTIFICATE_BYTES && bytes.len() == 44 + size,
-        "invalid pairing certificate size");
-    let id = bytes[8..40].try_into().context("invalid pairing identifier")?;
+    anyhow::ensure!(
+        size > 0 && size <= MAX_CERTIFICATE_BYTES && bytes.len() == 44 + size,
+        "invalid pairing certificate size"
+    );
+    let id = bytes[8..40]
+        .try_into()
+        .context("invalid pairing identifier")?;
     let cert = bytes[44..].to_vec();
     validate_certificate(&cert)?;
     Ok((id, cert))
 }
 pub(super) fn verify_ready(bytes: &[u8], binding: &Binding) -> Result<()> {
-    anyhow::ensure!(bytes == binding.context, "pairing completion differs from authenticated context");
+    anyhow::ensure!(
+        bytes == binding.context,
+        "pairing completion differs from authenticated context"
+    );
     Ok(())
 }

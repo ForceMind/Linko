@@ -32,9 +32,16 @@ async fn wrong_code_fails_both_sides_without_a_tls_or_peer_proposal() -> Result<
     let client = Arc::new(Identity::generate()?);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let mut offer = Offer::new(&server)?;
-    let wrong = if offer.code()? == "12345678" { "87654321" } else { "12345678" };
+    let wrong = if offer.code()? == "12345678" {
+        "87654321"
+    } else {
+        "12345678"
+    };
     let entry = CodeEntry::new(wrong.to_owned())?;
-    let (a, b) = tokio::join!(offer.accept(&listener, server), entry.connect(listener.local_addr()?, client));
+    let (a, b) = tokio::join!(
+        offer.accept(&listener, server),
+        entry.connect(listener.local_addr()?, client)
+    );
     assert!(a.is_err() && b.is_err());
     assert_eq!(offer.attempts_remaining(), ATTEMPT_LIMIT - 1);
     Ok(())
@@ -58,7 +65,11 @@ async fn malformed_and_disconnected_sockets_share_one_offer_budget() -> Result<(
     assert_eq!(offer.attempts_remaining(), 0);
     assert!(offer.code().is_err());
     // Must reject before waiting for a sixth socket or starting expensive work.
-    assert!(tokio::time::timeout(Duration::from_millis(100), offer.accept(&listener, server)).await?.is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), offer.accept(&listener, server))
+            .await?
+            .is_err()
+    );
     Ok(())
 }
 
@@ -71,7 +82,10 @@ async fn cancellation_and_absolute_expiry_reject_before_connect_or_accept() -> R
     assert!(offer.accept(&listener, identity.clone()).await.is_err());
     let entry = CodeEntry::new("12345678".into())?;
     entry.cancellation().cancel();
-    assert!(entry.connect(listener.local_addr()?, identity.clone()).await.is_err());
+    assert!(entry
+        .connect(listener.local_addr()?, identity.clone())
+        .await
+        .is_err());
     let mut offer = Offer::new(&identity)?;
     offer.lifetime.deadline = Instant::now();
     assert!(offer.code().is_err());
@@ -95,7 +109,8 @@ async fn idle_incoming_handshake_cancels_without_waiting_for_socket_timeout() ->
     };
     let (server, client) = tokio::time::timeout(Duration::from_secs(1), async {
         tokio::join!(offer.accept(&listener, identity), client)
-    }).await?;
+    })
+    .await?;
     assert!(server.is_err());
     client?;
     Ok(())
@@ -108,7 +123,9 @@ async fn exact_reads_preserve_pipelined_tls_prefix_and_reject_trailing_hello() -
     let mut trailing = hello.clone();
     trailing.push(0);
     assert!(wire::parse_hello(&trailing).is_err());
-    for size in 0..hello.len() { assert!(wire::parse_hello(&hello[..size]).is_err()); }
+    for size in 0..hello.len() {
+        assert!(wire::parse_hello(&hello[..size]).is_err());
+    }
     let (mut a, mut b) = tokio::io::duplex(4096);
     let writer = async {
         wire::write(&mut a, wire::KE3, b"finalization").await?;
