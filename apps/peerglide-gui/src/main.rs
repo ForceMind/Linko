@@ -1,6 +1,8 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod config_store;
 mod connection_info;
+mod desktop_state;
+mod desktop_style;
 mod desktop_ui;
 mod discovery_panel;
 mod gesture_lab;
@@ -111,7 +113,7 @@ enum CollaborationTab {
     Clipboard,
     Files,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dialog {
     NativeStart,
     Revoke,
@@ -234,6 +236,7 @@ struct App {
     exit_confirmed: bool,
     permission_report: Option<peerglide_platform::context::PermissionReport>,
     worker_permissions: worker_permissions::Checker,
+    screen_drag: Option<(egui::Vec2, egui::Pos2, egui::Rect)>,
     discovery: discovery_panel::Panel,
     gesture_lab: gesture_lab::GestureLab,
     gesture_rules: gesture_rules::RuleEditor,
@@ -254,6 +257,7 @@ struct App {
     worker_state: Option<Arc<WorkerSnapshot>>,
     status: String,
     connected: bool,
+    last_failure: bool,
     logs: VecDeque<String>,
     stopping: Option<Instant>,
 }
@@ -304,6 +308,7 @@ impl App {
             exit_confirmed: false,
             permission_report: None,
             worker_permissions: worker_permissions::Checker::default(),
+            screen_drag: None,
             discovery: discovery_panel::Panel::default(),
             gesture_lab: gesture_lab::GestureLab::new(&dir),
             gesture_rules: gesture_rules::RuleEditor::new(&dir),
@@ -324,6 +329,7 @@ impl App {
             worker_state: None,
             status: "离线".into(),
             connected: false,
+            last_failure: false,
             logs: VecDeque::new(),
             stopping: None,
         };
@@ -333,11 +339,7 @@ impl App {
         app
     }
     fn theme(&self, ctx: &egui::Context) {
-        ctx.set_visuals(if self.config.dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        desktop_style::install(ctx, self.config.dark);
     }
     fn save(&mut self) {
         if let Err(e) = self.save_config() {
@@ -559,6 +561,7 @@ impl App {
         self.logs.clear();
         self.connected = false;
         self.stopping = None;
+        self.last_failure = false;
         self.status = "正在启动".into();
         Ok(())
     }
@@ -616,6 +619,8 @@ impl App {
     }
     fn stop(&mut self) {
         self.pending_start = None;
+        self.native_confirmation = false;
+        self.screen_drag = None;
         if let Some(child) = &mut self.child {
             if self.input_terminal {
                 self.connected = false;
@@ -661,6 +666,7 @@ impl App {
             !self.recovery_blocked && self.stopping.is_none(),
             "恢复未确认，不能开始新的键鼠会话"
         );
+        self.native_confirmation = false;
         self.config.native = true;
         self.save_config()?;
         if self.child.is_some() {
@@ -760,6 +766,7 @@ impl App {
                     }
                     Some(WorkerState::Stopped | WorkerState::Failed) => {
                         self.connected = false;
+                        self.last_failure |= state == Some(WorkerState::Failed);
                         self.status = "工作进程已停止".into();
                     }
                     _ => (),
@@ -776,6 +783,7 @@ impl App {
             match child.try_wait() {
                 Ok(Some(exit)) => {
                     self.connected = false;
+                    self.last_failure |= !exit.success();
                     self.status = if exit.success() {
                         "离线".into()
                     } else {
@@ -870,6 +878,8 @@ impl App {
                 || i.viewport().occluded.unwrap_or(false)
         }) {
             self.gesture_lab.cancel();
+            self.screen_drag = None;
+            self.native_confirmation = false;
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
             if self.child.is_some() || self.recovery_blocked {
@@ -1120,6 +1130,203 @@ mod tests {
         assert_eq!(app.input_label(), "输入恢复未确认");
         app.native_confirmation = true;
         assert!(app.request_native().is_err());
+        assert!(app.child.is_none());
+        Ok(())
+    }
+    #[test]
+    fn workspace_start_only_opens_fresh_consent_and_readonly_recovery_blocks_it() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // Presentation fixture only: no identity, certificate or worker is created.
+        app.config.fingerprint = Some("presentation-only".into());
+        app.native_confirmation = true;
+        app.workspace_action(desktop_state::Action::StartInput);
+        if cfg!(any(windows, target_os = "macos")) {
+            assert_eq!(app.dialog, Some(Dialog::NativeStart));
+            assert!(!app.native_confirmation);
+        }
+        assert!(app.child.is_none());
+        assert!(!app.config.native && !app.config.allow);
+        assert!(!app.identity_dir().exists());
+        app.native_confirmation = true;
+        app.stop();
+        assert!(!app.native_confirmation);
+        app.native_confirmation = true;
+        app.workspace_action(desktop_state::Action::AddDevice);
+        assert!(!app.native_confirmation && app.dialog.is_none());
+        assert!(app.wizard.is_some());
+        app.wizard = None;
+        app.dialog = None;
+        app.recovery_blocked = true;
+        app.workspace_action(desktop_state::Action::StartInput);
+        assert!(app.dialog.is_none());
+        app.workspace_action(desktop_state::Action::Recovery);
+        assert_eq!(app.dialog, Some(Dialog::Recovery));
+        let mut readonly = App::load(fixture.path.clone());
+        readonly.config.fingerprint = app.config.fingerprint.clone();
+        for action in [
+            desktop_state::Action::StartInput,
+            desktop_state::Action::Connect,
+            desktop_state::Action::AddDevice,
+        ] {
+            readonly.workspace_action(action);
+            assert!(
+                readonly.child.is_none() && readonly.dialog.is_none() && readonly.wizard.is_none()
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn workspace_primary_action_stays_visible_in_supported_windows() -> Result<()> {
+        fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.visual_bounding_rect())
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().find_map(|shape| text_rect(shape, label))
+                }
+                _ => None,
+            }
+        }
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // Rendering metadata only. No peer certificate, identity or worker is created.
+        app.config.fingerprint = Some("workspace-presentation-only".into());
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let label = app.workspace_view().action.label();
+        for dark in [false, true] {
+            app.config.dark = dark;
+            app.theme(&ctx);
+            for size in [Vec2::new(920.0, 700.0), Vec2::new(1180.0, 820.0)] {
+                for page in [Page::Home, Page::Devices] {
+                    app.page = page;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ui| app.desktop(ui),
+                    );
+                    let (clip, bounds) = output
+                        .shapes
+                        .iter()
+                        .find_map(|paint| {
+                            text_rect(&paint.shape, label).map(|bounds| (paint.clip_rect, bounds))
+                        })
+                        .context("primary action was not painted in the initial viewport")?;
+                    assert!(
+                        clip.contains_rect(bounds),
+                        "primary action clipped at {size:?}: {bounds:?} outside {clip:?}"
+                    );
+                    assert!(app.child.is_none());
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn workspace_pointer_drag_and_direction_buttons_commit_only_editable_layout() -> Result<()> {
+        fn text_center(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().find_map(|shape| text_center(shape, label))
+                }
+                _ => None,
+            }
+        }
+        fn frame(
+            app: &mut App,
+            ctx: &egui::Context,
+            time: f64,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    focused: true,
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(920.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.desktop(ui),
+            )
+        }
+        fn step(app: &mut App, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
+            frame(app, ctx, time, events).drop_without_applying_deltas();
+        }
+        fn button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }
+        }
+        fn press(pos: egui::Pos2) -> Vec<egui::Event> {
+            vec![egui::Event::PointerMoved(pos), button(pos, true)]
+        }
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // Presentation fixture only: this test never authenticates or starts a worker.
+        app.config.fingerprint = Some("layout-presentation-only".into());
+        app.config.peer_name = "B".into();
+        app.page = Page::Devices;
+        app.device_tab = DeviceTab::Layout;
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        app.theme(&ctx);
+        step(&mut app, &ctx, 0.0, vec![]);
+        let output = frame(&mut app, &ctx, 0.1, vec![]);
+        let start = output
+            .shapes
+            .iter()
+            .find_map(|paint| text_center(&paint.shape, "B"))
+            .context("peer screen label not painted")?;
+        output.drop_without_applying_deltas();
+        let end = start - Vec2::new(260.0, 0.0);
+        step(&mut app, &ctx, 0.2, press(start));
+        step(&mut app, &ctx, 0.3, vec![egui::Event::PointerMoved(end)]);
+        assert!(
+            app.screen_drag.is_some(),
+            "drag did not acquire the peer screen"
+        );
+        step(&mut app, &ctx, 0.4, vec![button(end, false)]);
+        assert!(
+            app.screen_drag.is_none(),
+            "released drag left the layout locked"
+        );
+        assert_eq!(app.config.edge, "left");
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(app.dir.join("settings.json"))?)?;
+        assert_eq!(stored["data"]["edge"], "left");
+        let output = frame(&mut app, &ctx, 0.5, vec![]);
+        let right = output
+            .shapes
+            .iter()
+            .find_map(|paint| text_center(&paint.shape, "右侧"))
+            .context("direction button not painted")?;
+        output.drop_without_applying_deltas();
+        step(&mut app, &ctx, 0.6, press(right));
+        step(&mut app, &ctx, 0.7, vec![button(right, false)]);
+        assert_eq!(app.config.edge, "right");
+        let before = std::fs::read(app.dir.join("settings.json"))?;
+        drop(app.instance_lock.take());
+        step(&mut app, &ctx, 0.8, vec![]);
+        step(&mut app, &ctx, 0.9, press(start));
+        step(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(end)]);
+        step(&mut app, &ctx, 1.1, vec![button(end, false)]);
+        assert!(app.screen_drag.is_none());
+        assert_eq!(app.config.edge, "right");
+        assert_eq!(std::fs::read(app.dir.join("settings.json"))?, before);
         assert!(app.child.is_none());
         Ok(())
     }
@@ -1628,6 +1835,22 @@ mod lifecycle_tests {
             .spawn()?)
     }
     #[test]
+    fn hidden_window_cancels_layout_and_uncommitted_consent_without_saving() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let original = app.config.edge.clone();
+        app.native_confirmation = true;
+        app.screen_drag = Some((Vec2::ZERO, egui::pos2(10.0, 10.0), egui::Rect::EVERYTHING));
+        let ctx = egui::Context::default();
+        logic_frames(&mut app, &ctx, true);
+        assert!(app.screen_drag.is_none());
+        assert!(!app.native_confirmation);
+        assert_eq!(app.config.edge, original);
+        assert!(!app.dir.join("settings.json").exists());
+        assert!(app.child.is_none());
+        Ok(())
+    }
+    #[test]
     fn idle_logic_stops_periodic_paints_but_hidden_worker_and_stop_keep_ticking() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
@@ -1850,6 +2073,8 @@ mod lifecycle_tests {
     fn retrying_child_cannot_remain_connected_or_override_stop() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
+        // Enrolled presentation fixture only; this child never authenticates a peer.
+        app.config.fingerprint = Some("lifecycle-presentation-only".into());
         app.child = Some(
             Command::new(std::env::current_exe()?)
                 .args([
@@ -1879,6 +2104,16 @@ mod lifecycle_tests {
         set_state(&mut app, WorkerState::Reconnecting);
         app.poll();
         assert_eq!(app.status, "正在重连可信设备");
+        set_state(&mut app, WorkerState::Failed);
+        app.poll();
+        assert!(app.last_failure);
+        set_state(&mut app, WorkerState::Stopped);
+        app.poll();
+        assert!(
+            app.last_failure,
+            "a final stop must not hide the earlier failure"
+        );
+        assert_eq!(app.workspace_view().title, "连接未完成，正在结束");
         app.stop();
         set_state(&mut app, WorkerState::Authenticated);
         app.poll();

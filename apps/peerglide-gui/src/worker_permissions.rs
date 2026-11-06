@@ -223,19 +223,19 @@ impl Checker {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, idle: bool) {
         ui.add_space(12.0);
-        ui.strong("实际工作进程的系统权限");
-        ui.weak("由同一开发包内的工作进程只读检查，不联网、不捕获输入、不申请权限。结果是快照，启动键鼠时仍会复查。");
+        ui.strong("键鼠权限");
+        ui.weak("由实际输入程序检查，不联网、不捕获输入，也不申请权限。这里显示上次检查结果，开启键鼠时会再次确认。");
         if ui
             .add_enabled(
                 idle && self.receiver.is_none(),
-                egui::Button::new("检查实际工作进程权限"),
+                egui::Button::new("检查键鼠权限"),
             )
             .clicked()
         {
             self.start();
         }
         if self.receiver.is_some() {
-            ui.label("正在检查工作进程…");
+            ui.label("正在检查键鼠权限…");
         }
         match self.result {
             Some(Ok(report)) => {
@@ -247,7 +247,7 @@ impl Checker {
                     PermissionStatus::Unsupported => "尚不支持",
                 };
                 ui.label(format!(
-                    "工作进程 · 辅助功能：{} · 输入监控：{} · 输入桌面：{}",
+                    "上次检查 · 辅助功能：{} · 输入监控：{} · 输入桌面：{}",
                     label(report.accessibility),
                     label(report.input_monitoring),
                     label(report.input_desktop)
@@ -263,7 +263,7 @@ impl Checker {
                 ui.label(error);
             }
             None if self.receiver.is_none() => {
-                ui.weak("尚未检查实际工作进程；界面进程自身的授权不代表工作进程已获许可。");
+                ui.weak("点击检查，再按系统提示处理。界面自身的许可不能代替实际输入程序的许可。");
             }
             None => (),
         }
