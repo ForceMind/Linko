@@ -2070,8 +2070,10 @@ mod lifecycle_tests {
             app.active_mode = Some(SessionMode::Communication);
             app.pending_start = Some(SessionMode::Native);
             app.desktop_preferences.tray_enabled = enabled;
-            app.tray_mailbox.post(peerglide_platform::tray::Command::Stop);
-            app.tray_mailbox.post(peerglide_platform::tray::Command::Quit);
+            app.tray_mailbox
+                .post(peerglide_platform::tray::Command::Stop);
+            app.tray_mailbox
+                .post(peerglide_platform::tray::Command::Quit);
             let ctx = egui::Context::default();
             let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_tray(ctx));
             assert!(app.close_requested && app.pending_start.is_none());
