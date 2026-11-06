@@ -368,7 +368,10 @@ mod tests {
                     );
                     assert!(!f.path.join(NAME).exists());
                     assert_eq!(fs::read(f.path.join("identity/node.crt.der"))?, identity);
-                    assert_eq!(fs::read(f.path.join("identity/node.key.der"))?, key);
+                    assert!(
+                        fs::read(f.path.join("identity/node.key.der"))? == key,
+                        "fixture identity key changed; its contents must never be printed"
+                    );
                     drop(app);
                     assert!(!recover(&f.path)?, "recovery is idempotent");
                 }

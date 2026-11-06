@@ -1,6 +1,7 @@
 # ADR-0008: Recoverable local device enrollment
 
-Status: implementing; automatic fault/restart checks pending.
+Status: implemented; process/restart checks passed on Windows/macOS/Linux.
+Final-candidate qualification and native GUI error-state acceptance are separate.
 
 ## Problem
 
