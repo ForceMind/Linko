@@ -1,6 +1,7 @@
 //! Standard OPAQUE API only; no application MAC, KDF or cipher construction.
 use super::Binding;
 use anyhow::{Context, Result};
+use opaque_ke::rand::{rand_core::UnwrapErr, rngs::SysRng};
 use opaque_ke::{
     argon2::{Algorithm, Argon2, Params, Version},
     CipherSuite, ClientLogin, ClientLoginFinishParameters, ClientRegistration,
@@ -8,7 +9,6 @@ use opaque_ke::{
     CredentialResponse, Identifiers, ServerLogin, ServerLoginParameters, ServerRegistration,
     ServerSetup,
 };
-use opaque_ke::rand::{rand_core::UnwrapErr, rngs::SysRng};
 
 fn rng() -> UnwrapErr<SysRng> {
     UnwrapErr(SysRng)
@@ -27,7 +27,7 @@ pub(super) struct ServerState {
     binding: Binding,
 }
 
-fn ksf() -> Result<Argon2<'static>> {
+pub(super) fn ksf() -> Result<Argon2<'static>> {
     let params =
         Params::new(64 * 1024, 3, 1, None).map_err(|_| anyhow::anyhow!("invalid fixed KSF"))?;
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))

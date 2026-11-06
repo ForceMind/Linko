@@ -26,14 +26,14 @@ jobs:
           assert not deps['opaque-ke']['default-features']
           assert set(deps['opaque-ke']['features']) == {'ristretto255', 'argon2'}
           PY
-      - uses: actions/checkout@v4
-        with:
-          repository: meta/opaque-ke
-          ref: 027abbc91115baa38b70ad3af7f5a22f072f978b
-          path: target/upstream-opaque
-          persist-credentials: false
+      - name: Fetch fixed public upstream outside the PG workspace
+        run: |
+          git init "$RUNNER_TEMP/opaque-qualification"
+          git -C "$RUNNER_TEMP/opaque-qualification" remote add origin https://github.com/meta/opaque-ke
+          git -C "$RUNNER_TEMP/opaque-qualification" fetch --depth 1 origin "$OPAQUE_REV"
+          git -C "$RUNNER_TEMP/opaque-qualification" checkout --detach "$OPAQUE_REV"
       - name: Run selected upstream tests including RFC and compatibility fixtures
-        working-directory: target/upstream-opaque
+        working-directory: ${{ runner.temp }}/opaque-qualification
         run: |
           test "$(git rev-parse HEAD)" = "$OPAQUE_REV"
           cargo generate-lockfile
@@ -42,5 +42,5 @@ jobs:
         if: always()
         with:
           name: opaque-upstream-test-lock
-          path: target/upstream-opaque/Cargo.lock
+          path: ${{ runner.temp }}/opaque-qualification/Cargo.lock
           if-no-files-found: error
