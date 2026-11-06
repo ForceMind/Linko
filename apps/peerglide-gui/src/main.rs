@@ -41,7 +41,12 @@ struct Options {
     #[arg(long, hide = true, requires = "gesture_lab")]
     ui_layout_report: Option<PathBuf>,
     /// Isolated AppKit terminate integration check, never native input.
-    #[arg(long, hide = true, requires = "data_dir", conflicts_with = "gesture_lab")]
+    #[arg(
+        long,
+        hide = true,
+        requires = "data_dir",
+        conflicts_with = "gesture_lab"
+    )]
     macos_quit_check_report: Option<PathBuf>,
 }
 
@@ -1038,7 +1043,9 @@ impl App {
     fn process_tray_commands(&mut self, ctx: &egui::Context) {
         let pending = self.tray_mailbox.take();
         if pending.quit {
-            if let Some(check) = self.quit_check.as_mut() { check.received_quit(); }
+            if let Some(check) = self.quit_check.as_mut() {
+                check.received_quit();
+            }
             self.close_requested = true;
             self.stop();
             if self.child.is_some() || self.recovery_blocked {
@@ -1079,11 +1086,17 @@ impl App {
     }
     fn logic_tick(&mut self, ctx: &egui::Context) {
         if let Some(check) = self.quit_check.as_mut() {
-            let unsafe_context = self.child.is_some() || self.config.fingerprint.is_some()
-                || self.config.native || self.config.allow || self.pending_start.is_some();
+            let unsafe_context = self.child.is_some()
+                || self.config.fingerprint.is_some()
+                || self.config.native
+                || self.config.allow
+                || self.pending_start.is_some();
             let abort = check.tick(self.application_menu.as_ref(), unsafe_context);
             ctx.request_repaint_after(Duration::from_millis(50));
-            if abort { self.close_requested = true; self.stop(); }
+            if abort {
+                self.close_requested = true;
+                self.stop();
+            }
         }
         self.check_exit_protection(ctx);
         // Stop/Quit must cancel a queued upgrade before poll can start a successor.
@@ -1113,9 +1126,14 @@ impl App {
         }
         if self.close_requested && self.child.is_none() && !self.recovery_blocked {
             if let Some(check) = self.quit_check.take() {
-                let no_input = self.active_mode.is_none() && self.events.is_none()
-                    && !self.config.native && !self.config.allow && self.config.fingerprint.is_none();
-                if let Err(error) = check.finish(no_input) { self.notice = format!("退出检查回执写入失败：{error:#}"); }
+                let no_input = self.active_mode.is_none()
+                    && self.events.is_none()
+                    && !self.config.native
+                    && !self.config.allow
+                    && self.config.fingerprint.is_none();
+                if let Err(error) = check.finish(no_input) {
+                    self.notice = format!("退出检查回执写入失败：{error:#}");
+                }
             }
             self.exit_confirmed = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1151,12 +1169,23 @@ impl Drop for App {
 }
 fn main() -> eframe::Result<()> {
     let options = Options::parse();
-    let quit_check = options.macos_quit_check_report.as_ref().map(|report| {
-        quit_check::Check::prepare(options.data_dir.as_deref().expect("clap requires an isolated directory"), report)
-    }).transpose().unwrap_or_else(|error| {
-        eprintln!("退出检查无法开始：{error:#}");
-        std::process::exit(2);
-    });
+    let quit_check = options
+        .macos_quit_check_report
+        .as_ref()
+        .map(|report| {
+            quit_check::Check::prepare(
+                options
+                    .data_dir
+                    .as_deref()
+                    .expect("clap requires an isolated directory"),
+                report,
+            )
+        })
+        .transpose()
+        .unwrap_or_else(|error| {
+            eprintln!("退出检查无法开始：{error:#}");
+            std::process::exit(2);
+        });
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -2290,14 +2319,33 @@ mod lifecycle_tests {
         let mut app = App::load(fixture.path.clone());
         app.quit_check_mode = true;
         app.native_confirmation = true;
-        assert!(app.request_native().unwrap_err().to_string().contains("隔离退出检查"));
-        for mode in [SessionMode::Communication, SessionMode::Native, SessionMode::Probe] {
-            assert!(app.start_mode(mode).unwrap_err().to_string().contains("隔离退出检查"));
+        assert!(app
+            .request_native()
+            .unwrap_err()
+            .to_string()
+            .contains("隔离退出检查"));
+        for mode in [
+            SessionMode::Communication,
+            SessionMode::Native,
+            SessionMode::Probe,
+        ] {
+            assert!(app
+                .start_mode(mode)
+                .unwrap_err()
+                .to_string()
+                .contains("隔离退出检查"));
         }
         assert!(app.save_config().is_err());
         assert!(!app.native_confirmation && !app.config.native && app.child.is_none());
-        assert!(!fixture.path.join("settings.json").exists() && !fixture.path.join("identity").exists());
-        assert!(Options::try_parse_from(["peerglide-gui", "--macos-quit-check-report", "unused.json"]).is_err());
+        assert!(
+            !fixture.path.join("settings.json").exists() && !fixture.path.join("identity").exists()
+        );
+        assert!(Options::try_parse_from([
+            "peerglide-gui",
+            "--macos-quit-check-report",
+            "unused.json"
+        ])
+        .is_err());
         Ok(())
     }
     #[test]

@@ -224,10 +224,7 @@ impl Owner {
     /// A broken termination bridge may terminate the process before returning;
     /// its external supervisor must treat a missing final receipt as failure.
     pub fn request_termination_for_check(&self) -> Result<bool> {
-        anyhow::ensure!(
-            self.is_available(),
-            "应用退出保护不可用，不能执行退出检查"
-        );
+        anyhow::ensure!(self.is_available(), "应用退出保护不可用，不能执行退出检查");
         let running = self.app.isRunning();
         self.app.terminate(None);
         Ok(running)
