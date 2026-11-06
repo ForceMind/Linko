@@ -30,6 +30,15 @@ fn optional_peer(dir: &Path) -> Result<Option<Vec<u8>>> {
         Ok(_) => Ok(Some(transport::read_certificate(&path)?)),
     }
 }
+fn parse_address(text:&str)->Result<SocketAddr> {
+    let text=text.trim();
+    anyhow::ensure!(!text.is_empty(),"请填写另一台电脑的 IPv4 地址");
+    let address=text.parse::<SocketAddr>().or_else(|_|text.parse::<IpAddr>().map(|ip|SocketAddr::new(ip,24871)))
+        .map_err(|_|anyhow::anyhow!("地址格式不正确，请填写 IPv4 或 IPv4:端口"))?;
+    anyhow::ensure!(address.is_ipv4()&&!address.ip().is_unspecified()&&!address.ip().is_multicast()
+        &&address.ip()!=IpAddr::V4(Ipv4Addr::BROADCAST)&&address.port()!=0,"请使用有效的 IPv4 单播地址和端口");
+    Ok(address)
+}
 impl Origin {
     fn capture(app: &App, next: Config) -> Result<Self> {
         let local = Identity::load(&app.identity_dir())?.certificate;
@@ -317,8 +326,7 @@ impl Panel {
                     ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("八位数字配对码"));
                     if ui.button("核验另一台电脑").clicked(){
                         let result=(||->Result<()>{
-                            let address=self.address.parse::<SocketAddr>().or_else(|_|self.address.parse::<IpAddr>().map(|ip|SocketAddr::new(ip,24871)))?;
-                            anyhow::ensure!(address.is_ipv4()&&!address.ip().is_unspecified()&&!address.ip().is_multicast()&&address.port()!=0,"请输入实际IPv4地址");
+                            let address=parse_address(&self.address)?;
                             let mode=Mode::connect(address,std::mem::take(&mut self.code))?;
                             self.start(app,ctx,mode,Some(address),&Self::worker()?)
                         })();
@@ -369,6 +377,16 @@ impl Panel {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+    #[test]
+    fn address_errors_are_chinese_and_never_echo_untrusted_text()->Result<()> {
+        assert_eq!(parse_address("127.0.0.1")?,"127.0.0.1:24871".parse::<SocketAddr>()?);
+        for text in ["", "private-invalid-marker", "0.0.0.0:0", "255.255.255.255:24871", "[::1]:24871"] {
+            let error=parse_address(text).unwrap_err().to_string();
+            assert!(error.chars().any(|c|('\u{4e00}'..='\u{9fff}').contains(&c)));
+            assert!(!error.contains("private-invalid-marker")&&!error.contains("syntax"));
+        }
+        Ok(())
+    }
     #[test]
     fn pending_disk_metadata_never_recreates_a_session_or_bypasses_future_record_protection(
     ) -> Result<()> {

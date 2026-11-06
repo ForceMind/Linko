@@ -33,6 +33,8 @@ pub(super) struct Snapshot {
     pub mode: Option<SessionMode>,
     pub input: Option<WorkerInputState>,
     pub native_supported: bool,
+    pub pairing: bool,
+    pub pairing_pending: bool,
 }
 pub(super) struct View {
     pub title: &'static str,
@@ -84,6 +86,12 @@ pub(super) fn present(s: Snapshot) -> View {
                 Tone::Warning,
                 Action::None,
             );
+        }
+        if s.pairing {
+            return View::new("正在添加电脑","请在配对窗口核验身份；不会开启键鼠或数据同步。",Tone::Accent,Action::None);
+        }
+        if s.pairing_pending {
+            return View::new("登记等待对端回执","本机记录已保留，尚不能开始协同。请重新核验或撤销待确认登记。",Tone::Warning,Action::AddDevice);
         }
         if !s.registered {
             return View::new(
@@ -205,7 +213,20 @@ mod tests {
             mode: None,
             input: None,
             native_supported: true,
+            pairing: false,
+            pairing_pending: false,
         }
+    }
+    #[test]
+    fn pairing_busy_and_pending_are_not_mislabeled_as_readonly_or_ready() {
+        let mut s=snapshot();s.pairing=true;
+        assert_eq!(present(s).title,"正在添加电脑");
+        assert_eq!(present(s).action,Action::None);
+        s.pairing=false;s.pairing_pending=true;
+        assert_eq!(present(s).title,"登记等待对端回执");
+        assert_eq!(present(s).action,Action::AddDevice);
+        s.writable=false;
+        assert_eq!(present(s).title,"这个窗口只读");
     }
     #[test]
     fn dead_or_disconnected_process_cannot_present_stale_remote_control() {

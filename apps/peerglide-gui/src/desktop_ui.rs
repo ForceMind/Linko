@@ -83,7 +83,7 @@ impl App {
             registered: self.config.fingerprint.is_some()
                 && !self.pairing_pending()
                 && self.config_store.is_some(),
-            writable: self.writable(),
+            writable: !self.quit_check_mode && self.instance_lock.is_some() && self.config_store.is_some(),
             running: self.child.is_some(),
             connected: self.connected,
             failed: self.last_failure,
@@ -93,6 +93,8 @@ impl App {
             mode: self.active_mode,
             input: self.input_state,
             native_supported: cfg!(any(windows, target_os = "macos")),
+            pairing: self.pairing_open,
+            pairing_pending: self.pairing_pending(),
         })
     }
     fn native_start_available(&self) -> bool {
@@ -208,7 +210,7 @@ impl App {
                 ui.add_space(14.0);
                 self.work_controls(ui);
                 ui.add_space(14.0);
-                ui.weak("当前连接方式：交换公开连接卡并核对身份。短码配对尚未提供。");
+                ui.weak("推荐使用短码核验并记住设备；高级入口仍可独立核对公开连接信息。");
             });
             return;
         }
@@ -336,7 +338,7 @@ impl App {
                 ui.label("已登记的完整身份指纹");
                 ui.monospace(fp);
             }
-            ui.weak("自动短码配对、多设备和精细多屏拓扑尚未提供。");
+            ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
         });
     }
     fn device_permissions(&mut self, ui: &mut egui::Ui) {
@@ -743,7 +745,7 @@ impl App {
                 Err(error) => self.notice = error.to_string(),
             }
         }
-        ui.weak("公开信息仍需在对端独立核对完整指纹；不要发送私钥。自动短码配对尚未提供。");
+        ui.weak("高级公开信息需独立核对完整指纹；不要发送私钥。也可返回短码核验流程。");
         ui.label("粘贴另一台电脑的连接卡");
         let changed = egui::ScrollArea::vertical()
             .id_salt("connection-info-text")
@@ -826,7 +828,7 @@ impl App {
                     }
                     SetupStep::Find => {
                         ui.heading("交换连接卡，让两台电脑认识彼此");
-                        ui.label("先在一台复制连接卡，在另一台读取后复制回传，再回到第一台读取。两端各交换一次，之后会记住设备。短码配对尚未提供。");
+                        ui.label("这里是高级人工核验：两端各交换一次公开连接卡，再独立核对完整指纹。普通添加可返回使用短码。");
                         self.connection_exchange_ui(ui);
                         egui::CollapsingHeader::new("高级：设备发现或手动证书登记").show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {

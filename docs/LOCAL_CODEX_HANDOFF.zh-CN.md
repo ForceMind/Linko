@@ -1147,3 +1147,13 @@ e241/babdf改用95兼容CAS循环替代新stable弃用fetch_update，d879/c7c2�
 不当作协议攻击或成功取消，绝不补造PeerSaved/Completed；脚本严格期待Unknown/exit1。
 这次新修复仍须重跑消息交换和mandatory实际GUI模型，尚未完成验收。当前测试/CI
 状态在PR58回读，不把ignored GUI模型专项或synthetic save ack脚本算实际登记通过。
+
+d3bf45e已过完整五项42265327473及三平台mandatory实际GUI模型（Mac日志exactly1
+passed/0 ignored，约2.33秒），v2失通知严格Unknown通过。Mac产物13526254824外
+c2fc57e7bdf265cefef3d61a5369d76c015ca828af2d8bc558814b1ecbdd7290、内d375fb9269e1d306234d1cd222ac89dfb4695fee5b3a09d46afa34712fec7183，
+安全解压/strict ad-hoc整包签名metadata验证过。原生GUI单端隔离试开已见中文Home/
+短码面板、通过UI创建临时身份、空地址校验、关闭/退出；未开监听/配对/Native，未改
+真实profile/TCC，临时profile无settings/trusted-peer文件，无残留；约105秒峰RSS
+124960KiB（不作旧事故修复结论）。发现陈旧“短码未提供”、busy被误当只读、地址英文
+错误；现修分离只读/配对/Pending展示和中文不回显解析，须新精确候选CI/界面复查。
+原生双端保存点击/Windows GUI/物理C06仍未验收。私有收据在pairing-gui-d3bf45e。
