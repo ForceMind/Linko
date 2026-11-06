@@ -181,7 +181,10 @@ impl WorkerSnapshot {
         };
         self.4.store(value, Ordering::Release);
     }
-    fn take_switch(&self) -> Option<WorkerSwitchState> {
+    fn take_switch(&self, connected: bool) -> Option<WorkerSwitchState> {
+        if !connected {
+            return None;
+        }
         match self.4.swap(0, Ordering::AcqRel) {
             1 => Some(WorkerSwitchState::Idle),
             2 => Some(WorkerSwitchState::Pending),
@@ -929,11 +932,6 @@ impl App {
         }
         if let Some(snapshot) = &self.worker_state {
             let (state, probe_passed) = snapshot.take();
-            if let Some(switch) = snapshot.take_switch() {
-                if self.child.is_some() && self.stopping.is_none() {
-                    self.switch_state = Some(switch);
-                }
-            }
             if snapshot.2.load(Ordering::Acquire) || snapshot.3.load(Ordering::Acquire) {
                 self.switch_state = None;
             }
@@ -988,6 +986,18 @@ impl App {
                     }
                     _ => (),
                 }
+            }
+            // Authentication and its first switch record can arrive between
+            // reads. Keep metadata until that connection is observed, rather
+            // than consuming then discarding it while still showing offline.
+            let visible = self.connected
+                && self.child.is_some()
+                && self.stopping.is_none()
+                && !self.input_terminal
+                && !snapshot.2.load(Ordering::Acquire)
+                && !snapshot.3.load(Ordering::Acquire);
+            if let Some(switch) = snapshot.take_switch(visible) {
+                self.switch_state = Some(switch);
             }
         }
         if !self.connected || self.stopping.is_some() || self.input_terminal {
@@ -2735,14 +2745,25 @@ mod lifecycle_tests {
             snapshot.publish_switch(WorkerSwitchState::Denied);
         }
         snapshot.publish_switch(WorkerSwitchState::TimedOut);
-        assert_eq!(snapshot.take_switch(), Some(WorkerSwitchState::TimedOut));
+        assert_eq!(snapshot.take_switch(true), Some(WorkerSwitchState::TimedOut));
         snapshot.publish_switch(WorkerSwitchState::Denied);
         snapshot.publish(WorkerState::Disconnected);
         snapshot.publish(WorkerState::Listening);
         snapshot.publish(WorkerState::Authenticated);
-        assert_eq!(snapshot.take_switch(), Some(WorkerSwitchState::Idle));
-        assert_eq!(WorkerSnapshot::default().take_switch(), None);
-        assert_eq!(snapshot.take_switch(), None);
+        assert_eq!(snapshot.take_switch(true), Some(WorkerSwitchState::Idle));
+        assert_eq!(WorkerSnapshot::default().take_switch(true), None);
+        assert_eq!(snapshot.take_switch(true), None);
+    }
+    #[test]
+    fn switch_arriving_between_connection_reads_is_not_lost_while_offline() {
+        let snapshot = WorkerSnapshot::default();
+        let (state, _) = snapshot.take();
+        assert_eq!(state, None);
+        snapshot.publish(WorkerState::Authenticated);
+        snapshot.publish_switch(WorkerSwitchState::PeerUnavailable);
+        assert_eq!(snapshot.take_switch(false), None);
+        assert_eq!(snapshot.take().0, Some(WorkerState::Authenticated));
+        assert_eq!(snapshot.take_switch(true), Some(WorkerSwitchState::PeerUnavailable));
     }
 
     use super::*;
