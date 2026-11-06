@@ -134,15 +134,15 @@ fn add_icon(window: HWND, state: &State) -> bool {
     // our exact private ID also handles a still-present registration cleanly.
     // SAFETY: initialized structure, own HWND/ID, borrowed shared stock icon.
     unsafe {
-        Shell_NotifyIconW(NIM_DELETE, &mut data);
+        Shell_NotifyIconW(NIM_DELETE, &data);
     }
-    if unsafe { Shell_NotifyIconW(NIM_ADD, &mut data) } == 0 {
+    if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } == 0 {
         return false;
     }
     data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-    if unsafe { Shell_NotifyIconW(NIM_SETVERSION, &mut data) } == 0 {
+    if unsafe { Shell_NotifyIconW(NIM_SETVERSION, &data) } == 0 {
         unsafe {
-            Shell_NotifyIconW(NIM_DELETE, &mut data);
+            Shell_NotifyIconW(NIM_DELETE, &data);
         }
         return false;
     }
@@ -257,10 +257,10 @@ impl Drop for Owner {
                 .unwrap_or_else(|error| error.into_inner());
             *handle = None;
             if !self.window.is_null() {
-                let mut data = icon_data(self.window, self.state.icon);
+                let data = icon_data(self.window, self.state.icon);
                 // SAFETY: delete our icon before destroying its still-owned HWND.
                 unsafe {
-                    Shell_NotifyIconW(NIM_DELETE, &mut data);
+                    Shell_NotifyIconW(NIM_DELETE, &data);
                     DestroyWindow(self.window);
                 }
             }
