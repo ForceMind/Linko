@@ -16,6 +16,48 @@ pub struct WorkerEvent {
     version: u16,
     pub state: WorkerState,
 }
+
+/// Local switch-attempt observations, never peer permission or authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkerSwitchState {
+    Idle,
+    Pending,
+    Denied,
+    TimedOut,
+    PeerUnavailable,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum SwitchEventKind {
+    #[serde(rename = "switch")]
+    Switch,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerSwitchEvent {
+    version: u16,
+    kind: SwitchEventKind,
+    pub state: WorkerSwitchState,
+}
+impl WorkerSwitchEvent {
+    pub fn new(state: WorkerSwitchState) -> Self {
+        Self {
+            version: 1,
+            kind: SwitchEventKind::Switch,
+            state,
+        }
+    }
+    pub fn parse(line: &str) -> Option<Self> {
+        if line.len() > 1024 {
+            return None;
+        }
+        serde_json::from_str::<Self>(line)
+            .ok()
+            .filter(|event| event.version == 1)
+    }
+    pub fn line(&self) -> String {
+        serde_json::to_string(self).expect("finite switch observation")
+    }
+}
 impl WorkerEvent {
     pub fn new(state: WorkerState) -> Self {
         Self { version: 1, state }
@@ -113,6 +155,44 @@ impl WorkerInputEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn switch_observations_are_closed_bounded_and_contain_no_authority_or_input() {
+        for state in [
+            WorkerSwitchState::Idle,
+            WorkerSwitchState::Pending,
+            WorkerSwitchState::Denied,
+            WorkerSwitchState::TimedOut,
+            WorkerSwitchState::PeerUnavailable,
+        ] {
+            let event = WorkerSwitchEvent::new(state);
+            let line = event.line();
+            assert_eq!(WorkerSwitchEvent::parse(&line), Some(event));
+            assert!(line.len() < 128 && !line.contains('\n'));
+            assert!(
+                WorkerEvent::parse(&line).is_none() && WorkerInputEvent::parse(&line).is_none()
+            );
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value.as_object().unwrap().len(), 3);
+            assert_eq!(value["kind"], "switch");
+            for (key, invalid) in [
+                ("version", serde_json::json!(2)),
+                ("kind", serde_json::json!("input")),
+                ("state", serde_json::json!("Granted")),
+                ("lease", serde_json::json!(7)),
+                ("terminal", serde_json::json!(true)),
+            ] {
+                let mut invalid_value = value.clone();
+                invalid_value[key] = invalid;
+                assert!(WorkerSwitchEvent::parse(&invalid_value.to_string()).is_none());
+            }
+        }
+        let mut line = WorkerSwitchEvent::new(WorkerSwitchState::Denied).line();
+        line.push_str(&" ".repeat(1024 - line.len()));
+        assert!(WorkerSwitchEvent::parse(&line).is_some());
+        line.push(' ');
+        assert!(WorkerSwitchEvent::parse(&line).is_none());
+        assert!(WorkerSwitchEvent::parse("switch: Denied").is_none());
+    }
     #[test]
     fn supervisor_events_are_versioned_and_do_not_accept_log_prefixes() {
         let line = serde_json::to_string(&WorkerEvent::new(WorkerState::Authenticated)).unwrap();

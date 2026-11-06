@@ -87,3 +87,23 @@ notifications never fabricate Saved/Completed. The new exchange smoke uses real
 pipes/TLS with explicitly synthetic parent save replies, not filesystem or GUI
 enrollment acceptance. Old IPC-v1 and pairing-v1 require matched new binaries;
 input v5/manual enrollment are unchanged.
+
+## Switch-attempt observations (0.3.8-dev)
+
+Local IPC1 adds a separate bounded `kind: "switch"` record with only Idle,
+Pending, Denied, TimedOut or PeerUnavailable. No lease/peer IDs, coordinates,
+input contents, permission or cleanup claims are included. Idle is not a grant.
+Old GUIs ignore the new kind; new GUIs keep unknown with older workers. Matching
+packages remain required; input v5/ALPN and network messages are unchanged.
+
+The existing async session emits these outside native callbacks. Pending follows
+an actual Acquire, Denied requires the current pending lease, and the existing
+expiry emits TimedOut. Actual routing/recovery/session end clear attempt feedback.
+PeerUnavailable is based on negotiated mouse capability, not receiving permission,
+and persists across local reset until session end. No control decision changes.
+
+The GUI reader uses an independent fixed atomic snapshot, not its diagnostic
+queue. Reconnect/listen/disconnect, Stop, EOF/error, terminal input and child exit
+clear stale feedback; each child has its own snapshot. Recovery, current control
+and connection status take priority. Refusal wording does not invent a reason.
+Native positive refusal/timeout presentation remains physical C06 work.

@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
 use peerglide_protocol::{
-    worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState},
+    worker::{
+        WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent,
+        WorkerSwitchState,
+    },
     Edge, InputCapabilities, Message, VERSION,
 };
 use peerglide_transport as transport;
@@ -290,6 +293,8 @@ fn worker_event(managed: bool, state: WorkerState) {
 /// bounded wire record contains no peer/input payload, and repeats are coalesced.
 pub(crate) struct InputReporter {
     managed: bool,
+    last_switch: Option<WorkerSwitchState>,
+    peer_unavailable: bool,
     last: Option<WorkerInputState>,
     recovery_unconfirmed: bool,
     terminal_sent: bool,
@@ -297,11 +302,15 @@ pub(crate) struct InputReporter {
     observed: Vec<WorkerInputState>,
     #[cfg(test)]
     emitted: Vec<WorkerInputEvent>,
+    #[cfg(test)]
+    observed_switches: Vec<WorkerSwitchState>,
 }
 impl InputReporter {
     fn new(managed: bool) -> Self {
         Self {
             managed,
+            last_switch: None,
+            peer_unavailable: false,
             last: None,
             recovery_unconfirmed: false,
             terminal_sent: false,
@@ -309,7 +318,36 @@ impl InputReporter {
             observed: Vec::new(),
             #[cfg(test)]
             emitted: Vec::new(),
+            #[cfg(test)]
+            observed_switches: Vec::new(),
         }
+    }
+    fn switch(&mut self, state: WorkerSwitchState) {
+        let state = if state == WorkerSwitchState::Idle && self.peer_unavailable {
+            WorkerSwitchState::PeerUnavailable
+        } else {
+            state
+        };
+        if self.terminal_sent || self.last_switch == Some(state) {
+            return;
+        }
+        self.last_switch = Some(state);
+        #[cfg(test)]
+        self.observed_switches.push(state);
+        if self.managed {
+            use std::io::Write;
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{}", WorkerSwitchEvent::new(state).line());
+            let _ = out.flush();
+        }
+    }
+    fn peer_motion(&mut self, available: bool) {
+        self.peer_unavailable = !available;
+        self.switch(WorkerSwitchState::Idle);
+    }
+    fn clear_switch(&mut self) {
+        self.peer_unavailable = false;
+        self.switch(WorkerSwitchState::Idle);
     }
     fn set(&mut self, state: WorkerInputState) {
         if self.terminal_sent {
@@ -347,6 +385,7 @@ impl InputReporter {
         if self.terminal_sent {
             return self.last.unwrap_or(WorkerInputState::RecoveryUnconfirmed);
         }
+        self.clear_switch();
         let state = if self.recovery_unconfirmed {
             WorkerInputState::RecoveryUnconfirmed
         } else {
@@ -481,6 +520,7 @@ async fn run_inner(
     mut stop: tokio::sync::watch::Receiver<bool>,
     input_status: &mut InputReporter,
 ) -> Result<()> {
+    input_status.clear_switch();
     println!(
         "Local fingerprint: {}\nEnrolled peer: {}",
         id.fingerprint(),
@@ -660,6 +700,31 @@ mod context_cli_tests {
         assert_eq!(uncertain.last, Some(WorkerInputState::RecoveryUnconfirmed));
         assert_eq!(uncertain.emitted.len(), 3);
         assert!(uncertain.emitted.last().unwrap().terminal);
+    }
+    #[test]
+    fn switch_metadata_cannot_change_input_authority_or_outlive_the_terminal_fence() {
+        let mut reporter = InputReporter::new(false);
+        reporter.set(WorkerInputState::Disabled);
+        reporter.peer_motion(false);
+        reporter.switch(WorkerSwitchState::Idle);
+        assert_eq!(
+            reporter.observed_switches,
+            [WorkerSwitchState::PeerUnavailable]
+        );
+        reporter.peer_motion(true);
+        reporter.switch(WorkerSwitchState::Pending);
+        reporter.switch(WorkerSwitchState::Pending);
+        reporter.switch(WorkerSwitchState::Denied);
+        assert_eq!(reporter.last, Some(WorkerInputState::Disabled));
+        assert!(!reporter.recovery_unconfirmed);
+        assert_eq!(reporter.finish(), WorkerInputState::Disabled);
+        let count = reporter.observed_switches.len();
+        reporter.switch(WorkerSwitchState::Pending);
+        assert_eq!(reporter.observed_switches.len(), count);
+        assert_eq!(
+            reporter.observed_switches.last(),
+            Some(&WorkerSwitchState::Idle)
+        );
     }
 
     #[test]

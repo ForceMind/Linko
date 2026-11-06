@@ -422,6 +422,7 @@ pub(super) async fn run_with_status(
         "invalid session capabilities"
     );
     let mut input_status = InputStatus::new(native, reporter);
+    input_status.reporter.peer_motion(peer.motion());
     if *stop.borrow() {
         input_status.reporter.set(WorkerInputState::Disabled);
         return Ok(());
@@ -504,7 +505,7 @@ pub(super) async fn run_with_status(
             _=tick.tick()=>{
                 let now=now_ms();
                 if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
-                if pending.is_some_and(|(_,start)|now.saturating_sub(start)>1000){pending=None;}
+                if pending.is_some_and(|(_,start)|now.saturating_sub(start)>1000){pending=None;input_status.reporter.switch(super::WorkerSwitchState::TimedOut);}
                 if let Some(Outgoing {lease,..})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
                         input_status.restore(capture.as_ref())?;
@@ -532,16 +533,16 @@ pub(super) async fn run_with_status(
                             position=entry_position(remote_edge.opposite(),along);
                             let placed=recovery.pointer(position.0,position.1).await;
                             if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
-                            if input_status.checked(placed)? {send(&mut tx,&Message::Granted{lease}).await?;}
+                            if input_status.checked(placed)? {input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Granted{lease}).await?;}
                             else{input_status.release(&mut recovery).await?;send(&mut tx,&Message::Denied{lease}).await?;}
                         }else{send(&mut tx,&Message::Denied{lease}).await?;}
                     },
                     Message::Granted{lease}=>{
                         let activated=if pending.is_some_and(|(id,_)|id==lease) {if let Some(cap)=&capture{input_status.checked(cap.begin_routed(local_return.0,local_return.1))?}else{None}}else{None};
-                        if let Some(epoch)=activated{edge_gate.require_interior();pending=None;outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
+                        if let Some(epoch)=activated{input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();pending=None;outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
                         else{send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
-                    Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;}},
+                    Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
                     Message::Input{lease,event,cursor}=>{
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
                         let result=recovery.input(lease,event,cursor,now).await;
@@ -574,6 +575,7 @@ pub(super) async fn run_with_status(
                 if let Some(route)=captured_route(e){if !capture.as_ref().is_some_and(|cap|cap.gate.is_current(route)){continue;}}
                 if let Some(lease)=local_takeover(e,recovery.receiver.active().zip(recovery.receive_epoch),&mut edge_gate) {
                     input_status.release(&mut recovery).await?;
+                    input_status.reporter.switch(super::WorkerSwitchState::Idle);
 
                     send(&mut tx,&Message::Release { lease, cursor: None }).await?;
                     // This event only reclaims this computer. It cannot also
@@ -585,7 +587,7 @@ pub(super) async fn run_with_status(
                         edge_gate.require_interior();
                         if matches!(e,Captured::UnsupportedInput) {eprintln!("Unsupported input capability: stopping control; input was not forwarded.");}
                         input_status.restore(capture.as_ref())?;
-                        pending=None; if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        pending=None;input_status.reporter.switch(super::WorkerSwitchState::Idle); if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                         if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery).await?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
                     Captured::Position{x,y,width,height,route}=>{
@@ -596,12 +598,12 @@ pub(super) async fn run_with_status(
                         if cross && peer.motion() && capture.as_ref().is_some_and(|cap|cap.gate.idle()) && outgoing.is_none() && pending.is_none() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let along=match edge{Edge::Left|Edge::Right=>ny,_=>nx};position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
-                            pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
+                            pending=Some((next_lease,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
                         }
                     },
                     Captured::Toggle{route}=>{
                         if let Some(Outgoing{lease,..})=outgoing.take(){input_status.restore(capture.as_ref())?;send(&mut tx,&Message::Release { lease, cursor: Some(Motion {lease,sequence,x:position.0,y:position.1}) }).await?;}
-                        else if matches!(route,CaptureRoute::Local(_)) && peer.motion() && pending.is_none() && recovery.receiver.active().is_none() && !recovery.protection_pending(){next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some((next_lease,now_ms()));send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;}
+                        else if matches!(route,CaptureRoute::Local(_)) && peer.motion() && pending.is_none() && recovery.receiver.active().is_none() && !recovery.protection_pending(){next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some((next_lease,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;}
                     },
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
@@ -629,6 +631,7 @@ pub(super) async fn run_with_status(
     // Always finish local release and capture shutdown before returning to the
     // supervisor, including managed stop and network errors. Both are attempted
     // even when one fails; no canceled future bypasses this tail.
+    input_status.reporter.clear_switch();
     input_status.recovering();
     let receiving = recovery.receiver.active();
     let sending = outgoing.take().map(|current| current.lease);
@@ -1283,6 +1286,13 @@ mod tests {
             )
             .await?;
             assert_eq!(reporter.observed, [WorkerInputState::Disabled]);
+            assert_eq!(
+                reporter.observed_switches,
+                [
+                    super::super::WorkerSwitchState::PeerUnavailable,
+                    super::super::WorkerSwitchState::Idle
+                ]
+            );
             release_confirmed.await?;
             c.close(0u8.into(), b"stopped without native input");
             Ok::<_, anyhow::Error>(())
@@ -1290,6 +1300,8 @@ mod tests {
         let client = async {
             let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
             let (mut tx, mut rx) = c.open_bi().await?;
+            // Unsolicited refusals cannot invent a locally pending switch.
+            send(&mut tx, &Message::Denied { lease: 42 }).await?;
             send(
                 &mut tx,
                 &Message::Acquire {

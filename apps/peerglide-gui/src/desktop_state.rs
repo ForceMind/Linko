@@ -1,6 +1,7 @@
 //! Presentation of current facts. A label or button never grants input authority.
 use super::worker_permissions::Readiness;
 use super::{desktop_style::Tone, SessionMode, WorkerInputState};
+use peerglide_protocol::worker::WorkerSwitchState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
@@ -39,6 +40,7 @@ pub(super) struct Snapshot {
     pub pairing: bool,
     pub pairing_pending: bool,
     pub readiness: Readiness,
+    pub switch_state: Option<WorkerSwitchState>,
 }
 pub(super) struct View {
     pub title: &'static str,
@@ -197,6 +199,34 @@ pub(super) fn present(s: Snapshot) -> View {
             next,
         );
     }
+    if s.input == Some(WorkerInputState::Local) {
+        let feedback = match s.switch_state {
+            Some(WorkerSwitchState::Pending) => Some((
+                "正在请求切到另一台电脑",
+                "当前仍在本机，等待本次切换确认。",
+                Tone::Accent,
+            )),
+            Some(WorkerSwitchState::Denied) => Some((
+                "上次切换未被对端接受",
+                "请在另一台检查接收控制、键鼠开启和恢复提示；鼠标移回屏幕内再重试。",
+                Tone::Warning,
+            )),
+            Some(WorkerSwitchState::TimedOut) => Some((
+                "上次切换没有完成",
+                "本机未在期限内完成切换。先松开按键和鼠标按钮，将鼠标移回屏幕内再重试。",
+                Tone::Warning,
+            )),
+            Some(WorkerSwitchState::PeerUnavailable) => Some((
+                "对端未提供鼠标能力",
+                "请在另一台检查键鼠是否已开启及平台支持情况。提供能力不等于允许接收控制。",
+                Tone::Warning,
+            )),
+            _ => None,
+        };
+        if let Some((title, detail, tone)) = feedback {
+            return View::new(title, detail, tone, Action::None);
+        }
+    }
     match s.input {
         Some(WorkerInputState::ControllingRemote) => View::new(
             "正在控制另一台电脑",
@@ -269,6 +299,7 @@ mod tests {
             pairing: false,
             pairing_pending: false,
             readiness: Readiness::Ready,
+            switch_state: None,
         }
     }
     #[test]
@@ -424,6 +455,42 @@ mod tests {
             s.mode = Some(SessionMode::Native);
             s.input = Some(WorkerInputState::ControllingRemote);
             assert_eq!(present(s).title, "正在控制另一台电脑");
+        }
+    }
+    #[test]
+    fn switch_feedback_only_describes_a_connected_native_local_route() {
+        for switch in [
+            WorkerSwitchState::Pending,
+            WorkerSwitchState::Denied,
+            WorkerSwitchState::TimedOut,
+            WorkerSwitchState::PeerUnavailable,
+        ] {
+            let mut s = snapshot();
+            s.running = true;
+            s.connected = true;
+            s.mode = Some(SessionMode::Native);
+            s.input = Some(WorkerInputState::Local);
+            s.switch_state = Some(switch);
+            let view = present(s);
+            assert_eq!(view.action, Action::None);
+            assert!(!view.title.contains("已开启"));
+            let mut s = snapshot();
+            s.switch_state = Some(switch);
+            assert_eq!(present(s).title, "设备已记住，尚未连接");
+            let mut s = snapshot();
+            s.running = true;
+            s.connected = true;
+            s.mode = Some(SessionMode::Native);
+            s.input = Some(WorkerInputState::ControllingRemote);
+            s.switch_state = Some(switch);
+            assert_eq!(present(s).title, "正在控制另一台电脑");
+            let mut s = snapshot();
+            s.running = true;
+            s.connected = true;
+            s.mode = Some(SessionMode::Native);
+            s.input = Some(WorkerInputState::RecoveryUnconfirmed);
+            s.switch_state = Some(switch);
+            assert_eq!(present(s).action, Action::Recovery);
         }
     }
 }

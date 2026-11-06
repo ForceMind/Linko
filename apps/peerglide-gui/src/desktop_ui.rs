@@ -98,6 +98,7 @@ impl App {
             pairing: self.pairing_open,
             pairing_pending: self.pairing_pending(),
             readiness: self.worker_permissions.readiness(),
+            switch_state: self.switch_state,
         })
     }
     fn native_start_available(&self) -> bool {
