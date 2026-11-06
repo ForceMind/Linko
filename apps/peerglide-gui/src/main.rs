@@ -1514,8 +1514,10 @@ mod tests {
         app.native_confirmation = true;
         app.workspace_action(desktop_state::Action::AddDevice);
         assert!(!app.native_confirmation && app.dialog.is_none());
-        assert!(app.wizard.is_some());
-        app.wizard = None;
+        assert!(app.pairing_open && app.pairing_panel.open && app.wizard.is_none());
+        assert!(!app.pairing_panel.needs_poll() && !app.identity_dir().exists());
+        app.pairing_panel.open = false;
+        app.pairing_open = false;
         app.dialog = None;
         app.recovery_blocked = true;
         app.workspace_action(desktop_state::Action::StartInput);
@@ -1532,6 +1534,7 @@ mod tests {
             readonly.workspace_action(action);
             assert!(
                 readonly.child.is_none() && readonly.dialog.is_none() && readonly.wizard.is_none()
+                    && !readonly.pairing_open && !readonly.pairing_panel.needs_poll()
             );
         }
         Ok(())
