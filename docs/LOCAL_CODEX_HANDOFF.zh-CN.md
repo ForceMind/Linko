@@ -1059,3 +1059,12 @@ Linux/macOS工作区测试，审计失败为新增crypto-bigint0.5.5的RUSTSEC-2
 Argon2.6/voprf.6pre2等重大依赖迁移，仅可先实验验证，未接GUI。新增独立固定源码
 上游测试job，临时proposal重算新依赖锁和PG固定Argon2参数旧版输出fixture，随后
 须提交核对结果、删除临时workflow、完整PG检查/严格审计与资格复核，不能提前授信。
+
+3f7d57b锁已回收/摘要校验，bigint0.7.10替代受影响版本，基础依赖未升级；临时提案
+workflow已删除。CI42228351335已核对完整五项成功（Win/Mac/Linux、最低1.95、审计）。
+独立上游42228351494已成功，84unit/3兼容/1注册/
+19doc；2个上游ignored doc不算通过。PG13项网络负例/取消/CPU预算/固定Argon2
+fixture已实际在Mac执行成功。详VALIDATION新节；预发布voprf及GUI冻结边界保留。
+下一批不能把Session伪造成手工确认，需独立后台网络worker、带代次私有stdin/stdout、
+原身份/配置快照复查、ADR0008两端提交及回执未知；成功Offer handoff后关闭/换代要
+显式cancel。代码和权限异常/后台panic须终态失败，配对不自动开启输入或接收。

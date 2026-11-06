@@ -1499,3 +1499,42 @@ Input Monitoring Granted、Secure Input未检测到。未启动Native/通信，M
 当前等待Windows就绪和本次Mac→Windows最多45秒短测确认，不重新交换证书或生成
 身份。daff5a9文档候选五项42214599991与驻留两项42214600196全过；本次相对a791
 仍仅改记录。主Goal仍active，全路线/物理C06未完成，不合并或稳定发布。
+
+## 认证配对网络基础（2026-11-06，实验资格验证）
+
+PR56 / authenticated-pairing基于137471b，原a791445/0.3.4双机候选保持不变。
+新增真实TCP→标准OPAQUE→原socket双向TLS1.3→双向context确认，返回短时私有构造
+Session；未写盘/授信/启输入，GUI未接。输入v5及既有人工登记不变，见ADR-0010。
+
+初始4.0.1实现的e669d39已过三平台测试/构建及最低Rust，但未修改的审计拒绝
+crypto-bigint0.5.5（RUSTSEC-2026-0387）；未ignore、未将该候选接GUI。官方修复实验
+固定027abbc91115baa38b70ad3af7f5a22f072f978b，不能用同名已发布pre2或浮动main替代。
+新锁的bigint0.7.10、Argon2.6、dalek5等已核对，137471b所有原依赖版本/源/摘要保留。
+voprf仍为.6-pre2，当前组合没有适用的独立密码学审计，网络回归不自动解除GUI冻结。
+
+运行源码3f7d57bf3512400f6c2802436091394a7d1b26e4：完整CI42228351335五项均已回读
+成功（Windows/macOS/Linux、最低1.95、严格审计）。三平台fmt/严格Clippy/locked
+测试构建/Release和进程/打包专项均通过；后续纯文档候选精确状态继续在PR56回读。
+Mac日志实际列出13项配对回归成功，覆盖：真实握手/错码、跨socket尝试预算、取消/
+绝对期限、首包边界、OPAQUE身份/角色/offer/attempt替换和KE3重放、KE1/2/3非规范
+消息、错pin/无客户端证书/错或无ALPN、KE3/TLS/ready前取消、成功handoff以及取消
+计算等待者不释放活CPU许可。固定Argon2参数65536/3/1对照旧.5.3输出fixture也成功。
+
+独立上游源码job42228351494成功：84 unit（含RFC9807向量/旧默认KSF输出）、3项
+4.0.1兼容fixture、1项registration及19 doc测试；上游本就标记的2项doc ignored，
+未当通过。源码原样在PG workspace之外测试；首轮嵌套workspace失败已保留而非忽略。
+测试锁artifact13506399366摘要已核对，PG所选密码依赖的版本/校验和全出现在该锁中；
+上游另有dev-only旧digest/hmac/sha2，并非PG生产依赖。固定参数旧输出生成artifact
+13505289458摘要已核对。私有下载/锁比较/回执保留ignored target，不上传设备资料。
+
+| 分类 | 本批状态 |
+|---|---|
+| 已实现并自动验证 | 上述网络基础/有界消息与13项回归；同SHA五项平台CI及独立上游套件均通过 |
+| 已实现但实际设备未验收 | 跨主机配对、不同网卡/防火墙、真实用户取消/等待及资源测量 |
+| 尚未实现 | 中文短码向导、独立后台worker接线、两端ADR0008提交/回执及提交未知恢复 |
+| 客观受阻 | 本机无Rust且用户决定不装；双机C06等待Windows就绪与本次短测确认 |
+
+下一批先保持秘密只走私有stdin/内存而非CLI参数/日志，异步结果绑定GUI代次和原身份/
+配置快照；成功handoff后的关闭/重来须显式cancel，不再只drop Offer。提交前再验证
+Session，不能伪造人工fingerprint确认。持久intent后取消/断线可能为提交未知，不能
+回滚旧授权；配对不自动开通信/native/接收/重连。未完成这些条件不称短码产品可用。

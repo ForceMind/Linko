@@ -1,7 +1,8 @@
 # ADR-0010: Ephemeral code pairing before pinned mutual TLS
 
-Status: experimental qualification in progress after a dependency audit failure. The network authentication library is being
-qualified; GUI enrollment and two-peer durable commit are not wired yet. This is
+Status: experimental network foundation qualified; GUI enrollment and two-peer
+durable commit are not wired yet. Prerelease dependency admission and production
+review remain open. This is
 not production short-code availability or an independent cryptographic audit.
 
 ## Decision and compatibility
@@ -123,3 +124,9 @@ lock, rerun unchanged strict audit/MSRV/platform checks, and keep GUI closed.
 Never silently substitute floating main, the same-name published prerelease, or
 SPAKE2.finish: that API returns a key without confirming equal codes; a direct
 replacement followed by certificate TLS would not prove the short code.
+
+PG runtime3f7d57b passed all five platform/MSRV/audit jobs in42228351335 and the
+separate upstream test job42228351494. Fixed KSF compatibility, actual network
+authentication and negative/cancellation cases passed. This qualifies the scoped
+experimental network foundation only, not GUI enrollment or a production security
+review. See VALIDATION for exact evidence and unfinished integration requirements.
