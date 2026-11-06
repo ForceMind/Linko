@@ -619,6 +619,8 @@ impl App {
     }
     fn stop(&mut self) {
         self.pending_start = None;
+        self.native_confirmation = false;
+        self.screen_drag = None;
         if let Some(child) = &mut self.child {
             if self.input_terminal {
                 self.connected = false;
@@ -664,6 +666,7 @@ impl App {
             !self.recovery_blocked && self.stopping.is_none(),
             "恢复未确认，不能开始新的键鼠会话"
         );
+        self.native_confirmation = false;
         self.config.native = true;
         self.save_config()?;
         if self.child.is_some() {
@@ -876,6 +879,7 @@ impl App {
         }) {
             self.gesture_lab.cancel();
             self.screen_drag = None;
+            self.native_confirmation = false;
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
             if self.child.is_some() || self.recovery_blocked {
@@ -1144,6 +1148,14 @@ mod tests {
         assert!(app.child.is_none());
         assert!(!app.config.native && !app.config.allow);
         assert!(!app.identity_dir().exists());
+        app.native_confirmation = true;
+        app.stop();
+        assert!(!app.native_confirmation);
+        app.native_confirmation = true;
+        app.workspace_action(desktop_state::Action::AddDevice);
+        assert!(!app.native_confirmation && app.dialog.is_none());
+        assert!(app.wizard.is_some());
+        app.wizard = None;
         app.dialog = None;
         app.recovery_blocked = true;
         app.workspace_action(desktop_state::Action::StartInput);
@@ -1720,14 +1732,16 @@ mod lifecycle_tests {
             .spawn()?)
     }
     #[test]
-    fn hidden_or_unfocused_window_cancels_only_layout_draft_without_saving() -> Result<()> {
+    fn hidden_window_cancels_layout_and_uncommitted_consent_without_saving() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let original = app.config.edge.clone();
+        app.native_confirmation = true;
         app.screen_drag = Some((Vec2::ZERO, egui::pos2(10.0, 10.0), egui::Rect::EVERYTHING));
         let ctx = egui::Context::default();
         logic_frames(&mut app, &ctx, true);
         assert!(app.screen_drag.is_none());
+        assert!(!app.native_confirmation);
         assert_eq!(app.config.edge, original);
         assert!(!app.dir.join("settings.json").exists());
         assert!(app.child.is_none());

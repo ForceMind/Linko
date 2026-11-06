@@ -47,6 +47,10 @@ impl App {
     }
     fn open_setup(&mut self) {
         self.screen_drag = None;
+        self.native_confirmation = false;
+        if self.dialog == Some(Dialog::NativeStart) {
+            self.dialog = None;
+        }
         self.wizard_name = self.config.peer_name.clone();
         self.wizard_address = self.config.address.clone();
         self.wizard_listen = self.config.listen;
@@ -81,6 +85,8 @@ impl App {
             && self.config.fingerprint.is_some()
             && self.stopping.is_none()
             && !self.recovery_blocked
+            && self.wizard.is_none()
+            && self.dialog.is_none()
             && (self.child.is_none() || self.active_mode == Some(SessionMode::Communication))
     }
     pub(super) fn workspace_action(&mut self, action: desktop_state::Action) {
@@ -127,7 +133,11 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             if view.action != desktop_state::Action::None
                 && ui
-                    .add(desktop_style::primary(view.action.label()))
+                    .add_enabled(
+                        (self.wizard.is_none() && self.dialog.is_none())
+                            || view.action == desktop_state::Action::Recovery,
+                        desktop_style::primary(view.action.label()),
+                    )
                     .clicked()
             {
                 self.workspace_action(view.action);
@@ -322,6 +332,7 @@ impl App {
                     .checkbox(&mut self.config.allow, "允许已核验的电脑控制本机键鼠")
                     .changed()
                 {
+                self.native_confirmation = false;
                     self.save();
                 }
             },
