@@ -404,6 +404,9 @@ async fn cancelled_compute_waiter_does_not_release_the_running_cpu_permit() -> R
     // Always release the test task before asserting, including on failure.
     let _ = release_tx.send(());
     second.await??;
-    assert!(still_blocked, "cancelled waiter released active computation budget");
+    assert!(
+        still_blocked,
+        "cancelled waiter released active computation budget"
+    );
     Ok(())
 }

@@ -1053,3 +1053,9 @@ Linux/macOS工作区测试，审计失败为新增crypto-bigint0.5.5的RUSTSEC-2
 成功Offer→Session取消责任交接、服务端绑定快照（固定TripleDh的finish只用预存MAC，
 不会重核额外context参数）、真实OPAQUE替换/重放、TLS负例及KE3/TLS/ready迟到取消。
 该批初次平台fmt失败，已按官方差异修正；新回归仍需实际运行，未把范围复核当审计。
+
+审计修复资格候选固定官方027abbc91115baa38b70ad3af7f5a22f072f978b，非追main/同名
+已发布pre2。官方精确CI42108218606通过且保留RFC/4.0.1兼容fixture；这仍是dalek5/
+Argon2.6/voprf.6pre2等重大依赖迁移，仅可先实验验证，未接GUI。新增独立固定源码
+上游测试job，临时proposal重算新依赖锁和PG固定Argon2参数旧版输出fixture，随后
+须提交核对结果、删除临时workflow、完整PG检查/严格审计与资格复核，不能提前授信。

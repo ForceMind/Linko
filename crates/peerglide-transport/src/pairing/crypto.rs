@@ -8,7 +8,11 @@ use opaque_ke::{
     CredentialResponse, Identifiers, ServerLogin, ServerLoginParameters, ServerRegistration,
     ServerSetup,
 };
-use rand::rngs::OsRng;
+use opaque_ke::rand::{rand_core::UnwrapErr, rngs::SysRng};
+
+fn rng() -> UnwrapErr<SysRng> {
+    UnwrapErr(SysRng)
+}
 
 pub(super) struct Suite;
 impl CipherSuite for Suite {
@@ -42,7 +46,7 @@ fn parameters(binding: &Binding) -> ServerLoginParameters<'_, '_> {
 }
 
 pub(super) fn client_start(code: &[u8]) -> Result<(ClientLogin<Suite>, Vec<u8>)> {
-    let start = ClientLogin::<Suite>::start(&mut OsRng, code)
+    let start = ClientLogin::<Suite>::start(&mut rng(), code)
         .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     Ok((start.state, start.message.serialize().to_vec()))
 }
@@ -59,8 +63,8 @@ pub(super) fn server_start(
         request.serialize().as_slice() == bytes,
         "noncanonical pairing request"
     );
-    let setup = ServerSetup::<Suite>::new(&mut OsRng);
-    let registration = ClientRegistration::<Suite>::start(&mut OsRng, code)
+    let setup = ServerSetup::<Suite>::new(&mut rng());
+    let registration = ClientRegistration::<Suite>::start(&mut rng(), code)
         .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     let response =
         ServerRegistration::<Suite>::start(&setup, registration.message, &binding.context)
@@ -71,7 +75,7 @@ pub(super) fn server_start(
     let mut registered = registration
         .state
         .finish(
-            &mut OsRng,
+            &mut rng(),
             code,
             response.message,
             ClientRegistrationFinishParameters::new(identifiers(binding), Some(&ksf)),
@@ -81,7 +85,7 @@ pub(super) fn server_start(
     registered.export_key.zeroize();
     let record = ServerRegistration::<Suite>::finish(registered.message);
     let login = ServerLogin::<Suite>::start(
-        &mut OsRng,
+        &mut rng(),
         &setup,
         Some(record),
         request,
@@ -113,7 +117,7 @@ pub(super) fn client_finish(
     let ksf = ksf()?;
     let mut finish = state
         .finish(
-            &mut OsRng,
+            &mut rng(),
             code,
             response,
             ClientLoginFinishParameters::new(

@@ -1,0 +1,46 @@
+name: Pairing dependency lock proposal
+on:
+  pull_request:
+    paths:
+      - crates/peerglide-transport/Cargo.toml
+      - .github/workflows/pairing-lock-proposal.yml
+permissions:
+  contents: read
+jobs:
+  proposal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - name: Resolve reviewed fixed upstream repair
+        run: cargo metadata --format-version 1 > pairing-dependencies.json
+      - name: Propose canonical formatting without accepting it as validation
+        run: |
+          cargo fmt --all
+          git diff -- crates/peerglide-transport > pairing-rustfmt.patch
+      - name: Generate fixed-parameter Argon2 compatibility fixture from old release
+        run: |
+          mkdir -p target/argon2-fixture/src
+          printf '[package]\nname="argon2-fixture"\nversion="0.0.0"\nedition="2021"\n[workspace]\n[dependencies]\nargon2="=0.5.3"\n' > target/argon2-fixture/Cargo.toml
+          cat > target/argon2-fixture/src/main.rs <<'RS'
+          fn main() {
+              let params = argon2::Params::new(65536, 3, 1, None).unwrap();
+              let ksf = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+              let mut output = [0; 64];
+              ksf.hash_password_into(&[42; 64], &[0; 16], &mut output).unwrap();
+              for byte in output { print!("{byte:02x}"); }
+              println!();
+          }
+          RS
+          cargo run --release --manifest-path target/argon2-fixture/Cargo.toml > argon2-fixed-0.5.3.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pairing-lock-proposal
+          path: |
+            Cargo.lock
+            pairing-dependencies.json
+            pairing-rustfmt.patch
+            argon2-fixed-0.5.3.txt
+          if-no-files-found: error

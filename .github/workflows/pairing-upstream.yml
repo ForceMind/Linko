@@ -1,0 +1,46 @@
+name: Pinned pairing upstream qualification
+on:
+  pull_request:
+    paths:
+      - crates/peerglide-transport/**
+      - Cargo.lock
+      - .github/workflows/pairing-upstream.yml
+permissions:
+  contents: read
+env:
+  OPAQUE_REV: 027abbc91115baa38b70ad3af7f5a22f072f978b
+jobs:
+  upstream-ristretto:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Check exact dependency revision
+        run: |
+          python - <<'PY'
+          import os, pathlib, tomllib
+          deps = tomllib.loads(pathlib.Path('crates/peerglide-transport/Cargo.toml').read_text())['dependencies']
+          assert deps['opaque-ke']['rev'] == os.environ['OPAQUE_REV']
+          assert deps['opaque-ke']['git'] == 'https://github.com/facebook/opaque-ke'
+          assert not deps['opaque-ke']['default-features']
+          assert set(deps['opaque-ke']['features']) == {'ristretto255', 'argon2'}
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: meta/opaque-ke
+          ref: 027abbc91115baa38b70ad3af7f5a22f072f978b
+          path: target/upstream-opaque
+          persist-credentials: false
+      - name: Run selected upstream tests including RFC and compatibility fixtures
+        working-directory: target/upstream-opaque
+        run: |
+          test "$(git rev-parse HEAD)" = "$OPAQUE_REV"
+          cargo generate-lockfile
+          cargo test --release --locked --no-default-features --features ristretto255,argon2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: opaque-upstream-test-lock
+          path: target/upstream-opaque/Cargo.lock
+          if-no-files-found: error

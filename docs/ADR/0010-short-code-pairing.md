@@ -1,6 +1,6 @@
 # ADR-0010: Ephemeral code pairing before pinned mutual TLS
 
-Status: implementation in progress; dependency audit blocked. The network authentication library is being
+Status: experimental qualification in progress after a dependency audit failure. The network authentication library is being
 qualified; GUI enrollment and two-peer durable commit are not wired yet. This is
 not production short-code availability or an independent cryptographic audit.
 
@@ -8,7 +8,10 @@ not production short-code availability or an independent cryptographic audit.
 
 Keep input v5 and `peerglide/5` unchanged. Pairing is explicit and separate: input
 code endpoint is OPAQUE client and TLS client, display code endpoint is both
-servers. Use fixed `opaque-ke =4.0.1`, Ristretto255 / TripleDh / SHA512 and Argon2id
+servers. The initial `opaque-ke =4.0.1` candidate failed dependency audit. The
+experimental repair pins official revision `027abbc91115baa38b70ad3af7f5a22f072f978b`
+(package label 4.1.0-pre.2, different from that published crate), with
+Ristretto255 / TripleDh / SHA512 and Argon2id
 v1.3 (65536 KiB, 3 iterations, parallelism 1). No network-negotiated KSF, algorithm
 downgrade, custom application MAC/cipher, accept-any TLS verifier or TOFU.
 
@@ -71,7 +74,7 @@ temporary result retains its original deadline/cancellation and authenticated
 identity/context. GUI must cancel it on identity/config/target changes and close
 the offer when its flow ends. The code is never Debug/logged/persisted/discovered.
 
-Next: wire the Chinese offer/code-entry wizard to actual network progress; use
+After dependency/upstream and network qualification: wire the Chinese offer/code-entry wizard to actual network progress; use
 ADR-0008 local transactions with a fresh live result, not fabricated manual
 fingerprint confirmation. Bind two-peer commit messages to the same authenticated
 context, preserve closed input/receiving/reconnect, and represent lost acknowledgments
@@ -104,3 +107,19 @@ in >=0.7.6. No ignore or downgrade of the gate is permitted. Do not wire this
 candidate into GUI/production or describe it as qualified. Check a compatible
 upstream repair or review an alternate standard PAKE before proceeding; do not
 force incompatible bigint types or invent cryptographic repairs locally.
+
+The official fixed revision above changes elliptic-curve to0.14.3 (bigint>=0.7.8),
+dalek to5, Argon2 to0.6 and voprf to0.6.0-pre.2; it also refactors shared key
+exchange helpers. This is not a manifest-only backport, and voprf remains a
+prerelease. Scope review found the selected ordinary TripleDh transcript/DH order/
+labels and Ristretto encoding semantics retained, with official RFC9807 and frozen
+4.0.1 compatibility fixtures. Upstream exact-revision CI42108218606 is successful;
+it does not replace PG validation or independent cryptographic review.
+
+Qualification adds a separate exact-source upstream test job with Rust1.95 and
+only ristretto255/argon2, plus a PG65536/3/1 output fixture generated using old
+Argon2 0.5.3. Keep the new git revision immutable, record its tested transitive
+lock, rerun unchanged strict audit/MSRV/platform checks, and keep GUI closed.
+Never silently substitute floating main, the same-name published prerelease, or
+SPAKE2.finish: that API returns a key without confirming equal codes; a direct
+replacement followed by certificate TLS would not prove the short code.

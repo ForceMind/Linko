@@ -22,7 +22,7 @@ pub const ATTEMPT_LIMIT: u8 = 5;
 const ATTEMPT_LIFETIME: Duration = Duration::from_secs(20);
 const MAX_FRAME: usize = MAX_CERTIFICATE_BYTES + 64;
 const ALPN: &[u8] = b"peerglide-pairing/1";
-const DOMAIN: &[u8] = b"PeerGlide/pairing/1\0OPAQUE-4.0.1/Ristretto255/TripleDh/SHA512/Argon2id-65536-3-1\0input=5\0client=input-code;server=display-code\0";
+const DOMAIN: &[u8] = b"PeerGlide/pairing/1\0OPAQUE-RFC9807/Ristretto255/TripleDh/SHA512/Argon2id-65536-3-1\0input=5\0client=input-code;server=display-code\0";
 
 /// Clone only this cancellation handle, never an offer/code or PAKE state.
 #[derive(Clone)]
