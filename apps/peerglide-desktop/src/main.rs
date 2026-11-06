@@ -1,3 +1,4 @@
+mod pairing_worker;
 mod reconnect;
 mod session;
 use anyhow::{Context, Result};
@@ -79,6 +80,25 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Private GUI child: display a short code; never enable input or persist trust.
+    #[command(hide = true)]
+    PairOffer {
+        #[arg(long)]
+        identity: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:0")]
+        bind: SocketAddr,
+        #[arg(long, required = true)]
+        managed: bool,
+    },
+    /// Private GUI child: code arrives only through bounded stdin, never argv.
+    #[command(hide = true)]
+    PairConnect {
+        address: SocketAddr,
+        #[arg(long)]
+        identity: PathBuf,
+        #[arg(long, required = true)]
+        managed: bool,
+    },
     /// 只读检查本进程的前台/焦点与系统权限，不创建身份或启用输入。
     DiagnoseContext {
         /// 明确输出应用标识（Windows 可能包含个人安装路径）；默认不输出。
@@ -148,6 +168,16 @@ struct Options {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
+        Command::PairOffer {
+            identity,
+            bind,
+            managed,
+        } => pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed).await,
+        Command::PairConnect {
+            address,
+            identity,
+            managed,
+        } => pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed).await,
         Command::DiagnoseContext {
             include_application_id,
             observe_ms,

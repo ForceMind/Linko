@@ -172,5 +172,5 @@ pub(super) async fn compute<T: Send + 'static>(
         task()
     })
     .await
-    .context("pairing computation stopped")?
+    .map_err(|_| anyhow::Error::new(super::ComputationFailed))?
 }

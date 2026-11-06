@@ -32,3 +32,45 @@ success survives coalescing into Stopped, and process exit/stop still wins.
 Reconnecting and Disconnected are finite IPC-v1 states; they never imply resumed
 control. Tests cover a live helper child, a full log queue, stale authentication
 after stop, probe retention and old-config defaults. See ADR-0005.
+
+## Experimental read-only pairing child
+
+Hidden pair-offer/pair-connect commands require --managed and non-terminal stdin/
+stdout. They load an existing positively matched identity read-only. No input,
+enrollment, profile creation, receiving grant or settings write is reachable.
+Code entry travels only through bounded private stdin, not argv or diagnostics.
+The displaying child sends the code once over its own private stdout for the
+supervisor to display; it must never enter the ordinary log reader/history.
+
+Separate IPC-v1 pairing_event/pairing_command envelopes reject unknown fields,
+versions and oversized records. Commands are capped at256 bytes before allocation;
+public certificate events at72KiB before parsing, DER material at16KiB. Parsed
+events are observations, not persistent-trust tokens. Supervisor must still bind
+the exact owned child/channel, GUI generation and original identity/config to a
+later live Session/commit exchange; it may not fabricate manual confirmation.
+
+Input coalesces into one watch slot: Stop/EOF/invalid commands preempt pending
+code, repeated code is invalid, consumed code is removed without overwriting a
+racing Stop. Sensitive record types have no Debug and clear accepted code buffers
+on drop; this is best-effort memory hygiene, not a secure-memory/allocator claim.
+
+Output uses one bounded writer slot plus a two-second acknowledged write deadline.
+Blocking pipe IO lives on std threads so it cannot pin the async lifecycle or the
+Tokio blocking pool. The whole child retains one120-second deadline. Async panic
+and computation-task failure become terminal failure, not authentication retry.
+After temporary authentication, peer close/unexpected data ends the Session; it
+is invalidated before further local use. Expected EOF/reset is a disconnect;
+unexpected application data or malformed TLS is Failed/Protocol, not exit0.
+The dedicated pairing command replaces the default panic hook with typed
+Failed/Internal reporting and a failing exit, avoiding raw panic arguments or a
+blocked stderr hook; it does not suppress the failure outcome. Other CLI modes
+and the GUI panic policy are unchanged. There is no commit command in this batch.
+Stop, EOF, expiry and process exit never mean a device was saved. Native C06 and
+GUI pairing/enrollment remain separate, unfinished acceptance.
+
+Runtime c6aaf24 passed five platform/MSRV/audit jobs42236705671 and upstream
+42236705654. Real private-pipe smoke ran on three platforms and the host Mac,
+exit0/no forced cleanup/no owned children, no native input/enrollment/file changes.
+The earlier Mac EOF failure is preserved: code-await could return InvalidCommand
+between select polls. Stop is now a separate cancellation outcome, with a final
+control snapshot check; Protocol/Internal errors remain failures. See VALIDATION.

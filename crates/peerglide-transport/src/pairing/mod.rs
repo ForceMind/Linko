@@ -24,6 +24,16 @@ const MAX_FRAME: usize = MAX_CERTIFICATE_BYTES + 64;
 const ALPN: &[u8] = b"peerglide-pairing/1";
 const DOMAIN: &[u8] = b"PeerGlide/pairing/1\0OPAQUE-RFC9807/Ristretto255/TripleDh/SHA512/Argon2id-65536-3-1\0input=5\0client=input-code;server=display-code\0";
 
+/// Internal computation failure must stop the child, never become a code retry.
+#[derive(Debug)]
+pub struct ComputationFailed;
+impl std::fmt::Display for ComputationFailed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("pairing computation stopped")
+    }
+}
+impl std::error::Error for ComputationFailed {}
+
 /// Clone only this cancellation handle, never an offer/code or PAKE state.
 #[derive(Clone)]
 pub struct Cancellation(watch::Sender<bool>);
@@ -161,10 +171,25 @@ impl Offer {
             identity.certificate == self.local_certificate,
             "pairing identity changed"
         );
-        let (mut socket, _) = self
+        let (socket, _) = self
             .lifetime
             .run(async { Ok(listener.accept().await?) })
             .await?;
+        self.accept_connected(socket, identity).await
+    }
+
+    /// A supervisor may accept a socket to report real incoming progress. The
+    /// same offer budget and absolute deadline still apply before parsing/KSF.
+    pub async fn accept_connected(
+        &mut self,
+        mut socket: TcpStream,
+        identity: Arc<Identity>,
+    ) -> Result<PairingSession> {
+        self.code()?;
+        anyhow::ensure!(
+            identity.certificate == self.local_certificate,
+            "pairing identity changed"
+        );
         // Charge before reading any attacker-controlled bytes or running KSF.
         // Malformed frames, disconnect after KE2 and changed IP all consume it.
         self.attempts += 1;
@@ -308,6 +333,11 @@ pub struct PairingSession {
     lifetime: Lifetime,
     cancellation: Cancellation,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeerEnd {
+    Disconnected,
+    UnexpectedData,
+}
 impl Drop for PairingSession {
     fn drop(&mut self) {
         self.cancellation.cancel();
@@ -325,6 +355,37 @@ impl PairingSession {
     pub fn context_id(&self) -> Result<[u8; 32]> {
         self.peer_certificate()?;
         Ok(*blake3::hash(&self.binding.context).as_bytes())
+    }
+    /// While awaiting a local decision, detect closure or unexpected application
+    /// data. There must be exactly one stream reader; a future commit protocol
+    /// must replace this idle read, never run beside it. Every outcome invalidates
+    /// this temporary proposal; observing readiness is not persistent trust.
+    pub async fn wait_peer_end(&mut self) -> Result<PeerEnd> {
+        use tokio::io::AsyncReadExt;
+        let lifetime = self.lifetime.clone();
+        let result = lifetime
+            .run(async {
+                let mut byte = [0; 1];
+                match self.stream.read(&mut byte).await {
+                    Ok(0) => Ok(PeerEnd::Disconnected),
+                    Ok(_) => Ok(PeerEnd::UnexpectedData),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::UnexpectedEof
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::BrokenPipe
+                        ) =>
+                    {
+                        Ok(PeerEnd::Disconnected)
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            })
+            .await;
+        self.cancellation.cancel();
+        result
     }
 }
 

@@ -1068,3 +1068,26 @@ fixture已实际在Mac执行成功。详VALIDATION新节；预发布voprf及GUI�
 下一批不能把Session伪造成手工确认，需独立后台网络worker、带代次私有stdin/stdout、
 原身份/配置快照复查、ADR0008两端提交及回执未知；成功Offer handoff后关闭/换代要
 显式cancel。代码和权限异常/后台panic须终态失败，配对不自动开启输入或接收。
+
+## 45. B2独立配对worker接线（2026-11-06，开发中）
+
+pairing-worker基于3b838ae/PR56，新增hidden pair-offer/pair-connect，仅managed私有
+stdin/stdout，身份只读，未接GUI/提交命令/输入。代码见protocol/pairing_worker与
+desktop/pairing_worker；schema独立、有界、秘密不走argv/日志、Stop/EOF/到期终止。
+输出独立std线程+单槽/2秒回执，避免大证书/停读GUI卡住async停止。新增真实双进程
+tools/pairing_worker_smoke.py及CLI超时/panic/管道背压回归。transport新增接受已连接
+socket的预算保持入口和空闲断线使Session失效；计算panic单独分类，不当错码重试。
+本机预检仍无Rust，当前尚未编译运行，须完整CI/实际进程smoke后才能称本批通过。
+原a791445已获权App继续保留，Windows当前就绪确认仍待回复，不开启Native。
+
+c6aaf2450ec88bda3b3d2927c4881e681fc88715已过完整五项42236705671及独立上游
+42236705654。真实三平台private-pipe smoke通过：成功/Stop/peer-close/错码/EOF/
+Code紧跟Stop或EOF/同worker五次耗尽/超长输入/缺身份/文件不变。修复了额外TLS
+数据不能吞成正常断开、std reader panic显式InternalFault，以及等待code时Stop不能
+误当InvalidCommand的竞态（终态核对控制快照且保留Protocol/Internal失败）。
+da0e722的Mac真实EOF case曾失败，run42235077878保留，原断言不变后c6通过。
+仅解出CLI（不注册替换App），artifact13511638062内外摘要与strict ad-hoc worker签名
+校验过；详VALIDATION。宿主同脚本回环exit0（0.55秒）、无强制清理/CLI残留，不改
+GUI/TCC/真实profile；私有回执在ignored pairing-worker-c6aaf24。无GUI入口/Commit
+命令，不把IPC Authenticated当授信。下一批接父监督器代次/原身份配置及取消，再补
+两端ADR0008事务/绑定回执/提交未知和中文向导。#10/6.83GB及完整C06仍未解决或验收。
