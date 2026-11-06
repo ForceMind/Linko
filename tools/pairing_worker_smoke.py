@@ -88,7 +88,12 @@ class Child:
             if body["state"] == wanted:
                 return body
             if body["state"] in ("Failed", "Stopped"):
-                raise RuntimeError("pairing child reached an unexpected terminal state")
+                reason = body.get("reason")
+                known = {"Identity", "Listen", "Authentication", "InvalidCommand", "Protocol",
+                         "Internal", "Cancelled", "Expired", "PeerDisconnected", "AttemptsExhausted"}
+                safe_reason = reason if reason in known else "unrecognized"
+                raise RuntimeError("pairing child reached unexpected terminal state: "
+                                   + body["state"] + "/" + safe_reason)
 
     def command(self, body):
         record = {"version": 1, "kind": "pairing_command", "body": body}

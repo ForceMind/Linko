@@ -141,7 +141,7 @@ impl Inputs {
             })?;
         Ok(Self { rx, tx })
     }
-    async fn code(&mut self) -> std::result::Result<Arc<PairingCommand>, Failure> {
+    async fn code(&mut self) -> std::result::Result<Option<Arc<PairingCommand>>, Failure> {
         loop {
             let state = self.rx.borrow_and_update().clone();
             match state {
@@ -155,9 +155,10 @@ impl Inputs {
                             false
                         }
                     });
-                    return Ok(code);
+                    return Ok(Some(code));
                 }
-                Input::Stop | Input::Invalid => return Err(Failure::InvalidCommand),
+                Input::Stop => return Ok(None),
+                Input::Invalid => return Err(Failure::InvalidCommand),
                 Input::InternalFault => return Err(Failure::Internal),
                 Input::Waiting => (),
             }
@@ -239,6 +240,7 @@ async fn execute(
     deadline: Instant,
 ) -> std::result::Result<StopReason, Failure> {
     let control = stop(input.rx.clone(), matches!(mode, Mode::Offer(_)));
+    let final_control = input.rx.clone();
     let work = async {
         let mut session = match mode {
             Mode::Offer(address) => {
@@ -273,7 +275,9 @@ async fn execute(
                 }
             }
             Mode::Connect(address) => {
-                let command = input.code().await?;
+                let Some(command) = input.code().await? else {
+                    return Ok(StopReason::Cancelled);
+                };
                 let code = command
                     .entered_code()
                     .ok_or(Failure::InvalidCommand)?
@@ -295,11 +299,24 @@ async fn execute(
         };
         authenticated(&mut session, &identity, &output).await
     };
-    tokio::select! {
+    let result = tokio::select! {
         biased;
         result = control => result,
         _ = tokio::time::sleep_until(deadline) => Ok(StopReason::Expired),
         result = work => result,
+    };
+    // select's bias orders polls, not updates made by the stdin thread between
+    // polls. Reconcile the final control snapshot before publishing a result.
+    // Protocol/internal failures remain failures even if Stop races them.
+    if matches!(result, Err(Failure::Protocol | Failure::Internal)) {
+        return result;
+    }
+    let state = final_control.borrow().clone();
+    match state {
+        Input::Stop => Ok(StopReason::Cancelled),
+        Input::Invalid => Err(Failure::InvalidCommand),
+        Input::InternalFault => Err(Failure::Internal),
+        _ => result,
     }
 }
 async fn authenticated(
