@@ -66,15 +66,12 @@ impl Panel {
             self.stop();
             return;
         }
+        if self.published.is_some() && self.published != listening {
+            self.stop();
+            return;
+        }
         let mut failed = false;
         if let Some(handle) = &mut self.handle {
-            if self.published.is_some() && self.published != listening {
-                if handle.unpublish().is_err() {
-                    failed = true;
-                } else {
-                    self.published = None;
-                }
-            }
             if handle.poll(self.own.as_deref()).is_err() {
                 failed = true;
             }
@@ -100,12 +97,7 @@ impl Panel {
             if self.published.is_some() {
                 ui.label("已请求在局域网显示本次配对；不会广播配对码");
                 if ui.button("隐藏本次配对").clicked() {
-                    if self.handle.as_mut().is_some_and(|h| h.unpublish().is_ok()) {
-                        self.published = None;
-                        self.status = "已请求撤下广播；网络缓存可能稍后消失".into();
-                    } else {
-                        self.stop();
-                    }
+                    self.stop();
                 }
             } else if ui.button("让局域网内的电脑找到本次配对").clicked() {
                 let result = (|| -> anyhow::Result<()> {
