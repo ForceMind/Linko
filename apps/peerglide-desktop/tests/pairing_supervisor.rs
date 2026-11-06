@@ -1,7 +1,7 @@
 //! Exercise the GUI's actual process owner against the actual CLI, not forged
 //! Authenticated fixtures. CARGO_BIN_EXE is build provenance, never peer auth.
 #[path = "../../peerglide-gui/src/pairing_supervisor.rs"]
-mod pairing_supervisor;
+pub mod pairing_supervisor;
 use anyhow::{Context, Result};
 use pairing_supervisor::{Mode, Phase, Supervisor};
 use peerglide_protocol::pairing_worker::{Failure, StopReason};

@@ -45,7 +45,10 @@ impl Record {
             valid_fingerprint(local_fingerprint) && valid_fingerprint(peer_fingerprint),
             "配对收据指纹必须是 64 位小写十六进制"
         );
-        anyhow::ensure!(local_fingerprint != peer_fingerprint, "配对收据不能登记本机身份");
+        anyhow::ensure!(
+            local_fingerprint != peer_fingerprint,
+            "配对收据不能登记本机身份"
+        );
         Ok(Self {
             receipt_version: VERSION,
             phase: Phase::Pending,
@@ -69,7 +72,10 @@ impl Record {
     }
 
     fn validate_metadata(&self) -> Result<()> {
-        anyhow::ensure!(self.receipt_version == VERSION, "配对收据版本不受支持，原记录应保留");
+        anyhow::ensure!(
+            self.receipt_version == VERSION,
+            "配对收据版本不受支持，原记录应保留"
+        );
         anyhow::ensure!(
             valid_fingerprint(&self.local_fingerprint)
                 && valid_fingerprint(&self.peer_fingerprint)
@@ -138,8 +144,15 @@ mod tests {
         assert_eq!(record.phase(), Phase::Pending);
         assert!(record.is_pending());
         record.validate(&local(), Some(&peer()), false, false, false)?;
-        for (allow, native, reconnect) in [(true, false, false), (false, true, false), (false, false, true), (true, true, true)] {
-            assert!(record.validate(&local(), Some(&peer()), allow, native, reconnect).is_err());
+        for (allow, native, reconnect) in [
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+            (true, true, true),
+        ] {
+            assert!(record
+                .validate(&local(), Some(&peer()), allow, native, reconnect)
+                .is_err());
         }
         record.mark_confirmed()?;
         record.mark_confirmed()?;
@@ -159,9 +172,15 @@ mod tests {
             if phase == Phase::Confirmed {
                 record.mark_confirmed()?;
             }
-            assert!(record.validate(&"a".repeat(64), Some(&peer()), false, false, false).is_err());
-            assert!(record.validate(&local(), Some(&"b".repeat(64)), false, false, false).is_err());
-            assert!(record.validate(&local(), None, false, false, false).is_err());
+            assert!(record
+                .validate(&"a".repeat(64), Some(&peer()), false, false, false)
+                .is_err());
+            assert!(record
+                .validate(&local(), Some(&"b".repeat(64)), false, false, false)
+                .is_err());
+            assert!(record
+                .validate(&local(), None, false, false, false)
+                .is_err());
         }
         assert!(Record::pending([0; 32], &local(), &local()).is_err());
         Ok(())
@@ -169,13 +188,22 @@ mod tests {
 
     #[test]
     fn fingerprints_are_exact_lowercase_ascii_and_deserialized_data_is_revalidated() {
-        for invalid in [String::new(), "a".repeat(63), "a".repeat(65), "A".repeat(64), "g".repeat(64), "１".repeat(64)] {
+        for invalid in [
+            String::new(),
+            "a".repeat(63),
+            "a".repeat(65),
+            "A".repeat(64),
+            "g".repeat(64),
+            "１".repeat(64),
+        ] {
             assert!(Record::pending([0; 32], &invalid, &peer()).is_err());
             assert!(Record::pending([0; 32], &local(), &invalid).is_err());
             let mut stored = serde_json::to_value(pending()).unwrap();
             stored["peer_fingerprint"] = Value::String(invalid);
             let record: Record = serde_json::from_value(stored).unwrap();
-            assert!(record.validate(&local(), Some(&peer()), false, false, false).is_err());
+            assert!(record
+                .validate(&local(), Some(&peer()), false, false, false)
+                .is_err());
         }
     }
 
@@ -184,7 +212,9 @@ mod tests {
         let mut stored = serde_json::to_value(pending())?;
         stored["receipt_version"] = json!(2);
         let mut future: Record = serde_json::from_value(stored)?;
-        assert!(future.validate(&local(), Some(&peer()), false, false, false).is_err());
+        assert!(future
+            .validate(&local(), Some(&peer()), false, false, false)
+            .is_err());
         assert!(future.mark_confirmed().is_err());
         assert!(future.is_pending());
         Ok(())

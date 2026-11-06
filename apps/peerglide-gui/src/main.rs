@@ -8,9 +8,9 @@ mod discovery_panel;
 mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
-pub mod pairing_supervisor;
 mod pairing_panel;
 mod pairing_receipt;
+pub mod pairing_supervisor;
 mod quit_check;
 mod worker_permissions;
 use anyhow::{Context, Result};
@@ -431,7 +431,7 @@ impl App {
     }
     fn save_config(&mut self) -> Result<()> {
         anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会保存设备设置");
-        anyhow::ensure!(!self.pairing_open,"请先结束当前配对再修改设备设置");
+        anyhow::ensure!(!self.pairing_open, "请先结束当前配对再修改设备设置");
         self.validate_pairing_receipt()?;
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         self.config_store
@@ -443,22 +443,37 @@ impl App {
         self.dir.join("identity")
     }
     fn validate_pairing_receipt(&self) -> Result<()> {
-        if let Some(receipt)=&self.config.pairing_receipt {
-            let local=Identity::load(&self.identity_dir())?;
-            let peer=transport::read_certificate(&self.dir.join("trusted-peer.crt.der"))?;
-            let peer_fp=transport::fingerprint(&peer);
-            anyhow::ensure!(self.config.fingerprint.as_deref()==Some(peer_fp.as_str()),"收据与已登记证书不一致");
-            receipt.validate(&local.fingerprint(),Some(&peer_fp),self.config.allow,self.config.native,self.config.reconnect)?;
+        if let Some(receipt) = &self.config.pairing_receipt {
+            let local = Identity::load(&self.identity_dir())?;
+            let peer = transport::read_certificate(&self.dir.join("trusted-peer.crt.der"))?;
+            let peer_fp = transport::fingerprint(&peer);
+            anyhow::ensure!(
+                self.config.fingerprint.as_deref() == Some(peer_fp.as_str()),
+                "收据与已登记证书不一致"
+            );
+            receipt.validate(
+                &local.fingerprint(),
+                Some(&peer_fp),
+                self.config.allow,
+                self.config.native,
+                self.config.reconnect,
+            )?;
         }
         Ok(())
     }
-    fn pairing_pending(&self)->bool {
-        self.config.pairing_receipt.as_ref().is_some_and(|receipt|receipt.phase()==pairing_receipt::Phase::Pending)
+    fn pairing_pending(&self) -> bool {
+        self.config
+            .pairing_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.phase() == pairing_receipt::Phase::Pending)
     }
-    fn ensure_pairing_ready(&self)->Result<()> {
+    fn ensure_pairing_ready(&self) -> Result<()> {
         self.validate_pairing_receipt()?;
-        anyhow::ensure!(!self.pairing_pending(),"本机登记尚待对端回执；请重新核验或撤销后再连接");
-        anyhow::ensure!(!self.pairing_open,"请先结束配对再开启会话");
+        anyhow::ensure!(
+            !self.pairing_pending(),
+            "本机登记尚待对端回执；请重新核验或撤销后再连接"
+        );
+        anyhow::ensure!(!self.pairing_open, "请先结束配对再开启会话");
         Ok(())
     }
     fn local_fingerprint(&self) -> Option<String> {
@@ -830,12 +845,18 @@ impl App {
         }
         result.context("保存设备信任撤销结果；未确认持久完成，请重新打开屏跃检查")
     }
-    fn reset_settings(&mut self)->Result<()> {
-        anyhow::ensure!(self.idle_writable()&&!self.enrollment_blocked,"当前资料只读或仍有会话，原文件保留");
+    fn reset_settings(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.idle_writable() && !self.enrollment_blocked,
+            "当前资料只读或仍有会话，原文件保留"
+        );
         self.validate_pairing_receipt()?;
-        let next=Config::default();
-        enrollment_store::commit(self.config_store.as_mut().context("设置只读")?,&next,None)?;
-        self.config=next;self.confirmed_fingerprint=None;self.native_confirmation=false;self.pending_start=None;
+        let next = Config::default();
+        enrollment_store::commit(self.config_store.as_mut().context("设置只读")?, &next, None)?;
+        self.config = next;
+        self.confirmed_fingerprint = None;
+        self.native_confirmation = false;
+        self.pending_start = None;
         Ok(())
     }
     fn poll(&mut self) {
@@ -1160,13 +1181,13 @@ impl App {
         // Stop/Quit must cancel a queued upgrade before poll can start a successor.
         self.process_tray_commands(ctx);
         self.poll();
-        if ctx.input(|input|!input.focused||input.viewport().close_requested()) {
+        if ctx.input(|input| !input.focused || input.viewport().close_requested()) {
             self.pairing_panel.cancel();
         }
-        let mut pairing=std::mem::take(&mut self.pairing_panel);
-        pairing.tick(self,ctx);
-        self.pairing_open=pairing.blocks_actions();
-        self.pairing_panel=pairing;
+        let mut pairing = std::mem::take(&mut self.pairing_panel);
+        pairing.tick(self, ctx);
+        self.pairing_open = pairing.blocks_actions();
+        self.pairing_panel = pairing;
         if self.window_hidden && self.recovery_blocked {
             self.show_window(ctx);
             self.dialog = Some(Dialog::Recovery);
@@ -1189,7 +1210,11 @@ impl App {
                 self.tray.as_ref().is_some_and(|tray| tray.is_available()),
             );
         }
-        if self.close_requested && self.child.is_none() && !self.recovery_blocked && !self.pairing_panel.needs_poll() {
+        if self.close_requested
+            && self.child.is_none()
+            && !self.recovery_blocked
+            && !self.pairing_panel.needs_poll()
+        {
             if self
                 .quit_check
                 .as_ref()

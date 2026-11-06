@@ -2,7 +2,10 @@
 use super::*;
 impl App {
     fn writable(&self) -> bool {
-        !self.quit_check_mode && self.instance_lock.is_some() && self.config_store.is_some() && !self.pairing_open
+        !self.quit_check_mode
+            && self.instance_lock.is_some()
+            && self.config_store.is_some()
+            && !self.pairing_open
     }
     pub(super) fn idle_writable(&self) -> bool {
         self.writable() && self.child.is_none() && self.stopping.is_none() && !self.pairing_open
@@ -46,10 +49,15 @@ impl App {
             });
     }
     fn open_setup(&mut self) {
-        self.native_confirmation=false;self.pending_start=None;self.screen_drag=None;
-        self.confirmed_fingerprint=None;self.wizard=None;self.dialog=None;
-        self.pairing_panel.open(&self.config.peer_name,&self.config.address);
-        self.pairing_open=true;
+        self.native_confirmation = false;
+        self.pending_start = None;
+        self.screen_drag = None;
+        self.confirmed_fingerprint = None;
+        self.wizard = None;
+        self.dialog = None;
+        self.pairing_panel
+            .open(&self.config.peer_name, &self.config.address);
+        self.pairing_open = true;
     }
     pub(super) fn open_advanced_setup(&mut self) {
         self.screen_drag = None;
@@ -72,7 +80,9 @@ impl App {
     }
     pub(super) fn workspace_view(&self) -> desktop_state::View {
         desktop_state::present(desktop_state::Snapshot {
-            registered: self.config.fingerprint.is_some() && !self.pairing_pending() && self.config_store.is_some(),
+            registered: self.config.fingerprint.is_some()
+                && !self.pairing_pending()
+                && self.config_store.is_some(),
             writable: self.writable(),
             running: self.child.is_some(),
             connected: self.connected,
@@ -599,7 +609,7 @@ impl App {
                     self.save();
                 }
             });
-            ui.add_enabled_ui(self.idle_writable()&&!self.pairing_pending(), |ui| {
+            ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                 if ui
                     .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
                     .changed()
@@ -1141,10 +1151,10 @@ impl App {
             });
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
-        let mut pairing=std::mem::take(&mut self.pairing_panel);
-        pairing.ui(self,&ctx);
-        self.pairing_open=pairing.blocks_actions();
-        self.pairing_panel=pairing;
+        let mut pairing = std::mem::take(&mut self.pairing_panel);
+        pairing.ui(self, &ctx);
+        self.pairing_open = pairing.blocks_actions();
+        self.pairing_panel = pairing;
         if let Some((canvas, save)) = self.gesture_lab.inspection() {
             if let Some(path) = self.layout_report.take() {
                 let rect = |r: egui::Rect| [r.min.x, r.min.y, r.width(), r.height()];

@@ -79,7 +79,9 @@ impl Store {
     /// Confirmation metadata needs the same final snapshot/cancel check under
     /// the writer lock, after backup and immediately before atomic replacement.
     pub(super) fn save_guarded<T: Serialize>(
-        &mut self, data: &T, guard: impl FnOnce() -> Result<()>,
+        &mut self,
+        data: &T,
+        guard: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
         let path = self.path.clone();
         let _lock = lock(&path.with_extension("lock"))?;
