@@ -1,5 +1,5 @@
 //! AppKit menu owner; reviewed against winit 0.30.13's macOS delegate.
-use super::{Mailbox, Registry};
+use super::{Mailbox, Registry, TerminationCheck};
 use crate::tray::Command;
 use anyhow::{Context, Result};
 use objc2::{
@@ -11,8 +11,8 @@ use objc2::{
 use objc2_app_kit::{
     NSApplication, NSApplicationTerminateReply, NSEventModifierFlags, NSMenu, NSMenuItem,
 };
-use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
-use std::{cell::RefCell, sync::Arc};
+use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSOperationQueue, NSString};
+use std::{cell::RefCell, sync::{atomic::Ordering, Arc, Weak}};
 
 thread_local! {
     static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
@@ -218,17 +218,83 @@ impl Owner {
             && self.items[7].keyEquivalentModifierMask() == NSEventModifierFlags::Command
     }
 
-    /// Invoke the actual AppKit termination path in an isolated diagnostic
-    /// process with no native work. The caller must enforce those conditions.
-    /// Returns only the pre-call isRunning snapshot, not cleanup or Dock proof.
-    /// A broken termination bridge may terminate the process before returning;
-    /// its external supervisor must treat a missing final receipt as failure.
-    pub fn request_termination_for_check(&self) -> Result<bool> {
+    /// Queue the real AppKit path outside the current winit callback. Only use
+    /// in an isolated diagnostic process with no native work. Keep this Owner
+    /// alive and prevent GUI Close while the returned ticket is Pending.
+    /// Returned records only SDK return and its prior isRunning snapshot, not
+    /// cleanup or physical Dock proof. A broken bridge can still abort/exit;
+    /// the external supervisor must reject a missing final receipt.
+    pub fn request_termination_for_check(&self) -> Result<TerminationCheck> {
         anyhow::ensure!(self.is_available(), "应用退出保护不可用，不能执行退出检查");
-        let running = self.app.isRunning();
-        self.app.terminate(None);
-        Ok(running)
+        let check = TerminationCheck::pending();
+        let state = check.state.clone();
+        let application = (&*self.app as *const NSApplication) as usize;
+        let delegate = (&*self.delegate as *const AnyObject) as usize;
+        let menu = (&*self.menu as *const NSMenu) as usize;
+        let generation = self.generation;
+        let mailbox = Arc::downgrade(&self.target.ivars().mailbox);
+        // The queue copies the block. It captures only Send-safe integers,
+        // atomic state and Weak<Mailbox>, never a Retained AppKit object or
+        // MainThreadMarker. SDK objects are reacquired on the main queue.
+        let operation: block2::RcBlock<dyn Fn()> = block2::RcBlock::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                queued_termination(application, delegate, menu, generation, &mailbox)
+            }));
+            let status = match result {
+                Ok(Ok(false)) => 1,
+                Ok(Ok(true)) => 2,
+                _ => 3,
+            };
+            state.store(status, Ordering::Release);
+        });
+        // SAFETY: the copied block captures only Send-safe owned values listed
+        // above. The main queue executes it on the GUI thread after this winit
+        // callback returns; no Retained AppKit object crosses a thread boundary.
+        unsafe {
+            NSOperationQueue::mainQueue().addOperationWithBlock(&operation);
+        }
+        Ok(check)
     }
+}
+
+fn queued_termination(
+    application: usize,
+    delegate: usize,
+    menu: usize,
+    generation: u64,
+    mailbox: &Weak<Mailbox>,
+) -> Result<bool> {
+    let main = MainThreadMarker::new().context("退出检查没有在主队列执行")?;
+    let registered = || {
+        REGISTRY.with(|registry| {
+            let registry = registry.try_borrow().ok()?;
+            if !registry.contains(generation) {
+                return None;
+            }
+            let current = registry.mailbox(delegate, application)?;
+            let expected = mailbox.upgrade()?;
+            Arc::ptr_eq(&current, &expected).then_some(())
+        }).is_some()
+    };
+    anyhow::ensure!(registered(), "退出检查所有者已变化");
+    autoreleasepool(|_| {
+        let app = NSApplication::sharedApplication(main);
+        anyhow::ensure!((&*app as *const NSApplication) as usize == application, "退出检查应用已变化");
+        let current_delegate = checked_delegate(&app)?;
+        anyhow::ensure!((&*current_delegate as *const AnyObject) as usize == delegate
+            && check_bridge(current_delegate.class()), "退出检查代理保护已变化");
+        anyhow::ensure!(app.mainMenu().as_deref().is_some_and(|current| {
+            (current as *const NSMenu) as usize == menu
+        }), "退出检查菜单已变化");
+        let running = app.isRunning();
+        // No TLS/RefCell borrow survives any AppKit query or this real call.
+        // terminate: can run a nested run loop; the GUI must not close or tear
+        // down its owner until the ticket is Returned/Failed. In-flight SDK
+        // execution cannot be canceled or interrupted by dropping the ticket.
+        anyhow::ensure!(registered(), "退出检查所有者已失效");
+        app.terminate(None);
+        Ok(running)
+    })
 }
 
 fn item(

@@ -1,6 +1,6 @@
 //! Opt-in isolated AppKit integration check. Never enables input or networking.
 use anyhow::{Context, Result};
-use peerglide_platform::application_menu::Owner;
+use peerglide_platform::application_menu::{Owner, TerminationCheck, TerminationStatus};
 use serde::Serialize;
 use std::{
     fs::{self, File, OpenOptions},
@@ -18,6 +18,7 @@ pub(super) struct Check {
     quit_received: bool,
     running_before: Option<bool>,
     error: Option<&'static str>,
+    termination: Option<TerminationCheck>,
 }
 impl Check {
     pub(super) fn prepare(dir: &Path, report: &Path) -> Result<Self> {
@@ -48,11 +49,22 @@ impl Check {
             quit_received: false,
             running_before: None,
             error: None,
+            termination: None,
         })
     }
     /// True requests a normal GUI close after a failed check. No synthetic Quit
     /// is posted: a success must come from the real application delegate bridge.
     pub(super) fn tick(&mut self, owner: Option<&Owner>, unsafe_context: bool) -> bool {
+        if let Some(check) = &self.termination {
+            match check.status() {
+                TerminationStatus::Pending => (),
+                TerminationStatus::Returned { application_running_before } => {
+                    self.running_before = Some(application_running_before);
+                    self.returned = true;
+                }
+                TerminationStatus::Failed => self.error = Some("deferred AppKit termination request failed"),
+            }
+        }
         if self.error.is_some() {
             return true;
         }
@@ -70,15 +82,13 @@ impl Check {
             && self.started.elapsed() >= Duration::from_millis(100)
         {
             self.requested = true;
+            self.quit_received = false;
             let Some(owner) = owner else {
                 self.error = Some("real application exit owner is missing");
                 return true;
             };
             match owner.request_termination_for_check() {
-                Ok(running) => {
-                    self.running_before = Some(running);
-                    self.returned = true;
-                }
+                Ok(check) => self.termination = Some(check),
                 Err(_) => {
                     self.error = Some("real AppKit termination request failed");
                     return true;
@@ -86,6 +96,12 @@ impl Check {
             }
         }
         false
+    }
+    pub(super) fn ready_to_close(&self) -> bool {
+        if self.termination.as_ref().is_some_and(|check| check.status() == TerminationStatus::Pending) {
+            return false;
+        }
+        self.error.is_some() || self.returned
     }
     pub(super) fn received_quit(&mut self) {
         self.quit_received = true;

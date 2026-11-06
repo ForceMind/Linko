@@ -66,8 +66,11 @@ MIT and minimum Rust 1.95 remain unchanged.
 
 The opt-in hidden macOS check requires an explicitly empty data directory and a
 new report file. It cannot save device settings or start any device session. After
-entering real GUI logic it calls NSApplication.terminate:, then requires that call
-to return and the same mailbox's Quit to be consumed before writing a bounded
+entering real GUI logic it schedules NSApplication.terminate: on the next main
+queue turn, outside winit's event-handler borrow. AppKit persistent-state work can
+run a nested loop; calling it directly in GUI logic caused a confirmed host winit
+re-entry panic. Pending termination prevents even test-window close until the call
+returns. It requires return and the same mailbox's Quit before writing a bounded
 success receipt at normal close. Exit 0 without that receipt is failure. A separate
 20-second process guard can terminate only this isolated, non-native check. This
 exercises the real AppKit/delegate route, not a Dock click or physical input.

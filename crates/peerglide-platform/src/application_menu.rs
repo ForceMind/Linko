@@ -7,7 +7,40 @@
 //! Other platforms need no application-menu bridge: normal window-close handling
 //! remains responsible for their shutdown.
 use crate::tray::Mailbox;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
+
+/// Diagnostic progress only: not an input grant or cleanup confirmation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminationStatus {
+    Pending,
+    Returned { application_running_before: bool },
+    Failed,
+}
+
+/// Opaque result of a queued, isolated AppKit termination diagnostic. Poll until
+/// returned/failed; do not close the GUI or drop its menu owner while pending.
+/// No public constructor can manufacture a successful native check.
+pub struct TerminationCheck {
+    state: Arc<AtomicU8>,
+}
+impl TerminationCheck {
+    #[cfg(target_os = "macos")]
+    fn pending() -> Self {
+        Self { state: Arc::new(AtomicU8::new(0)) }
+    }
+
+    pub fn status(&self) -> TerminationStatus {
+        match self.state.load(Ordering::Acquire) {
+            0 => TerminationStatus::Pending,
+            1 => TerminationStatus::Returned { application_running_before: false },
+            2 => TerminationStatus::Returned { application_running_before: true },
+            _ => TerminationStatus::Failed,
+        }
+    }
+}
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -24,7 +57,7 @@ impl Owner {
     }
 
     /// The real AppKit termination diagnostic is only available on macOS.
-    pub fn request_termination_for_check(&self) -> anyhow::Result<bool> {
+    pub fn request_termination_for_check(&self) -> anyhow::Result<TerminationCheck> {
         anyhow::bail!("真实 AppKit 退出检查仅支持 macOS")
     }
 }

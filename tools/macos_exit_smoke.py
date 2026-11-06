@@ -28,7 +28,16 @@ def main():
             try:
                 exit_code = process.wait(timeout=20)
                 if exit_code != 0:
-                    raise RuntimeError(f"GUI exit {exit_code}; native terminate check failed")
+                    # The empty profile contains no identity/keys or input. Keep
+                    # a bounded own-process diagnostic instead of losing it with
+                    # TemporaryDirectory cleanup; do not print host path details.
+                    log.flush()
+                    with (root / "diagnostic.log").open("rb") as source:
+                        source.seek(0, 2)
+                        source.seek(max(0, source.tell() - 4096))
+                        tail = source.read(4096).decode("utf-8", errors="replace")
+                    tail = tail.replace(str(binary_dir), "[binary]").replace(str(root), "[isolated-check]").replace(str(pathlib.Path.home()), "[home]")
+                    raise RuntimeError(f"GUI exit {exit_code}; native terminate check failed\n{tail}")
                 if not report.is_file() or not 0 < report.stat().st_size <= 4096:
                     raise AssertionError("GUI exited without a complete bounded receipt")
                 with report.open("rb") as source:

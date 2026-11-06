@@ -1062,6 +1062,11 @@ impl App {
         }
     }
     fn process_window_close(&mut self, ctx: &egui::Context, tray_available: bool) {
+        if self.quit_check.as_ref().is_some_and(|check| !check.ready_to_close()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_requested = true;
+            return;
+        }
         if tray_available
             && self.desktop_preferences.tray_enabled
             && self.desktop_preferences.close_to_tray
@@ -1125,6 +1130,10 @@ impl App {
             );
         }
         if self.close_requested && self.child.is_none() && !self.recovery_blocked {
+            if self.quit_check.as_ref().is_some_and(|check| !check.ready_to_close()) {
+                ctx.request_repaint_after(Duration::from_millis(50));
+                return;
+            }
             if let Some(check) = self.quit_check.take() {
                 let no_input = self.active_mode.is_none()
                     && self.events.is_none()
