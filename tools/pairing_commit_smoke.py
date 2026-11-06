@@ -74,8 +74,9 @@ def main():
             b.process.stdin.close()
             b.event("Stopped")
             b.wait(0)
-            a.event("Stopped")
-            a.wait(0)
+            if a.event("Failed")["reason"] != "CommitUnknown":
+                raise RuntimeError("lost local-save notification did not retain commit uncertainty")
+            a.wait(1)
             if "PeerSaved" in a.names or "Completed" in a.names + b.names:
                 raise RuntimeError("lost LocalSaved notification fabricated completion")
 

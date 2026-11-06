@@ -1138,3 +1138,12 @@ None字段省略保旧配置，Confirmed不自动开任何授权，完成后可�
 --ignored且严格检查exactly1 passed/0 ignored；未运行不算通过。无显示模型不代替
 真实GUI/物理C06。当前初版尚未编译运行，须继续Clippy/格式/测试/修复和原生界面检查；
 原a791445已获权真实试跑App/配对不动，不要求用户现在重加权限。
+
+0.3.5后续CI修复：fafca37已过最低1.95；0a3b9f5把共享测试模块公开以保严格Clippy，
+e241/babdf改用95兼容CAS循环替代新stable弃用fetch_update，d879/c7c2更新新向导入口
+断言并保留只读/不创建身份/会话边界。c7c2dee的42263446899已过Linux工作区测试、
+最低1.95与审计，仍在平台流程；v2 exchange在丢LocalSaved场景返回Failed/Protocol，
+原脚本期待普通Stopped。现改明确定义CommitUnknown：Ready后缺对端保存事实又断线
+不当作协议攻击或成功取消，绝不补造PeerSaved/Completed；脚本严格期待Unknown/exit1。
+这次新修复仍须重跑消息交换和mandatory实际GUI模型，尚未完成验收。当前测试/CI
+状态在PR58回读，不把ignored GUI模型专项或synthetic save ack脚本算实际登记通过。

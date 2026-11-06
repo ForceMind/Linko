@@ -91,7 +91,7 @@ class Child:
             if body["state"] in ("Failed", "Stopped"):
                 reason = body.get("reason")
                 known = {"Identity", "Listen", "Authentication", "InvalidCommand", "Protocol",
-                         "Internal", "Cancelled", "Expired", "PeerDisconnected", "AttemptsExhausted"}
+                         "Internal", "CommitUnknown", "Cancelled", "Expired", "PeerDisconnected", "AttemptsExhausted"}
                 safe_reason = reason if isinstance(reason, str) and reason in known else "unrecognized"
                 raise RuntimeError("pairing child reached unexpected terminal state: "
                                    + body["state"] + "/" + safe_reason)

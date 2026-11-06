@@ -325,7 +325,7 @@ async fn execute(
     // Protocol/internal failures remain failures even if Stop races them.
     if matches!(
         result,
-        Err(Failure::Protocol | Failure::Internal) | Ok(End::Completed(_))
+        Err(Failure::Protocol | Failure::Internal | Failure::CommitUnknown) | Ok(End::Completed(_))
     ) {
         return result;
     }
@@ -393,8 +393,14 @@ async fn authenticated(
             Incoming::Peer(Ok(pairing::commit::Message::Closed)) => {
                 closed = true;
                 if !peer_saved {
+                    if ready {
+                        return Err(Failure::CommitUnknown);
+                    }
                     return peer_end(Ok(pairing::PeerEnd::Disconnected)).map(End::Stopped);
                 }
+            }
+            Incoming::Peer(Err(error)) if ready && expected_disconnect(&error) => {
+                return Err(Failure::CommitUnknown)
             }
             Incoming::Peer(_) => return Err(Failure::Protocol),
             Incoming::Local(Err(error)) => return Err(error),
@@ -410,7 +416,7 @@ async fn authenticated(
                     }
                     ipc::CommandTag::LocalSaved if ready && !saved => {
                         saved = true;
-                        if channel.saved().await.is_err() {
+                        if let Err(error) = channel.saved().await {
                             // Keep valid peer-saved evidence already read before
                             // closure; it is not a new live authentication ticket.
                             while let Some(fact) = channel.buffered_fact() {
@@ -423,7 +429,11 @@ async fn authenticated(
                                 }
                             }
                             if !peer_saved {
-                                return Err(Failure::Protocol);
+                                return Err(if expected_disconnect(&error) {
+                                    Failure::CommitUnknown
+                                } else {
+                                    Failure::Protocol
+                                });
                             }
                             closed = true;
                         }
@@ -436,6 +446,20 @@ async fn authenticated(
             }
         }
     }
+}
+
+fn expected_disconnect(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::NotConnected
+                | io::ErrorKind::TimedOut
+        )
+    })
 }
 
 fn peer_end(result: Result<pairing::PeerEnd>) -> std::result::Result<StopReason, Failure> {

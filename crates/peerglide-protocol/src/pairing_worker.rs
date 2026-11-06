@@ -33,6 +33,7 @@ pub enum Failure {
     Authentication,
     InvalidCommand,
     Protocol,
+    CommitUnknown,
     Internal,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
