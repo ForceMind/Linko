@@ -105,3 +105,14 @@ network loss retains its transport classification. Session end still executes
 owned-input release and capture shutdown. This changes error classification, not
 v5 encoding/ALPN, peer authentication or permission. Actual native cleanup remains
 C06; NoNative FIN/truncation regressions do not prove physical release.
+
+The explicit CI resource check is a NoNative loopback diagnostic. It requires an
+explicit data directory containing only a usable newly prepared identity, a
+bounded version1 spec, loopback IPv4, bounded duration, a different valid public
+peer certificate and an exclusive new report. It refuses existing settings/trust,
+extra files and symlink materials. Its fixture enrollment keeps native/receiving/
+reconnect off; CI/PID/time values grant no trust or input. Actual pinned TLS still
+runs. Deep start/native/save/enroll/revoke/reset and pairing guards keep this
+mode readonly and incapable of input. Normal application startup is unchanged.
+The private stdin command can only stop. Metadata receipts/PIDs are for process
+accounting, not authentication. No report stores keys, content or profile paths.

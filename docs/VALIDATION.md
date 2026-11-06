@@ -1789,3 +1789,23 @@ Linux artifact13548645117各约180.01秒，峰RSS132.176/133.719MiB，CPU区间1
 Linux ps整秒计数未跨刻度，曲线算0，仅是其量化分辨率内的结果，不证明完全不耗CPU。
 这些是隔离CI/no-session GUI短窗数据，不解释用户6.83GB，也不证明隐藏/worker/
 Native或8h/24h耐久。App源码/版本和冻结包不变，最终纯记录HEAD结果集中回读PR63。
+
+## A2真实GUI/自有worker分账（0.3.10-dev，开发中）
+
+resource-session-accounting基于PR63最终ff9cf52（五项42310065470、驻留42310065392
+成功）。新增显式CI隔离spec入口：仅接受只有可用身份的独立新目录、新报告、不同
+有效peer公钥、IPv4回环及17..600秒。复用原本地登记事务生成关闭全部授权的CI
+fixture，再由真实GUI正常start_mode启动同包通信worker，实际固定证书TLS/Hello，
+绝无Native/allow/reconnect。既有/未来设置、额外文件/符号链接与非回环拒绝，不
+从CI/PID/时间制造认证；普通启动不变。深层Native/保存/登记/撤销/重置/配对受限。
+
+JSONL只报告有限阶段、worker PID/回收、相对时间和native=false。父采样器只查
+自有GUI、其实际直接child及自有NoNative peer helper，分开RSS/累计CPU/区间CPU；
+每role512MiB为诊断中止线，不是产品预算。成功要求达到窗口、原GUI stop/EOF/
+terminal后worker被回收、GUI/helper正常退出；失败/中断仍回收自有Popen，不按PID
+杀其他进程。只请求普通窗口，未以内部标志冒充OS可见/隐藏或托盘验收，物理内存
+分账本批未测。目标CI为30秒短窗，非8h/24h/Native或双机验收。
+
+4项Python收据/部分写入/父PID/入口拒绝本机已过，不启动GUI；Rust增加新目录/
+未来文件/独占报告/loopback/Native防线回归，尚待CI编译/格式/Clippy/工作区与真实
+GUI会话检查。本机预检仍缺Rust不安装，无真实资料/TCC/现用App修改，浏览器未验。

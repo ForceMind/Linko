@@ -3,6 +3,7 @@ use super::*;
 impl App {
     fn writable(&self) -> bool {
         !self.quit_check_mode
+            && !self.resource_check_mode
             && self.instance_lock.is_some()
             && self.config_store.is_some()
             && !self.pairing_open
@@ -86,6 +87,7 @@ impl App {
                 && !self.pairing_pending()
                 && self.config_store.is_some(),
             writable: !self.quit_check_mode
+                && !self.resource_check_mode
                 && self.instance_lock.is_some()
                 && self.config_store.is_some(),
             running: self.child.is_some(),

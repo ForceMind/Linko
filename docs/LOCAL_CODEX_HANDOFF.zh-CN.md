@@ -1276,3 +1276,16 @@ f8e4f21五项42308474238与驻留42308474354成功，schema2原始JSON摘要/四
 整秒CPU未跨刻度算0，不说明无CPU使用。artifact13547252763/13548645117证据保留
 ignored target/local-validation/resource-cpu-f8e4f21。后续只补记录，App/版本不改，
 最终精确HEAD在PR63回读；隐藏/worker分账/8h/24h、C06与旧6.83GB根因仍未完成。
+
+## 53. A2真实GUI/自有worker分账（2026-11-07，开发中）
+
+resource-session-accounting/0.3.10基于PR63最终ff9cf52（五项42310065470、驻留
+42310065392全过）。显式CI资源spec只接受全新身份目录/回环/有效不同peer/新报告/
+有界窗口，复用登记事务关闭native/allow/reconnect；真实GUI正常启动同包worker
+完成实际mTLS/Hello。普通入口不变，CI模式深层拒Native/保存/更换登记/撤销/reset/
+配对，stdin只有stop；CI/PID/时间均非认证。有限JSONL阶段用于自有child分账，父
+脚本核对ppid并分GUI/owned worker/peer helper RSS/CPU，成功须真实GUI原stop→
+EOF/terminal/reap→正常退出。失败/信号仍清自有Popen，不按PID杀其他进程。普通
+窗口仅requested，未声称OS可见/隐藏；无footprint分账/8h/24h/Native/C06结论。
+Python4项收据/入口/父元数据回归本机过，Rust新安全边界/真实GUI会话待CI；本机
+缺Rust不安装，未启动宿主GUI/Native/设备会话或改App/配对/TCC，记录精确候选后交付。

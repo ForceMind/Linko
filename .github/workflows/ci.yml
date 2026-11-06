@@ -57,6 +57,7 @@ jobs:
         run: python tools/macos_exit_smoke.py target/release
       - run: python -m unittest discover -s tools -p test_third_party.py
       - run: python -m unittest discover -s tools -p test_package.py
+      - run: python -m unittest discover -s tools -p test_gui_worker_resource_smoke.py
       - run: python tools/third_party.py
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
