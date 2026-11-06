@@ -1533,8 +1533,11 @@ mod tests {
         ] {
             readonly.workspace_action(action);
             assert!(
-                readonly.child.is_none() && readonly.dialog.is_none() && readonly.wizard.is_none()
-                    && !readonly.pairing_open && !readonly.pairing_panel.needs_poll()
+                readonly.child.is_none()
+                    && readonly.dialog.is_none()
+                    && readonly.wizard.is_none()
+                    && !readonly.pairing_open
+                    && !readonly.pairing_panel.needs_poll()
             );
         }
         Ok(())
