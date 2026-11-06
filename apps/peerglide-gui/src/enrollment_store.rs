@@ -1,5 +1,5 @@
-//! Recoverable local enrollment, not network authentication. Only public
-//! certificates/settings enter the journal; private keys are never copied.
+//! Recoverable local enrollment, not network authentication. Only local settings
+//! and public certificates enter the journal; private keys are never copied.
 use super::{config_store, transport, Config};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -405,7 +405,7 @@ mod tests {
             let peer = fs::read(f.path.join("trusted-peer.crt.der"))?;
             let journal = fs::read(f.path.join(NAME))?;
             let app = App::load(f.path.clone());
-            assert!(app.config_store.is_none());
+            assert!(app.config_store.is_none() && app.enrollment_blocked);
             assert!(app.config.fingerprint.is_none() && !app.config.allow && !app.config.native);
             assert!(config_store::Store::reset::<Config>(f.path.join("settings.json")).is_err());
             assert_eq!(fs::read(f.path.join(changed))?, replacement);
@@ -429,7 +429,11 @@ mod tests {
             let settings = fs::read(f.path.join("settings.json"))?;
             fs::write(f.path.join(NAME), &bytes)?;
             let second = App::load(f.path.clone());
-            assert!(second.instance_lock.is_none() && second.config_store.is_none());
+            assert!(
+                second.instance_lock.is_none()
+                    && second.config_store.is_none()
+                    && second.enrollment_blocked
+            );
             assert_eq!(fs::read(f.path.join(NAME))?, bytes);
             drop(second);
             drop(owner);

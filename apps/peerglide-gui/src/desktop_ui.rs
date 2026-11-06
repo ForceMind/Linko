@@ -561,10 +561,14 @@ impl App {
         if !self.writable() {
             desktop_style::card(ui).show(ui, |ui| {
                 desktop_style::pill(ui, "设置只读，原资料已保留", desktop_style::Tone::Warning);
-                ui.label(
-                    "可能是另一窗口正在使用资料，或设置需要恢复。恢复前会备份，不改变本机身份。",
-                );
-                if self.instance_lock.is_some()
+                if self.enrollment_blocked {
+                    ui.label("设备变更尚未完成，原资料已保留，当前不能重置设备设置。");
+                    ui.weak("重新打开仍无法收尾时，请保留整个资料目录供检查。不会开启键鼠或覆盖冲突文件。");
+                } else {
+                    ui.label("可能是另一窗口正在使用资料，或设置需要恢复。恢复前会备份，不改变本机身份。");
+                }
+                if !self.enrollment_blocked
+                    && self.instance_lock.is_some()
                     && self.config_store.is_none()
                     && ui.button("备份并恢复设置…").clicked()
                 {

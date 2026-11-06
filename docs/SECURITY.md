@@ -17,8 +17,8 @@ Keys use exclusive file creation and Unix mode 0600. On Windows store identity
 files under a user-private directory with normal user ACLs; hardened ACL/keychain
 provisioning is pending. Never exchange private keys.
 
-The GUI's local enrollment/revocation commit now prepares a bounded public-material
-journal before replacing its certificate/settings pair. Only the profile owner
+The GUI's local enrollment/revocation commit now prepares a bounded journal of
+local settings and public certificates before replacing that pair. Only the profile owner
 can recover it, and changed identity/files or unsupported records stop read-only.
 Recovery never opens input/receiving permission. Pending records block ordinary
 saves/reset; their checksum detects corruption, not network authentication. See

@@ -34,7 +34,7 @@ On restart, only the GUI owning that profile may finish the recorded intent. Bot
 primary files must still equal their recorded old or new bytes and the local public
 identity must match. Recovery rolls forward, including interrupted revocation; it
 never restores a revoked old grant. File/identity changes, invalid/future records,
-or inconsistent grants leave the files intact and the GUI read-only. Ordinary save
+or inconsistent grants leave the files intact and device settings read-only. Ordinary save
 and explicit settings reset cannot bypass a pending record. No network session or
 input is started by recovery. It is idempotent after successful journal removal.
 

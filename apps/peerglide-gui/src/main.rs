@@ -257,6 +257,7 @@ struct App {
     dir: PathBuf,
     config: Config,
     config_store: Option<config_store::Store>,
+    enrollment_blocked: bool,
     instance_lock: Option<config_store::Lock>,
     page: Page,
     import_path: String,
@@ -301,6 +302,7 @@ impl App {
                 Err(error) => notice = format!("设备登记恢复未完成，原文件已保留：{error:#}"),
             }
         }
+        let enrollment_blocked = enrollment_store::ensure_idle(&dir.join("settings.json")).is_err();
         let (config_store, config) =
             match config_store::Store::open::<Config>(dir.join("settings.json")) {
                 Ok((store, config)) => (Some(store), config),
@@ -353,6 +355,7 @@ impl App {
             dir,
             config,
             config_store,
+            enrollment_blocked,
             instance_lock,
             page: Page::Home,
             import_path: String::new(),
@@ -502,6 +505,8 @@ impl App {
         let result =
             enrollment_store::commit(self.config_store.as_mut().unwrap(), &next, Some(&bytes));
         if let Err(error) = result {
+            self.enrollment_blocked =
+                enrollment_store::ensure_idle(&self.dir.join("settings.json")).is_err();
             self.config_store = None;
             return Err(error).context("设备登记未完成，请重新打开屏跃检查收尾；不会开启键鼠");
         }
@@ -738,6 +743,8 @@ impl App {
             .context("设置只读，设备信任撤销尚未持久保存")
             .and_then(|store| enrollment_store::commit(store, &self.config, None));
         if result.is_err() {
+            self.enrollment_blocked =
+                enrollment_store::ensure_idle(&self.dir.join("settings.json")).is_err();
             self.config_store = None;
         }
         result.context("保存设备信任撤销结果；未确认持久完成，请重新打开屏跃检查")
