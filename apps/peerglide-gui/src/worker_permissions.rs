@@ -459,8 +459,13 @@ mod tests {
         };
         assert_eq!(checker.readiness(), Readiness::Checking);
         checker.poll();
+        // Instant arithmetic need not represent a one-nanosecond delta on every OS.
+        // Establish real ordering before testing either side of the deadline.
+        let before_expiry = finished + FRESHNESS - Duration::from_millis(1);
+        let before_observation = finished - Duration::from_millis(1);
+        assert!(before_observation < finished && before_expiry < finished + FRESHNESS);
         assert_eq!(
-            checker.readiness_at(finished + FRESHNESS - Duration::from_nanos(1)),
+            checker.readiness_at(before_expiry),
             Readiness::Ready
         );
         assert_eq!(
@@ -468,7 +473,7 @@ mod tests {
             Readiness::Unchecked
         );
         assert_eq!(
-            checker.readiness_at(finished - Duration::from_nanos(1)),
+            checker.readiness_at(before_observation),
             Readiness::Unchecked
         );
         assert_eq!(checker.readiness(), Readiness::Unchecked);
