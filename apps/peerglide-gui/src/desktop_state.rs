@@ -1,6 +1,6 @@
 //! Presentation of current facts. A label or button never grants input authority.
-use super::{desktop_style::Tone, SessionMode, WorkerInputState};
 use super::worker_permissions::Readiness;
+use super::{desktop_style::Tone, SessionMode, WorkerInputState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Action {
@@ -124,7 +124,9 @@ pub(super) fn present(s: Snapshot) -> View {
             } else {
                 "设备已记住，尚未连接"
             },
-            if s.failed {
+            if s.native_supported && s.readiness != Readiness::Ready {
+                s.readiness.detail()
+            } else if s.failed {
                 "检查另一台电脑是否已打开，或到设置检查键鼠权限；详细原因在高级连接里。"
             } else {
                 "按桌面上的位置摆好屏幕，再明确开启键鼠协同。"
@@ -157,8 +159,13 @@ pub(super) fn present(s: Snapshot) -> View {
             Action::Recovery,
         );
     }
-    if s.connected && !s.failed && s.writable && s.native_supported && s.mode == Some(SessionMode::Communication)
-        && s.readiness != Readiness::Ready {
+    if s.connected
+        && !s.failed
+        && s.writable
+        && s.native_supported
+        && s.mode == Some(SessionMode::Communication)
+        && s.readiness != Readiness::Ready
+    {
         return permission_view(s.readiness, s.connected);
     }
     let next = if s.writable && s.native_supported && s.mode == Some(SessionMode::Communication) {
@@ -234,7 +241,11 @@ fn permission_view(readiness: Readiness, connected: bool) -> View {
             "开始前，先检查本机键鼠权限"
         },
         readiness.detail(),
-        if matches!(readiness, Readiness::Unchecked | Readiness::Checking) { Tone::Accent } else { Tone::Warning },
+        if matches!(readiness, Readiness::Unchecked | Readiness::Checking) {
+            Tone::Accent
+        } else {
+            Tone::Warning
+        },
         native_action(readiness),
     )
 }
@@ -369,20 +380,49 @@ mod tests {
     }
     #[test]
     fn local_permission_hints_never_override_recovery_failure_or_active_input() {
-        for readiness in [Readiness::Unchecked, Readiness::Checking, Readiness::Accessibility,
-            Readiness::InputMonitoring, Readiness::InputDesktop, Readiness::SecureInput,
-            Readiness::Unknown, Readiness::Unsupported, Readiness::Failed] {
-            let mut s = snapshot(); s.readiness = readiness;
+        for readiness in [
+            Readiness::Unchecked,
+            Readiness::Checking,
+            Readiness::Accessibility,
+            Readiness::InputMonitoring,
+            Readiness::InputDesktop,
+            Readiness::SecureInput,
+            Readiness::Unknown,
+            Readiness::Unsupported,
+            Readiness::Failed,
+        ] {
+            let mut s = snapshot();
+            s.readiness = readiness;
             let view = present(s);
-            assert_eq!(view.action, if readiness == Readiness::Checking { Action::None } else { Action::CheckPermissions });
+            assert_eq!(
+                view.action,
+                if readiness == Readiness::Checking {
+                    Action::None
+                } else {
+                    Action::CheckPermissions
+                }
+            );
             assert_eq!(view.detail, readiness.detail());
-            let mut s = snapshot(); s.readiness = readiness; s.recovery_blocked = true;
+            let mut s = snapshot();
+            s.readiness = readiness;
+            s.recovery_blocked = true;
             assert_eq!(present(s).action, Action::Recovery);
-            let mut s = snapshot(); s.readiness = readiness; s.failed = true;
+            let mut s = snapshot();
+            s.readiness = readiness;
+            s.failed = true;
             assert_eq!(present(s).title, "上次连接没有完成");
-            let mut s = snapshot(); s.readiness = readiness; s.running = true; s.failed = true; s.mode = Some(SessionMode::Communication);
+            let mut s = snapshot();
+            s.readiness = readiness;
+            s.running = true;
+            s.failed = true;
+            s.mode = Some(SessionMode::Communication);
             assert_eq!(present(s).title, "连接未完成，正在结束");
-            let mut s = snapshot(); s.readiness = readiness; s.running = true; s.connected = true; s.mode = Some(SessionMode::Native); s.input = Some(WorkerInputState::ControllingRemote);
+            let mut s = snapshot();
+            s.readiness = readiness;
+            s.running = true;
+            s.connected = true;
+            s.mode = Some(SessionMode::Native);
+            s.input = Some(WorkerInputState::ControllingRemote);
             assert_eq!(present(s).title, "正在控制另一台电脑");
         }
     }
