@@ -1024,8 +1024,13 @@ quit/ownerHealthy/noInput全true；确认当前辅助检查的GUI回调内同步
 后只读app清单/ps，未自动重开默认资料。窗口/工具观察不替代进程退出码。
 
 运行包固定a791445，不因后续纯文档更新替换或重复授权。正常默认入口已显示原Windows
-配对，实际同包worker只读诊断AX/IM均Denied，Secure Input Inactive；未开启Native，
-Mac接收仍关。用户已收到本次冻结App两项权限手动重新添加请求；授权不是输入同意，
-需重新核对实际worker，并另获本次Mac→已核验Windows短测准备确认。Windows当前
-就绪/版本仍待核对，不再交换证书或重生成身份。最终文档候选精确CI/远端在PR55回读；
-相对a791只改记录。主Goal仍active，全路线/物理C06未完成，不合并或稳定发布。
+配对。最初实际worker诊断AX/IM均Denied；经用户明确要求代操作后，仅在系统设置
+移除两项旧PeerGlide登记，用完整冻结App路径确认0.3.4/30.8MB并重新添加、开启。
+系统认证由用户本人完成，未读取/填写密码，未改其他App权限或删除应用/身份/配对。
+用户解锁后，同一冻结包的“检查键鼠权限”实际worker只读结果为AX Granted、
+Input Monitoring Granted、Secure Input未检测到。未启动Native/通信，Mac接收仍关。
+随后⌘Q结束诊断，监督记录gui_exited、55.17秒、峰RSS120656KiB、无GUI/worker残留；
+这是短时前置检查，不是资源事故修复或C06验收。私有收据仅保留在ignored target。
+当前等待Windows就绪和本次Mac→Windows最多45秒短测确认，不重新交换证书或生成
+身份。daff5a9文档候选五项42214599991与驻留两项42214600196全过；本次相对a791
+仍仅改记录。主Goal仍active，全路线/物理C06未完成，不合并或稳定发布。
