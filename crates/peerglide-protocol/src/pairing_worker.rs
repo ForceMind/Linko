@@ -57,9 +57,15 @@ pub enum State {
         local_fingerprint: String,
         context: [u8; 32],
     },
-    ReadyToSave { context: [u8; 32] },
-    PeerSaved { context: [u8; 32] },
-    Completed { context: [u8; 32] },
+    ReadyToSave {
+        context: [u8; 32],
+    },
+    PeerSaved {
+        context: [u8; 32],
+    },
+    Completed {
+        context: [u8; 32],
+    },
     Stopped {
         reason: StopReason,
     },
@@ -139,7 +145,13 @@ enum Command {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum CommandTag { Stop = 0, Code = 1, Approve = 2, LocalSaved = 3, ReceiptStored = 4 }
+pub enum CommandTag {
+    Stop = 0,
+    Code = 1,
+    Approve = 2,
+    LocalSaved = 3,
+    ReceiptStored = 4,
+}
 impl Drop for Command {
     fn drop(&mut self) {
         if let Self::Code { code } = self {
@@ -193,15 +205,28 @@ impl PairingCommand {
     }
     pub fn context(&self) -> Option<[u8; 32]> {
         match &self.body {
-            Command::Approve { context } | Command::LocalSaved { context }
-                | Command::ReceiptStored { context } => Some(*context),
+            Command::Approve { context }
+            | Command::LocalSaved { context }
+            | Command::ReceiptStored { context } => Some(*context),
             _ => None,
         }
     }
-    fn with_context(body: Command) -> Self { Self { version: VERSION, kind: CommandKind::Pairing, body } }
-    pub fn approve(context: [u8; 32]) -> Self { Self::with_context(Command::Approve { context }) }
-    pub fn local_saved(context: [u8; 32]) -> Self { Self::with_context(Command::LocalSaved { context }) }
-    pub fn receipt_stored(context: [u8; 32]) -> Self { Self::with_context(Command::ReceiptStored { context }) }
+    fn with_context(body: Command) -> Self {
+        Self {
+            version: VERSION,
+            kind: CommandKind::Pairing,
+            body,
+        }
+    }
+    pub fn approve(context: [u8; 32]) -> Self {
+        Self::with_context(Command::Approve { context })
+    }
+    pub fn local_saved(context: [u8; 32]) -> Self {
+        Self::with_context(Command::LocalSaved { context })
+    }
+    pub fn receipt_stored(context: [u8; 32]) -> Self {
+        Self::with_context(Command::ReceiptStored { context })
+    }
     pub fn is_stop(&self) -> bool {
         matches!(self.body, Command::Stop {})
     }
@@ -212,9 +237,9 @@ impl PairingCommand {
         if line.len() > MAX_COMMAND_LINE {
             return None;
         }
-        serde_json::from_str::<Self>(line)
-            .ok()
-            .filter(|command| command.version == VERSION && command.entered_code().is_none_or(valid_code))
+        serde_json::from_str::<Self>(line).ok().filter(|command| {
+            command.version == VERSION && command.entered_code().is_none_or(valid_code)
+        })
     }
 }
 

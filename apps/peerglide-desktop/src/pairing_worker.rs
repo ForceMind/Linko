@@ -25,7 +25,10 @@ pub enum Mode {
     Offer(SocketAddr),
     Connect(SocketAddr),
 }
-enum End { Stopped(StopReason), Completed([u8; 32]) }
+enum End {
+    Stopped(StopReason),
+    Completed([u8; 32]),
+}
 
 struct PendingOutput {
     event: PairingEvent,
@@ -79,7 +82,12 @@ impl Output {
 }
 
 #[derive(Clone)]
-enum Input { Waiting, Stop, Invalid, InternalFault }
+enum Input {
+    Waiting,
+    Stop,
+    Invalid,
+    InternalFault,
+}
 
 fn guard_reader(tx: &watch::Sender<Input>, read: impl FnOnce()) {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).is_err() {
@@ -96,37 +104,66 @@ impl Inputs {
         use std::sync::atomic::{AtomicU8, Ordering};
         let (tx, rx) = watch::channel(Input::Waiting);
         let (commands, received) = tokio::sync::mpsc::channel(1);
-        let expected = Arc::new(AtomicU8::new(if offering { 0 } else { ipc::CommandTag::Code as u8 }));
+        let expected = Arc::new(AtomicU8::new(if offering {
+            0
+        } else {
+            ipc::CommandTag::Code as u8
+        }));
         let stage = expected.clone();
-        std::thread::Builder::new().name("pairing-input".into()).spawn(move || {
-            guard_reader(&tx, || {
-                let stdin=io::stdin(); let mut reader=stdin.lock();
-                loop {
-                    match ipc::read_command(&mut reader) {
-                        Ok(Some(command)) if command.is_stop() => { tx.send_replace(Input::Stop); break; }
-                        Ok(Some(command)) => {
-                            let tag=command.tag() as u8;
-                            if stage.compare_exchange(tag,0,Ordering::AcqRel,Ordering::Acquire).is_err()
-                                || commands.try_send(command).is_err() {
-                                tx.send_replace(Input::Invalid); break;
+        std::thread::Builder::new()
+            .name("pairing-input".into())
+            .spawn(move || {
+                guard_reader(&tx, || {
+                    let stdin = io::stdin();
+                    let mut reader = stdin.lock();
+                    loop {
+                        match ipc::read_command(&mut reader) {
+                            Ok(Some(command)) if command.is_stop() => {
+                                tx.send_replace(Input::Stop);
+                                break;
+                            }
+                            Ok(Some(command)) => {
+                                let tag = command.tag() as u8;
+                                if stage
+                                    .compare_exchange(tag, 0, Ordering::AcqRel, Ordering::Acquire)
+                                    .is_err()
+                                    || commands.try_send(command).is_err()
+                                {
+                                    tx.send_replace(Input::Invalid);
+                                    break;
+                                }
+                            }
+                            Ok(None) => {
+                                tx.send_replace(Input::Stop);
+                                break;
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                                tx.send_replace(Input::Invalid);
+                                break;
+                            }
+                            Err(_) => {
+                                tx.send_replace(Input::InternalFault);
+                                break;
                             }
                         }
-                        Ok(None) => { tx.send_replace(Input::Stop); break; }
-                        Err(error) if error.kind()==io::ErrorKind::InvalidData => { tx.send_replace(Input::Invalid); break; }
-                        Err(_) => { tx.send_replace(Input::InternalFault); break; }
                     }
-                }
-            });
-        })?;
-        Ok(Self { rx, commands:received, expected })
+                });
+            })?;
+        Ok(Self {
+            rx,
+            commands: received,
+            expected,
+        })
     }
-    fn allow(&self, tag: ipc::CommandTag) -> std::result::Result<(),Failure> {
+    fn allow(&self, tag: ipc::CommandTag) -> std::result::Result<(), Failure> {
         use std::sync::atomic::Ordering;
-        self.expected.compare_exchange(0,tag as u8,Ordering::AcqRel,Ordering::Acquire)
-            .map(|_| ()).map_err(|_| Failure::Internal)
+        self.expected
+            .compare_exchange(0, tag as u8, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| Failure::Internal)
     }
-    async fn next(&mut self) -> std::result::Result<Option<PairingCommand>,Failure> {
-        let command=self.commands.recv().await;
+    async fn next(&mut self) -> std::result::Result<Option<PairingCommand>, Failure> {
+        let command = self.commands.recv().await;
         match &*self.rx.borrow() {
             Input::Stop => Ok(None),
             Input::Invalid => Err(Failure::InvalidCommand),
@@ -136,11 +173,15 @@ impl Inputs {
     }
     #[cfg(test)]
     fn fixture(rx: watch::Receiver<Input>) -> Self {
-        let (_,commands)=tokio::sync::mpsc::channel(1);
-        Self { rx, commands, expected:Arc::new(std::sync::atomic::AtomicU8::new(0)) }
+        let (_, commands) = tokio::sync::mpsc::channel(1);
+        Self {
+            rx,
+            commands,
+            expected: Arc::new(std::sync::atomic::AtomicU8::new(0)),
+        }
     }
 }
-async fn stop(mut rx: watch::Receiver<Input>) -> std::result::Result<StopReason,Failure> {
+async fn stop(mut rx: watch::Receiver<Input>) -> std::result::Result<StopReason, Failure> {
     loop {
         match &*rx.borrow_and_update() {
             Input::Stop => return Ok(StopReason::Cancelled),
@@ -148,7 +189,9 @@ async fn stop(mut rx: watch::Receiver<Input>) -> std::result::Result<StopReason,
             Input::InternalFault => return Err(Failure::Internal),
             Input::Waiting => (),
         }
-        if rx.changed().await.is_err() { return Ok(StopReason::Cancelled); }
+        if rx.changed().await.is_err() {
+            return Ok(StopReason::Cancelled);
+        }
     }
 }
 
@@ -185,7 +228,9 @@ pub async fn run(identity: PathBuf, mode: Mode, managed: bool) -> Result<()> {
             Ok(())
         }
         Ok(End::Completed(context)) => {
-            output.emit(State::Completed { context }).await
+            output
+                .emit(State::Completed { context })
+                .await
                 .map_err(|_| anyhow::anyhow!("配对完成回执通道已关闭"))?;
             Ok(())
         }
@@ -278,7 +323,10 @@ async fn execute(
     // select's bias orders polls, not updates made by the stdin thread between
     // polls. Reconcile the final control snapshot before publishing a result.
     // Protocol/internal failures remain failures even if Stop races them.
-    if matches!(result, Err(Failure::Protocol | Failure::Internal) | Ok(End::Completed(_))) {
+    if matches!(
+        result,
+        Err(Failure::Protocol | Failure::Internal) | Ok(End::Completed(_))
+    ) {
         return result;
     }
     let state = final_control.borrow().clone();
@@ -306,10 +354,17 @@ async fn authenticated(
             local_fingerprint: identity.fingerprint(),
         })
         .await?;
-    let mut channel = session.into_commit_channel().map_err(|_| Failure::Protocol)?;
+    let mut channel = session
+        .into_commit_channel()
+        .map_err(|_| Failure::Protocol)?;
     let context = channel.context();
-    let mut approved = false; let mut prepared = false; let mut ready = false;
-    let mut saved = false; let mut peer_saved = false; let mut receipt = false; let mut closed = false;
+    let mut approved = false;
+    let mut prepared = false;
+    let mut ready = false;
+    let mut saved = false;
+    let mut peer_saved = false;
+    let mut receipt = false;
+    let mut closed = false;
     loop {
         if approved && prepared && !ready {
             input.allow(ipc::CommandTag::LocalSaved)?;
@@ -321,7 +376,10 @@ async fn authenticated(
             output.emit(State::PeerSaved { context }).await?;
             receipt = true;
         }
-        enum Incoming { Peer(Result<pairing::commit::Message>), Local(std::result::Result<Option<PairingCommand>,Failure>) }
+        enum Incoming {
+            Peer(Result<pairing::commit::Message>),
+            Local(std::result::Result<Option<PairingCommand>, Failure>),
+        }
         let event = tokio::select! {
             biased;
             message = channel.receive(), if !closed => Incoming::Peer(message),
@@ -329,16 +387,22 @@ async fn authenticated(
         };
         match event {
             Incoming::Peer(Ok(pairing::commit::Message::Prepared)) => prepared = true,
-            Incoming::Peer(Ok(pairing::commit::Message::Saved)) if approved && prepared => peer_saved = true,
+            Incoming::Peer(Ok(pairing::commit::Message::Saved)) if approved && prepared => {
+                peer_saved = true
+            }
             Incoming::Peer(Ok(pairing::commit::Message::Closed)) => {
                 closed = true;
-                if !peer_saved { return peer_end(Ok(pairing::PeerEnd::Disconnected)).map(End::Stopped); }
+                if !peer_saved {
+                    return peer_end(Ok(pairing::PeerEnd::Disconnected)).map(End::Stopped);
+                }
             }
             Incoming::Peer(_) => return Err(Failure::Protocol),
             Incoming::Local(Err(error)) => return Err(error),
             Incoming::Local(Ok(None)) => return Ok(End::Stopped(StopReason::Cancelled)),
             Incoming::Local(Ok(Some(command))) => {
-                if command.context() != Some(context) { return Err(Failure::Protocol); }
+                if command.context() != Some(context) {
+                    return Err(Failure::Protocol);
+                }
                 match command.tag() {
                     ipc::CommandTag::Approve if !approved => {
                         approved = true;
@@ -351,16 +415,22 @@ async fn authenticated(
                             // closure; it is not a new live authentication ticket.
                             while let Some(fact) = channel.buffered_fact() {
                                 match fact {
-                                    Ok(pairing::commit::Message::Saved) if approved && prepared => peer_saved = true,
+                                    Ok(pairing::commit::Message::Saved) if approved && prepared => {
+                                        peer_saved = true
+                                    }
                                     Ok(pairing::commit::Message::Closed) => closed = true,
                                     _ => return Err(Failure::Protocol),
                                 }
                             }
-                            if !peer_saved { return Err(Failure::Protocol); }
+                            if !peer_saved {
+                                return Err(Failure::Protocol);
+                            }
                             closed = true;
                         }
                     }
-                    ipc::CommandTag::ReceiptStored if receipt && saved && peer_saved => return Ok(End::Completed(context)),
+                    ipc::CommandTag::ReceiptStored if receipt && saved && peer_saved => {
+                        return Ok(End::Completed(context))
+                    }
                     _ => return Err(Failure::InvalidCommand),
                 }
             }

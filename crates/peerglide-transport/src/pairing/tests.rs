@@ -361,24 +361,27 @@ async fn commit_channel_preserves_early_peer_facts_and_requires_both_prepares() 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let mut offer = Offer::new(&server)?;
     let entry = CodeEntry::new(offer.code()?.to_owned())?;
-    let (a,b) = tokio::try_join!(offer.accept(&listener,server),entry.connect(listener.local_addr()?,client))?;
+    let (a, b) = tokio::try_join!(
+        offer.accept(&listener, server),
+        entry.connect(listener.local_addr()?, client)
+    )?;
     let mut a = a.into_commit_channel()?;
     let mut b = b.into_commit_channel()?;
-    assert_eq!(a.context(),b.context());
+    assert_eq!(a.context(), b.context());
     assert!(a.saved().await.is_err());
     // One side can approve/prepare before the other user's local approval.
     a.prepare().await?;
-    assert_eq!(b.receive().await?,Message::Prepared);
+    assert_eq!(b.receive().await?, Message::Prepared);
     assert!(b.saved().await.is_err());
     b.prepare().await?;
-    assert_eq!(a.receive().await?,Message::Prepared);
+    assert_eq!(a.receive().await?, Message::Prepared);
     // The peer's actual Saved fact may precede our local filesystem response.
     a.saved().await?;
-    assert_eq!(b.receive().await?,Message::Saved);
+    assert_eq!(b.receive().await?, Message::Saved);
     b.saved().await?;
-    assert_eq!(a.receive().await?,Message::Saved);
+    assert_eq!(a.receive().await?, Message::Saved);
     drop(a);
-    assert_eq!(b.receive().await?,Message::Closed);
+    assert_eq!(b.receive().await?, Message::Closed);
     // EOF does not erase previously verified facts in the caller. There is no
     // automatic disk write or claim that the other parent confirmed a receipt.
     Ok(())
@@ -390,8 +393,8 @@ fn legacy_pairing_bootstrap_is_rejected_before_any_commit_capability() -> Result
     let mut old = wire::hello(&random_id(), &identity.certificate)?;
     old[..8].copy_from_slice(b"PGPAIR01");
     assert!(wire::parse_hello(&old).is_err());
-    assert_eq!(peerglide_protocol::VERSION,5);
-    assert_eq!(peerglide_protocol::ALPN,b"peerglide/5");
+    assert_eq!(peerglide_protocol::VERSION, 5);
+    assert_eq!(peerglide_protocol::ALPN, b"peerglide/5");
     Ok(())
 }
 

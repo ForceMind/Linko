@@ -1,9 +1,9 @@
 //! Opt-in ephemeral short-code authentication over TCP, then in-place strict
 //! mutual TLS. This returns a temporary peer proposal, never persistent trust or
 //! input/data/action authority. The production GUI is not wired to this yet.
+pub mod commit;
 mod crypto;
 mod wire;
-pub mod commit;
 
 use crate::{Identity, MAX_CERTIFICATE_BYTES};
 use anyhow::{Context, Result};
@@ -341,7 +341,9 @@ pub enum PeerEnd {
 }
 impl Drop for PairingSession {
     fn drop(&mut self) {
-        if self.stream.is_some() { self.cancellation.cancel(); }
+        if self.stream.is_some() {
+            self.cancellation.cancel();
+        }
     }
 }
 impl PairingSession {
@@ -350,7 +352,10 @@ impl PairingSession {
     }
     pub fn peer_certificate(&self) -> Result<&[u8]> {
         self.lifetime.check()?;
-        verify_tls(self.stream.as_ref().context("pairing stream transferred")?, &self.peer_certificate)?;
+        verify_tls(
+            self.stream.as_ref().context("pairing stream transferred")?,
+            &self.peer_certificate,
+        )?;
         Ok(&self.peer_certificate)
     }
     pub fn context_id(&self) -> Result<[u8; 32]> {
@@ -359,7 +364,9 @@ impl PairingSession {
     }
     /// Transfer this live authenticated connection, without resetting its
     /// deadline. The channel reports protocol facts; it never writes trust.
-    pub fn into_commit_channel(self) -> Result<commit::Channel> { commit::Channel::new(self) }
+    pub fn into_commit_channel(self) -> Result<commit::Channel> {
+        commit::Channel::new(self)
+    }
     /// While awaiting a local decision, detect closure or unexpected application
     /// data. There must be exactly one stream reader; a future commit protocol
     /// must replace this idle read, never run beside it. Every outcome invalidates
@@ -370,7 +377,13 @@ impl PairingSession {
         let result = lifetime
             .run(async {
                 let mut byte = [0; 1];
-                match self.stream.as_mut().context("pairing stream transferred")?.read(&mut byte).await {
+                match self
+                    .stream
+                    .as_mut()
+                    .context("pairing stream transferred")?
+                    .read(&mut byte)
+                    .await
+                {
                     Ok(0) => Ok(PeerEnd::Disconnected),
                     Ok(_) => Ok(PeerEnd::UnexpectedData),
                     Err(error)
