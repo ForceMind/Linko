@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.3.7-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.8-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -122,6 +122,8 @@ These checks never request OS permissions or authorize control/actions. See
 7. 松开物理键和鼠标按钮后跨边，键盘跟随控制目标；先移入对端，再在对端按下
    鼠标拖拽。按住按钮时不跨屏，原生文件跨屏拖放未提供。Control/Command 保持
    各自物理语义，快捷键、布局和输入法由目标系统解释，不是 Unicode/IME 文本转发。
+   切换没成功时，查看总览的请求、拒绝、超时或对端能力提示。拒绝没有披露具体原因，
+   请在另一台检查接收控制、键鼠开启及恢复状态；移回屏幕内再试，不会自动重试。
 8. `Ctrl+Alt+Right` 并松开组合键可手动切换；`Ctrl+Alt+Esc` 紧急恢复。
    接收端首次物理动作只用于收回控制，不执行或回放触发动作；切回本机后先松开
    全部物理键/按钮再操作。停止或退出后等待工作进程收尾。若显示“输入恢复未确认”，
@@ -130,7 +132,8 @@ These checks never request OS permissions or authorize control/actions. See
    不代表系统修饰键已释放。明确强制结束工作进程同样不能证明恢复成功。
 
 此顺序不替代四边、拖拽/滚轮、修饰键、接收端物理接管、不同DPI、断网/退出、
-睡眠唤醒与权限变化的实机矩阵。当前 G1、生产剪贴板/文件和配对码仍未提供；托盘/菜单栏的可选预览见下文。
+睡眠唤醒与权限变化的实机矩阵。当前 G1、生产剪贴板/文件仍未提供；短码配对与
+双端回执是开发预览，真实双机仍待验证。托盘/菜单栏的可选预览见下文。
 
 0.2.3-dev 修正 macOS 打包身份，并新增“设置 → 检查实际工作进程权限”。0.2.2 实机
 曾出现 GUI 两项权限已授予、worker 仍因辅助功能未获许可而退出；不能反复要求用户给

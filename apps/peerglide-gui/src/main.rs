@@ -17,7 +17,7 @@ mod worker_permissions;
 use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, RichText, Vec2};
-use peerglide_protocol::worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState};
+use peerglide_protocol::worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent, WorkerSwitchState};
 use peerglide_transport::{self as transport, Identity};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -166,8 +166,17 @@ enum Page {
 }
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
-struct WorkerSnapshot(AtomicU16, AtomicU16, AtomicBool, AtomicBool);
+struct WorkerSnapshot(AtomicU16, AtomicU16, AtomicBool, AtomicBool, AtomicU16);
 impl WorkerSnapshot {
+    fn publish_switch(&self, state: WorkerSwitchState) {
+        let value = match state { WorkerSwitchState::Idle => 1, WorkerSwitchState::Pending => 2,
+            WorkerSwitchState::Denied => 3, WorkerSwitchState::TimedOut => 4, WorkerSwitchState::PeerUnavailable => 5 };
+        self.4.store(value, Ordering::Release);
+    }
+    fn take_switch(&self) -> Option<WorkerSwitchState> {
+        match self.4.swap(0, Ordering::AcqRel) { 1 => Some(WorkerSwitchState::Idle), 2 => Some(WorkerSwitchState::Pending),
+            3 => Some(WorkerSwitchState::Denied), 4 => Some(WorkerSwitchState::TimedOut), 5 => Some(WorkerSwitchState::PeerUnavailable), _ => None }
+    }
     fn publish_input(&self, state: WorkerInputState, terminal: bool) {
         let code = match state {
             WorkerInputState::Disabled => 1,
@@ -197,6 +206,9 @@ impl WorkerSnapshot {
     }
 
     fn publish(&self, state: WorkerState) {
+        if matches!(state, WorkerState::Listening | WorkerState::Reconnecting | WorkerState::Disconnected | WorkerState::Stopped | WorkerState::Failed) {
+            self.publish_switch(WorkerSwitchState::Idle);
+        }
         let code = match state {
             WorkerState::Listening => 1,
             WorkerState::Reconnecting => 2,
@@ -255,6 +267,7 @@ struct App {
     active_mode: Option<SessionMode>,
     pending_start: Option<SessionMode>,
     input_state: Option<WorkerInputState>,
+    switch_state: Option<WorkerSwitchState>,
     input_terminal: bool,
     recovery_blocked: bool,
     close_requested: bool,
@@ -370,6 +383,7 @@ impl App {
             active_mode: None,
             pending_start: None,
             input_state: None,
+            switch_state: None,
             input_terminal: false,
             recovery_blocked: false,
             close_requested: false,
@@ -672,10 +686,13 @@ impl App {
                     output_state.publish(event.state);
                 } else if let Some(event) = WorkerInputEvent::parse(&line) {
                     output_state.publish_input(event.state, event.terminal);
+                } else if let Some(event) = WorkerSwitchEvent::parse(&line) {
+                    output_state.publish_switch(event.state);
                 } else {
                     let _ = output_tx.try_send(line.chars().take(600).collect());
                 }
             }
+            output_state.publish_switch(WorkerSwitchState::Idle);
             output_state.2.store(true, Ordering::Release);
         });
         std::thread::spawn(move || {
@@ -685,6 +702,7 @@ impl App {
         });
         self.child = Some(child);
         self.active_mode = Some(mode);
+        self.switch_state = None;
         self.input_terminal = false;
         self.input_state = Some(if mode == SessionMode::Native {
             WorkerInputState::Unavailable
@@ -754,6 +772,7 @@ impl App {
     }
     fn stop(&mut self) {
         self.pairing_panel.cancel();
+        self.switch_state = None;
         self.pending_start = None;
         self.native_confirmation = false;
         self.screen_drag = None;
@@ -889,6 +908,14 @@ impl App {
         }
         if let Some(snapshot) = &self.worker_state {
             let (state, probe_passed) = snapshot.take();
+            if let Some(switch) = snapshot.take_switch() {
+                if self.child.is_some() && self.stopping.is_none() {
+                    self.switch_state = Some(switch);
+                }
+            }
+            if snapshot.2.load(Ordering::Acquire) || snapshot.3.load(Ordering::Acquire) {
+                self.switch_state = None;
+            }
             if let Some((input, terminal)) = snapshot.take_input() {
                 if self.child.is_some() {
                     self.input_terminal = terminal;
@@ -942,6 +969,9 @@ impl App {
                 }
             }
         }
+        if !self.connected || self.stopping.is_some() || self.input_terminal {
+            self.switch_state = None;
+        }
         if self
             .stopping
             .is_some_and(|started| started.elapsed() > Duration::from_secs(3))
@@ -952,6 +982,7 @@ impl App {
             match child.try_wait() {
                 Ok(Some(exit)) => {
                     self.connected = false;
+                    self.switch_state = None;
                     self.last_failure |= !exit.success();
                     self.status = if exit.success() {
                         "离线".into()
@@ -2674,6 +2705,23 @@ mod lifecycle_tests {
         snapshot.publish(WorkerState::Stopped);
         assert_eq!(snapshot.take(), (Some(WorkerState::Stopped), true));
         assert_eq!(snapshot.take(), (None, false));
+    }
+    #[test]
+    fn switch_observation_coalesces_and_cannot_survive_a_reconnect_or_new_child() {
+        let snapshot = WorkerSnapshot::default();
+        for _ in 0..10000 {
+            snapshot.publish_switch(WorkerSwitchState::Pending);
+            snapshot.publish_switch(WorkerSwitchState::Denied);
+        }
+        snapshot.publish_switch(WorkerSwitchState::TimedOut);
+        assert_eq!(snapshot.take_switch(), Some(WorkerSwitchState::TimedOut));
+        snapshot.publish_switch(WorkerSwitchState::Denied);
+        snapshot.publish(WorkerState::Disconnected);
+        snapshot.publish(WorkerState::Listening);
+        snapshot.publish(WorkerState::Authenticated);
+        assert_eq!(snapshot.take_switch(), Some(WorkerSwitchState::Idle));
+        assert_eq!(WorkerSnapshot::default().take_switch(), None);
+        assert_eq!(snapshot.take_switch(), None);
     }
 
     use super::*;

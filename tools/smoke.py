@@ -17,7 +17,9 @@ def managed_states(output):
     assert records[0] == disabled, output
     assert records[-2:] == [terminal, {"version": 1, "state": "Stopped"}], output
     connections = [record for record in records if "kind" not in record]
-    assert len(connections) + len(inputs) == len(records), output
+    switches = [record for record in records if record.get("kind") == "switch"]
+    assert switches == [{"version": 1, "kind": "switch", "state": "Idle"}], output
+    assert len(connections) + len(inputs) + len(switches) == len(records), output
     assert all(set(record) == {"version", "state"} and record["version"] == 1
                for record in connections), output
     return [record["state"] for record in connections]

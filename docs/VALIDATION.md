@@ -1686,3 +1686,19 @@ Instant顺序，仍要求未来时间/精确到期均Unchecked，未改生产30�
 Rust说明Instant封装系统类型、行为随平台不同（见[官方Instant说明](https://doc.rust-lang.org/std/time/struct.Instant.html#os-specific-behaviors)）；此处只
 修正该跨平台测试输入，不归因历史#10/6.83GB。新候选仍需完整Windows与最终精确
 HEAD CI回读。394项外部依赖未变，最终结果集中在PR60，不将这个中间记录当全通过。
+
+## 跨屏切换结果反馈（0.3.8-dev，开发中）
+
+switch-feedback基于PR60最终17e219f（五项42284800216、驻留42284800467和上游
+42284800233全部通过）。增加独立switch IPC1有限枚举观察：请求中、匹配拒绝、原
+过期、实际协商鼠标能力缺失；Idle不是放行。只增会话循环的观察，未改v5/lease/
+1000ms原过期阈值、输入判定、授权、回调或恢复。拒绝不推断具体原因或触发重试。
+GUI用每child独立原子快照，断线/重连/停止/EOF/终态/退出清旧提示，恢复/控制状态
+优先，不与有界诊断队列竞争，也不导出输入或lease内容。
+
+新增闭合schema/字段与边界、reporter去重/终态/不变更输入、快照洪泛/重连/新child、
+显示优先级回归；真实无Native会话收到未请求Denied仍不报告本机拒绝。进程smoke
+与重连脚本严格验证新增Idle/无鼠标能力状态及重连后重建/终态清空，不放宽旧输入
+Disabled/terminal要求。Python语法已检查，Rust预检仍缺cargo/rustc不安装；当前待
+CI编译/fmt/Clippy/测试/build及三平台专项。原生正向拒绝/超时、双机与物理C06未验，
+浏览器/宿主新GUI未验，不修改现用App/资料/配对/TCC；不称日常稳定或独立安全审查。
