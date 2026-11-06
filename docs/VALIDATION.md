@@ -1255,3 +1255,42 @@ Mac artifact13471755307下载后外层SHA256=fe51cb23fdab6d8a97438eec654026244a3
 已修改为紧凑设备卡、主操作放图形上方、水平布局减少空高，并新增浅深主题/920×700
 与1180×820/总览及设备页的主按钮完整绘制且不被裁剪回归。后续运行候选仍待CI及
 本机复查，aeea运行包保留供来源核对，不作为修正后GUI的验收证据。浏览器未验证。
+
+
+#### 0.3.0 B1冻结候选与补充指针回归（2026-11-06）
+
+运行源码0eb687a65554470893c7a16befa6bfcca57ebe00通过完整五项
+[CI42152464452](https://github.com/ForceMind/PeerGlide/actions/runs/42152464452)及两平台
+[驻留42152464382](https://github.com/ForceMind/PeerGlide/actions/runs/42152464382)。包含三平台
+fmt/严格Clippy/locked测试/Debug+Release、真实无原生输入进程probe/reconnect/context、
+GUI smoke、最低Rust1.95、审计、Mac完整签名/ZIP解压与篡改拒绝。首屏主按钮完整
+绘制回归覆盖浅深主题、920×700及1180×820、总览和设备页。
+
+Mac artifact13473062882：外层SHA256=c5b07672c86b925f968c65490200a0fc3d4182dcb36ff7ac959b7ece76f2ac7e，
+内层fdb1d09698e890c54db6fefb278fb4af0dbdf020b966a0bb4cbb97a66c698237。本机安全内容、
+摘要、strict签名、bundle metadata和CLI0.3.0版本均核对。Windows匹配包13473756220由
+CI构建，外层API摘要4eb5d24b17fffbd8988b9218fb049cf84c942daa6e33769a0ca2a77d267caddf；
+本机未运行Windows包。产物及实际CI截图保留在ignored workspace-0eb687a。
+
+Mac驻留两场景各约181秒，RSS峰116944/116992KiB，预热后增长992/0KiB；physical峰
+40039/39322KiB，首场景partial、第二available，整体physical检查null。success只说明
+已覆盖的短时指标，不是完整GPU/压缩内存或6.83GB根因修复。两个平台任务均success。
+
+本机macOS26.2/25C56 arm64实际运行同一冻结包，在新隔离随机身份下只复制公开信任
+材料，不复制原私钥，不联网/开启Native/更改OS权限。总览与设备页主操作首屏可达，
+浅深外观、设置、未勾选的开启确认/禁用确认按钮与关闭确认窗均实际观察到。三次有界
+检查由既定保护结束空闲GUI，峰RSS100592/117440/115712KiB，均无候选GUI/worker残留。
+原试跑profile的settings与公开证书摘要前后相同，现有配对没有改写。
+
+宿主CUA拖动未改变方向，抬前窗口及方向点击也未获得可确认结果；不归因于工具或
+产品中的任何一个，也不写成原生验收通过。针对该疑点追加连续指针按下/移动/抬起、
+实际方向按钮点击、保存/只读不写磁盘的GUI回归。补充提交516b1e1482ef1ee0f5e14db71b8e16c8e4e0f60f
+通过完整五项[CI42157340095](https://github.com/ForceMind/PeerGlide/actions/runs/42157340095)及两平台
+[驻留42157340100](https://github.com/ForceMind/PeerGlide/actions/runs/42157340100)。GUI Unix73项
+（Windows71项）及Mac20轮并行回归通过。连续GUI事件可以提交left、按钮回到right，
+只读时内存及落盘布局不改；此为软件事件证据，宿主真实鼠标与物理C06仍需另验。
+
+516只增加cfg(test)模块：main.rs生产前缀与0eb逐字相同，其他GUI/CLI/核心/工具/依赖/
+CI源码差异为空。保留已核验0eb运行包，不为了测试或文档反复更换App代码身份。
+未进行浏览器测试或独立完整安全审计，历史#10与6.83GB根因均未确认。现有短码、
+托盘、G1、数据、音频仍未接通，真实双机键鼠仍未验收，不因此关闭对应Issue。
