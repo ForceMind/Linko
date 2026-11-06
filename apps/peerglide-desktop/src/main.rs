@@ -165,6 +165,9 @@ struct Options {
     /// Reconnect only the same enrolled peer with bounded backoff; disabled by default.
     #[arg(long)]
     reconnect: bool,
+    /// Private GUI first-connection grace; never reconnects a completed session.
+    #[arg(long, hide = true, requires = "managed", conflicts_with = "reconnect", value_parser = clap::value_parser!(u64).range(1..=120))]
+    wait_for_peer_secs: Option<u64>,
     #[arg(long, value_enum, default_value = "right")]
     edge: Side,
 }
@@ -412,6 +415,11 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
 }
 
 async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
+    anyhow::ensure!(
+        o.wait_for_peer_secs.is_none()
+            || (o.managed && address.is_some() && !probe && !o.reconnect),
+        "initial wait requires a managed non-probe connector without reconnect"
+    );
     let managed = o.managed;
     let mut input_status = InputReporter::new(managed);
     // No native capture/input effect exists during identity/network setup.
@@ -460,6 +468,13 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
         managed,
         if result.is_ok() {
             WorkerState::Stopped
+        } else if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<reconnect::InitialWaitExpired>())
+            && terminal != WorkerInputState::RecoveryUnconfirmed
+        {
+            WorkerState::PeerWaitExpired
         } else {
             WorkerState::Failed
         },
@@ -480,12 +495,26 @@ async fn supervise(
         "a peer must have a distinct identity"
     );
     let mut backoff = reconnect::Backoff::default();
+    let mut initial = reconnect::InitialWait::new(o.wait_for_peer_secs);
     loop {
         if *stop.borrow() {
             return Ok(());
         }
         reconnect::verify_pins(&o.identity, &o.peer_cert, &id.certificate, &peer)?;
-        let result = run_inner(o, address, probe, &id, &peer, stop.clone(), input_status).await;
+        initial.check()?;
+        let result = run_inner(
+            Attempt {
+                o,
+                address,
+                probe,
+                id: &id,
+                peer: &peer,
+                initial: &mut initial,
+            },
+            stop.clone(),
+            input_status,
+        )
+        .await;
         if *stop.borrow() {
             return result;
         }
@@ -495,7 +524,7 @@ async fn supervise(
                 Ok(()) => Err(anyhow::anyhow!("native input recovery remains unconfirmed")),
             };
         }
-        if !o.reconnect || probe {
+        if (!o.reconnect && !initial.waiting()) || probe {
             return result;
         }
         match result {
@@ -503,23 +532,52 @@ async fn supervise(
             Err(error) if reconnect::retryable(&error) => (),
             Err(error) => return Err(error),
         }
-        worker_event(o.managed, WorkerState::Reconnecting);
+        initial.check()?;
+        worker_event(
+            o.managed,
+            if initial.waiting() {
+                WorkerState::WaitingForPeer
+            } else {
+                WorkerState::Reconnecting
+            },
+        );
         eprintln!("Connection ended; retrying the same enrolled peer after backoff.");
         tokio::select! {
-            _ = tokio::time::sleep(backoff.next_delay()) => (),
+            biased;
             _ = stop_requested(&mut stop) => return Ok(()),
+            _ = initial_wait_deadline(initial.deadline()) => return Err(reconnect::InitialWaitExpired.into()),
+            _ = tokio::time::sleep(backoff.next_delay()) => (),
         }
     }
 }
-async fn run_inner(
-    o: &Options,
+struct Attempt<'a> {
+    o: &'a Options,
     address: Option<SocketAddr>,
     probe: bool,
-    id: &transport::Identity,
-    peer: &[u8],
+    id: &'a transport::Identity,
+    peer: &'a [u8],
+    initial: &'a mut reconnect::InitialWait,
+}
+async fn initial_wait_deadline(deadline: Option<tokio::time::Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline).await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+async fn run_inner(
+    attempt: Attempt<'_>,
     mut stop: tokio::sync::watch::Receiver<bool>,
     input_status: &mut InputReporter,
 ) -> Result<()> {
+    let Attempt {
+        o,
+        address,
+        probe,
+        id,
+        peer,
+        initial,
+    } = attempt;
     input_status.clear_switch();
     println!(
         "Local fingerprint: {}\nEnrolled peer: {}",
@@ -534,10 +592,16 @@ async fn run_inner(
         o.native
     );
     worker_event(o.managed, WorkerState::Listening);
+    if initial.waiting() {
+        worker_event(o.managed, WorkerState::WaitingForPeer);
+    }
     // Before the native session is installed, canceling negotiation owns no
     // captured/injected input. Once installed, stop is handled cooperatively by
     // session::run_with_status so its explicit recovery tail cannot be dropped.
     let connected = tokio::select! {
+        biased;
+        _ = stop_requested(&mut stop) => None,
+        _ = initial_wait_deadline(initial.deadline()) => Some(Err(reconnect::InitialWaitExpired.into())),
         result = async {
     let (c, mut tx, mut rx) = if let Some(addr) = address {
         let c = tokio::time::timeout(Duration::from_secs(5), e.connect(addr, "peerglide.local")?)
@@ -575,7 +639,6 @@ async fn run_inner(
     };
     Ok::<_, anyhow::Error>((c, tx, rx, local, peer_capabilities))
         } => Some(result),
-        _ = stop_requested(&mut stop) => None,
     };
     let Some(connected) = connected else {
         e.close(0u8.into(), b"supervisor stopped");
@@ -591,6 +654,8 @@ async fn run_inner(
     if !peer_capabilities.motion() {
         eprintln!("Peer native input is unavailable; connection diagnostics remain available.");
     }
+    reconnect::verify_pins(&o.identity, &o.peer_cert, &id.certificate, peer)?;
+    initial.negotiated()?;
     println!("Authenticated peer connected. Ctrl+C exits; Ctrl+Alt+Esc restores local input.");
     worker_event(o.managed, WorkerState::Authenticated);
     if probe {
@@ -647,6 +712,59 @@ async fn run_inner(
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+    #[tokio::test]
+    async fn initial_wait_invalid_modes_reject_before_identity_io() {
+        for args in [
+            vec![
+                "peerglide",
+                "listen",
+                "--peer-cert",
+                "missing",
+                "--managed",
+                "--wait-for-peer-secs",
+                "2",
+            ],
+            vec![
+                "peerglide",
+                "connect",
+                "127.0.0.1:1",
+                "--peer-cert",
+                "missing",
+                "--managed",
+                "--probe",
+                "--wait-for-peer-secs",
+                "2",
+            ],
+        ] {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let error = match cli.command {
+                Command::Listen(options) => run(options, None, false).await.unwrap_err(),
+                Command::Connect {
+                    address,
+                    options,
+                    probe,
+                } => run(options, Some(address), probe).await.unwrap_err(),
+                _ => unreachable!(),
+            };
+            assert!(error.to_string().contains("initial wait requires"));
+        }
+        for extra in [
+            vec!["--wait-for-peer-secs", "0", "--managed"],
+            vec!["--wait-for-peer-secs", "121", "--managed"],
+            vec!["--wait-for-peer-secs", "2"],
+            vec!["--wait-for-peer-secs", "2", "--managed", "--reconnect"],
+        ] {
+            let mut args = vec![
+                "peerglide",
+                "connect",
+                "127.0.0.1:1",
+                "--peer-cert",
+                "missing",
+            ];
+            args.extend(extra);
+            assert!(Cli::try_parse_from(args).is_err());
+        }
+    }
     #[test]
     fn input_reporter_coalesces_changes_independently_of_connection_authentication() {
         let mut reporter = InputReporter::new(false);

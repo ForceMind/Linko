@@ -41,6 +41,8 @@ pub(super) struct Snapshot {
     pub pairing_pending: bool,
     pub readiness: Readiness,
     pub switch_state: Option<WorkerSwitchState>,
+    pub waiting_for_peer: bool,
+    pub peer_wait_expired: bool,
 }
 pub(super) struct View {
     pub title: &'static str,
@@ -117,6 +119,18 @@ pub(super) fn present(s: Snapshot) -> View {
                 Action::AddDevice,
             );
         }
+        if s.peer_wait_expired {
+            return View::new(
+                "等待另一台电脑已超时",
+                "配对已保留。请在另一台也开启协同，再重新发起；不会自动重试或恢复旧控制。",
+                Tone::Warning,
+                if s.native_supported {
+                    native_action(s.readiness)
+                } else {
+                    Action::Connect
+                },
+            );
+        }
         if !s.failed && s.native_supported && s.readiness != Readiness::Ready {
             return permission_view(s.readiness, false);
         }
@@ -181,6 +195,14 @@ pub(super) fn present(s: Snapshot) -> View {
                 "连接未完成，正在结束",
                 "保留当前窗口，等连接结束后再检查权限或重试。",
                 Tone::Warning,
+                Action::None,
+            );
+        }
+        if s.waiting_for_peer {
+            return View::new(
+                "等待另一台电脑就绪",
+                "请在另一台也开启协同。本次等待约一分钟，可随时停止；连接前不会捕获或转发输入。",
+                Tone::Accent,
                 Action::None,
             );
         }
@@ -300,6 +322,8 @@ mod tests {
             pairing_pending: false,
             readiness: Readiness::Ready,
             switch_state: None,
+            waiting_for_peer: false,
+            peer_wait_expired: false,
         }
     }
     #[test]
@@ -492,5 +516,28 @@ mod tests {
             s.switch_state = Some(switch);
             assert_eq!(present(s).action, Action::Recovery);
         }
+    }
+    #[test]
+    fn first_wait_and_expiry_are_not_authentication_or_recovery() {
+        let mut s = snapshot();
+        s.running = true;
+        s.waiting_for_peer = true;
+        s.mode = Some(SessionMode::Native);
+        s.input = Some(WorkerInputState::Disabled);
+        let view = present(s);
+        assert_eq!(view.title, "等待另一台电脑就绪");
+        assert_eq!(view.action, Action::None);
+        let mut s = snapshot();
+        s.peer_wait_expired = true;
+        s.failed = true;
+        assert_eq!(present(s).title, "等待另一台电脑已超时");
+        let mut s = snapshot();
+        s.peer_wait_expired = true;
+        s.recovery_blocked = true;
+        assert_eq!(present(s).action, Action::Recovery);
+        let mut s = snapshot();
+        s.peer_wait_expired = true;
+        s.registered = false;
+        assert_eq!(present(s).action, Action::AddDevice);
     }
 }

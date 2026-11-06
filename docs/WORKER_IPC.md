@@ -107,3 +107,13 @@ queue. Reconnect/listen/disconnect, Stop, EOF/error, terminal input and child ex
 clear stale feedback; each child has its own snapshot. Recovery, current control
 and connection status take priority. Refusal wording does not invent a reason.
 Native positive refusal/timeout presentation remains physical C06 work.
+
+## Initial connection wait states (0.3.9-dev)
+
+IPC1 adds WaitingForPeer during the explicitly requested bounded first wait and
+PeerWaitExpired for that pre-capture budget's terminal failure. Both contain only
+version/state; neither proves TLS, readiness, input ownership or cleanup. Input
+terminal records remain separate. GUI child exit/EOF may overtake its first poll,
+so the final snapshot is also inspected for expiry before discarding that child.
+A new attempt/configuration clears old expiry presentation. Matching packages
+remain required; no input-network protocol change or remote command is added.

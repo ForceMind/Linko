@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 pub enum WorkerState {
     Listening,
     Reconnecting,
+    WaitingForPeer,
+    PeerWaitExpired,
     Disconnected,
     Authenticated,
     ProbePassed,

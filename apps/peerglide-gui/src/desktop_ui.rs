@@ -49,6 +49,7 @@ impl App {
             });
     }
     fn open_setup(&mut self) {
+        self.peer_wait_expired = false;
         self.native_confirmation = false;
         self.pending_start = None;
         self.screen_drag = None;
@@ -60,6 +61,7 @@ impl App {
         self.pairing_open = true;
     }
     pub(super) fn open_advanced_setup(&mut self) {
+        self.peer_wait_expired = false;
         self.screen_drag = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
@@ -99,6 +101,8 @@ impl App {
             pairing_pending: self.pairing_pending(),
             readiness: self.worker_permissions.readiness(),
             switch_state: self.switch_state,
+            waiting_for_peer: self.waiting_for_peer,
+            peer_wait_expired: self.peer_wait_expired,
         })
     }
     fn native_start_available(&self) -> bool {
@@ -1042,6 +1046,7 @@ impl App {
                     let permissions_fresh=self.worker_permissions.readiness()==worker_permissions::Readiness::Ready;
                     if !permissions_fresh{self.native_confirmation=false;}
                     ui.label("这会启动真实原生键鼠捕获与注入；实际工作进程将重新检查系统权限。连接/认证不代表对端允许本机控制。");
+                    if !self.config.listen && !self.config.reconnect {ui.weak("本次会等待另一台电脑约一分钟，可随时停止；连接并重新验权后才开始捕获键鼠。这不会开启断线自动重连。");}
                     ui.label(if self.config.allow{"本机接收偏好：允许已登记对端控制本机。"}else{"本机接收偏好：不允许对端控制本机；可请求控制已授权本机的对端。"});
                     if self.child.is_some(){ui.weak("当前仅通信会话将先停止；清理成功后再以键鼠模式重连。失败不自动继续。");}
                     ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");

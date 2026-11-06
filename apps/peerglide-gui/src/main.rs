@@ -230,6 +230,8 @@ impl WorkerSnapshot {
                 | WorkerState::Disconnected
                 | WorkerState::Stopped
                 | WorkerState::Failed
+                | WorkerState::WaitingForPeer
+                | WorkerState::PeerWaitExpired
         ) {
             self.publish_switch(WorkerSwitchState::Idle);
         }
@@ -241,6 +243,8 @@ impl WorkerSnapshot {
             WorkerState::ProbePassed => 5,
             WorkerState::Stopped => 6,
             WorkerState::Failed => 7,
+            WorkerState::WaitingForPeer => 8,
+            WorkerState::PeerWaitExpired => 9,
         };
         let mut old = self.0.load(Ordering::Relaxed);
         loop {
@@ -270,6 +274,8 @@ impl WorkerSnapshot {
             5 => Some(WorkerState::ProbePassed),
             6 => Some(WorkerState::Stopped),
             7 => Some(WorkerState::Failed),
+            8 => Some(WorkerState::WaitingForPeer),
+            9 => Some(WorkerState::PeerWaitExpired),
             _ => None,
         };
         (state, value & 0x100 != 0)
@@ -329,6 +335,8 @@ struct App {
     worker_state: Option<Arc<WorkerSnapshot>>,
     status: String,
     connected: bool,
+    waiting_for_peer: bool,
+    peer_wait_expired: bool,
     last_failure: bool,
     logs: VecDeque<String>,
     stopping: Option<Instant>,
@@ -445,6 +453,8 @@ impl App {
             worker_state: None,
             status: "离线".into(),
             connected: false,
+            waiting_for_peer: false,
+            peer_wait_expired: false,
             last_failure: false,
             logs: VecDeque::new(),
             stopping: None,
@@ -476,7 +486,9 @@ impl App {
         self.config_store
             .as_mut()
             .context("设置需要恢复，原文件已保留")?
-            .save(&self.config)
+            .save(&self.config)?;
+        self.peer_wait_expired = false;
+        Ok(())
     }
     fn identity_dir(&self) -> PathBuf {
         self.dir.join("identity")
@@ -726,6 +738,8 @@ impl App {
         });
         self.child = Some(child);
         self.active_mode = Some(mode);
+        self.waiting_for_peer = false;
+        self.peer_wait_expired = false;
         self.switch_state = None;
         self.input_terminal = false;
         self.input_state = Some(if mode == SessionMode::Native {
@@ -771,6 +785,8 @@ impl App {
             .arg("--managed");
         if self.config.reconnect && !probe {
             cmd.arg("--reconnect");
+        } else if !self.config.listen && !probe {
+            cmd.args(["--wait-for-peer-secs", "60"]);
         }
         if probe {
             cmd.arg("--probe");
@@ -797,6 +813,7 @@ impl App {
     fn stop(&mut self) {
         self.pairing_panel.cancel();
         self.switch_state = None;
+        self.waiting_for_peer = false;
         self.pending_start = None;
         self.native_confirmation = false;
         self.screen_drag = None;
@@ -958,7 +975,20 @@ impl App {
                 self.notice = "通信探针通过，未注入任何输入。".into();
             }
             if self.child.is_some() && self.stopping.is_none() {
+                if state.is_some() {
+                    self.waiting_for_peer = state == Some(WorkerState::WaitingForPeer);
+                }
                 match state {
+                    Some(WorkerState::WaitingForPeer) => {
+                        self.connected = false;
+                        self.status = "等待另一台电脑就绪".into();
+                    }
+                    Some(WorkerState::PeerWaitExpired) => {
+                        self.connected = false;
+                        self.peer_wait_expired = true;
+                        self.last_failure = true;
+                        self.status = "本次等待已超时".into();
+                    }
                     Some(WorkerState::Listening) => {
                         self.connected = false;
                         self.status = "等待对端连接".into();
@@ -1013,6 +1043,7 @@ impl App {
             match child.try_wait() {
                 Ok(Some(exit)) => {
                     self.connected = false;
+                    self.waiting_for_peer = false;
                     self.switch_state = None;
                     self.last_failure |= !exit.success();
                     self.status = if exit.success() {
@@ -1033,7 +1064,8 @@ impl App {
                         }
                         // The reader can publish its final probe result between
                         // the earlier snapshot read and this EOF observation.
-                        let (_, probe_passed) = snapshot.take();
+                        let (last_state, probe_passed) = snapshot.take();
+                        self.peer_wait_expired |= last_state == Some(WorkerState::PeerWaitExpired);
                         if probe_passed {
                             self.notice = "通信探针通过，未注入任何输入。".into();
                         }
@@ -2736,6 +2768,39 @@ mod lifecycle_tests {
         snapshot.publish(WorkerState::Stopped);
         assert_eq!(snapshot.take(), (Some(WorkerState::Stopped), true));
         assert_eq!(snapshot.take(), (None, false));
+    }
+    #[test]
+    fn gui_startup_wait_is_explicit_per_run_and_never_inherited_by_probe_or_reconnect() -> Result<()>
+    {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        for (listen, reconnect, mode, expected) in [
+            (false, false, SessionMode::Communication, true),
+            (false, false, SessionMode::Native, true),
+            (false, false, SessionMode::Probe, false),
+            (true, false, SessionMode::Native, false),
+            (false, true, SessionMode::Native, false),
+        ] {
+            app.config.listen = listen;
+            app.config.reconnect = reconnect;
+            let command = app.worker_command(
+                PathBuf::from("not-executed"),
+                PathBuf::from("public-test.der"),
+                mode,
+            );
+            let args: Vec<_> = command.get_args().collect();
+            let position = args.iter().position(|arg| *arg == "--wait-for-peer-secs");
+            assert_eq!(position.is_some(), expected);
+            if let Some(position) = position {
+                assert_eq!(args[position + 1], "60");
+            }
+            assert_eq!(
+                args.iter().any(|arg| *arg == "--reconnect"),
+                reconnect && mode != SessionMode::Probe
+            );
+        }
+        assert!(app.child.is_none() && !app.dir.join("settings.json").exists());
+        Ok(())
     }
     #[test]
     fn switch_observation_coalesces_and_cannot_survive_a_reconnect_or_new_child() {

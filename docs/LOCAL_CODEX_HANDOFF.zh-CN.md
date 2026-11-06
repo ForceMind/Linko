@@ -1224,3 +1224,36 @@ switch-feedback/0.3.8基于PR60最终17e219f，五项42284800216、驻留4228480
 反馈再按旧离线状态丢弃；改为观察到连接后消费，并加确定性交错回归。离线显示
 仍清旧提示、reader重连重置、每child隔离不变；2处断言格式按runner继续修正。
 394项外部依赖未变。最终精确HEAD结果集中在PR61，NoNative模型不勾物理C06。
+
+## 51. B2首次连接等待（2026-11-07，开发中）
+
+first-connection-wait/0.3.9基于PR61最终7c69b75（五项42291710144、驻留42291710040、
+上游42291709909全过）。修复正确配对的两端启动时序不便：GUI连接端无reconnect
+时显式给首次协商60秒预算，CLI默认不变；只限managed connector，排除probe/listen/
+reconnect。只重试已知瞬时网络错误、地址与身份固定，总预算不重置；成功一次后
+不自动重连。timer只在无捕获协商/退避内，协商/最终身份复查后退休，不包Native
+会话/清理tail。每次和协商后复查真实本机key/cert及peer字节，身份文件错误不当
+网络重试。新增本地WaitingForPeer/PeerWaitExpired，GUI约一分钟/停止/配对保留，
+EOF后再看最终到期记录，恢复仍优先。新进程NoNative专项与参数/政策/GUI回归待CI。
+本机缺Rust继续不安装，Python语法检查过。v5/ALPN、授权、callback/捕获/账本不改，
+现用App/配对/TCC不动。真实双机启动顺序、睡眠/撤权及C06仍未验收。
+
+24ea232已应用首轮fmt，最低1.95/三平台Clippy与工作区/审计过。Linux首次startup
+smoke因强杀被当正常断开期待0失败，实际程序保留connection lost/timed out错误。
+0b0b44d仅修测试：正常协作停仍期待0，异常丢失单独期待失败且不重连。Linux完整
+42298681886已成功，8项真实NoNative进程PASS，涵盖晚启动、预算退休/不重置、停止、
+pin/私钥变化、错TLS和不重连，未放宽旧断言。其他平台后续/驻留与最终纯记录HEAD
+须继续回读PR62；394项外部依赖不变。现用App/身份/配对/TCC及物理未验状态不动。
+
+4498b51的Windows再次失败，协作关闭收到unexpected end of file（非强杀timed out）。
+已定位实现缺口：帧边界FIN早于c.close_reason通知，旧read_u32把它混同截断；现
+首字节识别完整帧间FIN，截断FIN/非法帧类型单独失败，transport loss不改成帧错误，
+连接timeout/nonzero不再无条件成功；观察到的无效帧不能被关闭竞态盖掉。真实TLS
+帧及NoNative session回归新增，所有结束仍走原清理tail，v5/ALPN不改。quinn0.11.12
+官方源码下载摘要与锁一致，确认其IO错误转换，未改依赖。隔离GUI外部工具加timeout
+及始终回收，原Linux作业最终自行成功未重启。新修复待CI，不能沿用先前绿灯交付。
+
+7efc07d的42303853610 Linux完整过：真实TLS FIN/截断与NoNative session清理回归、
+8项startup进程检查及有界Xvfb两页都通过，最低1.95/审计与三平台工作区/Clippy过。
+其他平台后续/驻留待最终回读PR62。正常帧边界EOF、截断FIN和transport loss有区别，
+不一概吞错，timeout/reset仍失败；不据NoNative证明Native清理/双机，现用包不动。

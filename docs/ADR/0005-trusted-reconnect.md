@@ -41,3 +41,38 @@ contain matching GUI/worker versions. No new remote RPC, clipboard/file permissi
 or arbitrary command is introduced. Reconnect smoke uses real loopback processes
 and valid independent certificates, but no OS input. Physical Wi-Fi/USB/Bluetooth,
 sleep, DPI/IME and native permission/cleanup verification remain #3.
+
+## Bounded first-connection wait (0.3.9-dev)
+
+A matched GUI may explicitly request private `--wait-for-peer-secs` (1..120,
+managed connector only, mutually exclusive with reconnect and forbidden for
+listen/probe). Ordinary CLI defaults and probe remain one-shot. The GUI requests
+60 seconds for a connector without the user's separate reconnect preference.
+This is one initial negotiation budget, never refreshed by attempts/backoff.
+Only known transient connection errors retry with the existing bounded backoff.
+
+The timer owns only pre-capture TLS/Hello negotiation and backoff. Actual pinned
+TLS/Hello plus final identity-file verification retire it before session/capture
+installation. No timeout wrapper surrounds an active native session or its
+cleanup tail. A successful first session does not enable later reconnect;
+permission/native/protocol/auth failures still stop. Stop/EOF wins over the
+deadline, and cleanup time is additional to the negotiation budget.
+
+Verify the actual local certificate/key match and exact enrolled peer bytes
+before every attempt and again after negotiation. Missing/invalid/key-mismatched
+identity files are non-retryable even if a filesystem error resembles a network
+timeout. This is not an active filesystem watcher or a new enrollment mechanism.
+
+Local IPC1 adds WaitingForPeer/PeerWaitExpired; neither means authentication or
+an input grant. The GUI names the other computer, offers Stop and distinguishes
+expiry while preserving recovery priority. Readiness/explicit native consent,
+receiver permission, fresh physical switching intention, v5 and ALPN remain.
+Real startup order, Wi-Fi/suspend/permission and native cleanup are still C06.
+
+A subsequent Windows cooperative-close regression exposed clean stream FIN being
+reported as UnexpectedEof before the connection-close notification. Framing now
+distinguishes FIN between complete messages from FIN within a header/body. Clean
+boundary end returns through the same session cleanup; truncated FIN/invalid
+length/decode remains a protocol failure, not a reconnectable network error.
+Known transport losses retain their original class; nonzero/timeout connection
+closure is not silently mapped to success. No bytes, wire version or ALPN change.
