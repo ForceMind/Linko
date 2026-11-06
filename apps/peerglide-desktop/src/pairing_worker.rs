@@ -83,6 +83,14 @@ enum Input {
     Code(Arc<PairingCommand>),
     Stop,
     Invalid,
+    InternalFault,
+}
+
+fn guard_reader(tx: &watch::Sender<Input>, read: impl FnOnce()) {
+    // The reader is discarded after unwind; no poisoned IO state is reused.
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).is_err() {
+        tx.send_replace(Input::InternalFault);
+    }
 }
 struct Inputs {
     rx: watch::Receiver<Input>,
@@ -97,29 +105,39 @@ impl Inputs {
         std::thread::Builder::new()
             .name("pairing-input".into())
             .spawn(move || {
-                let stdin = io::stdin();
-                let mut reader = stdin.lock();
-                let mut code_seen = false;
-                loop {
-                    match ipc::read_command(&mut reader) {
-                        Ok(Some(command)) if command.entered_code().is_some() && !code_seen => {
-                            code_seen = true;
-                            reader_tx.send_replace(Input::Code(Arc::new(command)));
-                        }
-                        Ok(Some(command)) if command.entered_code().is_none() => {
-                            reader_tx.send_replace(Input::Stop);
-                            break;
-                        }
-                        Ok(None) => {
-                            reader_tx.send_replace(Input::Stop);
-                            break;
-                        }
-                        _ => {
-                            reader_tx.send_replace(Input::Invalid);
-                            break;
+                guard_reader(&reader_tx, || {
+                    let stdin = io::stdin();
+                    let mut reader = stdin.lock();
+                    let mut code_seen = false;
+                    loop {
+                        match ipc::read_command(&mut reader) {
+                            Ok(Some(command)) if command.entered_code().is_some() && !code_seen => {
+                                code_seen = true;
+                                reader_tx.send_replace(Input::Code(Arc::new(command)));
+                            }
+                            Ok(Some(command)) if command.entered_code().is_none() => {
+                                reader_tx.send_replace(Input::Stop);
+                                break;
+                            }
+                            Ok(None) => {
+                                reader_tx.send_replace(Input::Stop);
+                                break;
+                            }
+                            Ok(Some(_)) => {
+                                reader_tx.send_replace(Input::Invalid);
+                                break;
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                                reader_tx.send_replace(Input::Invalid);
+                                break;
+                            }
+                            Err(_) => {
+                                reader_tx.send_replace(Input::InternalFault);
+                                break;
+                            }
                         }
                     }
-                }
+                });
             })?;
         Ok(Self { rx, tx })
     }
@@ -140,6 +158,7 @@ impl Inputs {
                     return Ok(code);
                 }
                 Input::Stop | Input::Invalid => return Err(Failure::InvalidCommand),
+                Input::InternalFault => return Err(Failure::Internal),
                 Input::Waiting => (),
             }
             self.rx
@@ -157,6 +176,7 @@ async fn stop(
         match &*rx.borrow_and_update() {
             Input::Stop => return Ok(StopReason::Cancelled),
             Input::Invalid => return Err(Failure::InvalidCommand),
+            Input::InternalFault => return Err(Failure::Internal),
             Input::Code(_) if offering => return Err(Failure::InvalidCommand),
             _ => (),
         }
@@ -311,6 +331,19 @@ fn peer_end(result: Result<pairing::PeerEnd>) -> std::result::Result<StopReason,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn reader_panic_is_terminal_even_while_other_senders_stay_alive() -> Result<()> {
+        let (tx, rx) = watch::channel(Input::Waiting);
+        let retained_sender = tx.clone();
+        let reader = std::thread::spawn(move || {
+            guard_reader(&tx, || panic!("synthetic input reader failure"));
+        });
+        let result = tokio::time::timeout(Duration::from_secs(1), stop(rx, false)).await?;
+        assert!(reader.join().is_ok());
+        assert!(matches!(result, Err(Failure::Internal)));
+        assert!(matches!(&*retained_sender.borrow(), Input::InternalFault));
+        Ok(())
+    }
     struct BlockedWriter {
         release: mpsc::Receiver<()>,
         done: Option<oneshot::Sender<()>>,
@@ -359,12 +392,19 @@ mod tests {
         let (done, joined) = oneshot::channel();
         let (started, writing) = oneshot::channel();
         let output = Arc::new(Output::spawn_with(BlockedWriter {
-            release: rx, done: Some(done), started: Some(started),
+            release: rx,
+            done: Some(done),
+            started: Some(started),
         })?);
         let (tx, input) = watch::channel(Input::Waiting);
         let mut task = tokio::spawn(execute(
-            Arc::new(Identity::generate()?), Mode::Offer("127.0.0.1:0".parse()?),
-            Inputs { tx: tx.clone(), rx: input }, output.clone(),
+            Arc::new(Identity::generate()?),
+            Mode::Offer("127.0.0.1:0".parse()?),
+            Inputs {
+                tx: tx.clone(),
+                rx: input,
+            },
+            output.clone(),
             Instant::now() + pairing::OFFER_LIFETIME,
         ));
         writing.await?;
@@ -372,7 +412,10 @@ mod tests {
         let early = tokio::time::timeout(Duration::from_secs(1), &mut task).await;
         let timely = early.is_ok();
         let _ = release.send(());
-        let outcome = match early { Ok(result) => result?, Err(_) => task.await? };
+        let outcome = match early {
+            Ok(result) => result?,
+            Err(_) => task.await?,
+        };
         drop(output);
         tokio::time::timeout(Duration::from_secs(1), joined).await??;
         assert!(timely && matches!(outcome, Ok(StopReason::Cancelled)));
@@ -382,18 +425,32 @@ mod tests {
     impl Write for FailedWriter {
         fn write(&mut self, _: &[u8]) -> io::Result<usize> {
             assert!(!self.0, "synthetic output writer panic");
-            Err(io::Error::new(io::ErrorKind::BrokenPipe, "test closed output"))
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "test closed output",
+            ))
         }
-        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
     #[tokio::test]
     async fn writer_failure_and_unexpected_peer_data_cannot_report_success() -> Result<()> {
         for panic in [false, true] {
             let output = Output::spawn_with(FailedWriter(panic))?;
-            assert!(matches!(output.emit(State::Authenticating {}).await, Err(Failure::Internal)));
+            assert!(matches!(
+                output.emit(State::Authenticating {}).await,
+                Err(Failure::Internal)
+            ));
         }
-        assert!(matches!(peer_end(Ok(pairing::PeerEnd::UnexpectedData)), Err(Failure::Protocol)));
-        assert!(matches!(peer_end(Err(anyhow::anyhow!("test malformed TLS"))), Err(Failure::Protocol)));
+        assert!(matches!(
+            peer_end(Ok(pairing::PeerEnd::UnexpectedData)),
+            Err(Failure::Protocol)
+        ));
+        assert!(matches!(
+            peer_end(Err(anyhow::anyhow!("test malformed TLS"))),
+            Err(Failure::Protocol)
+        ));
         Ok(())
     }
     #[tokio::test]

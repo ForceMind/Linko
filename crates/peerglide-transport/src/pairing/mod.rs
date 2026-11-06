@@ -369,10 +369,17 @@ impl PairingSession {
                 match self.stream.read(&mut byte).await {
                     Ok(0) => Ok(PeerEnd::Disconnected),
                     Ok(_) => Ok(PeerEnd::UnexpectedData),
-                    Err(error) if matches!(error.kind(),
-                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
-                        | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe
-                    ) => Ok(PeerEnd::Disconnected),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::UnexpectedEof
+                                | std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::BrokenPipe
+                        ) =>
+                    {
+                        Ok(PeerEnd::Disconnected)
+                    }
                     Err(error) => Err(error.into()),
                 }
             })
