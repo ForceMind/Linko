@@ -1538,3 +1538,43 @@ Mac日志实际列出13项配对回归成功，覆盖：真实握手/错码、�
 配置快照；成功handoff后的关闭/重来须显式cancel，不再只drop Offer。提交前再验证
 Session，不能伪造人工fingerprint确认。持久intent后取消/断线可能为提交未知，不能
 回滚旧授权；配对不自动开通信/native/接收/重连。未完成这些条件不称短码产品可用。
+
+## 独立配对工作进程（2026-11-06）
+
+PR57 / pairing-worker基于3b838ae。隐藏pair-offer/pair-connect仅接受managed私有管道，
+身份只读、短码不走argv/日志，无Native/设置/登记写入。IPC1命令256字节前置限长、
+公开证书事件72KiB；单槽writer两秒确认防停读stdout卡住异步停止，整个child120秒
+绝对期限。Stop/EOF/内部异常终态、预算不随socket重建；异常应用数据Failed/Protocol，
+普通EOF/reset为断开，均使临时Session失效。
+
+运行源码c6aaf2450ec88bda3b3d2927c4881e681fc88715完整五项42236705671及独立上游
+42236705654已全部成功。三平台fmt/strict Clippy/locked工作区测试构建/Release、
+进程/GUI/打包专项及最低1.95/严格审计通过。真实双进程smoke在三平台执行：随机
+身份、实际OPAQUE/TLS及context/双证书匹配、Stop/peer-close/错码/等待code的EOF、
+Code紧接Stop或EOF、同worker五次耗尽无新Listening、超长输入/缺身份与文件不变。
+单元覆盖协议边界、阻塞stdout时Stop、writer/任务/计算/reader panic与期限，并用真实
+认证TLS额外字节验证proposal失效。新panic hook不打印raw参数但仍Internal/exit1；
+坏stdout不能保证事件送达，父监督器须以EOF/退出失效缓存，不能保留旧Auth状态。
+
+保留失败：da0e722的42235077878 Linux/Windows成功，Mac真实等待code的EOF case
+失败。code分支可能在control下次poll前把Stop返回InvalidCommand；c6独立返回取消，
+发布前核对控制快照、保留Protocol/Internal失败，原取消断言未放宽。此新worker竞态
+不定位历史#10或6.83GB根因。
+
+宿主只解出同源CLI，未提取/注册替换App。artifact13511638062摘要校验通过：
+外85304a4e3431ab0eeaa1aa565a0dcc08fd3ca6e7313c814f2ebfd86dfb4f149b，
+内0df21a4d4b9074cd36349bbf5a14680371015a3646e5f39bac3e2b3eec0a91b5，
+worker4d6c3c2933a115e06c36f681be2ba54ac6177047102f61270d853d043ab7f559。
+strict ad-hoc worker标识/签名/版本通过，不代表Developer ID或TCC。脚本与c6源码
+相同，宿主回环exit0（约0.55秒）、无强制清理/owned CLI残留，临时身份文件不变。
+ignored target仅保留无短码/真实身份内容的provenance/回执；未采RSS、不称内存修复。
+
+| 分类 | 本批状态 |
+|---|---|
+| 已实现并自动验证 | 只读pairing worker/独立IPC/有界生命周期及三平台真实进程smoke |
+| 已实现但实际环境未验收 | 跨主机LAN/网卡/防火墙与真实GUI中的配对/取消体验 |
+| 尚未实现 | 父监督器代次/原身份配置绑定、中文向导、两端登记/回执/提交未知；无Commit命令 |
+| 客观受阻 | 本机无Rust且用户不装；完整C06待Windows当前就绪与本次短测确认 |
+
+原a791445/0.3.4已获权GUI不替换、不再改权限或真实配对，Mac接收仍关。上述结果
+不勾选物理C06，不授自动输入/数据/动作；GUI/持久登记仍冻结，阶段进度不是主目标完成。

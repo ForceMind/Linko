@@ -33,7 +33,7 @@ Reconnecting and Disconnected are finite IPC-v1 states; they never imply resumed
 control. Tests cover a live helper child, a full log queue, stale authentication
 after stop, probe retention and old-config defaults. See ADR-0005.
 
-## Experimental pairing child (in qualification)
+## Experimental read-only pairing child
 
 Hidden pair-offer/pair-connect commands require --managed and non-terminal stdin/
 stdout. They load an existing positively matched identity read-only. No input,
@@ -67,3 +67,10 @@ blocked stderr hook; it does not suppress the failure outcome. Other CLI modes
 and the GUI panic policy are unchanged. There is no commit command in this batch.
 Stop, EOF, expiry and process exit never mean a device was saved. Native C06 and
 GUI pairing/enrollment remain separate, unfinished acceptance.
+
+Runtime c6aaf24 passed five platform/MSRV/audit jobs42236705671 and upstream
+42236705654. Real private-pipe smoke ran on three platforms and the host Mac,
+exit0/no forced cleanup/no owned children, no native input/enrollment/file changes.
+The earlier Mac EOF failure is preserved: code-await could return InvalidCommand
+between select polls. Stop is now a separate cancellation outcome, with a final
+control snapshot check; Protocol/Internal errors remain failures. See VALIDATION.

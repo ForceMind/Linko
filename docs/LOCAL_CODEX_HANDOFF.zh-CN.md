@@ -1079,3 +1079,15 @@ tools/pairing_worker_smoke.py及CLI超时/panic/管道背压回归。transport�
 socket的预算保持入口和空闲断线使Session失效；计算panic单独分类，不当错码重试。
 本机预检仍无Rust，当前尚未编译运行，须完整CI/实际进程smoke后才能称本批通过。
 原a791445已获权App继续保留，Windows当前就绪确认仍待回复，不开启Native。
+
+c6aaf2450ec88bda3b3d2927c4881e681fc88715已过完整五项42236705671及独立上游
+42236705654。真实三平台private-pipe smoke通过：成功/Stop/peer-close/错码/EOF/
+Code紧跟Stop或EOF/同worker五次耗尽/超长输入/缺身份/文件不变。修复了额外TLS
+数据不能吞成正常断开、std reader panic显式InternalFault，以及等待code时Stop不能
+误当InvalidCommand的竞态（终态核对控制快照且保留Protocol/Internal失败）。
+da0e722的Mac真实EOF case曾失败，run42235077878保留，原断言不变后c6通过。
+仅解出CLI（不注册替换App），artifact13511638062内外摘要与strict ad-hoc worker签名
+校验过；详VALIDATION。宿主同脚本回环exit0（0.55秒）、无强制清理/CLI残留，不改
+GUI/TCC/真实profile；私有回执在ignored pairing-worker-c6aaf24。无GUI入口/Commit
+命令，不把IPC Authenticated当授信。下一批接父监督器代次/原身份配置及取消，再补
+两端ADR0008事务/绑定回执/提交未知和中文向导。#10/6.83GB及完整C06仍未解决或验收。
