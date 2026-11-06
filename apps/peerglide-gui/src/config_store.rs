@@ -74,6 +74,15 @@ impl Store {
         Ok((Self { path, expected }, data))
     }
     pub fn save<T: Serialize>(&mut self, data: &T) -> Result<()> {
+        self.save_guarded(data, || Ok(()))
+    }
+    /// Confirmation metadata needs the same final snapshot/cancel check under
+    /// the writer lock, after backup and immediately before atomic replacement.
+    pub(super) fn save_guarded<T: Serialize>(
+        &mut self,
+        data: &T,
+        guard: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         let path = self.path.clone();
         let _lock = lock(&path.with_extension("lock"))?;
         super::enrollment_store::ensure_idle(&path)?;
@@ -82,7 +91,12 @@ impl Store {
             previous.as_deref().map(blake3::hash) == self.expected,
             "其他进程已修改配置，请重新加载后再保存"
         );
-        self.commit(data, previous)
+        let bytes = encode(data)?;
+        backup(&self.path, previous.as_deref())?;
+        guard()?;
+        atomic_write(&self.path, &bytes)?;
+        self.expected = Some(blake3::hash(&bytes));
+        Ok(())
     }
     /// The caller holds the GUI owner lock. Keep the settings lock across the
     /// journal and both public-file replacements, never across native callbacks.

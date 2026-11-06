@@ -1091,3 +1091,78 @@ da0e722的Mac真实EOF case曾失败，run42235077878保留，原断言不变后
 GUI/TCC/真实profile；私有回执在ignored pairing-worker-c6aaf24。无GUI入口/Commit
 命令，不把IPC Authenticated当授信。下一批接父监督器代次/原身份配置及取消，再补
 两端ADR0008事务/绑定回执/提交未知和中文向导。#10/6.83GB及完整C06仍未解决或验收。
+
+## 46. B2父监督器与登记闭环接线（2026-11-06，开发中）
+
+pairing-gui基于ba909eb/PR57（该精确HEAD五项42239541332及上游42239541345已过）。
+新增GUI纯IO父监督器：独立有界队列、owned child/单调代次、Stop/EOF/异常优先于
+缓存Auth、代码不走日志、停后复用禁止；只有只读NoNative子进程能用3秒后kill回收。
+CLI integration test直接编译GUI监督器源码并通过CARGO_BIN_EXE运行真实CLI，非伪造
+Authenticated fixture；build路径不是对端认证。当前仅源码，尚待CI；GUI/保存未开放。
+全闭环仍需：v2拒旧pairing v1（输入v5不动）；双方Approve/Prepare才请求本地Save，
+本地ADR0008写Pending后方可LocalSaved，收到同context对端Saved才持久Confirmed。
+Pending实际阻止全部会话入口；最终原配置hash/旧peer/完整local DER/可用身份复查
+与一次性save-claim放持settings锁、备份后/journal创建前，与Cancel原子排序；claim
+后取消/失败不回滚旧信任。Saved通知丢失为未知，重启只恢复Pending、不重造Session。
+对端Prepare/Saved可能先到，应有界记住；本地命令严格阶段且允许位先于提示事件。
+Confirmed只表示本机保存双方Saved证据；一端正常退出不能抹掉已验证PeerSaved。
+None receipt省略保旧格式，未知/矛盾receipt保只读，撤销/更换后旧回执不能复活。
+
+父监督器9af2d1d最低1.95已编译，平台fmt差异按共享路径去重应用为0e9fd34，正式
+CI42245089202仍待回读。随后开始v2网络提交原语：PGPAIR02/context2/独立ALPN2拒旧
+v1，输入v5保持；同Session转移原deadline、持续reader+2槽队列、有角色/完整context
+绑定Prepared/Saved，不做任何文件写入。当前源码尚待编译/回归，worker的Approve/
+LocalSaved/ReceiptStored状态、parent事务save-claim及中文向导仍须继续实际接通。
+
+9eaa124后继续实现worker提交状态：私有IPC2（256字节data/独立terminal watch）只按
+atomic阶段一次接受Code/Approve/LocalSaved/ReceiptStored，提示事件前先开放阶段。
+实际node context+角色绑定，双方Prepared后ReadyToSave，真实父保存应答才发Saved，
+正常远端EOF不抹掉PeerSaved，ReceiptStored后Completed。仍无child文件写入，GUI
+还未发这些命令。新增pairing_commit_smoke真实管道/TLS但synthetic parent save acks，
+不能当磁盘/GUI登记通过。单独pairing_receipt元数据模块已由子任务写好，尚未接Config
+或编译；后续须Pending拦实际启动、事务内snapshot+claim及Confirmed语义全部落地。
+
+## 47. 中文短码/真实事务闭环初版（2026-11-07，未验收）
+
+0.3.5-dev源码已接Panel中文显示/输入短码→实际owned child核验→双方记住→Pending→
+PeerSaved/Confirmed。新增SaveClaim/ReceiptClaim：IO终态异步失效，claim在持锁backup
+后/journal前消耗；原raw/旧peer/完整local DER/真实key匹配复查。不复用手工指纹
+变量，不从磁盘context恢复Session。Pending深层拒communication/probe/native及
+request_native，旧/未来/矛盾收据只读；交互式reset也走原两文件事务与stale guard。
+None字段省略保旧配置，Confirmed不自动开任何授权，完成后可重开配对（已修Completed
+展示状态未reset的问题）。独立parent模块实际读队列与RootFS桥接，仍仅NoNative child
+能kill回收，普通input worker的Unknown/恢复不变。
+新增mandatory post-release GUI模型专项：用匹配CLI真实两profile/事务/重启验证，
+含claim前Cancel/EOF/坏key拒写、claim后取消仅Pending，Pending真实启动入口拒绝、
+未来receipt与外部改写不能reset覆盖。默认workspace编译但ignore该专项，CI必须另行
+--ignored且严格检查exactly1 passed/0 ignored；未运行不算通过。无显示模型不代替
+真实GUI/物理C06。当前初版尚未编译运行，须继续Clippy/格式/测试/修复和原生界面检查；
+原a791445已获权真实试跑App/配对不动，不要求用户现在重加权限。
+
+0.3.5后续CI修复：fafca37已过最低1.95；0a3b9f5把共享测试模块公开以保严格Clippy，
+e241/babdf改用95兼容CAS循环替代新stable弃用fetch_update，d879/c7c2更新新向导入口
+断言并保留只读/不创建身份/会话边界。c7c2dee的42263446899已过Linux工作区测试、
+最低1.95与审计，仍在平台流程；v2 exchange在丢LocalSaved场景返回Failed/Protocol，
+原脚本期待普通Stopped。现改明确定义CommitUnknown：Ready后缺对端保存事实又断线
+不当作协议攻击或成功取消，绝不补造PeerSaved/Completed；脚本严格期待Unknown/exit1。
+这次新修复仍须重跑消息交换和mandatory实际GUI模型，尚未完成验收。当前测试/CI
+状态在PR58回读，不把ignored GUI模型专项或synthetic save ack脚本算实际登记通过。
+
+d3bf45e已过完整五项42265327473及三平台mandatory实际GUI模型（Mac日志exactly1
+passed/0 ignored，约2.33秒），v2失通知严格Unknown通过。Mac产物13526254824外
+c2fc57e7bdf265cefef3d61a5369d76c015ca828af2d8bc558814b1ecbdd7290、内d375fb9269e1d306234d1cd222ac89dfb4695fee5b3a09d46afa34712fec7183，
+安全解压/strict ad-hoc整包签名metadata验证过。原生GUI单端隔离试开已见中文Home/
+短码面板、通过UI创建临时身份、空地址校验、关闭/退出；未开监听/配对/Native，未改
+真实profile/TCC，临时profile无settings/trusted-peer文件，无残留；约105秒峰RSS
+124960KiB（不作旧事故修复结论）。发现陈旧“短码未提供”、busy被误当只读、地址英文
+错误；现修分离只读/配对/Pending展示和中文不回显解析，须新精确候选CI/界面复查。
+原生双端保存点击/Windows GUI/物理C06仍未验收。私有收据在pairing-gui-d3bf45e。
+
+修复候选32f816c五项42269528542、驻留42269528320及上游42269528471全过；三平台
+mandatory真实GUI模型仍严格1 passed/0 ignored。Mac同SHA包13527989729摘要及strict
+ad-hoc整包验证通过，临时profile原生复查首页短码文案/面板/空地址中文/关闭及CmdQ
+退出，47.75秒峰RSS130352KiB，无settings/peer-trust/监听/Native/进程残留；busy标题
+被固定面板遮挡仅计自动语义回归。首次复查到180秒guard停止，随后独立复查正常退出，
+保留两份收据不混同。未改真实profile/TCC，不定位旧6.83GB或#10；仍待双端原生及C06。
+Windows同源包13528987789已下载及核对内外摘要，宿主未运行；32f816c两端冻结包
+继续用于试跑，后续纯记录提交不替换已核验运行包，也不要求重新登记系统权限。

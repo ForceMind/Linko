@@ -25,6 +25,10 @@ pub enum Mode {
     Offer(SocketAddr),
     Connect(SocketAddr),
 }
+enum End {
+    Stopped(StopReason),
+    Completed([u8; 32]),
+}
 
 struct PendingOutput {
     event: PairingEvent,
@@ -80,106 +84,110 @@ impl Output {
 #[derive(Clone)]
 enum Input {
     Waiting,
-    Code(Arc<PairingCommand>),
     Stop,
     Invalid,
     InternalFault,
 }
 
 fn guard_reader(tx: &watch::Sender<Input>, read: impl FnOnce()) {
-    // The reader is discarded after unwind; no poisoned IO state is reused.
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).is_err() {
         tx.send_replace(Input::InternalFault);
     }
 }
 struct Inputs {
     rx: watch::Receiver<Input>,
-    tx: watch::Sender<Input>,
+    commands: tokio::sync::mpsc::Receiver<PairingCommand>,
+    expected: Arc<std::sync::atomic::AtomicU8>,
 }
 impl Inputs {
-    fn spawn() -> Result<Self> {
+    fn spawn(offering: bool) -> Result<Self> {
+        use std::sync::atomic::{AtomicU8, Ordering};
         let (tx, rx) = watch::channel(Input::Waiting);
-        let reader_tx = tx.clone();
-        // std thread, not spawn_blocking: a still-open stdin must not keep the
-        // Tokio runtime alive after an expired/failed handshake. No input hooks.
+        let (commands, received) = tokio::sync::mpsc::channel(1);
+        let expected = Arc::new(AtomicU8::new(if offering {
+            0
+        } else {
+            ipc::CommandTag::Code as u8
+        }));
+        let stage = expected.clone();
         std::thread::Builder::new()
             .name("pairing-input".into())
             .spawn(move || {
-                guard_reader(&reader_tx, || {
+                guard_reader(&tx, || {
                     let stdin = io::stdin();
                     let mut reader = stdin.lock();
-                    let mut code_seen = false;
                     loop {
                         match ipc::read_command(&mut reader) {
-                            Ok(Some(command)) if command.entered_code().is_some() && !code_seen => {
-                                code_seen = true;
-                                reader_tx.send_replace(Input::Code(Arc::new(command)));
-                            }
-                            Ok(Some(command)) if command.entered_code().is_none() => {
-                                reader_tx.send_replace(Input::Stop);
+                            Ok(Some(command)) if command.is_stop() => {
+                                tx.send_replace(Input::Stop);
                                 break;
+                            }
+                            Ok(Some(command)) => {
+                                let tag = command.tag() as u8;
+                                if stage
+                                    .compare_exchange(tag, 0, Ordering::AcqRel, Ordering::Acquire)
+                                    .is_err()
+                                    || commands.try_send(command).is_err()
+                                {
+                                    tx.send_replace(Input::Invalid);
+                                    break;
+                                }
                             }
                             Ok(None) => {
-                                reader_tx.send_replace(Input::Stop);
-                                break;
-                            }
-                            Ok(Some(_)) => {
-                                reader_tx.send_replace(Input::Invalid);
+                                tx.send_replace(Input::Stop);
                                 break;
                             }
                             Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-                                reader_tx.send_replace(Input::Invalid);
+                                tx.send_replace(Input::Invalid);
                                 break;
                             }
                             Err(_) => {
-                                reader_tx.send_replace(Input::InternalFault);
+                                tx.send_replace(Input::InternalFault);
                                 break;
                             }
                         }
                     }
                 });
             })?;
-        Ok(Self { rx, tx })
+        Ok(Self {
+            rx,
+            commands: received,
+            expected,
+        })
     }
-    async fn code(&mut self) -> std::result::Result<Option<Arc<PairingCommand>>, Failure> {
-        loop {
-            let state = self.rx.borrow_and_update().clone();
-            match state {
-                Input::Code(code) => {
-                    // Clear the stored code without overwriting a racing Stop.
-                    self.tx.send_if_modified(|state| {
-                        if matches!(state, Input::Code(current) if Arc::ptr_eq(current, &code)) {
-                            *state = Input::Waiting;
-                            true
-                        } else {
-                            false
-                        }
-                    });
-                    return Ok(Some(code));
-                }
-                Input::Stop => return Ok(None),
-                Input::Invalid => return Err(Failure::InvalidCommand),
-                Input::InternalFault => return Err(Failure::Internal),
-                Input::Waiting => (),
-            }
-            self.rx
-                .changed()
-                .await
-                .map_err(|_| Failure::InvalidCommand)?;
+    fn allow(&self, tag: ipc::CommandTag) -> std::result::Result<(), Failure> {
+        use std::sync::atomic::Ordering;
+        self.expected
+            .compare_exchange(0, tag as u8, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| Failure::Internal)
+    }
+    async fn next(&mut self) -> std::result::Result<Option<PairingCommand>, Failure> {
+        let command = self.commands.recv().await;
+        match &*self.rx.borrow() {
+            Input::Stop => Ok(None),
+            Input::Invalid => Err(Failure::InvalidCommand),
+            Input::InternalFault => Err(Failure::Internal),
+            Input::Waiting => command.map(Some).ok_or(Failure::Internal),
+        }
+    }
+    #[cfg(test)]
+    fn fixture(rx: watch::Receiver<Input>) -> Self {
+        let (_, commands) = tokio::sync::mpsc::channel(1);
+        Self {
+            rx,
+            commands,
+            expected: Arc::new(std::sync::atomic::AtomicU8::new(0)),
         }
     }
 }
-async fn stop(
-    mut rx: watch::Receiver<Input>,
-    offering: bool,
-) -> std::result::Result<StopReason, Failure> {
+async fn stop(mut rx: watch::Receiver<Input>) -> std::result::Result<StopReason, Failure> {
     loop {
         match &*rx.borrow_and_update() {
             Input::Stop => return Ok(StopReason::Cancelled),
             Input::Invalid => return Err(Failure::InvalidCommand),
             Input::InternalFault => return Err(Failure::Internal),
-            Input::Code(_) if offering => return Err(Failure::InvalidCommand),
-            _ => (),
+            Input::Waiting => (),
         }
         if rx.changed().await.is_err() {
             return Ok(StopReason::Cancelled);
@@ -200,7 +208,7 @@ pub async fn run(identity: PathBuf, mode: Mode, managed: bool) -> Result<()> {
     let output = Arc::new(Output::spawn()?);
     let outcome = match Identity::load(&identity) {
         Err(_) => Err(Failure::Identity),
-        Ok(identity) => match Inputs::spawn() {
+        Ok(identity) => match Inputs::spawn(matches!(mode, Mode::Offer(_))) {
             Err(_) => Err(Failure::Internal),
             Ok(input) => {
                 let writer = output.clone();
@@ -212,11 +220,18 @@ pub async fn run(identity: PathBuf, mode: Mode, managed: bool) -> Result<()> {
         },
     };
     match outcome {
-        Ok(reason) => {
+        Ok(End::Stopped(reason)) => {
             output
                 .emit(State::Stopped { reason })
                 .await
                 .map_err(|_| anyhow::anyhow!("配对状态通道已关闭"))?;
+            Ok(())
+        }
+        Ok(End::Completed(context)) => {
+            output
+                .emit(State::Completed { context })
+                .await
+                .map_err(|_| anyhow::anyhow!("配对完成回执通道已关闭"))?;
             Ok(())
         }
         Err(reason) => {
@@ -227,8 +242,8 @@ pub async fn run(identity: PathBuf, mode: Mode, managed: bool) -> Result<()> {
 }
 
 async fn supervise(
-    future: impl std::future::Future<Output = std::result::Result<StopReason, Failure>> + Send + 'static,
-) -> std::result::Result<StopReason, Failure> {
+    future: impl std::future::Future<Output = std::result::Result<End, Failure>> + Send + 'static,
+) -> std::result::Result<End, Failure> {
     tokio::spawn(future).await.unwrap_or(Err(Failure::Internal))
 }
 
@@ -238,11 +253,11 @@ async fn execute(
     mut input: Inputs,
     output: Arc<Output>,
     deadline: Instant,
-) -> std::result::Result<StopReason, Failure> {
-    let control = stop(input.rx.clone(), matches!(mode, Mode::Offer(_)));
+) -> std::result::Result<End, Failure> {
+    let control = stop(input.rx.clone());
     let final_control = input.rx.clone();
     let work = async {
-        let mut session = match mode {
+        let session = match mode {
             Mode::Offer(address) => {
                 let listener = TcpListener::bind(address)
                     .await
@@ -268,15 +283,15 @@ async fn execute(
                             let remaining = offer.attempts_remaining();
                             output.emit(State::AttemptRejected { remaining }).await?;
                             if remaining == 0 {
-                                return Ok(StopReason::AttemptsExhausted);
+                                return Ok(End::Stopped(StopReason::AttemptsExhausted));
                             }
                         }
                     }
                 }
             }
             Mode::Connect(address) => {
-                let Some(command) = input.code().await? else {
-                    return Ok(StopReason::Cancelled);
+                let Some(command) = input.next().await? else {
+                    return Ok(End::Stopped(StopReason::Cancelled));
                 };
                 let code = command
                     .entered_code()
@@ -297,33 +312,38 @@ async fn execute(
                     })?
             }
         };
-        authenticated(&mut session, &identity, &output).await
+        authenticated(session, &identity, &output, &mut input).await
     };
     let result = tokio::select! {
         biased;
-        result = control => result,
-        _ = tokio::time::sleep_until(deadline) => Ok(StopReason::Expired),
+        result = control => result.map(End::Stopped),
+        _ = tokio::time::sleep_until(deadline) => Ok(End::Stopped(StopReason::Expired)),
         result = work => result,
     };
     // select's bias orders polls, not updates made by the stdin thread between
     // polls. Reconcile the final control snapshot before publishing a result.
     // Protocol/internal failures remain failures even if Stop races them.
-    if matches!(result, Err(Failure::Protocol | Failure::Internal)) {
+    if matches!(
+        result,
+        Err(Failure::Protocol | Failure::Internal | Failure::CommitUnknown) | Ok(End::Completed(_))
+    ) {
         return result;
     }
     let state = final_control.borrow().clone();
     match state {
-        Input::Stop => Ok(StopReason::Cancelled),
+        Input::Stop => Ok(End::Stopped(StopReason::Cancelled)),
         Input::Invalid => Err(Failure::InvalidCommand),
         Input::InternalFault => Err(Failure::Internal),
         _ => result,
     }
 }
 async fn authenticated(
-    session: &mut PairingSession,
+    session: PairingSession,
     identity: &Identity,
     output: &Output,
-) -> std::result::Result<StopReason, Failure> {
+    input: &mut Inputs,
+) -> std::result::Result<End, Failure> {
+    input.allow(ipc::CommandTag::Approve)?;
     output
         .emit(State::Authenticated {
             certificate: session
@@ -334,8 +354,112 @@ async fn authenticated(
             local_fingerprint: identity.fingerprint(),
         })
         .await?;
-    // No commit command exists in this batch. Do not imply persistence or grant.
-    peer_end(session.wait_peer_end().await)
+    let mut channel = session
+        .into_commit_channel()
+        .map_err(|_| Failure::Protocol)?;
+    let context = channel.context();
+    let mut approved = false;
+    let mut prepared = false;
+    let mut ready = false;
+    let mut saved = false;
+    let mut peer_saved = false;
+    let mut receipt = false;
+    let mut closed = false;
+    loop {
+        if approved && prepared && !ready {
+            input.allow(ipc::CommandTag::LocalSaved)?;
+            output.emit(State::ReadyToSave { context }).await?;
+            ready = true;
+        }
+        if saved && peer_saved && !receipt {
+            input.allow(ipc::CommandTag::ReceiptStored)?;
+            output.emit(State::PeerSaved { context }).await?;
+            receipt = true;
+        }
+        enum Incoming {
+            Peer(Result<pairing::commit::Message>),
+            Local(std::result::Result<Option<PairingCommand>, Failure>),
+        }
+        let event = tokio::select! {
+            biased;
+            message = channel.receive(), if !closed => Incoming::Peer(message),
+            command = input.next() => Incoming::Local(command),
+        };
+        match event {
+            Incoming::Peer(Ok(pairing::commit::Message::Prepared)) => prepared = true,
+            Incoming::Peer(Ok(pairing::commit::Message::Saved)) if approved && prepared => {
+                peer_saved = true
+            }
+            Incoming::Peer(Ok(pairing::commit::Message::Closed)) => {
+                closed = true;
+                if !peer_saved {
+                    if ready {
+                        return Err(Failure::CommitUnknown);
+                    }
+                    return peer_end(Ok(pairing::PeerEnd::Disconnected)).map(End::Stopped);
+                }
+            }
+            Incoming::Peer(Err(error)) if ready && expected_disconnect(&error) => {
+                return Err(Failure::CommitUnknown)
+            }
+            Incoming::Peer(_) => return Err(Failure::Protocol),
+            Incoming::Local(Err(error)) => return Err(error),
+            Incoming::Local(Ok(None)) => return Ok(End::Stopped(StopReason::Cancelled)),
+            Incoming::Local(Ok(Some(command))) => {
+                if command.context() != Some(context) {
+                    return Err(Failure::Protocol);
+                }
+                match command.tag() {
+                    ipc::CommandTag::Approve if !approved => {
+                        approved = true;
+                        channel.prepare().await.map_err(|_| Failure::Protocol)?;
+                    }
+                    ipc::CommandTag::LocalSaved if ready && !saved => {
+                        saved = true;
+                        if let Err(error) = channel.saved().await {
+                            // Keep valid peer-saved evidence already read before
+                            // closure; it is not a new live authentication ticket.
+                            while let Some(fact) = channel.buffered_fact() {
+                                match fact {
+                                    Ok(pairing::commit::Message::Saved) if approved && prepared => {
+                                        peer_saved = true
+                                    }
+                                    Ok(pairing::commit::Message::Closed) => (),
+                                    _ => return Err(Failure::Protocol),
+                                }
+                            }
+                            if !peer_saved {
+                                return Err(if expected_disconnect(&error) {
+                                    Failure::CommitUnknown
+                                } else {
+                                    Failure::Protocol
+                                });
+                            }
+                            closed = true;
+                        }
+                    }
+                    ipc::CommandTag::ReceiptStored if receipt && saved && peer_saved => {
+                        return Ok(End::Completed(context))
+                    }
+                    _ => return Err(Failure::InvalidCommand),
+                }
+            }
+        }
+    }
+}
+
+fn expected_disconnect(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::NotConnected
+                | io::ErrorKind::TimedOut
+        )
+    })
 }
 
 fn peer_end(result: Result<pairing::PeerEnd>) -> std::result::Result<StopReason, Failure> {
@@ -355,7 +479,7 @@ mod tests {
         let reader = std::thread::spawn(move || {
             guard_reader(&tx, || panic!("synthetic input reader failure"));
         });
-        let result = tokio::time::timeout(Duration::from_secs(1), stop(rx, false)).await?;
+        let result = tokio::time::timeout(Duration::from_secs(1), stop(rx)).await?;
         assert!(reader.join().is_ok());
         assert!(matches!(result, Err(Failure::Internal)));
         assert!(matches!(&*retained_sender.borrow(), Input::InternalFault));
@@ -417,10 +541,7 @@ mod tests {
         let mut task = tokio::spawn(execute(
             Arc::new(Identity::generate()?),
             Mode::Offer("127.0.0.1:0".parse()?),
-            Inputs {
-                tx: tx.clone(),
-                rx: input,
-            },
+            Inputs::fixture(input),
             output.clone(),
             Instant::now() + pairing::OFFER_LIFETIME,
         ));
@@ -435,7 +556,7 @@ mod tests {
         };
         drop(output);
         tokio::time::timeout(Duration::from_secs(1), joined).await??;
-        assert!(timely && matches!(outcome, Ok(StopReason::Cancelled)));
+        assert!(timely && matches!(outcome, Ok(End::Stopped(StopReason::Cancelled))));
         Ok(())
     }
     struct FailedWriter(bool);
@@ -472,17 +593,17 @@ mod tests {
     }
     #[tokio::test]
     async fn absolute_worker_expiry_and_task_panic_are_terminal() -> Result<()> {
-        let (tx, rx) = watch::channel(Input::Waiting);
+        let (_tx, rx) = watch::channel(Input::Waiting);
         let output = Arc::new(Output::spawn_with(io::sink())?);
         let result = execute(
             Arc::new(Identity::generate()?),
             Mode::Offer("127.0.0.1:0".parse()?),
-            Inputs { tx, rx },
+            Inputs::fixture(rx),
             output,
             Instant::now() + Duration::from_millis(10),
         )
         .await;
-        assert!(matches!(result, Ok(StopReason::Expired)));
+        assert!(matches!(result, Ok(End::Stopped(StopReason::Expired))));
         let result = supervise(async { panic!("synthetic pairing task failure") }).await;
         assert!(matches!(result, Err(Failure::Internal)));
         Ok(())

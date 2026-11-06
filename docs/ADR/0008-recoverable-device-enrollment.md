@@ -56,7 +56,25 @@ Cover stale/future settings, changed peer/local identity, checksum/grant tamperi
 oversized/invalid records, second GUI ownership and backup collisions. These are
 disk/process tests, not physical C06 or a complete security audit.
 
-The caller is still the explicitly confirmed manual enrollment UI. No short code,
-PAKE verifier, fixture authorization, TLS exception, new input hook, data grant,
-OS permission or protocol migration is introduced. A later PAKE path needs its own
-reviewed authentication/commit receipt, not a fabricated manual confirmation.
+The original caller was the explicitly confirmed manual enrollment UI. The
+experimental0.3.5 path now adds a guarded entry for real pairing-v2 workers; it
+does not fabricate the manual fingerprint confirmation. Its one-shot save claim
+and raw-settings/old-peer/full-local-DER/key-match checks run under the settings
+lock after backup and before journal creation. Cancel before claim prevents the
+intent; accepted claim may finish as Pending/unknown after cancellation.
+
+Optional pairing_receipt metadata is inside the existing settings bytes and thus
+the same journal. Initial enrollment may record only Pending, with native/receive/
+reconnect closed; Pending blocks actual ordinary session entry points. Previous
+and next receipts must match the journal's real public identities. Confirmation
+updates settings under a guarded writer lock only after same-context PeerSaved
+evidence; it cannot revive revoked/replaced trust. None is omitted for legacy
+format compatibility. Older GUIs reject the added field read-only; finish/review
+this flow with the matching new GUI before using an older one on such a profile.
+
+Restart only recovers Pending, never reconstructs a Session from disk context or
+auto-confirms. Confirmed means local evidence of both Saved reports, not globally
+atomic completion or proof the peer also stored confirmation. Journal recovery,
+advisory/source qualification and GUI-model/crash/cancel tests remain distinct;
+see ADR0010 and VALIDATION for tested versus in-progress scope. No TLS exception,
+new input hook, data/action grant or OS permission is introduced.

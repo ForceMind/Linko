@@ -47,7 +47,7 @@ Plain TCP carries only bounded public bootstrap fields and standard PAKE message
 It does not confer trust. Frames are u32 length (tag included), one-byte expected
 tag, and payload; unknown order/version, oversized/truncated/trailing fields fail.
 The OPAQUE decoder must also roundtrip all bytes, rejecting prefix-only parses.
-Bootstrap magic is `PGPAIR01`, then 32-byte attempt/offer ID, u32 DER size, exact
+Bootstrap magic is now `PGPAIR02`, then 32-byte attempt/offer ID, u32 DER size, exact
 DER. Client/server roles use distinct tags. No unbounded or buffered pre-reader.
 
 Client writes complete KE3 only after its standard finish succeeds, then upgrades
@@ -59,7 +59,7 @@ entry deadline. Cancellation/expiry is checked again before returning a result.
 
 TLS uses independent per-attempt config, normal rustls/ring signature and server
 name checks, exact authenticated DER roots, required client certificate, TLS1.3,
-and distinct mandatory `peerglide-pairing/1` ALPN. Resumption/tickets/early data are
+and distinct mandatory `peerglide-pairing/2` ALPN. Resumption/tickets/early data are
 disabled. After handshake, verify full leaf DER, TLS version and ALPN again.
 Both sides send their role-specific ready frame containing the entire canonical
 context inside TLS, flush and verify the opposite role/context before returning a
@@ -130,3 +130,38 @@ separate upstream test job42228351494. Fixed KSF compatibility, actual network
 authentication and negative/cancellation cases passed. This qualifies the scoped
 experimental network foundation only, not GUI enrollment or a production security
 review. See VALIDATION for exact evidence and unfinished integration requirements.
+
+## Durable GUI integration constraints (planned, not yet enabled)
+
+The parent supervisor is a separate owned-child channel. Its Authenticated
+observation is not a save capability. Pending enrollment must block real session
+start paths, not just receiving/native/reconnect preferences or disabled buttons.
+The final snapshot/identity checks and one-shot save claim belong inside the
+settings-locked ADR0008 operation, after backups and before creating the journal.
+Cancel and claim need one atomic ordering point; accepted intent cannot be undone
+as if cancelled. There is no globally instantaneous cross-machine cancel order.
+
+Both users approve; both children exchange role-specific Prepare before asking
+their parents to save. Only a fully successful local transaction may emit Saved.
+Pending receipt metadata should be journaled within settings; restart must not
+reconstruct Session or auto-confirm. Lost LocalSaved notification stays unknown.
+Peer Prepare/Saved may arrive before local approval/save and needs bounded storage;
+local commands remain phase-specific, with allowed state published before events.
+
+Confirmed means this machine durably recorded evidence of both Saved messages,
+not that the peer also confirmed or both children exited. A later normal EOF must
+not erase verified PeerSaved evidence; later revoke/replacement must invalidate it.
+Version/context/identity inconsistencies remain read-only. The commit channel now
+uses explicit v2 bootstrap/context/ALPN rejection of experimental v1; input v5 and
+the manual fallback remain unchanged. Both devices need the matched v2 candidate
+for this experimental pairing feature, with no fallback to v1 authentication or
+fabricated manual confirmation. Existing input identities are not regenerated.
+
+The experimental channel transfers the same live Session without resetting its
+original deadline, uses one persistent frame reader with a two-item queue, and
+binds role-specific Prepared/Saved frames to the entire authenticated context.
+Cancelling a receive does not discard a partially read length/payload. Saved
+requires local prepare and receipt of peer prepare; duplicate/order/context/role
+violations reject. This messaging primitive does not verify a local filesystem
+save or confer trust: worker approval/ack state, parent save-claim, receipt journal
+and GUI wiring still require implementation and tests before GUI trust writes.

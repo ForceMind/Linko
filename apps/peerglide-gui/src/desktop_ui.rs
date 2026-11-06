@@ -2,10 +2,13 @@
 use super::*;
 impl App {
     fn writable(&self) -> bool {
-        !self.quit_check_mode && self.instance_lock.is_some() && self.config_store.is_some()
+        !self.quit_check_mode
+            && self.instance_lock.is_some()
+            && self.config_store.is_some()
+            && !self.pairing_open
     }
     pub(super) fn idle_writable(&self) -> bool {
-        self.writable() && self.child.is_none() && self.stopping.is_none()
+        self.writable() && self.child.is_none() && self.stopping.is_none() && !self.pairing_open
     }
     pub(super) fn input_label(&self) -> &'static str {
         if self.recovery_blocked {
@@ -46,6 +49,17 @@ impl App {
             });
     }
     fn open_setup(&mut self) {
+        self.native_confirmation = false;
+        self.pending_start = None;
+        self.screen_drag = None;
+        self.confirmed_fingerprint = None;
+        self.wizard = None;
+        self.dialog = None;
+        self.pairing_panel
+            .open(&self.config.peer_name, &self.config.address);
+        self.pairing_open = true;
+    }
+    pub(super) fn open_advanced_setup(&mut self) {
         self.screen_drag = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
@@ -66,8 +80,12 @@ impl App {
     }
     pub(super) fn workspace_view(&self) -> desktop_state::View {
         desktop_state::present(desktop_state::Snapshot {
-            registered: self.config.fingerprint.is_some(),
-            writable: self.writable(),
+            registered: self.config.fingerprint.is_some()
+                && !self.pairing_pending()
+                && self.config_store.is_some(),
+            writable: !self.quit_check_mode
+                && self.instance_lock.is_some()
+                && self.config_store.is_some(),
             running: self.child.is_some(),
             connected: self.connected,
             failed: self.last_failure,
@@ -77,6 +95,8 @@ impl App {
             mode: self.active_mode,
             input: self.input_state,
             native_supported: cfg!(any(windows, target_os = "macos")),
+            pairing: self.pairing_open,
+            pairing_pending: self.pairing_pending(),
         })
     }
     fn native_start_available(&self) -> bool {
@@ -192,7 +212,7 @@ impl App {
                 ui.add_space(14.0);
                 self.work_controls(ui);
                 ui.add_space(14.0);
-                ui.weak("当前连接方式：交换公开连接卡并核对身份。短码配对尚未提供。");
+                ui.weak("推荐使用短码核验并记住设备；高级入口仍可独立核对公开连接信息。");
             });
             return;
         }
@@ -320,14 +340,14 @@ impl App {
                 ui.label("已登记的完整身份指纹");
                 ui.monospace(fp);
             }
-            ui.weak("自动短码配对、多设备和精细多屏拓扑尚未提供。");
+            ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
         });
     }
     fn device_permissions(&mut self, ui: &mut egui::Ui) {
         ui.heading("让另一台电脑控制我");
         ui.label("只影响这台电脑接收键鼠；对方是否接受你的控制，需要它自己同意。");
         ui.add_enabled_ui(
-            self.idle_writable() && self.config.fingerprint.is_some(),
+            self.idle_writable() && self.config.fingerprint.is_some() && !self.pairing_pending(),
             |ui| {
                 if ui
                     .checkbox(&mut self.config.allow, "允许已核验的电脑控制本机键鼠")
@@ -593,7 +613,7 @@ impl App {
                     self.save();
                 }
             });
-            ui.add_enabled_ui(self.idle_writable(), |ui| {
+            ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                 if ui
                     .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
                     .changed()
@@ -727,7 +747,7 @@ impl App {
                 Err(error) => self.notice = error.to_string(),
             }
         }
-        ui.weak("公开信息仍需在对端独立核对完整指纹；不要发送私钥。自动短码配对尚未提供。");
+        ui.weak("高级公开信息需独立核对完整指纹；不要发送私钥。也可返回短码核验流程。");
         ui.label("粘贴另一台电脑的连接卡");
         let changed = egui::ScrollArea::vertical()
             .id_salt("connection-info-text")
@@ -810,7 +830,7 @@ impl App {
                     }
                     SetupStep::Find => {
                         ui.heading("交换连接卡，让两台电脑认识彼此");
-                        ui.label("先在一台复制连接卡，在另一台读取后复制回传，再回到第一台读取。两端各交换一次，之后会记住设备。短码配对尚未提供。");
+                        ui.label("这里是高级人工核验：两端各交换一次公开连接卡，再独立核对完整指纹。普通添加可返回使用短码。");
                         self.connection_exchange_ui(ui);
                         egui::CollapsingHeader::new("高级：设备发现或手动证书登记").show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
@@ -1020,7 +1040,7 @@ impl App {
                     if ui.add_enabled(cfg!(any(windows,target_os="macos"))&&self.writable()&&self.native_confirmation&&self.stopping.is_none()&&!self.recovery_blocked,egui::Button::new("确认并开启键鼠")).clicked(){let result=self.request_native();let success=result.is_ok();self.feedback(result,"正在准备真实键鼠会话，输入归属等待进程报告。");if success{self.dialog=None;}}
                 },
                 Dialog::Revoke=>{ui.label("停止会话并清除对端信任与本机接收许可。保留本机身份；下次需重新核验。");if ui.button("撤销并停止会话").clicked(){let result=self.revoke();self.feedback(result,"设备信任已撤销，旧会话正在停止。");self.dialog=None;}},
-                Dialog::Reset=>{ui.label("先备份原设置，再恢复默认并关闭授权。本机身份保持。无效或未来版本不会直接覆盖。");if ui.add_enabled(self.child.is_none()&&self.instance_lock.is_some(),egui::Button::new("确认备份并恢复设置")).clicked(){match config_store::Store::reset::<Config>(self.dir.join("settings.json")){Ok((store,config))=>{self.config_store=Some(store);self.config=config;self.theme(ctx);self.notice="已备份并恢复设置，授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},
+                Dialog::Reset=>{ui.label("先备份设置和设备登记，再恢复默认并撤销信任。本机身份保持；无效或未来版本只读保留。");if ui.add_enabled(self.idle_writable(),egui::Button::new("确认备份并恢复设置")).clicked(){match self.reset_settings(){Ok(())=>{self.theme(ctx);self.notice="已备份并恢复默认，设备信任和授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},
                 Dialog::ForceStop=>{ui.label("仅在正常停止无响应时使用。强制结束不能确认输入已释放，之后本窗口只允许通信诊断。");if ui.button("明确强制结束，保留恢复警告").clicked(){if let Some(child)=self.child.as_mut(){let result=child.kill().map_err(anyhow::Error::from);self.feedback(result,"已请求强制结束，输入恢复未确认。");}
                 if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;}self.pending_start=None;self.dialog=None;}},
                 Dialog::Recovery=>{ui.strong(self.input_label());ui.label("松开物理按键/鼠标按钮，检查两端提示与系统权限。屏跃不会关闭安全防护，也不把退出当恢复成功。进程报告只表示软件路由与清理请求，不代表OS或应用效果已确认。");ui.label("恢复未确认时保留警告。可运行仅通信诊断；新的原生键鼠会话保持禁止。");ui.label("清理失败且原生捕获仍可用时：先松开全部物理按键／按钮，再重新按下并松开Ctrl+Alt+Esc，可请求强制返回。它仍保留未知警告，不证明系统按键已释放。");if self.child.is_some()&&ui.button("再次发送停止请求").clicked(){let result=self.resend_stop();self.feedback(result,"已再次发送停止请求，仍需等待清理结果。");}
@@ -1135,6 +1155,10 @@ impl App {
             });
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
+        let mut pairing = std::mem::take(&mut self.pairing_panel);
+        pairing.ui(self, &ctx);
+        self.pairing_open = pairing.blocks_actions();
+        self.pairing_panel = pairing;
         if let Some((canvas, save)) = self.gesture_lab.inspection() {
             if let Some(path) = self.layout_report.take() {
                 let rect = |r: egui::Rect| [r.min.x, r.min.y, r.width(), r.height()];

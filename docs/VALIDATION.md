@@ -1578,3 +1578,53 @@ ignored target仅保留无短码/真实身份内容的provenance/回执；未采
 
 原a791445/0.3.4已获权GUI不替换、不再改权限或真实配对，Mac接收仍关。上述结果
 不勾选物理C06，不授自动输入/数据/动作；GUI/持久登记仍冻结，阶段进度不是主目标完成。
+
+## 中文短码与双端持久登记（0.3.5-dev，2026-11-07）
+
+PR58已接中文入口、owned parent/worker、v2协商和ADR0008真实事务。Pending收据在
+原settings字节内随journal恢复，实际communication/probe/native/request路径拒绝；
+全部初始授权关闭。SaveClaim/ReceiptClaim只由实际child阶段发出，IO终态/取消原子
+失效，最终snapshot/完整身份/key-match在settings锁内backup后、journal前复查。
+Confirmed只表示本机已记录双方Saved证据，不表示对方也保存了Confirmed。通知丢失
+或取消不能补造回执、回滚旧trust或自动从磁盘context恢复Session。v2拒旧pairing-v1/
+IPC-v1，输入v5不变；两个节点需匹配新候选，旧人工指纹路径保留。
+
+运行源码d3bf45e915cb7a7fbc18b208f1baadbee22932a6五项42265327473、驻留两项
+42265327454、独立上游42265327237全部成功。三平台工作区/进程/打包及mandatory
+GUI模型通过。该模型使用匹配Release CLI、两个真实临时profile、实际PAKE/TLS与
+本地journal，检查claim前坏key/取消/EOF不写主文件，claim先胜后取消仅Pending、
+Pending深入口拒绝、确认/重启一致、私钥不变和全部授权关闭、完成后再开始配对。
+未来receipt/外部改写不能reset覆盖亦有回归。默认workspace中该专项ignored不计
+通过；独立CI脚本严格要求精确测试exactly1 passed/0 ignored（Mac约2.33秒）。
+v2消息交换smoke使用synthetic parent save replies，仅计通信/顺序验收；它不替代
+上述真实文件模型。保留失败：c7c2dee失LocalSaved场景误归Protocol，d3改为明确
+CommitUnknown/exit1；严格禁止伪造PeerSaved/Completed，未放宽为任意终态。
+
+Mac artifact13526254824外c2fc57e7bdf265cefef3d61a5369d76c015ca828af2d8bc558814b1ecbdd7290，
+内d375fb9269e1d306234d1cd222ac89dfb4695fee5b3a09d46afa34712fec7183，安全解压和
+strict ad-hoc整包identity/resource seal通过，不是Developer ID/TCC或完整安全审计。
+宿主原生单端UI在全新临时profile实际打开中文Home/短码面板、创建临时身份、检查
+空地址错误、关闭并退出，无监听/对端登记/Native/系统权限变更。无settings/peer-trust
+文件和残留进程；约105秒峰RSS124960KiB，不定位历史6.83GB或#10根因。
+发现陈旧“短码未提供”、busy误报只读、英文地址错误；已修分离pairing/Pending/
+readonly展示和中文不回显解析，新增语义回归。修复后精确候选32f816c78afcbc0e4e750fa2df4b5b93ca7ed917
+五项42269528542、驻留42269528320及上游42269528471全部成功，三平台mandatory
+实际GUI模型通过。Mac产物13527989729外层aa267fca432de60e41310a0891769c4b8d587cc8e0f89bd394136662c93136d6、
+内层4fec311095837cdfbd7d3bd0e66ad5b16f5fb22cf9b2006685983045e3a54ab5，
+安全解压/strict ad-hoc整包验证通过。复用上述仅含临时身份的隔离profile，实际见到
+推荐短码的中文首页、短码面板、空地址中文提示、关闭返回首页和CmdQ退出；47.75秒
+峰RSS130352KiB，无settings/peer-trust/监听/Native或进程残留。busy状态有自动语义
+回归，但标题被固定面板遮挡，本次不计视觉验收；未修改真实配对或TCC。首次复查
+180秒到界限由guard停止，另次完成上述正常退出；两次记录均保留在ignored target。
+同源Windows产物13528987789外层05edd0b3ca5dc1114df14f56e3abf4707ae8a263bcc0aabd74e331e06f629f4a、
+内层40fe1f6106857083df863697055e121de71ac1df02766f145923b3d0e5554988已下载核对，未在宿主运行。
+
+| 分类 | 本阶段证据 |
+|---|---|
+| 已实现并自动验证 | 中文配对/真实持久事务/回执、claim竞争和重启门槛；32f816c三平台真实模型/五项CI/驻留通过 |
+| 已实现但原生未全验收 | 修复包单端基本GUI已复查；原生双端保存点击、Windows GUI/真实跨主机仍待验 |
+| 尚未实现 | 短码服务自动发现、新增多设备/多屏、G1全局/数据/拖拽/音频及后续发布项 |
+| 客观受阻 | 本机不安装Rust；真实C06待Windows当前就绪及本次短测确认 |
+
+原a791445真实配对/权限保持；尚未合并/发布稳定版，浏览器未验证。CI/模型/单端
+UI不勾物理C06，未宣称整个Goal完成。私有host/provenance记录仅在ignored target。

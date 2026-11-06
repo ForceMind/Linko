@@ -10,6 +10,10 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub const MAX_EVENT_LINE: usize = 72 * 1024;
 pub const MAX_COMMAND_LINE: usize = 256;
+pub const VERSION: u16 = 2;
+pub fn clear_code(code: &mut String) {
+    code.zeroize();
+}
 const MAX_CERTIFICATE: usize = 16 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -29,6 +33,7 @@ pub enum Failure {
     Authentication,
     InvalidCommand,
     Protocol,
+    CommitUnknown,
     Internal,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +59,15 @@ pub enum State {
     Authenticated {
         certificate: Vec<u8>,
         local_fingerprint: String,
+        context: [u8; 32],
+    },
+    ReadyToSave {
+        context: [u8; 32],
+    },
+    PeerSaved {
+        context: [u8; 32],
+    },
+    Completed {
         context: [u8; 32],
     },
     Stopped {
@@ -102,7 +116,7 @@ pub struct PairingEvent {
 impl PairingEvent {
     pub fn new(event: State) -> Self {
         Self {
-            version: 1,
+            version: VERSION,
             kind: EventKind::Pairing,
             event,
         }
@@ -120,7 +134,7 @@ impl PairingEvent {
         }
         serde_json::from_str::<Self>(line)
             .ok()
-            .filter(|event| event.version == 1 && event.event.valid())
+            .filter(|event| event.version == VERSION && event.event.valid())
     }
 }
 
@@ -128,7 +142,19 @@ impl PairingEvent {
 #[serde(tag = "command", deny_unknown_fields)]
 enum Command {
     Code { code: String },
+    Approve { context: [u8; 32] },
+    LocalSaved { context: [u8; 32] },
+    ReceiptStored { context: [u8; 32] },
     Stop {},
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CommandTag {
+    Stop = 0,
+    Code = 1,
+    Approve = 2,
+    LocalSaved = 3,
+    ReceiptStored = 4,
 }
 impl Drop for Command {
     fn drop(&mut self) {
@@ -154,14 +180,14 @@ impl PairingCommand {
             return None;
         };
         valid_code(code).then_some(Self {
-            version: 1,
+            version: VERSION,
             kind: CommandKind::Pairing,
             body,
         })
     }
     pub fn stop() -> Self {
         Self {
-            version: 1,
+            version: VERSION,
             kind: CommandKind::Pairing,
             body: Command::Stop {},
         }
@@ -169,8 +195,44 @@ impl PairingCommand {
     pub fn entered_code(&self) -> Option<&str> {
         match &self.body {
             Command::Code { code } => Some(code),
-            Command::Stop {} => None,
+            _ => None,
         }
+    }
+    pub fn tag(&self) -> CommandTag {
+        match self.body {
+            Command::Code { .. } => CommandTag::Code,
+            Command::Approve { .. } => CommandTag::Approve,
+            Command::LocalSaved { .. } => CommandTag::LocalSaved,
+            Command::ReceiptStored { .. } => CommandTag::ReceiptStored,
+            Command::Stop {} => CommandTag::Stop,
+        }
+    }
+    pub fn context(&self) -> Option<[u8; 32]> {
+        match &self.body {
+            Command::Approve { context }
+            | Command::LocalSaved { context }
+            | Command::ReceiptStored { context } => Some(*context),
+            _ => None,
+        }
+    }
+    fn with_context(body: Command) -> Self {
+        Self {
+            version: VERSION,
+            kind: CommandKind::Pairing,
+            body,
+        }
+    }
+    pub fn approve(context: [u8; 32]) -> Self {
+        Self::with_context(Command::Approve { context })
+    }
+    pub fn local_saved(context: [u8; 32]) -> Self {
+        Self::with_context(Command::LocalSaved { context })
+    }
+    pub fn receipt_stored(context: [u8; 32]) -> Self {
+        Self::with_context(Command::ReceiptStored { context })
+    }
+    pub fn is_stop(&self) -> bool {
+        matches!(self.body, Command::Stop {})
     }
     pub fn line(&self) -> Zeroizing<String> {
         Zeroizing::new(serde_json::to_string(self).expect("closed pairing command"))
@@ -179,9 +241,9 @@ impl PairingCommand {
         if line.len() > MAX_COMMAND_LINE {
             return None;
         }
-        serde_json::from_str::<Self>(line)
-            .ok()
-            .filter(|command| command.version == 1 && command.entered_code().is_none_or(valid_code))
+        serde_json::from_str::<Self>(line).ok().filter(|command| {
+            command.version == VERSION && command.entered_code().is_none_or(valid_code)
+        })
     }
 }
 
@@ -215,6 +277,35 @@ fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid pairing command")
 }
 
+/// Pairing stdout is a separate bounded channel, never an ordinary log line.
+pub fn read_event(reader: &mut impl BufRead) -> io::Result<Option<PairingEvent>> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(invalid())
+            };
+        }
+        let end = chunk.iter().position(|byte| *byte == b'\n');
+        let count = end.unwrap_or(chunk.len());
+        if bytes.len() + count > MAX_EVENT_LINE {
+            return Err(invalid());
+        }
+        bytes.extend_from_slice(&chunk[..count]);
+        reader.consume(count + usize::from(end.is_some()));
+        if end.is_some() {
+            return std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(PairingEvent::parse)
+                .map(Some)
+                .ok_or_else(invalid);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,8 +326,9 @@ mod tests {
             .entered_code()
             .is_none());
         for bad in [
-            r#"{"version":2,"kind":"pairing_command","body":{"command":"Stop"}}"#,
-            r#"{"version":1,"kind":"pairing_command","body":{"command":"Stop","extra":true}}"#,
+            r#"{"version":3,"kind":"pairing_command","body":{"command":"Stop"}}"#,
+            r#"{"version":2,"kind":"pairing_command","body":{"command":"Stop","extra":true}}"#,
+            r#"{"version":1,"kind":"pairing_command","body":{"command":"Stop"}}"#,
             "stop",
             "log {\"version\":1}",
         ] {
@@ -290,5 +382,18 @@ mod tests {
         assert!(bad.line().is_none());
         assert!(PairingEvent::parse(&" ".repeat(MAX_EVENT_LINE + 1)).is_none());
         assert!(PairingEvent::parse(&PairingCommand::stop().line()).is_none());
+        let mut framed = event.line().unwrap();
+        framed.push('\n');
+        assert!(read_event(&mut io::Cursor::new(framed.as_bytes()))
+            .unwrap()
+            .is_some());
+        for bytes in [
+            vec![b' '; MAX_EVENT_LINE + 1],
+            vec![255, b'\n'],
+            b"{}".to_vec(),
+        ] {
+            assert!(read_event(&mut io::Cursor::new(bytes)).is_err());
+        }
+        assert!(read_event(&mut io::Cursor::new(b"")).unwrap().is_none());
     }
 }
