@@ -368,13 +368,16 @@ impl App {
         };
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
         let (local, peer) = screen_rects(rect, &self.config.edge);
+        let interaction_canvas = rect.intersect(ui.clip_rect());
         if !editable
             || !ui.input(|i| i.focused)
-            || self.screen_drag.is_some_and(|(_, _, old)| old != rect)
+            || self
+                .screen_drag
+                .is_some_and(|(_, _, old)| old != interaction_canvas)
         {
             self.screen_drag = None;
         }
-        let response = ui.interact(
+        let _ = ui.interact(
             peer,
             ui.scope_id().with("peer-display"),
             if editable {
@@ -383,17 +386,33 @@ impl App {
                 egui::Sense::hover()
             },
         );
-        if response.drag_started() {
-            if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
-                self.screen_drag = Some((origin - peer.center(), peer.center(), rect));
-            }
-        }
-        if response.dragged() {
-            if let (Some((offset, center, _)), Some(pointer)) =
-                (self.screen_drag.as_mut(), response.interact_pointer_pos())
-            {
-                *center = pointer - *offset;
-            }
+        // Window-local ordered events preserve a down/move/up batch even when egui's
+        // frame-level drag response no longer retains the original press position.
+        let (focused, down, events) =
+            ui.input(|i| (i.focused, i.pointer.primary_down(), i.events.clone()));
+        let layer = ui.layer_id();
+        let own_press = events.iter().all(|event| match event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } => ui.ctx().layer_id_at(*pos) == Some(layer),
+            _ => true,
+        });
+        let edge = update_layout_drag(
+            &mut self.screen_drag,
+            &events,
+            peer,
+            local,
+            interaction_canvas,
+            editable && focused && own_press,
+            down,
+        );
+        if let Some(edge) = edge {
+            self.config.edge = edge.into();
+            self.save();
+            ui.ctx().request_repaint();
         }
         let displayed = self.screen_drag.map_or(peer, |(_, center, _)| {
             egui::Rect::from_center_size(center, peer.size())
@@ -428,16 +447,6 @@ impl App {
                 && self.input_state == Some(WorkerInputState::ControllingRemote),
             self.config.dark,
         );
-        if response.drag_stopped() {
-            if let Some((_, center, _)) = self.screen_drag.take() {
-                if editable && rect.contains(center) {
-                    if let Some(edge) = dropped_edge(center, local) {
-                        self.config.edge = edge.into();
-                        self.save();
-                    }
-                }
-            }
-        }
         ui.add_space(8.0);
         ui.add_enabled_ui(editable && self.screen_drag.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1118,9 +1127,124 @@ fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
     })
 }
 
+fn update_layout_drag(
+    draft: &mut Option<(Vec2, egui::Pos2, egui::Rect)>,
+    events: &[egui::Event],
+    peer: egui::Rect,
+    local: egui::Rect,
+    canvas: egui::Rect,
+    editable: bool,
+    primary_down: bool,
+) -> Option<&'static str> {
+    if !editable
+        || events
+            .iter()
+            .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+    {
+        *draft = None;
+        return None;
+    }
+    for event in events {
+        match *event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } => {
+                *draft = if peer.contains(pos) && canvas.contains(pos) {
+                    Some((pos - peer.center(), peer.center(), canvas))
+                } else {
+                    None
+                };
+            }
+            egui::Event::PointerMoved(pos) => {
+                if let Some((offset, center, _)) = draft.as_mut() {
+                    *center = pos - *offset;
+                }
+            }
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                ..
+            } => {
+                if let Some((offset, _, original)) = draft.take() {
+                    let center = pos - offset;
+                    if original == canvas && canvas.contains(center) {
+                        return dropped_edge(center, local);
+                    }
+                }
+            }
+            egui::Event::PointerGone
+            | egui::Event::MouseWheel { .. }
+            | egui::Event::PointerButton { .. }
+            | egui::Event::Key {
+                key: egui::Key::Escape,
+                pressed: true,
+                ..
+            } => {
+                *draft = None;
+            }
+            _ => (),
+        }
+    }
+    if !primary_down {
+        *draft = None;
+    }
+    None
+}
+
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+    #[test]
+    fn clipped_press_and_transient_focus_loss_never_commit_a_drag() {
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(500.0, 300.0));
+        let local = egui::Rect::from_center_size(egui::pos2(250.0, 150.0), Vec2::new(100.0, 80.0));
+        let peer = local.translate(Vec2::new(150.0, 0.0));
+        let start = peer.center();
+        let end = egui::pos2(100.0, 150.0);
+        let press = egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        };
+        let release = egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        };
+        let events = vec![
+            press.clone(),
+            egui::Event::PointerMoved(end),
+            release.clone(),
+        ];
+        let mut draft = None;
+        assert_eq!(
+            update_layout_drag(&mut draft, &events, peer, local, canvas, true, false),
+            Some("left")
+        );
+        let clipped = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(320.0, 300.0));
+        assert_eq!(
+            update_layout_drag(&mut draft, &events, peer, local, clipped, true, false),
+            None
+        );
+        let interrupted = vec![
+            press,
+            egui::Event::WindowFocused(false),
+            egui::Event::WindowFocused(true),
+            egui::Event::PointerMoved(end),
+            release,
+        ];
+        assert_eq!(
+            update_layout_drag(&mut draft, &interrupted, peer, local, canvas, true, false),
+            None
+        );
+        assert!(draft.is_none());
+    }
     #[test]
     fn relative_screens_fit_the_canvas_in_all_directions_and_small_windows() {
         for width in [200.0, 320.0, 600.0, 1000.0] {

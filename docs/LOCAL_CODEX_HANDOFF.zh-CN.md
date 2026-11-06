@@ -822,3 +822,66 @@ UI验证profile仍见ignored workspace-b430519/gui-profile.json，是新随机�
 沿用；稳定资料迁移按A3先明确源/目标与冲突后让用户确认，不覆盖默认目录或旧身份。
 B1是已实现/自动验证且部分本机复查，不是整合目标全部完成；主Goal继续active。
 下一项沿A/B基础物理验收、资料入口、认证短码与托盘继续，未确认系统副作用不实施。
+
+
+## 快速布局拖动边界（2026-11-06，验证中）
+
+workspace-drag-boundaries/PR52从9be1d3b继续。c8fb49f及绘制前置补齐后的c837f4f均在
+三平台复现同帧down/move/up未保存，严格断言保持。0.3.1-dev改为仅在本GUI画布中按序
+消费指针事件：有效按下归属/偏移、释放最终位置、只读/失焦/画布变化/离开/滚轮/其他
+按钮/Escape取消；无新全局hook，不修改Native/v5。当前候选待CI，不把此软件复现当
+宿主CUA问题已定位，物理C06仍未验收。本机预检仍因缺Rust停止，不安装。
+
+A3只读盘点确认标准用户资料目录仅有gui-instance.lock，没有身份或配置。四文件迁移
+清单在ignored target/local-validation/profile-migration-proposal/plan.json，源为原私有
+配对profile（不是workspace新测试身份）。迁移单独确认已发，未执行，不能把预选或
+超时视为同意；需重新核对源摘要/目标空、持两端GUI锁、独占创建并保留源，目标将
+native/allow/reconnect置false。Windows短测就绪问题也仍待回复，不自动开启捕获。
+
+
+用户随后明确批准A3迁移。重新检查源四文件摘要/目标仅gui-instance.lock，持源与目标
+GUI独占锁，OpenSSL校验证书与私钥公钥一致后，以独占创建复制四文件到标准用户资料
+目录；目录0700/文件0600并fsync，源摘要前后全相同。目标native/allow/reconnect均false，
+无系统许可变化、无私钥生成或旧文件覆盖。receipt保存在ignored迁移计划旁；不把资料
+复制等同于Native/C06通过。尚需正常GUI默认入口回读，不再要求用户重新配对。
+
+78fba26最初仅Clippy因helper放在test module之后失败（最低Rust编译过、资源两项过），
+现移动helper到测试之前，不增加allow/跳过门槛。窄复核还发现并补上Down必须在可见
+裁剪区/当前命中层、同批WindowFocused(false)即使最终聚焦仍作废；新增对应负例，
+最终候选待完整CI。本批并未证明宿主CUA拖动原因，真实硬件验收仍未运行。
+
+
+A3回读已执行：使用已核验0eb687a包正常入口、不带--data-dir参数，实际GUI显示原
+Windows设备且为未连接/不接收控制，没有再次交换材料或生成身份。120秒保护结束
+空闲进程，峰RSS120640KiB，无残留；未联网/Native/改系统权限。既有身份现在标准
+目录可用，后续常规入口优先标准目录；旧私有profile保留作备份，隔离测试身份禁止
+用于真实Windows连接。回读记录在ignored profile-migration-proposal/gui-readback.json。
+
+dcd49d2最低Rust和审计过，平台job仅fmt因测试向量换行未过，已按CI精确修正；不能
+把未运行的完整平台测试标通过。最终代码与宿主拖动复验仍待当前候选。
+
+
+668493a在CI42166093751已通过三平台fmt/严格Clippy/全部单测（含稳定画布同帧快速
+拖动、裁剪起点和同批失焦负例）、最低Rust和审计，发布构建仍进行，尚不能记完整CI
+通过。生产拖动遗漏已有明确失败→修复证据；不能据此倒推宿主CUA问题根因已定位。
+随后87159ad把同批失焦取消一致应用到未提交Native勾选并加负例，最终CI42166487947
+及驻留42166487907待完成。不要发布或合并未核验候选，不更换已获权包反复授权。
+
+本轮此前Goal turn有B1实际实现/测试/推送证据，属于progress；本轮又复现快速拖动、
+提交修复和负例，并实际完成获准的A3资料迁移/默认GUI回读，仍是progress。Windows
+就绪问题尚待回复，不把资料迁移授权当作Native短测授权；主Goal仍active，全路线未完。
+
+
+0.3.1冻结运行源87159ad已回读完整五项CI42166487947及两平台驻留42166487907均
+success；49fc993仅记录，不改受测代码。Mac匹配artifact13479072548下载后核对外层
+SHA256=b11da41ba42a5fbcfec5f8f882378db9b720db66e4ef46a1e723299784d9dc22、内层
+13969bb40e4b88d73accaf1686342ec090a1c2bf420f2145bc64c70868352969，安全解压/无用户身份/
+strict签名/metadata均过。匹配Windows artifact13479128469，本机不运行Windows程序。
+本机隔离资料正常入口实际观察0.3.1，方向按钮可切left并回right且落盘，native/allow/
+reconnect始终false；宿主自动化drag仍未确认，不能因此宣称其问题根因已定位。132.48秒
+GUI正常退出、峰RSS126896KiB、无候选残留，未联网/Native/系统许可变化；真实双机C06
+仍未验收，6.83GB根因仍未知。包及报告在ignored drag-87159ad，测试身份不用于真实配对。
+
+A3已按用户授权完成且默认GUI回读通过，无需重做配对。真实配对优先标准用户资料
+目录；旧临时/项目资料保留备份。新0.3.1包不保证系统授权沿用，不提前反复索取授权。
+主Goal保持active，后续沿A/B认证配对/托盘及用户就绪后的物理短测继续。

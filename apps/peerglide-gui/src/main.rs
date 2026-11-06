@@ -874,6 +874,9 @@ impl App {
         self.poll();
         if ctx.input(|i| {
             !i.focused
+                || i.events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::WindowFocused(false)))
                 || i.viewport().minimized.unwrap_or(false)
                 || i.viewport().occluded.unwrap_or(false)
         }) {
@@ -1318,9 +1321,27 @@ mod tests {
         step(&mut app, &ctx, 0.6, press(right));
         step(&mut app, &ctx, 0.7, vec![button(right, false)]);
         assert_eq!(app.config.edge, "right");
+        // Paint the new position before pressing it: egui hit testing uses painted geometry.
+        step(&mut app, &ctx, 0.75, vec![]);
+        step(
+            &mut app,
+            &ctx,
+            0.8,
+            vec![
+                egui::Event::PointerMoved(start),
+                button(start, true),
+                egui::Event::PointerMoved(end),
+                button(end, false),
+            ],
+        );
+        assert!(app.screen_drag.is_none());
+        assert_eq!(app.config.edge, "left", "coalesced drag was lost");
+        step(&mut app, &ctx, 0.81, press(right));
+        step(&mut app, &ctx, 0.82, vec![button(right, false)]);
+        assert_eq!(app.config.edge, "right");
         let before = std::fs::read(app.dir.join("settings.json"))?;
         drop(app.instance_lock.take());
-        step(&mut app, &ctx, 0.8, vec![]);
+        step(&mut app, &ctx, 0.85, vec![]);
         step(&mut app, &ctx, 0.9, press(start));
         step(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(end)]);
         step(&mut app, &ctx, 1.1, vec![button(end, false)]);
@@ -1848,6 +1869,17 @@ mod lifecycle_tests {
         assert_eq!(app.config.edge, original);
         assert!(!app.dir.join("settings.json").exists());
         assert!(app.child.is_none());
+        app.native_confirmation = true;
+        let input = egui::RawInput {
+            focused: true,
+            events: vec![
+                egui::Event::WindowFocused(false),
+                egui::Event::WindowFocused(true),
+            ],
+            ..Default::default()
+        };
+        let _ = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
+        assert!(!app.native_confirmation);
         Ok(())
     }
     #[test]
