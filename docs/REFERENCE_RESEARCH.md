@@ -182,3 +182,20 @@ MIT集成和分发许可；本记录区分用户确认的单独授权与仓库�
 42058770247通过，两平台驻留42058770207完成；Mac有physical缺测，原内存事故未定位。
 源码研究没有替代硬件验证。具体证据见VALIDATION；应用与协议源码不因最后记录更新
 而改变，保留同一fd8运行包供最终授权及实机试跑。
+
+## B2认证短码依赖筛选（2026-11-06）
+
+Oink采用的[spake2 0.4.0](https://docs.rs/spake2/0.4.0/spake2/)明确声明没有接受独立
+第三方审计。其MSRV/双许可证满足PG，但不能因RustCrypto或参考项目采用而声称
+“已审计”。[aucpace 0.1.1](https://docs.rs/aucpace/0.1.1/aucpace/)同样声明未独立审计。
+
+[opaque-ke 4.0.1](https://github.com/meta/opaque-ke/blob/v4.0.1/Cargo.toml)声明Rust1.85、
+MIT OR Apache-2.0，是可继续审查的候选。[NCC历史报告](https://www.nccgroup.com/media/0uspzge5/_ncc_group_whatsappllc_opaque_report_2021-12-10_v13.pdf)
+初审v0.5.0/Draft03、主要复测v1.2.0，明确限制更新版本/规范的深入审查；不能自动
+延伸为当前4.0.1/RFC9807已审计，也不为套用旧审计降级依赖。客户端/服务器型aPAKE
+用于临时双机短码的注册、标准context/双方身份绑定及完成回执仍需组合协议审查。
+
+本次仅筛选，没有新增密码学依赖、配对监听或生产短码。后续入口不得放宽现有双向
+TLS固定证书验证，不伪造人工confirmed_fingerprint；旧登记成功、PAKE验证成功与
+双方持久提交成功是三个不同事实。取消/过期/新代次必须废弃迟到结果，尝试预算不随
+断线重置，输入/数据同意独立。登记的证书与配置事务仍需补齐，不称短码已可用。

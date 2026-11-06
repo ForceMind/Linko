@@ -1,6 +1,6 @@
 # ADR-0007: Optional desktop tray and close lifecycle
 
-Status: implementing; Windows/macOS runtime acceptance pending.
+Status: implemented and automatically checked; native runtime acceptance partial/pending.
 
 ## Problem
 
