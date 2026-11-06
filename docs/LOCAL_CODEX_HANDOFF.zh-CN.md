@@ -837,3 +837,15 @@ A3只读盘点确认标准用户资料目录仅有gui-instance.lock，没有身�
 配对profile（不是workspace新测试身份）。迁移单独确认已发，未执行，不能把预选或
 超时视为同意；需重新核对源摘要/目标空、持两端GUI锁、独占创建并保留源，目标将
 native/allow/reconnect置false。Windows短测就绪问题也仍待回复，不自动开启捕获。
+
+
+用户随后明确批准A3迁移。重新检查源四文件摘要/目标仅gui-instance.lock，持源与目标
+GUI独占锁，OpenSSL校验证书与私钥公钥一致后，以独占创建复制四文件到标准用户资料
+目录；目录0700/文件0600并fsync，源摘要前后全相同。目标native/allow/reconnect均false，
+无系统许可变化、无私钥生成或旧文件覆盖。receipt保存在ignored迁移计划旁；不把资料
+复制等同于Native/C06通过。尚需正常GUI默认入口回读，不再要求用户重新配对。
+
+78fba26最初仅Clippy因helper放在test module之后失败（最低Rust编译过、资源两项过），
+现移动helper到测试之前，不增加allow/跳过门槛。窄复核还发现并补上Down必须在可见
+裁剪区/当前命中层、同批WindowFocused(false)即使最终聚焦仍作废；新增对应负例，
+最终候选待完整CI。本批并未证明宿主CUA拖动原因，真实硬件验收仍未运行。

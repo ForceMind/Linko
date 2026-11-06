@@ -368,9 +368,12 @@ impl App {
         };
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
         let (local, peer) = screen_rects(rect, &self.config.edge);
+        let interaction_canvas = rect.intersect(ui.clip_rect());
         if !editable
             || !ui.input(|i| i.focused)
-            || self.screen_drag.is_some_and(|(_, _, old)| old != rect)
+            || self
+                .screen_drag
+                .is_some_and(|(_, _, old)| old != interaction_canvas)
         {
             self.screen_drag = None;
         }
@@ -387,13 +390,23 @@ impl App {
         // frame-level drag response no longer retains the original press position.
         let (focused, down, events) =
             ui.input(|i| (i.focused, i.pointer.primary_down(), i.events.clone()));
+        let layer = ui.layer_id();
+        let own_press = events.iter().all(|event| match event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } => ui.ctx().layer_id_at(*pos) == Some(layer),
+            _ => true,
+        });
         let edge = update_layout_drag(
             &mut self.screen_drag,
             &events,
             peer,
             local,
-            rect,
-            editable && focused,
+            interaction_canvas,
+            editable && focused && own_press,
             down,
         );
         if let Some(edge) = edge {
@@ -1114,38 +1127,6 @@ fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
     })
 }
 
-#[cfg(test)]
-mod layout_tests {
-    use super::*;
-    #[test]
-    fn relative_screens_fit_the_canvas_in_all_directions_and_small_windows() {
-        for width in [200.0, 320.0, 600.0, 1000.0] {
-            let canvas = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), Vec2::new(width, 260.0));
-            for edge in ["left", "right", "top", "bottom"] {
-                let (local, peer) = screen_rects(canvas, edge);
-                assert!(canvas.contains_rect(local));
-                assert!(canvas.contains_rect(peer));
-                assert_eq!(dropped_edge(peer.center(), local), Some(edge));
-                assert_eq!(dropped_edge(local.center(), local), None);
-                assert!(!local.intersects(peer));
-            }
-        }
-    }
-    #[test]
-    fn dropping_over_local_screen_or_nonfinite_position_cannot_change_layout() {
-        let local = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(166.0, 112.0));
-        for center in [
-            local.center(),
-            local.min,
-            local.max,
-            egui::pos2(f32::NAN, 0.0),
-            egui::pos2(0.0, f32::INFINITY),
-        ] {
-            assert_eq!(dropped_edge(center, local), None);
-        }
-    }
-}
-
 fn update_layout_drag(
     draft: &mut Option<(Vec2, egui::Pos2, egui::Rect)>,
     events: &[egui::Event],
@@ -1155,7 +1136,11 @@ fn update_layout_drag(
     editable: bool,
     primary_down: bool,
 ) -> Option<&'static str> {
-    if !editable {
+    if !editable
+        || events
+            .iter()
+            .any(|event| matches!(event, egui::Event::WindowFocused(false)))
+    {
         *draft = None;
         return None;
     }
@@ -1208,4 +1193,79 @@ fn update_layout_drag(
         *draft = None;
     }
     None
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn clipped_press_and_transient_focus_loss_never_commit_a_drag() {
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(500.0, 300.0));
+        let local = egui::Rect::from_center_size(egui::pos2(250.0, 150.0), Vec2::new(100.0, 80.0));
+        let peer = local.translate(Vec2::new(150.0, 0.0));
+        let start = peer.center();
+        let end = egui::pos2(100.0, 150.0);
+        let press = egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        };
+        let release = egui::Event::PointerButton {
+            pos: end,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        };
+        let events = vec![press.clone(), egui::Event::PointerMoved(end), release.clone()];
+        let mut draft = None;
+        assert_eq!(
+            update_layout_drag(&mut draft, &events, peer, local, canvas, true, false),
+            Some("left")
+        );
+        let clipped = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(320.0, 300.0));
+        assert_eq!(
+            update_layout_drag(&mut draft, &events, peer, local, clipped, true, false),
+            None
+        );
+        let interrupted = vec![
+            press,
+            egui::Event::WindowFocused(false),
+            egui::Event::WindowFocused(true),
+            egui::Event::PointerMoved(end),
+            release,
+        ];
+        assert_eq!(
+            update_layout_drag(&mut draft, &interrupted, peer, local, canvas, true, false),
+            None
+        );
+        assert!(draft.is_none());
+    }
+    #[test]
+    fn relative_screens_fit_the_canvas_in_all_directions_and_small_windows() {
+        for width in [200.0, 320.0, 600.0, 1000.0] {
+            let canvas = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), Vec2::new(width, 260.0));
+            for edge in ["left", "right", "top", "bottom"] {
+                let (local, peer) = screen_rects(canvas, edge);
+                assert!(canvas.contains_rect(local));
+                assert!(canvas.contains_rect(peer));
+                assert_eq!(dropped_edge(peer.center(), local), Some(edge));
+                assert_eq!(dropped_edge(local.center(), local), None);
+                assert!(!local.intersects(peer));
+            }
+        }
+    }
+    #[test]
+    fn dropping_over_local_screen_or_nonfinite_position_cannot_change_layout() {
+        let local = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(166.0, 112.0));
+        for center in [
+            local.center(),
+            local.min,
+            local.max,
+            egui::pos2(f32::NAN, 0.0),
+            egui::pos2(0.0, f32::INFINITY),
+        ] {
+            assert_eq!(dropped_edge(center, local), None);
+        }
+    }
 }
