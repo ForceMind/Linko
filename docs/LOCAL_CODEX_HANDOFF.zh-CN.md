@@ -885,3 +885,21 @@ GUI正常退出、峰RSS126896KiB、无候选残留，未联网/Native/系统许
 A3已按用户授权完成且默认GUI回读通过，无需重做配对。真实配对优先标准用户资料
 目录；旧临时/项目资料保留备份。新0.3.1包不保证系统授权沿用，不提前反复索取授权。
 主Goal保持active，后续沿A/B认证配对/托盘及用户就绪后的物理短测继续。
+
+
+## 可选托盘／菜单栏闭环（2026-11-06，开发/验证中）
+
+desktop-tray从a31acf1继续已批准B/U01，版本0.3.2-dev。root负责GUI生命周期/独立
+桌面偏好/文档/CI，复用sol/high的localize_panels独占platform tray及其Cargo feature/
+lib导出，不派其他或递归代理。原生回调只合并Show/Stop/Quit意图并唤醒GUI，无输入
+hook/全局快捷键/脚本/自启。具体决策见ADR-0007。
+
+默认不启用后台保留；启用实际可用入口+单独close-to-tray选择才能隐藏，入口失效
+退回合作停止；Stop/Quit在poll前消费取消queued Native，退出等待旧清理/输出完成，
+未知恢复显示窗口保留警告。DesktopPreferences独立版本化文件，旧settings.json不加
+新字段，旧已获权0.2.4输入GUI仍可读；未来/坏桌面文件保留只读，不隐式开启后台。
+新增真实非Native helper/GUI关闭、退出优先/旧输入升级取消、偏好隔离回归待CI。
+
+本机preflight-20261106T055548243581Z-31189仍因rustc/cargo缺失停止，不安装。新Mac/
+Windows托盘尚未原生验收，Linux明确不支持，不将代码存在/纯测试当平台完成。窗口
+默认资料已完成用户批准迁移，仍不注册启动/服务或改OS许可，也不启动真实Native。

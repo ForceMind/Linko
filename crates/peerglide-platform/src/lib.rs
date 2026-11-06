@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+pub mod tray;
 mod receive_driver;
 pub use receive_driver::{
     ReceiveAck, ReceiveControl, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot,
