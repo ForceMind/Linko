@@ -10,6 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 pub const MAX_EVENT_LINE: usize = 72 * 1024;
 pub const MAX_COMMAND_LINE: usize = 256;
+pub const VERSION: u16 = 2;
 const MAX_CERTIFICATE: usize = 16 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -56,6 +57,9 @@ pub enum State {
         local_fingerprint: String,
         context: [u8; 32],
     },
+    ReadyToSave { context: [u8; 32] },
+    PeerSaved { context: [u8; 32] },
+    Completed { context: [u8; 32] },
     Stopped {
         reason: StopReason,
     },
@@ -102,7 +106,7 @@ pub struct PairingEvent {
 impl PairingEvent {
     pub fn new(event: State) -> Self {
         Self {
-            version: 1,
+            version: VERSION,
             kind: EventKind::Pairing,
             event,
         }
@@ -120,7 +124,7 @@ impl PairingEvent {
         }
         serde_json::from_str::<Self>(line)
             .ok()
-            .filter(|event| event.version == 1 && event.event.valid())
+            .filter(|event| event.version == VERSION && event.event.valid())
     }
 }
 
@@ -128,8 +132,14 @@ impl PairingEvent {
 #[serde(tag = "command", deny_unknown_fields)]
 enum Command {
     Code { code: String },
+    Approve { context: [u8; 32] },
+    LocalSaved { context: [u8; 32] },
+    ReceiptStored { context: [u8; 32] },
     Stop {},
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CommandTag { Stop = 0, Code = 1, Approve = 2, LocalSaved = 3, ReceiptStored = 4 }
 impl Drop for Command {
     fn drop(&mut self) {
         if let Self::Code { code } = self {
@@ -154,14 +164,14 @@ impl PairingCommand {
             return None;
         };
         valid_code(code).then_some(Self {
-            version: 1,
+            version: VERSION,
             kind: CommandKind::Pairing,
             body,
         })
     }
     pub fn stop() -> Self {
         Self {
-            version: 1,
+            version: VERSION,
             kind: CommandKind::Pairing,
             body: Command::Stop {},
         }
@@ -169,9 +179,29 @@ impl PairingCommand {
     pub fn entered_code(&self) -> Option<&str> {
         match &self.body {
             Command::Code { code } => Some(code),
-            Command::Stop {} => None,
+            _ => None,
         }
     }
+    pub fn tag(&self) -> CommandTag {
+        match self.body {
+            Command::Code { .. } => CommandTag::Code,
+            Command::Approve { .. } => CommandTag::Approve,
+            Command::LocalSaved { .. } => CommandTag::LocalSaved,
+            Command::ReceiptStored { .. } => CommandTag::ReceiptStored,
+            Command::Stop {} => CommandTag::Stop,
+        }
+    }
+    pub fn context(&self) -> Option<[u8; 32]> {
+        match &self.body {
+            Command::Approve { context } | Command::LocalSaved { context }
+                | Command::ReceiptStored { context } => Some(*context),
+            _ => None,
+        }
+    }
+    fn with_context(body: Command) -> Self { Self { version: VERSION, kind: CommandKind::Pairing, body } }
+    pub fn approve(context: [u8; 32]) -> Self { Self::with_context(Command::Approve { context }) }
+    pub fn local_saved(context: [u8; 32]) -> Self { Self::with_context(Command::LocalSaved { context }) }
+    pub fn receipt_stored(context: [u8; 32]) -> Self { Self::with_context(Command::ReceiptStored { context }) }
     pub fn is_stop(&self) -> bool {
         matches!(self.body, Command::Stop {})
     }
@@ -184,7 +214,7 @@ impl PairingCommand {
         }
         serde_json::from_str::<Self>(line)
             .ok()
-            .filter(|command| command.version == 1 && command.entered_code().is_none_or(valid_code))
+            .filter(|command| command.version == VERSION && command.entered_code().is_none_or(valid_code))
     }
 }
 
@@ -267,8 +297,9 @@ mod tests {
             .entered_code()
             .is_none());
         for bad in [
-            r#"{"version":2,"kind":"pairing_command","body":{"command":"Stop"}}"#,
-            r#"{"version":1,"kind":"pairing_command","body":{"command":"Stop","extra":true}}"#,
+            r#"{"version":3,"kind":"pairing_command","body":{"command":"Stop"}}"#,
+            r#"{"version":2,"kind":"pairing_command","body":{"command":"Stop","extra":true}}"#,
+            r#"{"version":1,"kind":"pairing_command","body":{"command":"Stop"}}"#,
             "stop",
             "log {\"version\":1}",
         ] {

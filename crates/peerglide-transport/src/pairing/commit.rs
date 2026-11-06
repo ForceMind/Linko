@@ -50,6 +50,11 @@ impl Channel {
     }
     pub fn context(&self) -> [u8; 32] { self.id }
     pub fn check(&self) -> Result<()> { self.lifetime.check() }
+    /// Drain only already authenticated/parsed facts after an output error.
+    /// This is not renewed liveness or permission to start a filesystem write.
+    pub fn buffered_fact(&mut self) -> Option<Result<Message>> {
+        self.incoming.try_recv().ok()
+    }
     pub async fn receive(&mut self) -> Result<Message> {
         let result = self.lifetime.run(async { self.incoming.recv().await.context("pairing reader stopped")? }).await;
         match result {

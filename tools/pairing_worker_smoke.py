@@ -18,6 +18,7 @@ import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MAX_LINE = 72 * 1024
+IPC_VERSION = 2
 
 
 class Child:
@@ -46,7 +47,7 @@ class Child:
                     break
                 try:
                     event = json.loads(line)
-                    if event["version"] != 1 or event["kind"] != "pairing_event":
+                    if event["version"] != IPC_VERSION or event["kind"] != "pairing_event":
                         raise ValueError()
                     body = event["event"]
                     self.names.append(body["state"])
@@ -91,12 +92,12 @@ class Child:
                 reason = body.get("reason")
                 known = {"Identity", "Listen", "Authentication", "InvalidCommand", "Protocol",
                          "Internal", "Cancelled", "Expired", "PeerDisconnected", "AttemptsExhausted"}
-                safe_reason = reason if reason in known else "unrecognized"
+                safe_reason = reason if isinstance(reason, str) and reason in known else "unrecognized"
                 raise RuntimeError("pairing child reached unexpected terminal state: "
                                    + body["state"] + "/" + safe_reason)
 
     def command(self, body):
-        record = {"version": 1, "kind": "pairing_command", "body": body}
+        record = {"version": IPC_VERSION, "kind": "pairing_command", "body": body}
         self.process.stdin.write(json.dumps(record, separators=(",", ":")).encode() + b"\n")
         self.process.stdin.flush()
 
@@ -221,7 +222,7 @@ def main():
                 commands = [{"command": "Code", "code": code}]
                 if ending == "stop":
                     commands.append({"command": "Stop"})
-                frames = b"".join(json.dumps({"version": 1, "kind": "pairing_command", "body": body},
+                frames = b"".join(json.dumps({"version": IPC_VERSION, "kind": "pairing_command", "body": body},
                                            separators=(",", ":")).encode() + b"\n" for body in commands)
                 client.process.stdin.write(frames)
                 client.process.stdin.flush()

@@ -1113,3 +1113,11 @@ CI42245089202仍待回读。随后开始v2网络提交原语：PGPAIR02/context2
 v1，输入v5保持；同Session转移原deadline、持续reader+2槽队列、有角色/完整context
 绑定Prepared/Saved，不做任何文件写入。当前源码尚待编译/回归，worker的Approve/
 LocalSaved/ReceiptStored状态、parent事务save-claim及中文向导仍须继续实际接通。
+
+9eaa124后继续实现worker提交状态：私有IPC2（256字节data/独立terminal watch）只按
+atomic阶段一次接受Code/Approve/LocalSaved/ReceiptStored，提示事件前先开放阶段。
+实际node context+角色绑定，双方Prepared后ReadyToSave，真实父保存应答才发Saved，
+正常远端EOF不抹掉PeerSaved，ReceiptStored后Completed。仍无child文件写入，GUI
+还未发这些命令。新增pairing_commit_smoke真实管道/TLS但synthetic parent save acks，
+不能当磁盘/GUI登记通过。单独pairing_receipt元数据模块已由子任务写好，尚未接Config
+或编译；后续须Pending拦实际启动、事务内snapshot+claim及Confirmed语义全部落地。
