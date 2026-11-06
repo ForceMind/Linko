@@ -469,7 +469,10 @@ mod tests {
             checker.readiness_at(finished + FRESHNESS),
             Readiness::Unchecked
         );
-        assert_eq!(checker.readiness_at(before_observation), Readiness::Unchecked);
+        assert_eq!(
+            checker.readiness_at(before_observation),
+            Readiness::Unchecked
+        );
         assert_eq!(checker.readiness(), Readiness::Unchecked);
         assert!(checker.expires_in().is_none() && !checker.needs_poll());
         checker.result = Some(Observation {
