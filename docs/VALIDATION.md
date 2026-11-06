@@ -1294,3 +1294,18 @@ Mac驻留两场景各约181秒，RSS峰116944/116992KiB，预热后增长992/0Ki
 CI源码差异为空。保留已核验0eb运行包，不为了测试或文档反复更换App代码身份。
 未进行浏览器测试或独立完整安全审计，历史#10与6.83GB根因均未确认。现有短码、
 托盘、G1、数据、音频仍未接通，真实双机键鼠仍未验收，不因此关闭对应Issue。
+
+
+## 快速布局拖动边界（2026-11-06，验证中）
+
+workspace-drag-boundaries/PR52从9be1d3b继续。c8fb49f及绘制前置补齐后的c837f4f均在
+三平台复现同帧down/move/up未保存，严格断言保持。0.3.1-dev改为仅在本GUI画布中按序
+消费指针事件：有效按下归属/偏移、释放最终位置、只读/失焦/画布变化/离开/滚轮/其他
+按钮/Escape取消；无新全局hook，不修改Native/v5。当前候选待CI，不把此软件复现当
+宿主CUA问题已定位，物理C06仍未验收。本机预检仍因缺Rust停止，不安装。
+
+A3只读盘点确认标准用户资料目录仅有gui-instance.lock，没有身份或配置。四文件迁移
+清单在ignored target/local-validation/profile-migration-proposal/plan.json，源为原私有
+配对profile（不是workspace新测试身份）。迁移单独确认已发，未执行，不能把预选或
+超时视为同意；需重新核对源摘要/目标空、持两端GUI锁、独占创建并保留源，目标将
+native/allow/reconnect置false。Windows短测就绪问题也仍待回复，不自动开启捕获。

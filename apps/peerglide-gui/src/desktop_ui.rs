@@ -374,7 +374,7 @@ impl App {
         {
             self.screen_drag = None;
         }
-        let response = ui.interact(
+        let _ = ui.interact(
             peer,
             ui.scope_id().with("peer-display"),
             if editable {
@@ -383,17 +383,23 @@ impl App {
                 egui::Sense::hover()
             },
         );
-        if response.drag_started() {
-            if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
-                self.screen_drag = Some((origin - peer.center(), peer.center(), rect));
-            }
-        }
-        if response.dragged() {
-            if let (Some((offset, center, _)), Some(pointer)) =
-                (self.screen_drag.as_mut(), response.interact_pointer_pos())
-            {
-                *center = pointer - *offset;
-            }
+        // Window-local ordered events preserve a down/move/up batch even when egui's
+        // frame-level drag response no longer retains the original press position.
+        let (focused, down, events) =
+            ui.input(|i| (i.focused, i.pointer.primary_down(), i.events.clone()));
+        let edge = update_layout_drag(
+            &mut self.screen_drag,
+            &events,
+            peer,
+            local,
+            rect,
+            editable && focused,
+            down,
+        );
+        if let Some(edge) = edge {
+            self.config.edge = edge.into();
+            self.save();
+            ui.ctx().request_repaint();
         }
         let displayed = self.screen_drag.map_or(peer, |(_, center, _)| {
             egui::Rect::from_center_size(center, peer.size())
@@ -428,16 +434,6 @@ impl App {
                 && self.input_state == Some(WorkerInputState::ControllingRemote),
             self.config.dark,
         );
-        if response.drag_stopped() {
-            if let Some((_, center, _)) = self.screen_drag.take() {
-                if editable && rect.contains(center) {
-                    if let Some(edge) = dropped_edge(center, local) {
-                        self.config.edge = edge.into();
-                        self.save();
-                    }
-                }
-            }
-        }
         ui.add_space(8.0);
         ui.add_enabled_ui(editable && self.screen_drag.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1148,4 +1144,68 @@ mod layout_tests {
             assert_eq!(dropped_edge(center, local), None);
         }
     }
+}
+
+fn update_layout_drag(
+    draft: &mut Option<(Vec2, egui::Pos2, egui::Rect)>,
+    events: &[egui::Event],
+    peer: egui::Rect,
+    local: egui::Rect,
+    canvas: egui::Rect,
+    editable: bool,
+    primary_down: bool,
+) -> Option<&'static str> {
+    if !editable {
+        *draft = None;
+        return None;
+    }
+    for event in events {
+        match *event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                ..
+            } => {
+                *draft = if peer.contains(pos) && canvas.contains(pos) {
+                    Some((pos - peer.center(), peer.center(), canvas))
+                } else {
+                    None
+                };
+            }
+            egui::Event::PointerMoved(pos) => {
+                if let Some((offset, center, _)) = draft.as_mut() {
+                    *center = pos - *offset;
+                }
+            }
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                ..
+            } => {
+                if let Some((offset, _, original)) = draft.take() {
+                    let center = pos - offset;
+                    if original == canvas && canvas.contains(center) {
+                        return dropped_edge(center, local);
+                    }
+                }
+            }
+            egui::Event::PointerGone
+            | egui::Event::MouseWheel { .. }
+            | egui::Event::PointerButton { .. }
+            | egui::Event::Key {
+                key: egui::Key::Escape,
+                pressed: true,
+                ..
+            } => {
+                *draft = None;
+            }
+            _ => (),
+        }
+    }
+    if !primary_down {
+        *draft = None;
+    }
+    None
 }
