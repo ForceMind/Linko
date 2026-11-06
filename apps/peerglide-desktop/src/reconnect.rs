@@ -24,14 +24,25 @@ pub struct InitialWait {
 }
 impl InitialWait {
     pub fn new(seconds: Option<u64>) -> Self {
-        Self { deadline: seconds.map(|seconds| tokio::time::Instant::now() + Duration::from_secs(seconds)), negotiated: false }
+        Self {
+            deadline: seconds
+                .map(|seconds| tokio::time::Instant::now() + Duration::from_secs(seconds)),
+            negotiated: false,
+        }
     }
     pub fn deadline(&self) -> Option<tokio::time::Instant> {
         self.deadline.filter(|_| !self.negotiated)
     }
-    pub fn waiting(&self) -> bool { self.deadline().is_some() }
+    pub fn waiting(&self) -> bool {
+        self.deadline().is_some()
+    }
     pub fn check(&self) -> Result<()> {
-        anyhow::ensure!(!self.deadline().is_some_and(|deadline| tokio::time::Instant::now() >= deadline), InitialWaitExpired);
+        anyhow::ensure!(
+            !self
+                .deadline()
+                .is_some_and(|deadline| tokio::time::Instant::now() >= deadline),
+            InitialWaitExpired
+        );
         Ok(())
     }
     /// Called only after actual pinned TLS/Hello and final pin checks.
@@ -85,16 +96,20 @@ fn unchanged(path: &Path, expected: &[u8]) -> Result<bool> {
 }
 pub fn verify_pins(identity: &Path, peer_path: &Path, local: &[u8], peer: &[u8]) -> Result<()> {
     (|| -> Result<()> {
-    anyhow::ensure!(
-        peerglide_transport::Identity::load(identity).context("verify usable local identity before connection")?.certificate == local,
-        "local identity changed during reconnect; restart explicitly"
-    );
-    anyhow::ensure!(
-        unchanged(peer_path, peer).context("verify enrolled peer before reconnect")?,
-        "enrolled identity changed during reconnect; enrollment required"
-    );
-    Ok(())
-    })().context(IdentityFilesUnavailable)
+        anyhow::ensure!(
+            peerglide_transport::Identity::load(identity)
+                .context("verify usable local identity before connection")?
+                .certificate
+                == local,
+            "local identity changed during reconnect; restart explicitly"
+        );
+        anyhow::ensure!(
+            unchanged(peer_path, peer).context("verify enrolled peer before reconnect")?,
+            "enrolled identity changed during reconnect; enrollment required"
+        );
+        Ok(())
+    })()
+    .context(IdentityFilesUnavailable)
 }
 #[cfg(test)]
 mod tests {
@@ -103,16 +118,22 @@ mod tests {
     fn initial_wait_is_one_budget_and_never_times_out_a_negotiated_session() {
         let mut initial = InitialWait::new(Some(10));
         let deadline = initial.deadline().unwrap();
-        for _ in 0..10 { assert_eq!(initial.deadline(), Some(deadline)); }
+        for _ in 0..10 {
+            assert_eq!(initial.deadline(), Some(deadline));
+        }
         initial.negotiated().unwrap();
         initial.deadline = Some(tokio::time::Instant::now() - Duration::from_secs(1));
         assert!(!initial.waiting() && initial.deadline().is_none());
         initial.check().unwrap();
-        let mut expired = InitialWait { deadline: Some(tokio::time::Instant::now() - Duration::from_secs(1)), negotiated: false };
+        let mut expired = InitialWait {
+            deadline: Some(tokio::time::Instant::now() - Duration::from_secs(1)),
+            negotiated: false,
+        };
         assert!(expired.check().is_err() && expired.negotiated().is_err());
         assert!(expired.waiting());
         assert!(!retryable(&InitialWaitExpired.into()));
-        let disk_error = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::TimedOut)).context(IdentityFilesUnavailable);
+        let disk_error = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::TimedOut))
+            .context(IdentityFilesUnavailable);
         assert!(!retryable(&disk_error));
         assert!(!InitialWait::new(None).waiting());
     }

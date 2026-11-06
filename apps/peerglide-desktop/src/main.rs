@@ -415,7 +415,11 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
 }
 
 async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
-    anyhow::ensure!(o.wait_for_peer_secs.is_none() || (o.managed && address.is_some() && !probe && !o.reconnect), "initial wait requires a managed non-probe connector without reconnect");
+    anyhow::ensure!(
+        o.wait_for_peer_secs.is_none()
+            || (o.managed && address.is_some() && !probe && !o.reconnect),
+        "initial wait requires a managed non-probe connector without reconnect"
+    );
     let managed = o.managed;
     let mut input_status = InputReporter::new(managed);
     // No native capture/input effect exists during identity/network setup.
@@ -464,7 +468,12 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
         managed,
         if result.is_ok() {
             WorkerState::Stopped
-        } else if result.as_ref().err().is_some_and(|error| error.is::<reconnect::InitialWaitExpired>()) && terminal != WorkerInputState::RecoveryUnconfirmed {
+        } else if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<reconnect::InitialWaitExpired>())
+            && terminal != WorkerInputState::RecoveryUnconfirmed
+        {
             WorkerState::PeerWaitExpired
         } else {
             WorkerState::Failed
@@ -493,7 +502,19 @@ async fn supervise(
         }
         reconnect::verify_pins(&o.identity, &o.peer_cert, &id.certificate, &peer)?;
         initial.check()?;
-        let result = run_inner(Attempt { o, address, probe, id: &id, peer: &peer, initial: &mut initial }, stop.clone(), input_status).await;
+        let result = run_inner(
+            Attempt {
+                o,
+                address,
+                probe,
+                id: &id,
+                peer: &peer,
+                initial: &mut initial,
+            },
+            stop.clone(),
+            input_status,
+        )
+        .await;
         if *stop.borrow() {
             return result;
         }
@@ -512,7 +533,14 @@ async fn supervise(
             Err(error) => return Err(error),
         }
         initial.check()?;
-        worker_event(o.managed, if initial.waiting() { WorkerState::WaitingForPeer } else { WorkerState::Reconnecting });
+        worker_event(
+            o.managed,
+            if initial.waiting() {
+                WorkerState::WaitingForPeer
+            } else {
+                WorkerState::Reconnecting
+            },
+        );
         eprintln!("Connection ended; retrying the same enrolled peer after backoff.");
         tokio::select! {
             biased;
@@ -542,7 +570,14 @@ async fn run_inner(
     mut stop: tokio::sync::watch::Receiver<bool>,
     input_status: &mut InputReporter,
 ) -> Result<()> {
-    let Attempt { o, address, probe, id, peer, initial } = attempt;
+    let Attempt {
+        o,
+        address,
+        probe,
+        id,
+        peer,
+        initial,
+    } = attempt;
     input_status.clear_switch();
     println!(
         "Local fingerprint: {}\nEnrolled peer: {}",
@@ -557,7 +592,9 @@ async fn run_inner(
         o.native
     );
     worker_event(o.managed, WorkerState::Listening);
-    if initial.waiting() { worker_event(o.managed, WorkerState::WaitingForPeer); }
+    if initial.waiting() {
+        worker_event(o.managed, WorkerState::WaitingForPeer);
+    }
     // Before the native session is installed, canceling negotiation owns no
     // captured/injected input. Once installed, stop is handled cooperatively by
     // session::run_with_status so its explicit recovery tail cannot be dropped.
@@ -678,20 +715,52 @@ mod context_cli_tests {
     #[tokio::test]
     async fn initial_wait_invalid_modes_reject_before_identity_io() {
         for args in [
-            vec!["peerglide", "listen", "--peer-cert", "missing", "--managed", "--wait-for-peer-secs", "2"],
-            vec!["peerglide", "connect", "127.0.0.1:1", "--peer-cert", "missing", "--managed", "--probe", "--wait-for-peer-secs", "2"],
+            vec![
+                "peerglide",
+                "listen",
+                "--peer-cert",
+                "missing",
+                "--managed",
+                "--wait-for-peer-secs",
+                "2",
+            ],
+            vec![
+                "peerglide",
+                "connect",
+                "127.0.0.1:1",
+                "--peer-cert",
+                "missing",
+                "--managed",
+                "--probe",
+                "--wait-for-peer-secs",
+                "2",
+            ],
         ] {
             let cli = Cli::try_parse_from(args).unwrap();
             let error = match cli.command {
                 Command::Listen(options) => run(options, None, false).await.unwrap_err(),
-                Command::Connect { address, options, probe } => run(options, Some(address), probe).await.unwrap_err(),
+                Command::Connect {
+                    address,
+                    options,
+                    probe,
+                } => run(options, Some(address), probe).await.unwrap_err(),
                 _ => unreachable!(),
             };
             assert!(error.to_string().contains("initial wait requires"));
         }
-        for extra in [vec!["--wait-for-peer-secs", "0", "--managed"], vec!["--wait-for-peer-secs", "121", "--managed"],
-            vec!["--wait-for-peer-secs", "2"], vec!["--wait-for-peer-secs", "2", "--managed", "--reconnect"]] {
-            let mut args = vec!["peerglide", "connect", "127.0.0.1:1", "--peer-cert", "missing"];
+        for extra in [
+            vec!["--wait-for-peer-secs", "0", "--managed"],
+            vec!["--wait-for-peer-secs", "121", "--managed"],
+            vec!["--wait-for-peer-secs", "2"],
+            vec!["--wait-for-peer-secs", "2", "--managed", "--reconnect"],
+        ] {
+            let mut args = vec![
+                "peerglide",
+                "connect",
+                "127.0.0.1:1",
+                "--peer-cert",
+                "missing",
+            ];
             args.extend(extra);
             assert!(Cli::try_parse_from(args).is_err());
         }

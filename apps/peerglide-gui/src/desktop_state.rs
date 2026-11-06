@@ -120,8 +120,16 @@ pub(super) fn present(s: Snapshot) -> View {
             );
         }
         if s.peer_wait_expired {
-            return View::new("等待另一台电脑已超时", "配对已保留。请在另一台也开启协同，再重新发起；不会自动重试或恢复旧控制。", Tone::Warning,
-                if s.native_supported { native_action(s.readiness) } else { Action::Connect });
+            return View::new(
+                "等待另一台电脑已超时",
+                "配对已保留。请在另一台也开启协同，再重新发起；不会自动重试或恢复旧控制。",
+                Tone::Warning,
+                if s.native_supported {
+                    native_action(s.readiness)
+                } else {
+                    Action::Connect
+                },
+            );
         }
         if !s.failed && s.native_supported && s.readiness != Readiness::Ready {
             return permission_view(s.readiness, false);
@@ -191,7 +199,12 @@ pub(super) fn present(s: Snapshot) -> View {
             );
         }
         if s.waiting_for_peer {
-            return View::new("等待另一台电脑就绪", "请在另一台也开启协同。本次等待约一分钟，可随时停止；连接前不会捕获或转发输入。", Tone::Accent, Action::None);
+            return View::new(
+                "等待另一台电脑就绪",
+                "请在另一台也开启协同。本次等待约一分钟，可随时停止；连接前不会捕获或转发输入。",
+                Tone::Accent,
+                Action::None,
+            );
         }
         return View::new(
             "正在等待两台电脑连接",
@@ -506,16 +519,25 @@ mod tests {
     }
     #[test]
     fn first_wait_and_expiry_are_not_authentication_or_recovery() {
-        let mut s = snapshot(); s.running = true; s.waiting_for_peer = true;
-        s.mode = Some(SessionMode::Native); s.input = Some(WorkerInputState::Disabled);
+        let mut s = snapshot();
+        s.running = true;
+        s.waiting_for_peer = true;
+        s.mode = Some(SessionMode::Native);
+        s.input = Some(WorkerInputState::Disabled);
         let view = present(s);
         assert_eq!(view.title, "等待另一台电脑就绪");
         assert_eq!(view.action, Action::None);
-        let mut s = snapshot(); s.peer_wait_expired = true; s.failed = true;
+        let mut s = snapshot();
+        s.peer_wait_expired = true;
+        s.failed = true;
         assert_eq!(present(s).title, "等待另一台电脑已超时");
-        let mut s = snapshot(); s.peer_wait_expired = true; s.recovery_blocked = true;
+        let mut s = snapshot();
+        s.peer_wait_expired = true;
+        s.recovery_blocked = true;
         assert_eq!(present(s).action, Action::Recovery);
-        let mut s = snapshot(); s.peer_wait_expired = true; s.registered = false;
+        let mut s = snapshot();
+        s.peer_wait_expired = true;
+        s.registered = false;
         assert_eq!(present(s).action, Action::AddDevice);
     }
 }

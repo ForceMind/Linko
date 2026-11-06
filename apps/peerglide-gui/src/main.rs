@@ -975,7 +975,9 @@ impl App {
                 self.notice = "通信探针通过，未注入任何输入。".into();
             }
             if self.child.is_some() && self.stopping.is_none() {
-                if state.is_some() { self.waiting_for_peer = state == Some(WorkerState::WaitingForPeer); }
+                if state.is_some() {
+                    self.waiting_for_peer = state == Some(WorkerState::WaitingForPeer);
+                }
                 match state {
                     Some(WorkerState::WaitingForPeer) => {
                         self.connected = false;
@@ -2768,7 +2770,8 @@ mod lifecycle_tests {
         assert_eq!(snapshot.take(), (None, false));
     }
     #[test]
-    fn gui_startup_wait_is_explicit_per_run_and_never_inherited_by_probe_or_reconnect() -> Result<()> {
+    fn gui_startup_wait_is_explicit_per_run_and_never_inherited_by_probe_or_reconnect() -> Result<()>
+    {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         for (listen, reconnect, mode, expected) in [
@@ -2778,13 +2781,23 @@ mod lifecycle_tests {
             (true, false, SessionMode::Native, false),
             (false, true, SessionMode::Native, false),
         ] {
-            app.config.listen = listen; app.config.reconnect = reconnect;
-            let command = app.worker_command(PathBuf::from("not-executed"), PathBuf::from("public-test.der"), mode);
+            app.config.listen = listen;
+            app.config.reconnect = reconnect;
+            let command = app.worker_command(
+                PathBuf::from("not-executed"),
+                PathBuf::from("public-test.der"),
+                mode,
+            );
             let args: Vec<_> = command.get_args().collect();
             let position = args.iter().position(|arg| *arg == "--wait-for-peer-secs");
             assert_eq!(position.is_some(), expected);
-            if let Some(position) = position { assert_eq!(args[position + 1], "60"); }
-            assert_eq!(args.iter().any(|arg| *arg == "--reconnect"), reconnect && mode != SessionMode::Probe);
+            if let Some(position) = position {
+                assert_eq!(args[position + 1], "60");
+            }
+            assert_eq!(
+                args.iter().any(|arg| *arg == "--reconnect"),
+                reconnect && mode != SessionMode::Probe
+            );
         }
         assert!(app.child.is_none() && !app.dir.join("settings.json").exists());
         Ok(())
