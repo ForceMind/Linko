@@ -72,10 +72,14 @@ impl Validity {
         for slot in [&self.save, &self.receipt] {
             let mut state = slot.load(Ordering::Acquire);
             loop {
-                let next = match state { 0 => 2, 1 => 3, _ => break };
-                match slot.compare_exchange_weak(state,next,Ordering::AcqRel,Ordering::Acquire) {
+                let next = match state {
+                    0 => 2,
+                    1 => 3,
+                    _ => break,
+                };
+                match slot.compare_exchange_weak(state, next, Ordering::AcqRel, Ordering::Acquire) {
                     Ok(_) => break,
-                    Err(current) => state=current,
+                    Err(current) => state = current,
                 }
             }
         }
