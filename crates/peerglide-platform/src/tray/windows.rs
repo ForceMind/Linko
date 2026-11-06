@@ -465,10 +465,16 @@ mod tests {
             KEY_SELECT_NOTIFICATION,
         ] {
             assert_eq!(notification(event as LPARAM), Notice::Show);
-            assert_eq!(notification(((ICON_ID << 16) | event) as LPARAM), Notice::Show);
+            assert_eq!(
+                notification(((ICON_ID << 16) | event) as LPARAM),
+                Notice::Show
+            );
         }
         for event in [WM_RBUTTONUP, WM_CONTEXTMENU] {
-            assert_eq!(notification(((ICON_ID << 16) | event) as LPARAM), Notice::Menu);
+            assert_eq!(
+                notification(((ICON_ID << 16) | event) as LPARAM),
+                Notice::Menu
+            );
         }
         for event in [0, WM_MOUSEMOVE, WM_USER + 2, WM_USER + 6] {
             assert_eq!(
