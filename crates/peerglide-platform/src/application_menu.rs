@@ -22,6 +22,11 @@ impl Owner {
     pub fn is_available(&self) -> bool {
         true
     }
+
+    /// The real AppKit termination diagnostic is only available on macOS.
+    pub fn request_termination_for_check(&self) -> anyhow::Result<bool> {
+        anyhow::bail!("真实 AppKit 退出检查仅支持 macOS")
+    }
 }
 
 /// Install once after the native event loop has initialized, before enabling

@@ -2,7 +2,7 @@
 use super::*;
 impl App {
     fn writable(&self) -> bool {
-        self.instance_lock.is_some() && self.config_store.is_some()
+        !self.quit_check_mode && self.instance_lock.is_some() && self.config_store.is_some()
     }
     pub(super) fn idle_writable(&self) -> bool {
         self.writable() && self.child.is_none() && self.stopping.is_none()

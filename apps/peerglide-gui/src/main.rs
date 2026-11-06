@@ -8,6 +8,7 @@ mod discovery_panel;
 mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
+mod quit_check;
 mod worker_permissions;
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -39,6 +40,9 @@ struct Options {
     /// Isolated GUI smoke geometry only; create a new report, never overwrite.
     #[arg(long, hide = true, requires = "gesture_lab")]
     ui_layout_report: Option<PathBuf>,
+    /// Isolated AppKit terminate integration check, never native input.
+    #[arg(long, hide = true, requires = "data_dir", conflicts_with = "gesture_lab")]
+    macos_quit_check_report: Option<PathBuf>,
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -251,6 +255,8 @@ struct App {
     tray_mailbox: Arc<peerglide_platform::tray::Mailbox>,
     application_menu: Option<peerglide_platform::application_menu::Owner>,
     application_menu_error: Option<String>,
+    quit_check: Option<quit_check::Check>,
+    quit_check_mode: bool,
     window_hidden: bool,
     screen_drag: Option<(egui::Vec2, egui::Pos2, egui::Rect)>,
     discovery: discovery_panel::Panel,
@@ -362,6 +368,8 @@ impl App {
             tray_mailbox: peerglide_platform::tray::Mailbox::new(Arc::new(|| {})),
             application_menu: None,
             application_menu_error: None,
+            quit_check: None,
+            quit_check_mode: false,
             window_hidden: false,
             screen_drag: None,
             discovery: discovery_panel::Panel::default(),
@@ -403,6 +411,7 @@ impl App {
         }
     }
     fn save_config(&mut self) -> Result<()> {
+        anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会保存设备设置");
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         self.config_store
             .as_mut()
@@ -536,6 +545,7 @@ impl App {
         })
     }
     fn start_mode(&mut self, mode: SessionMode) -> Result<()> {
+        anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会启动设备会话");
         let probe = mode == SessionMode::Probe;
         anyhow::ensure!(
             mode != SessionMode::Native || cfg!(any(windows, target_os = "macos")),
@@ -732,6 +742,7 @@ impl App {
             std::mem::take(&mut self.native_confirmation),
             "请明确确认启动真实键鼠"
         );
+        anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会开启键鼠");
         anyhow::ensure!(
             !self.recovery_blocked && self.stopping.is_none(),
             "恢复未确认，不能开始新的键鼠会话"
@@ -1027,6 +1038,7 @@ impl App {
     fn process_tray_commands(&mut self, ctx: &egui::Context) {
         let pending = self.tray_mailbox.take();
         if pending.quit {
+            if let Some(check) = self.quit_check.as_mut() { check.received_quit(); }
             self.close_requested = true;
             self.stop();
             if self.child.is_some() || self.recovery_blocked {
@@ -1066,6 +1078,13 @@ impl App {
         }
     }
     fn logic_tick(&mut self, ctx: &egui::Context) {
+        if let Some(check) = self.quit_check.as_mut() {
+            let unsafe_context = self.child.is_some() || self.config.fingerprint.is_some()
+                || self.config.native || self.config.allow || self.pending_start.is_some();
+            let abort = check.tick(self.application_menu.as_ref(), unsafe_context);
+            ctx.request_repaint_after(Duration::from_millis(50));
+            if abort { self.close_requested = true; self.stop(); }
+        }
         self.check_exit_protection(ctx);
         // Stop/Quit must cancel a queued upgrade before poll can start a successor.
         self.process_tray_commands(ctx);
@@ -1093,6 +1112,11 @@ impl App {
             );
         }
         if self.close_requested && self.child.is_none() && !self.recovery_blocked {
+            if let Some(check) = self.quit_check.take() {
+                let no_input = self.active_mode.is_none() && self.events.is_none()
+                    && !self.config.native && !self.config.allow && self.config.fingerprint.is_none();
+                if let Err(error) = check.finish(no_input) { self.notice = format!("退出检查回执写入失败：{error:#}"); }
+            }
             self.exit_confirmed = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -1127,6 +1151,12 @@ impl Drop for App {
 }
 fn main() -> eframe::Result<()> {
     let options = Options::parse();
+    let quit_check = options.macos_quit_check_report.as_ref().map(|report| {
+        quit_check::Check::prepare(options.data_dir.as_deref().expect("clap requires an isolated directory"), report)
+    }).transpose().unwrap_or_else(|error| {
+        eprintln!("退出检查无法开始：{error:#}");
+        std::process::exit(2);
+    });
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -1139,6 +1169,8 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             let mut app = App::new(cc, dir);
+            app.quit_check_mode = quit_check.is_some();
+            app.quit_check = quit_check;
             if options.gesture_lab {
                 app.page = Page::GestureLab;
                 app.mouse_tab = MouseTab::Practice;
@@ -2250,6 +2282,22 @@ mod lifecycle_tests {
         let error = app.start_mode(SessionMode::Native).unwrap_err();
         assert!(error.to_string().contains("退出恢复入口"));
         assert!(!fixture.path.join("identity").exists());
+        Ok(())
+    }
+    #[test]
+    fn isolated_quit_check_cannot_save_or_start_any_device_session() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.quit_check_mode = true;
+        app.native_confirmation = true;
+        assert!(app.request_native().unwrap_err().to_string().contains("隔离退出检查"));
+        for mode in [SessionMode::Communication, SessionMode::Native, SessionMode::Probe] {
+            assert!(app.start_mode(mode).unwrap_err().to_string().contains("隔离退出检查"));
+        }
+        assert!(app.save_config().is_err());
+        assert!(!app.native_confirmation && !app.config.native && app.child.is_none());
+        assert!(!fixture.path.join("settings.json").exists() && !fixture.path.join("identity").exists());
+        assert!(Options::try_parse_from(["peerglide-gui", "--macos-quit-check-report", "unused.json"]).is_err());
         Ok(())
     }
     #[test]

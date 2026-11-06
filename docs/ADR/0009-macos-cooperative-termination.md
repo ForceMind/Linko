@@ -63,3 +63,11 @@ menu/Cmd+Q and system-terminate dispatch need native acceptance with no input fi
 owned-worker waiting is separate from physical C06. Windows/Linux retain their
 normal window-close handling. Input v5, independent grants, identity/config formats,
 MIT and minimum Rust 1.95 remain unchanged.
+
+The opt-in hidden macOS check requires an explicitly empty data directory and a
+new report file. It cannot save device settings or start any device session. After
+entering real GUI logic it calls NSApplication.terminate:, then requires that call
+to return and the same mailbox's Quit to be consumed before writing a bounded
+success receipt at normal close. Exit 0 without that receipt is failure. A separate
+20-second process guard can terminate only this isolated, non-native check. This
+exercises the real AppKit/delegate route, not a Dock click or physical input.
