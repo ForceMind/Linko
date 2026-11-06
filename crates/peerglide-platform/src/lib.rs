@@ -9,6 +9,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
+pub mod application_menu;
 pub mod context;
 mod receive_driver;
 pub mod tray;

@@ -249,6 +249,8 @@ struct App {
     desktop_store: Option<config_store::Store>,
     tray: Option<peerglide_platform::tray::Tray>,
     tray_mailbox: Arc<peerglide_platform::tray::Mailbox>,
+    application_menu: Option<peerglide_platform::application_menu::Owner>,
+    application_menu_error: Option<String>,
     window_hidden: bool,
     screen_drag: Option<(egui::Vec2, egui::Pos2, egui::Rect)>,
     discovery: discovery_panel::Panel,
@@ -282,6 +284,17 @@ impl App {
         let app = Self::load(dir);
         app.theme(&cc.egui_ctx);
         let mut app = app;
+        let wake_context = cc.egui_ctx.clone();
+        app.tray_mailbox = peerglide_platform::tray::Mailbox::new(Arc::new(move || {
+            wake_context.request_repaint();
+        }));
+        match peerglide_platform::application_menu::install(app.tray_mailbox.clone()) {
+            Ok(owner) => app.application_menu = Some(owner),
+            Err(error) => {
+                app.application_menu_error = Some(format!("{error:#}"));
+                app.notice = "退出恢复入口未就绪，本窗口只能使用通信诊断，不能开启键鼠。请重新打开本版检查。".into();
+            }
+        }
         app.sync_tray(&cc.egui_ctx);
         app
     }
@@ -347,6 +360,8 @@ impl App {
             desktop_store,
             tray: None,
             tray_mailbox: peerglide_platform::tray::Mailbox::new(Arc::new(|| {})),
+            application_menu: None,
+            application_menu_error: None,
             window_hidden: false,
             screen_drag: None,
             discovery: discovery_panel::Panel::default(),
@@ -526,6 +541,8 @@ impl App {
             mode != SessionMode::Native || cfg!(any(windows, target_os = "macos")),
             "此平台只支持通信诊断，原生输入尚未实现"
         );
+        anyhow::ensure!(mode != SessionMode::Native || self.native_exit_protected(),
+            "退出恢复入口未就绪，不能开启新的键鼠会话；仍可使用通信诊断");
         anyhow::ensure!(self.stopping.is_none(), "停止和恢复尚未完成");
         anyhow::ensure!(
             mode != SessionMode::Native || !self.recovery_blocked,
@@ -709,12 +726,12 @@ impl App {
         }
     }
     fn request_native(&mut self) -> Result<()> {
-        anyhow::ensure!(self.native_confirmation, "请明确确认启动真实键鼠");
+        anyhow::ensure!(std::mem::take(&mut self.native_confirmation), "请明确确认启动真实键鼠");
         anyhow::ensure!(
             !self.recovery_blocked && self.stopping.is_none(),
             "恢复未确认，不能开始新的键鼠会话"
         );
-        self.native_confirmation = false;
+        anyhow::ensure!(self.native_exit_protected(), "退出恢复入口未就绪，不能开启键鼠");
         self.config.native = true;
         self.save_config()?;
         if self.child.is_some() {
@@ -909,6 +926,25 @@ impl App {
     }
 }
 impl App {
+    fn native_exit_protected(&self) -> bool {
+        !cfg!(target_os = "macos") || (self.application_menu_error.is_none()
+            && self.application_menu.as_ref().is_some_and(|owner| owner.is_available()))
+    }
+    fn check_exit_protection(&mut self, ctx: &egui::Context) {
+        if cfg!(target_os = "macos") && self.application_menu.is_some()
+            && self.application_menu_error.is_none() && !self.native_exit_protected()
+        {
+            self.exit_protection_lost(ctx);
+        }
+    }
+    fn exit_protection_lost(&mut self, ctx: &egui::Context) {
+        self.application_menu_error = Some("应用退出入口发生变化".into());
+        self.native_confirmation = false;
+        self.pending_start = None;
+        if self.active_mode == Some(SessionMode::Native) { self.stop(); }
+        self.show_window(ctx);
+        self.notice = "退出恢复入口发生变化，已请求停止键鼠。请确认恢复状态并重新打开屏跃。".into();
+    }
     fn request_activity_tick(&self, ctx: &egui::Context) {
         // Native capture/watchdogs stay in the worker. GUI polling is needed
         // only while local asynchronous work or canvas deadlines are pending.
@@ -949,13 +985,8 @@ impl App {
         if self.window_hidden {
             self.show_window(ctx);
         }
-        let wake_context = ctx.clone();
-        let mailbox = peerglide_platform::tray::Mailbox::new(Arc::new(move || {
-            wake_context.request_repaint();
-        }));
-        match peerglide_platform::tray::create(mailbox.clone()) {
+        match peerglide_platform::tray::create(self.tray_mailbox.clone()) {
             Ok(tray) => {
-                self.tray_mailbox = mailbox;
                 self.tray = Some(tray);
             }
             Err(error) => {
@@ -1019,6 +1050,7 @@ impl App {
         }
     }
     fn logic_tick(&mut self, ctx: &egui::Context) {
+        self.check_exit_protection(ctx);
         // Stop/Quit must cancel a queued upgrade before poll can start a successor.
         self.process_tray_commands(ctx);
         self.poll();
@@ -2135,6 +2167,66 @@ mod lifecycle_tests {
             assert!(app.tray.is_none());
             assert!(!app.tray_mailbox.take().quit);
         }
+        Ok(())
+    }
+    #[test]
+    fn application_menu_handle_survives_tray_disable_and_quit_preempts_upgrade() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let handle = app.tray_mailbox.clone();
+        let ctx = egui::Context::default();
+        app.desktop_preferences.tray_enabled = false;
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_tray(ctx));
+        assert!(Arc::ptr_eq(&handle, &app.tray_mailbox));
+        app.window_hidden = true;
+        handle.post(peerglide_platform::tray::Command::Show);
+        logic_frames(&mut app, &ctx, false);
+        assert!(!app.window_hidden);
+        app.child = Some(managed_child()?);
+        app.active_mode = Some(SessionMode::Communication);
+        app.pending_start = Some(SessionMode::Native);
+        app.desktop_preferences.close_to_tray = true;
+        handle.post(peerglide_platform::tray::Command::Quit);
+        logic_frames(&mut app, &ctx, true);
+        assert!(app.close_requested && app.pending_start.is_none());
+        assert!(app.stopping.is_some() || app.child.is_none());
+        assert_ne!(app.active_mode, Some(SessionMode::Native));
+        assert!(Arc::ptr_eq(&handle, &app.tray_mailbox));
+        Ok(())
+    }
+    #[test]
+    fn lost_exit_protection_stops_owned_helper_and_never_fakes_recovery() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // UI-state fixture only: helper reads Stop; no capture/injection exists.
+        app.child = Some(managed_child()?);
+        app.active_mode = Some(SessionMode::Native);
+        app.pending_start = Some(SessionMode::Native);
+        app.native_confirmation = true;
+        app.window_hidden = true;
+        let ctx = egui::Context::default();
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.exit_protection_lost(ctx));
+        assert!(!app.window_hidden && !app.native_confirmation && app.pending_start.is_none());
+        assert!(app.application_menu_error.is_some() && app.stopping.is_some());
+        app.recovery_blocked = true;
+        app.tray_mailbox.post(peerglide_platform::tray::Command::Quit);
+        logic_frames(&mut app, &ctx, true);
+        assert!(!app.exit_confirmed && !app.window_hidden);
+        assert_eq!(app.dialog, Some(Dialog::Recovery));
+        Ok(())
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn missing_exit_owner_blocks_native_before_writing_preferences_or_spawning() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.native_confirmation = true;
+        assert!(app.request_native().unwrap_err().to_string().contains("退出恢复入口"));
+        assert!(!app.native_confirmation && !app.config.native && app.child.is_none());
+        assert!(!fixture.path.join("settings.json").exists());
+        let error = app.start_mode(SessionMode::Native).unwrap_err();
+        assert!(error.to_string().contains("退出恢复入口"));
+        assert!(!fixture.path.join("identity").exists());
         Ok(())
     }
     #[test]

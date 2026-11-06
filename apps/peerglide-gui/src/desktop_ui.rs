@@ -81,6 +81,7 @@ impl App {
     }
     fn native_start_available(&self) -> bool {
         cfg!(any(windows, target_os = "macos"))
+            && self.application_menu_error.is_none()
             && self.writable()
             && self.config.fingerprint.is_some()
             && self.stopping.is_none()
@@ -558,6 +559,13 @@ impl App {
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         Self::heading(ui, "设置", "让屏跃按你的习惯工作。");
+        if self.application_menu_error.is_some() {
+            desktop_style::card(ui).show(ui, |ui| {
+                desktop_style::pill(ui, "退出恢复入口未就绪", desktop_style::Tone::Warning);
+                ui.label("本窗口不能开启新的键鼠会话，仍可使用通信诊断。请先确认恢复状态，再重新打开本版屏跃。");
+            });
+            ui.add_space(14.0);
+        }
         if !self.writable() {
             desktop_style::card(ui).show(ui, |ui| {
                 desktop_style::pill(ui, "设置只读，原资料已保留", desktop_style::Tone::Warning);
