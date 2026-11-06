@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.3.1-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.2-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -16,8 +16,8 @@ See [validation](docs/VALIDATION.md).
 
 Primary-display switching, basic HID keys, three mouse buttons and scrolling
 form the initial native prototype. Multi-monitor topology, IME composition,
-clipboard, files, pairing codes, tray and signed installers are
-not implemented in this milestone. The desktop interface is Simplified Chinese, with an embedded OFL-licensed Noto Sans SC font; no system font installation is needed. A native eframe control panel provides
+clipboard, files, pairing codes and stable signed installers remain
+unimplemented. Optional tray/menu-bar integration is an experimental desktop slice; see validation. The desktop interface is Simplified Chinese, with an embedded OFL-licensed Noto Sans SC font; no system font installation is needed. A native eframe control panel provides
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
 
@@ -123,7 +123,7 @@ These checks never request OS permissions or authorize control/actions. See
    不代表系统修饰键已释放。明确强制结束工作进程同样不能证明恢复成功。
 
 此顺序不替代四边、拖拽/滚轮、修饰键、接收端物理接管、不同DPI、断网/退出、
-睡眠唤醒与权限变化的实机矩阵。当前 G1、生产剪贴板/文件、配对码和托盘仍未提供。
+睡眠唤醒与权限变化的实机矩阵。当前 G1、生产剪贴板/文件和配对码仍未提供；托盘/菜单栏的可选预览见下文。
 
 0.2.3-dev 修正 macOS 打包身份，并新增“设置 → 检查实际工作进程权限”。0.2.2 实机
 曾出现 GUI 两项权限已授予、worker 仍因辅助功能未获许可而退出；不能反复要求用户给
@@ -227,3 +227,10 @@ automatically** in Settings, or add `--reconnect` to `listen`/`connect`. It retr
 the same enrolled identity with capped backoff; changing certificates, native
 cleanup errors or authorization failures stop it. Control stays local until you
 switch again. See [ADR-0005](docs/ADR/0005-trusted-reconnect.md) for limits.
+
+
+0.3.2-dev增加可选择开启的Windows托盘/macOS菜单栏。设置中先启用入口，再单独选择
+关闭窗口后是否保留后台协同；默认仍停止、清理后退出。菜单只提供显示窗口、停止、
+退出，不从菜单启用键鼠或扩大权限。入口失败时不隐藏，恢复未知会显示窗口保留警告。
+桌面偏好使用单独版本化文件，不更改旧输入设置或身份；不开机启动。精确候选及原生
+验收状态见VALIDATION，未验证的菜单行为不能当物理键鼠C06通过。

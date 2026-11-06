@@ -598,9 +598,68 @@ impl App {
         });
         ui.add_space(14.0);
         desktop_style::card(ui).show(ui, |ui| {
-            ui.strong("关闭窗口时");
-            ui.label("停止协同，清理输入，然后退出。");
-            ui.weak("托盘和菜单栏尚未接通，目前不会在关闭后留在后台。");
+            ui.strong(if cfg!(target_os = "macos") {
+                "菜单栏与关闭窗口"
+            } else {
+                "托盘与关闭窗口"
+            });
+            let supported = cfg!(any(windows, target_os = "macos"));
+            let editable =
+                self.instance_lock.is_some() && self.desktop_store.is_some() && supported;
+            ui.add_enabled_ui(editable, |ui| {
+                let mut preferences = self.desktop_preferences;
+                if ui
+                    .checkbox(&mut preferences.tray_enabled, "显示屏跃的菜单栏／托盘入口")
+                    .changed()
+                {
+                    if !preferences.tray_enabled {
+                        preferences.close_to_tray = false;
+                    }
+                    let result = self.set_desktop_preferences(ctx, preferences);
+                    if let Err(error) = result {
+                        self.notice = format!("桌面选项未保存：{error:#}");
+                    }
+                }
+                let mut close_to_tray = self.desktop_preferences.close_to_tray;
+                if ui
+                    .add_enabled(
+                        self.tray.as_ref().is_some_and(|tray| tray.is_available()),
+                        egui::Checkbox::new(&mut close_to_tray, "关闭窗口后继续在后台协同"),
+                    )
+                    .changed()
+                {
+                    let preferences = DesktopPreferences {
+                        close_to_tray,
+                        ..self.desktop_preferences
+                    };
+                    let result = self.set_desktop_preferences(ctx, preferences);
+                    if let Err(error) = result {
+                        self.notice = format!("关闭方式未保存：{error:#}");
+                    }
+                }
+            });
+            if self.tray.as_ref().is_some_and(|tray| tray.is_available()) {
+                ui.label("入口已显示：可打开窗口、停止协同或退出屏跃。");
+                ui.weak(if self.desktop_preferences.close_to_tray {
+                    "关闭窗口不会停止协同。停止或退出请使用菜单栏／托盘；退出仍等待输入清理。"
+                } else {
+                    "关闭窗口会停止协同、清理输入，然后退出。"
+                });
+            } else {
+                ui.label("关闭窗口会停止协同、清理输入，然后退出。");
+                if !supported {
+                    ui.weak("此平台的托盘适配尚未提供。");
+                } else if self.desktop_preferences.tray_enabled
+                    && editable
+                    && ui.button("重试显示入口").clicked()
+                {
+                    self.sync_tray(ctx);
+                }
+            }
+            if self.desktop_store.is_none() {
+                ui.weak("桌面选项只读，原文件已保留；不会启用后台保留。");
+            }
+            ui.weak("默认不启用后台保留；不会注册开机启动。");
         });
         ui.add_space(16.0);
         egui::CollapsingHeader::new("高级诊断").show(ui, |ui| {

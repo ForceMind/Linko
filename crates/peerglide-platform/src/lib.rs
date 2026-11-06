@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 mod capture_thread;
 pub mod context;
 mod receive_driver;
+pub mod tray;
 pub use receive_driver::{
     ReceiveAck, ReceiveControl, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot,
     COMMAND_TIMEOUT,

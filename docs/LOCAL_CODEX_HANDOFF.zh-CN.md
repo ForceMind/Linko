@@ -885,3 +885,53 @@ GUI正常退出、峰RSS126896KiB、无候选残留，未联网/Native/系统许
 A3已按用户授权完成且默认GUI回读通过，无需重做配对。真实配对优先标准用户资料
 目录；旧临时/项目资料保留备份。新0.3.1包不保证系统授权沿用，不提前反复索取授权。
 主Goal保持active，后续沿A/B认证配对/托盘及用户就绪后的物理短测继续。
+
+
+## 可选托盘／菜单栏闭环（2026-11-06，开发/验证中）
+
+desktop-tray从a31acf1继续已批准B/U01，版本0.3.2-dev。root负责GUI生命周期/独立
+桌面偏好/文档/CI，复用sol/high的localize_panels独占platform tray及其Cargo feature/
+lib导出，不派其他或递归代理。原生回调只合并Show/Stop/Quit意图并唤醒GUI，无输入
+hook/全局快捷键/脚本/自启。具体决策见ADR-0007。
+
+默认不启用后台保留；启用实际可用入口+单独close-to-tray选择才能隐藏，入口失效
+退回合作停止；Stop/Quit在poll前消费取消queued Native，退出等待旧清理/输出完成，
+未知恢复显示窗口保留警告。DesktopPreferences独立版本化文件，旧settings.json不加
+新字段，旧已获权0.2.4输入GUI仍可读；未来/坏桌面文件保留只读，不隐式开启后台。
+新增真实非Native helper/GUI关闭、退出优先/旧输入升级取消、偏好隔离回归待CI。
+
+本机preflight-20261106T055548243581Z-31189仍因rustc/cargo缺失停止，不安装。新Mac/
+Windows托盘尚未原生验收，Linux明确不支持，不将代码存在/纯测试当平台完成。窗口
+默认资料已完成用户批准迁移，仍不注册启动/服务或改OS许可，也不启动真实Native。
+
+
+0.3.2托盘候选f624e55在CI42174645783的macOS完整平台检查成功；Windows明确失败于
+windows-sys未导出NIN_KEYSELECT宏，不把平台失败掩盖为依赖环境问题。6b36703按微软
+SDK宏补兼容定义及鼠标/键盘/打包通知回归；CI42176236476最低Rust/审计和驻留两项
+42176236442通过，平台仅fmt两处多行assert未过，按日志精确修正后重跑最终候选。
+本机f624e55匹配artifact13482872247外层3337acb6007b009bf414aab56d32610544123a9fb5cb09e68f1dcecd60d1c927、
+内层8fd7c69fc759b4822766f7cde4a9b77007b689a2ca2ff20264e87d020972f60b，安全解压/strict
+签名/metadata通过。隔离GUI实际启用菜单栏、单独后台保留选项并落盘，native/allow/
+reconnect仍false；系统菜单栏UI自动化读取超时，未确认隐藏唤回/菜单Stop/Quit，不能
+记原生生命周期通过。600秒保护到时结束无Native GUI，峰RSS130064KiB、无残留；
+这是保护终止而非正常退出证明，也不能定位历史6.83GB原因。真实配对/OS许可未变。
+
+
+托盘冻结运行源bb5f4442b4f911c3444f8b2b886cef38b6a43344已通过完整五项CI42181140226，
+含Windows格式/独立CLI/严格Clippy/locked构建测试、Release及进程smoke；macOS/Linux
+同样成功，最低1.95和审计成功。两平台驻留42181140346均成功。c87到bb仅修正Windows
+Shell_NotifyIconW只读指针，无门槛放宽；e499299仅补GUI操作说明。最终文档提交的
+精确CI在PR53回读，不能将旧失败提交标过。主线回读仍5d947637，未合并PR堆栈。
+第二次f624本机检查读取已保存桌面选项、点击窗口关闭后，GUI进程继续存在且无worker；
+隐藏窗口/Dock读取仍被CUA超时阻断，不证明菜单恢复。600.76秒保护终止，峰RSS
+119728KiB、无残留。上述两次保护结束均不是原生菜单Quit正常退出证明。Mac完整
+Show/Stop/Quit、Windows托盘/Explorer重启、真实双机C06仍需原生补验；历史6.83GB和
+#10根因不变。不得把本批CI或范围化复核当完整独立安全审计。
+
+
+B2只读筛选已完成，证据在REFERENCE_RESEARCH末节。spake2/aucpace未独立审计，
+opaque-ke有明确历史审计但不能套到当前版本；未选定生产依赖/未加网络短码。
+下一批先确定版本与组合协议审查边界、登记事务，再接真实认证流程；不能把离线
+状态机、fixture或人工指纹字段当PAKE验证。此轮有真实实现/修复/CI/宿主部分验证
+与逐批推送，属于progress；主Goal保持active，完整整合与物理验收没有完成。
+
