@@ -1286,7 +1286,13 @@ mod tests {
             )
             .await?;
             assert_eq!(reporter.observed, [WorkerInputState::Disabled]);
-            assert_eq!(reporter.observed_switches, [super::super::WorkerSwitchState::PeerUnavailable, super::super::WorkerSwitchState::Idle]);
+            assert_eq!(
+                reporter.observed_switches,
+                [
+                    super::super::WorkerSwitchState::PeerUnavailable,
+                    super::super::WorkerSwitchState::Idle
+                ]
+            );
             release_confirmed.await?;
             c.close(0u8.into(), b"stopped without native input");
             Ok::<_, anyhow::Error>(())

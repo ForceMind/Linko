@@ -5,7 +5,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
 use peerglide_protocol::{
-    worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent, WorkerSwitchState},
+    worker::{
+        WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent,
+        WorkerSwitchState,
+    },
     Edge, InputCapabilities, Message, VERSION,
 };
 use peerglide_transport as transport;
@@ -322,8 +325,12 @@ impl InputReporter {
     fn switch(&mut self, state: WorkerSwitchState) {
         let state = if state == WorkerSwitchState::Idle && self.peer_unavailable {
             WorkerSwitchState::PeerUnavailable
-        } else { state };
-        if self.terminal_sent || self.last_switch == Some(state) { return; }
+        } else {
+            state
+        };
+        if self.terminal_sent || self.last_switch == Some(state) {
+            return;
+        }
         self.last_switch = Some(state);
         #[cfg(test)]
         self.observed_switches.push(state);
@@ -700,7 +707,10 @@ mod context_cli_tests {
         reporter.set(WorkerInputState::Disabled);
         reporter.peer_motion(false);
         reporter.switch(WorkerSwitchState::Idle);
-        assert_eq!(reporter.observed_switches, [WorkerSwitchState::PeerUnavailable]);
+        assert_eq!(
+            reporter.observed_switches,
+            [WorkerSwitchState::PeerUnavailable]
+        );
         reporter.peer_motion(true);
         reporter.switch(WorkerSwitchState::Pending);
         reporter.switch(WorkerSwitchState::Pending);
@@ -711,7 +721,10 @@ mod context_cli_tests {
         let count = reporter.observed_switches.len();
         reporter.switch(WorkerSwitchState::Pending);
         assert_eq!(reporter.observed_switches.len(), count);
-        assert_eq!(reporter.observed_switches.last(), Some(&WorkerSwitchState::Idle));
+        assert_eq!(
+            reporter.observed_switches.last(),
+            Some(&WorkerSwitchState::Idle)
+        );
     }
 
     #[test]

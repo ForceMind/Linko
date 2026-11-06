@@ -17,7 +17,10 @@ mod worker_permissions;
 use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, RichText, Vec2};
-use peerglide_protocol::worker::{WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent, WorkerSwitchState};
+use peerglide_protocol::worker::{
+    WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent,
+    WorkerSwitchState,
+};
 use peerglide_transport::{self as transport, Identity};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -169,13 +172,24 @@ enum Page {
 struct WorkerSnapshot(AtomicU16, AtomicU16, AtomicBool, AtomicBool, AtomicU16);
 impl WorkerSnapshot {
     fn publish_switch(&self, state: WorkerSwitchState) {
-        let value = match state { WorkerSwitchState::Idle => 1, WorkerSwitchState::Pending => 2,
-            WorkerSwitchState::Denied => 3, WorkerSwitchState::TimedOut => 4, WorkerSwitchState::PeerUnavailable => 5 };
+        let value = match state {
+            WorkerSwitchState::Idle => 1,
+            WorkerSwitchState::Pending => 2,
+            WorkerSwitchState::Denied => 3,
+            WorkerSwitchState::TimedOut => 4,
+            WorkerSwitchState::PeerUnavailable => 5,
+        };
         self.4.store(value, Ordering::Release);
     }
     fn take_switch(&self) -> Option<WorkerSwitchState> {
-        match self.4.swap(0, Ordering::AcqRel) { 1 => Some(WorkerSwitchState::Idle), 2 => Some(WorkerSwitchState::Pending),
-            3 => Some(WorkerSwitchState::Denied), 4 => Some(WorkerSwitchState::TimedOut), 5 => Some(WorkerSwitchState::PeerUnavailable), _ => None }
+        match self.4.swap(0, Ordering::AcqRel) {
+            1 => Some(WorkerSwitchState::Idle),
+            2 => Some(WorkerSwitchState::Pending),
+            3 => Some(WorkerSwitchState::Denied),
+            4 => Some(WorkerSwitchState::TimedOut),
+            5 => Some(WorkerSwitchState::PeerUnavailable),
+            _ => None,
+        }
     }
     fn publish_input(&self, state: WorkerInputState, terminal: bool) {
         let code = match state {
@@ -206,7 +220,14 @@ impl WorkerSnapshot {
     }
 
     fn publish(&self, state: WorkerState) {
-        if matches!(state, WorkerState::Listening | WorkerState::Reconnecting | WorkerState::Disconnected | WorkerState::Stopped | WorkerState::Failed) {
+        if matches!(
+            state,
+            WorkerState::Listening
+                | WorkerState::Reconnecting
+                | WorkerState::Disconnected
+                | WorkerState::Stopped
+                | WorkerState::Failed
+        ) {
             self.publish_switch(WorkerSwitchState::Idle);
         }
         let code = match state {
