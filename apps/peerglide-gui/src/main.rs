@@ -1228,6 +1228,109 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn workspace_pointer_drag_and_direction_buttons_commit_only_editable_layout() -> Result<()> {
+        fn text_center(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().find_map(|shape| text_center(shape, label))
+                }
+                _ => None,
+            }
+        }
+        fn frame(
+            app: &mut App,
+            ctx: &egui::Context,
+            time: f64,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    focused: true,
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(920.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.desktop(ui),
+            )
+        }
+        fn step(app: &mut App, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
+            frame(app, ctx, time, events).drop_without_applying_deltas();
+        }
+        fn button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }
+        }
+        fn press(pos: egui::Pos2) -> Vec<egui::Event> {
+            vec![egui::Event::PointerMoved(pos), button(pos, true)]
+        }
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // Presentation fixture only: this test never authenticates or starts a worker.
+        app.config.fingerprint = Some("layout-presentation-only".into());
+        app.config.peer_name = "B".into();
+        app.page = Page::Devices;
+        app.device_tab = DeviceTab::Layout;
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        app.theme(&ctx);
+        step(&mut app, &ctx, 0.0, vec![]);
+        let output = frame(&mut app, &ctx, 0.1, vec![]);
+        let start = output
+            .shapes
+            .iter()
+            .find_map(|paint| text_center(&paint.shape, "B"))
+            .context("peer screen label not painted")?;
+        output.drop_without_applying_deltas();
+        let end = start - Vec2::new(260.0, 0.0);
+        step(&mut app, &ctx, 0.2, press(start));
+        step(&mut app, &ctx, 0.3, vec![egui::Event::PointerMoved(end)]);
+        assert!(
+            app.screen_drag.is_some(),
+            "drag did not acquire the peer screen"
+        );
+        step(&mut app, &ctx, 0.4, vec![button(end, false)]);
+        assert!(
+            app.screen_drag.is_none(),
+            "released drag left the layout locked"
+        );
+        assert_eq!(app.config.edge, "left");
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(app.dir.join("settings.json"))?)?;
+        assert_eq!(stored["data"]["edge"], "left");
+        let output = frame(&mut app, &ctx, 0.5, vec![]);
+        let right = output
+            .shapes
+            .iter()
+            .find_map(|paint| text_center(&paint.shape, "右侧"))
+            .context("direction button not painted")?;
+        output.drop_without_applying_deltas();
+        step(&mut app, &ctx, 0.6, press(right));
+        step(&mut app, &ctx, 0.7, vec![button(right, false)]);
+        assert_eq!(app.config.edge, "right");
+        let before = std::fs::read(app.dir.join("settings.json"))?;
+        drop(app.instance_lock.take());
+        step(&mut app, &ctx, 0.8, vec![]);
+        step(&mut app, &ctx, 0.9, press(start));
+        step(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(end)]);
+        step(&mut app, &ctx, 1.1, vec![button(end, false)]);
+        assert!(app.screen_drag.is_none());
+        assert_eq!(app.config.edge, "right");
+        assert_eq!(std::fs::read(app.dir.join("settings.json"))?, before);
+        assert!(app.child.is_none());
+        Ok(())
+    }
+    #[test]
     fn full_desktop_and_dialogs_render_without_starting_workers_or_exporting_samples() -> Result<()>
     {
         let fixture = Fixture::new()?;
