@@ -1068,3 +1068,14 @@ fixture已实际在Mac执行成功。详VALIDATION新节；预发布voprf及GUI�
 下一批不能把Session伪造成手工确认，需独立后台网络worker、带代次私有stdin/stdout、
 原身份/配置快照复查、ADR0008两端提交及回执未知；成功Offer handoff后关闭/换代要
 显式cancel。代码和权限异常/后台panic须终态失败，配对不自动开启输入或接收。
+
+## 45. B2独立配对worker接线（2026-11-06，开发中）
+
+pairing-worker基于3b838ae/PR56，新增hidden pair-offer/pair-connect，仅managed私有
+stdin/stdout，身份只读，未接GUI/提交命令/输入。代码见protocol/pairing_worker与
+desktop/pairing_worker；schema独立、有界、秘密不走argv/日志、Stop/EOF/到期终止。
+输出独立std线程+单槽/2秒回执，避免大证书/停读GUI卡住async停止。新增真实双进程
+tools/pairing_worker_smoke.py及CLI超时/panic/管道背压回归。transport新增接受已连接
+socket的预算保持入口和空闲断线使Session失效；计算panic单独分类，不当错码重试。
+本机预检仍无Rust，当前尚未编译运行，须完整CI/实际进程smoke后才能称本批通过。
+原a791445已获权App继续保留，Windows当前就绪确认仍待回复，不开启Native。

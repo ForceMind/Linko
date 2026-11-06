@@ -42,7 +42,7 @@ async fn real_tcp_pake_then_mutual_tls_returns_only_bound_temporary_peers() -> R
     let entry = CodeEntry::new(offer.code()?.to_owned())?;
     let cancel_client = entry.cancellation();
     let cancel_server = offer.cancellation();
-    let (accepted, connected) = tokio::try_join!(
+    let (mut accepted, connected) = tokio::try_join!(
         offer.accept(&listener, server.clone()),
         entry.connect(listener.local_addr()?, client.clone()),
     )?;
@@ -56,6 +56,10 @@ async fn real_tcp_pake_then_mutual_tls_returns_only_bound_temporary_peers() -> R
     assert_eq!(accepted.peer_certificate()?, client.certificate);
     cancel_client.cancel();
     assert!(connected.peer_certificate().is_err());
+    drop(connected);
+    // A disconnected peer cannot remain a usable pending proposal.
+    let _ = tokio::time::timeout(Duration::from_secs(1), accepted.wait_peer_end()).await?;
+    assert!(accepted.peer_certificate().is_err());
     cancel_server.cancel();
     assert!(accepted.peer_certificate().is_err());
     Ok(())
@@ -435,5 +439,7 @@ async fn cancelled_compute_waiter_does_not_release_the_running_cpu_permit() -> R
         still_blocked,
         "cancelled waiter released active computation budget"
     );
+    let failed = crypto::compute::<()>(|| panic!("synthetic pairing compute failure")).await;
+    assert!(failed.err().unwrap().downcast_ref::<ComputationFailed>().is_some());
     Ok(())
 }
