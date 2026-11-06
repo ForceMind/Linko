@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.3.3-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.4-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -17,7 +17,7 @@ See [validation](docs/VALIDATION.md).
 Primary-display switching, basic HID keys, three mouse buttons and scrolling
 form the initial native prototype. Multi-monitor topology, IME composition,
 clipboard, files, pairing codes and stable signed installers remain
-unimplemented. Optional tray/menu-bar integration is an experimental desktop slice; see validation. The desktop interface is Simplified Chinese, with an embedded OFL-licensed Noto Sans SC font; no system font installation is needed. A native eframe control panel provides
+unimplemented. Optional tray/menu-bar integration is an experimental desktop slice; see validation. The macOS application menu and normal termination now use cooperative recovery; physical native-input acceptance remains pending. The desktop interface is Simplified Chinese, with an embedded OFL-licensed Noto Sans SC font; no system font installation is needed. A native eframe control panel provides
 identity/enrollment, session start/stop, probes, relative screen placement and
 dark/light settings.
 

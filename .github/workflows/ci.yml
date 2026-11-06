@@ -42,6 +42,9 @@ jobs:
       - run: python tools/smoke.py
       - run: python tools/reconnect_smoke.py
       - run: python tools/context_smoke.py
+      - name: macOS cooperative system-terminate check (no native input)
+        if: runner.os == 'macOS'
+        run: python tools/macos_exit_smoke.py target/release
       - run: python -m unittest discover -s tools -p test_third_party.py
       - run: python -m unittest discover -s tools -p test_package.py
       - run: python tools/third_party.py

@@ -1435,3 +1435,67 @@ Mac匹配artifact13488684105外层e4e6c013da53ea16bd4c83c83d8860c27ef622c11454f6
 Windows原生GUI/真实断电、手工冲突修复、生产短码仍未验/未交付；现有已获权0.2.4
 包与实际配对保留供用户就绪后的单向物理短测，不反复要求新中间包授权。本轮为有
 源码、回归、CI、本机GUI与推送证据的progress，完整Goal继续active，不合并或发布。
+
+## Mac中文菜单与正常退出保护（2026-11-06，开发/验证中）
+
+macos-safe-quit/PR55从1960986继续已批准B3，版本0.3.4-dev。锁定winit默认菜单英文且
+Cmd+Q直达terminate/WillTerminate，绕过GUI的CloseRequested等待；新平台owner不依赖
+tray偏好，中文菜单/缺失ShouldTerminate桥接转入同一Quit。保留原delegate/既有IMP，
+编译期锁winit0.30.13，运行时核对实例/ABI/菜单绑定；弱注册先解绑，进程永久selector
+无owner仍取消终止。GUI邮箱在所有owner创建前一次建立，托盘不换Arc；缺失保护拒新
+Native，丢失保护请求Stop显窗，Unknown不能被Quit覆盖。无新输入hook或全局快捷键，
+v5/身份/配置/独立授权不改。SIGKILL/Force Quit及注销完整保证除外；详ADR-0009。
+
+复用localize_panels sol/high独占平台四文件，根负责GUI/测试/版本/文档；无递归派工。
+首轮b1d2fbe最低1.95/审计过，平台仅fmt35hunks未过；Mac资源编译报3处ProtocolObject
+向AnyObject转换不匹配。已按锁定objc2 0.6.5的AsRef API与CI格式精确修正，待新候选
+全量检查，未把失败标过。本机preflight-20261106T093137433792Z-63984因Rust缺失停止，
+按用户决定不安装；原生菜单/正常系统terminate与真实C06尚未验，无Native或OS权限变化。
+
+fb187af完整五项42200296381及两平台驻留42200296460通过。c22713a五项42204109595
+通过，Mac真实AppKit检查回执含running/returned/quit/ownerHealthy/noInput全true，
+两端仍未做物理C06。Mac artifact13495433513外层c524e13df993262a667fd2b702c2f3408df2b168bc9213053964fd4c283868b5、
+内层fa68d7a3ef7a936e269313d5ace401a7e3eb70d3cf29cc90fb2dacc9a8acc0cf，解压安全路径/
+strict签名/metadata已过。本机同包隔离系统检查两次SIGABRT，失败stderr为winit
+事件重入（event_handler.rs:135）；崩溃栈在AppKit persistent-state嵌套RunLoop，
+直接从GUI logic调用terminate不适用于宿主26.2。此为当前辅助检查的可复现失败，
+不能套到#10历史根因，也未改变系统防护或winit重入保护。
+
+46d2f85改为NSOperationQueue主队列异步票据，执行时重新核对真实app/delegate/菜单/
+bridge/registry，Pending禁止Close和owner拆卸。返回后才能出回执，超时/缺回执/abort
+仍失败；正常生产菜单仍只postQuit，未随诊断改动。该源码最低1.95/审计及两平台
+驻留42208139236通过，平台只fmt10hunks失败，按日志修正后再跑全量及宿主复验。
+
+本机c227正常菜单已独立观察中文Show/Stop/Quit等项、Show恢复窗口、实际无Native
+回环双CLI认证、菜单Stop、再连接、托盘on/off/on及close-to-tray=true时CmdQ退出。
+352.4秒GUI在资源截止360秒前退出（LS观察，未收集GUI退出码），双peer退出0/0，
+看到两个独立GUI工作进程且无--native/--allow-control；峰RSS129760KiB，测试身份未变，
+native/allow/reconnect仍false，最终无残留。并未点击实际Dock退出，也未做隐藏后
+菜单栏唤回或真实键鼠。私有脚本/回执在ignored safe-quit-c22713a，测试身份不得用于
+真实Windows配对。主Goal有新实现/CI/失败诊断/本机UI证据，继续active，不合并/发布。
+
+a791445a6e3c69cbd958ccc7e12c91127da4d680运行源码已通过完整五项42209777020与两平台
+RSS驻留42209777128，含真正AppKit调用→同一邮箱Quit→健康保护→GUI逻辑关闭的
+严格回执；缺回执/abort不算通过。Mac artifact13498951503外层4a1ff2ac739913e5b04b9dd237d88c70503e73ac7259204d31ba4f5e090060a4、
+内层c173e2e6298dfc4214d6453a5d2b0e8a5a84060884c1e9413e2007d6d5f4e68e，安全解压/strict
+签名/metadata过。同一宿主26.2用新包重做真实API检查，退出0、running/returned/
+quit/ownerHealthy/noInput全true；确认当前辅助检查的GUI回调内同步调用重入已通过
+主队列修正，不关闭状态保存或winit保护；#10历史根因和6.83GB仍未定位。
+
+用户解锁后，普通GUI在close-to-tray=true时⌘Q退出0（80.09秒、无会话）；之前锁屏
+90秒保护到时-15保留为未完成。随后用户实际Dock右键退出，同一受监测普通GUI退出0
+（61.16秒，无会话/Native、无残留）。这补齐无Native系统退出入口，不是实际KVM
+按键释放或睡眠/撤权/8h耐久验收。收据在ignored safe-quit-a791445子目录；Cua闭窗
+后只读app清单/ps，未自动重开默认资料。窗口/工具观察不替代进程退出码。
+
+运行包固定a791445，不因后续纯文档更新替换或重复授权。正常默认入口已显示原Windows
+配对。最初实际worker诊断AX/IM均Denied；经用户明确要求代操作后，仅在系统设置
+移除两项旧PeerGlide登记，用完整冻结App路径确认0.3.4/30.8MB并重新添加、开启。
+系统认证由用户本人完成，未读取/填写密码，未改其他App权限或删除应用/身份/配对。
+用户解锁后，同一冻结包的“检查键鼠权限”实际worker只读结果为AX Granted、
+Input Monitoring Granted、Secure Input未检测到。未启动Native/通信，Mac接收仍关。
+随后⌘Q结束诊断，监督记录gui_exited、55.17秒、峰RSS120656KiB、无GUI/worker残留；
+这是短时前置检查，不是资源事故修复或C06验收。私有收据仅保留在ignored target。
+当前等待Windows就绪和本次Mac→Windows最多45秒短测确认，不重新交换证书或生成
+身份。daff5a9文档候选五项42214599991与驻留两项42214600196全过；本次相对a791
+仍仅改记录。主Goal仍active，全路线/物理C06未完成，不合并或稳定发布。
