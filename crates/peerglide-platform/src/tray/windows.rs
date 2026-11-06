@@ -22,6 +22,25 @@ const ICON_ID: u32 = 1;
 const SHOW_ID: usize = 1;
 const STOP_ID: usize = 2;
 const QUIT_ID: usize = 3;
+// Windows SDK shellapi.h: NINF_KEY=0x1, NIN_KEYSELECT=(NIN_SELECT | NINF_KEY).
+// windows-sys 0.61 exports NIN_SELECT but omits the compound macro.
+// https://github.com/microsoft/win32metadata/blob/main/generation/WinSDK/RecompiledIdlHeaders/um/shellapi.h
+const KEY_SELECT_NOTIFICATION: u32 = NIN_SELECT | 0x1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Notice {
+    Show,
+    Menu,
+    Ignore,
+}
+fn notification(value: LPARAM) -> Notice {
+    // Version 4 packs the notification in LOWORD and the icon ID in HIWORD.
+    match (value as u32) & 0xffff {
+        WM_LBUTTONUP | WM_LBUTTONDBLCLK | NIN_SELECT | KEY_SELECT_NOTIFICATION => Notice::Show,
+        WM_RBUTTONUP | WM_CONTEXTMENU => Notice::Menu,
+        _ => Notice::Ignore,
+    }
+}
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
@@ -180,11 +199,9 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: 
             return 0;
         }
         if message == CALLBACK && !state.stop.load(Ordering::Acquire) {
-            match (l as u32) & 0xffff {
-                WM_LBUTTONUP | WM_LBUTTONDBLCLK | NIN_SELECT | NIN_KEYSELECT => {
-                    state.mailbox.post(Command::Show)
-                }
-                WM_RBUTTONUP | WM_CONTEXTMENU => {
+            match notification(l) {
+                Notice::Show => state.mailbox.post(Command::Show),
+                Notice::Menu => {
                     let mut point = POINT { x: 0, y: 0 };
                     if unsafe { GetCursorPos(&mut point) } != 0 {
                         // Required by the native shortcut-menu contract so an
@@ -214,7 +231,7 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: 
                         }
                     }
                 }
-                _ => (),
+                Notice::Ignore => (),
             }
             return 0;
         }
@@ -432,4 +449,33 @@ pub(super) fn create(mailbox: Arc<Mailbox>) -> Result<Tray> {
         .recv_timeout(Duration::from_secs(3))
         .context("托盘初始化未完成")??;
     Ok(tray)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_keyboard_and_packed_version4_notifications_keep_their_actions() {
+        assert_eq!(KEY_SELECT_NOTIFICATION, 0x0401);
+        for event in [
+            WM_LBUTTONUP,
+            WM_LBUTTONDBLCLK,
+            NIN_SELECT,
+            KEY_SELECT_NOTIFICATION,
+        ] {
+            assert_eq!(notification(event as LPARAM), Notice::Show);
+            assert_eq!(notification(((ICON_ID << 16) | event) as LPARAM), Notice::Show);
+        }
+        for event in [WM_RBUTTONUP, WM_CONTEXTMENU] {
+            assert_eq!(notification(((ICON_ID << 16) | event) as LPARAM), Notice::Menu);
+        }
+        for event in [0, WM_MOUSEMOVE, WM_USER + 2, WM_USER + 6] {
+            assert_eq!(
+                notification(((ICON_ID << 16) | event) as LPARAM),
+                Notice::Ignore,
+                "unrelated/balloon/popup notifications cannot become Show or Menu"
+            );
+        }
+    }
 }
