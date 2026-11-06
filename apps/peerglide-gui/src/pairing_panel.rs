@@ -392,7 +392,7 @@ impl Panel {
             if self.supervisor.phase()==Phase::Completed&&ui.button("下一步：摆好屏幕位置").clicked(){
                 app.page=super::Page::Devices;app.device_tab=super::DeviceTab::Layout;self.open=false;
             }
-            if self.supervisor.needs_poll(){if ui.button("停止核验").clicked(){self.cancel();}}
+            if self.supervisor.needs_poll()&&ui.button("停止核验").clicked(){self.cancel();}
             if ui.button("关闭").clicked(){self.open=false;self.cancel();}
         });
         if !open {
