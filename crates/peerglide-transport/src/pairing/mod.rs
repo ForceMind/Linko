@@ -186,7 +186,10 @@ impl Offer {
         identity: Arc<Identity>,
     ) -> Result<PairingSession> {
         self.code()?;
-        anyhow::ensure!(identity.certificate == self.local_certificate, "pairing identity changed");
+        anyhow::ensure!(
+            identity.certificate == self.local_certificate,
+            "pairing identity changed"
+        );
         // Charge before reading any attacker-controlled bytes or running KSF.
         // Malformed frames, disconnect after KE2 and changed IP all consume it.
         self.attempts += 1;
@@ -330,6 +333,11 @@ pub struct PairingSession {
     lifetime: Lifetime,
     cancellation: Cancellation,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PeerEnd {
+    Disconnected,
+    UnexpectedData,
+}
 impl Drop for PairingSession {
     fn drop(&mut self) {
         self.cancellation.cancel();
@@ -352,15 +360,23 @@ impl PairingSession {
     /// data. There must be exactly one stream reader; a future commit protocol
     /// must replace this idle read, never run beside it. Every outcome invalidates
     /// this temporary proposal; observing readiness is not persistent trust.
-    pub async fn wait_peer_end(&mut self) -> Result<()> {
+    pub async fn wait_peer_end(&mut self) -> Result<PeerEnd> {
         use tokio::io::AsyncReadExt;
         let lifetime = self.lifetime.clone();
-        let result = lifetime.run(async {
-            let mut byte = [0; 1];
-            let count = self.stream.read(&mut byte).await?;
-            anyhow::ensure!(count == 0, "unexpected pairing application data");
-            Ok(())
-        }).await;
+        let result = lifetime
+            .run(async {
+                let mut byte = [0; 1];
+                match self.stream.read(&mut byte).await {
+                    Ok(0) => Ok(PeerEnd::Disconnected),
+                    Ok(_) => Ok(PeerEnd::UnexpectedData),
+                    Err(error) if matches!(error.kind(),
+                        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe
+                    ) => Ok(PeerEnd::Disconnected),
+                    Err(error) => Err(error.into()),
+                }
+            })
+            .await;
         self.cancellation.cancel();
         result
     }

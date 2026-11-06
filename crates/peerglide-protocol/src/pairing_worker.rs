@@ -2,7 +2,10 @@
 //! Only a supervisor's own live child stdout may produce observations. Codes
 //! must never enter generic diagnostic logs; stale child channels must be dropped.
 use serde::{Deserialize, Serialize};
-use std::{io::{self, BufRead}, net::SocketAddr};
+use std::{
+    io::{self, BufRead},
+    net::SocketAddr,
+};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const MAX_EVENT_LINE: usize = 72 * 1024;
@@ -40,20 +43,31 @@ pub enum StopReason {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "state", deny_unknown_fields)]
 pub enum State {
-    Listening { code: String, address: SocketAddr },
+    Listening {
+        code: String,
+        address: SocketAddr,
+    },
     Authenticating {},
-    AttemptRejected { remaining: u8 },
+    AttemptRejected {
+        remaining: u8,
+    },
     Authenticated {
         certificate: Vec<u8>,
         local_fingerprint: String,
         context: [u8; 32],
     },
-    Stopped { reason: StopReason },
-    Failed { reason: Failure },
+    Stopped {
+        reason: StopReason,
+    },
+    Failed {
+        reason: Failure,
+    },
 }
 impl Drop for State {
     fn drop(&mut self) {
-        if let Self::Listening { code, .. } = self { code.zeroize(); }
+        if let Self::Listening { code, .. } = self {
+            code.zeroize();
+        }
     }
 }
 impl State {
@@ -61,10 +75,17 @@ impl State {
         match self {
             Self::Listening { code, address } => valid_code(code) && address.port() != 0,
             Self::AttemptRejected { remaining } => *remaining < 5,
-            Self::Authenticated { certificate, local_fingerprint, .. } => {
-                !certificate.is_empty() && certificate.len() <= MAX_CERTIFICATE
+            Self::Authenticated {
+                certificate,
+                local_fingerprint,
+                ..
+            } => {
+                !certificate.is_empty()
+                    && certificate.len() <= MAX_CERTIFICATE
                     && local_fingerprint.len() == 64
-                    && local_fingerprint.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    && local_fingerprint
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             }
             _ => true,
         }
@@ -79,15 +100,27 @@ pub struct PairingEvent {
     pub event: State,
 }
 impl PairingEvent {
-    pub fn new(event: State) -> Self { Self { version: 1, kind: EventKind::Pairing, event } }
+    pub fn new(event: State) -> Self {
+        Self {
+            version: 1,
+            kind: EventKind::Pairing,
+            event,
+        }
+    }
     pub fn line(&self) -> Option<Zeroizing<String>> {
-        if !self.event.valid() { return None; }
+        if !self.event.valid() {
+            return None;
+        }
         let line = Zeroizing::new(serde_json::to_string(self).ok()?);
         (line.len() <= MAX_EVENT_LINE).then_some(line)
     }
     pub fn parse(line: &str) -> Option<Self> {
-        if line.len() > MAX_EVENT_LINE { return None; }
-        serde_json::from_str::<Self>(line).ok().filter(|event| event.version == 1 && event.event.valid())
+        if line.len() > MAX_EVENT_LINE {
+            return None;
+        }
+        serde_json::from_str::<Self>(line)
+            .ok()
+            .filter(|event| event.version == 1 && event.event.valid())
     }
 }
 
@@ -99,7 +132,9 @@ enum Command {
 }
 impl Drop for Command {
     fn drop(&mut self) {
-        if let Self::Code { code } = self { code.zeroize(); }
+        if let Self::Code { code } = self {
+            code.zeroize();
+        }
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -115,21 +150,38 @@ fn valid_code(code: &str) -> bool {
 impl PairingCommand {
     pub fn code(code: String) -> Option<Self> {
         let body = Command::Code { code };
-        let Command::Code { code } = &body else { return None; };
-        valid_code(code).then_some(Self { version: 1, kind: CommandKind::Pairing, body })
+        let Command::Code { code } = &body else {
+            return None;
+        };
+        valid_code(code).then_some(Self {
+            version: 1,
+            kind: CommandKind::Pairing,
+            body,
+        })
     }
-    pub fn stop() -> Self { Self { version: 1, kind: CommandKind::Pairing, body: Command::Stop {} } }
+    pub fn stop() -> Self {
+        Self {
+            version: 1,
+            kind: CommandKind::Pairing,
+            body: Command::Stop {},
+        }
+    }
     pub fn entered_code(&self) -> Option<&str> {
-        match &self.body { Command::Code { code } => Some(code), Command::Stop {} => None }
+        match &self.body {
+            Command::Code { code } => Some(code),
+            Command::Stop {} => None,
+        }
     }
     pub fn line(&self) -> Zeroizing<String> {
         Zeroizing::new(serde_json::to_string(self).expect("closed pairing command"))
     }
     pub fn parse(line: &str) -> Option<Self> {
-        if line.len() > MAX_COMMAND_LINE { return None; }
-        serde_json::from_str::<Self>(line).ok().filter(|command| {
-            command.version == 1 && command.entered_code().is_none_or(valid_code)
-        })
+        if line.len() > MAX_COMMAND_LINE {
+            return None;
+        }
+        serde_json::from_str::<Self>(line)
+            .ok()
+            .filter(|command| command.version == 1 && command.entered_code().is_none_or(valid_code))
     }
 }
 
@@ -140,11 +192,17 @@ pub fn read_command(reader: &mut impl BufRead) -> io::Result<Option<PairingComma
     loop {
         let chunk = reader.fill_buf()?;
         if chunk.is_empty() {
-            return if bytes.is_empty() { Ok(None) } else { Err(invalid()) };
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(invalid())
+            };
         }
         let end = chunk.iter().position(|b| *b == b'\n');
         let count = end.unwrap_or(chunk.len());
-        if bytes.len() + count > MAX_COMMAND_LINE { return Err(invalid()); }
+        if bytes.len() + count > MAX_COMMAND_LINE {
+            return Err(invalid());
+        }
         bytes.extend_from_slice(&chunk[..count]);
         reader.consume(count + usize::from(end.is_some()));
         if end.is_some() {
@@ -153,7 +211,9 @@ pub fn read_command(reader: &mut impl BufRead) -> io::Result<Option<PairingComma
         }
     }
 }
-fn invalid() -> io::Error { io::Error::new(io::ErrorKind::InvalidData, "invalid pairing command") }
+fn invalid() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "invalid pairing command")
+}
 
 #[cfg(test)]
 mod tests {
@@ -164,35 +224,69 @@ mod tests {
             assert!(PairingCommand::code(text.into()).is_none());
         }
         let command = PairingCommand::code("12345678".into()).unwrap();
-        assert_eq!(PairingCommand::parse(&command.line()).unwrap().entered_code(), Some("12345678"));
-        assert!(PairingCommand::parse(&PairingCommand::stop().line()).unwrap().entered_code().is_none());
+        assert_eq!(
+            PairingCommand::parse(&command.line())
+                .unwrap()
+                .entered_code(),
+            Some("12345678")
+        );
+        assert!(PairingCommand::parse(&PairingCommand::stop().line())
+            .unwrap()
+            .entered_code()
+            .is_none());
         for bad in [
             r#"{"version":2,"kind":"pairing_command","body":{"command":"Stop"}}"#,
             r#"{"version":1,"kind":"pairing_command","body":{"command":"Stop","extra":true}}"#,
-            "stop", "log {\"version\":1}",
-        ] { assert!(PairingCommand::parse(bad).is_none()); }
+            "stop",
+            "log {\"version\":1}",
+        ] {
+            assert!(PairingCommand::parse(bad).is_none());
+        }
         assert!(PairingCommand::parse(&" ".repeat(MAX_COMMAND_LINE + 1)).is_none());
     }
     #[test]
     fn command_reader_limits_memory_and_rejects_partial_utf8_and_partial_records() {
-        let mut full = PairingCommand::stop().line(); full.push('\n');
-        assert!(read_command(&mut io::Cursor::new(full.as_bytes())).unwrap().is_some());
-        for bytes in [b"".to_vec(), vec![b' '; MAX_COMMAND_LINE + 1], vec![255, b'\n'], b"{}".to_vec()] {
+        let mut full = PairingCommand::stop().line();
+        full.push('\n');
+        assert!(read_command(&mut io::Cursor::new(full.as_bytes()))
+            .unwrap()
+            .is_some());
+        for bytes in [
+            b"".to_vec(),
+            vec![b' '; MAX_COMMAND_LINE + 1],
+            vec![255, b'\n'],
+            b"{}".to_vec(),
+        ] {
             let result = read_command(&mut io::Cursor::new(&bytes));
-            if bytes.is_empty() { assert!(result.unwrap().is_none()); } else { assert!(result.is_err()); }
+            if bytes.is_empty() {
+                assert!(result.unwrap().is_none());
+            } else {
+                assert!(result.is_err());
+            }
         }
     }
     #[test]
     fn event_codec_is_distinct_from_input_state_and_bounds_public_material() {
-        let event = PairingEvent::new(State::Listening { code: "12345678".into(), address: "127.0.0.1:24871".parse().unwrap() });
+        let event = PairingEvent::new(State::Listening {
+            code: "12345678".into(),
+            address: "127.0.0.1:24871".parse().unwrap(),
+        });
         let line = event.line().unwrap();
         assert!(PairingEvent::parse(&line).is_some());
         assert!(crate::worker::WorkerEvent::parse(&line).is_none());
         assert!(crate::worker::WorkerInputEvent::parse(&line).is_none());
-        let auth = PairingEvent::new(State::Authenticated { certificate: vec![255; MAX_CERTIFICATE], local_fingerprint: "a".repeat(64), context: [0; 32] });
+        let auth = PairingEvent::new(State::Authenticated {
+            certificate: vec![255; MAX_CERTIFICATE],
+            local_fingerprint: "a".repeat(64),
+            context: [0; 32],
+        });
         assert!(auth.line().unwrap().len() < MAX_EVENT_LINE);
         assert!(PairingEvent::parse(&auth.line().unwrap()).is_some());
-        let bad = PairingEvent::new(State::Authenticated { certificate: vec![0; MAX_CERTIFICATE + 1], local_fingerprint: "a".repeat(64), context: [0; 32] });
+        let bad = PairingEvent::new(State::Authenticated {
+            certificate: vec![0; MAX_CERTIFICATE + 1],
+            local_fingerprint: "a".repeat(64),
+            context: [0; 32],
+        });
         assert!(bad.line().is_none());
         assert!(PairingEvent::parse(&" ".repeat(MAX_EVENT_LINE + 1)).is_none());
         assert!(PairingEvent::parse(&PairingCommand::stop().line()).is_none());

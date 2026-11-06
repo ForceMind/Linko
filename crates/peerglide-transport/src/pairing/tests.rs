@@ -58,9 +58,30 @@ async fn real_tcp_pake_then_mutual_tls_returns_only_bound_temporary_peers() -> R
     assert!(connected.peer_certificate().is_err());
     drop(connected);
     // A disconnected peer cannot remain a usable pending proposal.
-    let _ = tokio::time::timeout(Duration::from_secs(1), accepted.wait_peer_end()).await?;
+    let ended = tokio::time::timeout(Duration::from_secs(1), accepted.wait_peer_end()).await??;
+    assert_eq!(ended, PeerEnd::Disconnected);
     assert!(accepted.peer_certificate().is_err());
     cancel_server.cancel();
+    assert!(accepted.peer_certificate().is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn authenticated_extra_application_data_invalidates_the_pending_proposal() -> Result<()> {
+    let _scenario = CRYPTO_SCENARIOS.lock().await;
+    let server = Arc::new(Identity::generate()?);
+    let client = Arc::new(Identity::generate()?);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mut offer = Offer::new(&server)?;
+    let entry = CodeEntry::new(offer.code()?.to_owned())?;
+    let (mut accepted, mut connected) = tokio::try_join!(
+        offer.accept(&listener, server),
+        entry.connect(listener.local_addr()?, client),
+    )?;
+    connected.stream.write_all(&[1]).await?;
+    connected.stream.flush().await?;
+    let ended = tokio::time::timeout(Duration::from_secs(1), accepted.wait_peer_end()).await??;
+    assert_eq!(ended, PeerEnd::UnexpectedData);
     assert!(accepted.peer_certificate().is_err());
     Ok(())
 }
@@ -440,6 +461,10 @@ async fn cancelled_compute_waiter_does_not_release_the_running_cpu_permit() -> R
         "cancelled waiter released active computation budget"
     );
     let failed = crypto::compute::<()>(|| panic!("synthetic pairing compute failure")).await;
-    assert!(failed.err().unwrap().downcast_ref::<ComputationFailed>().is_some());
+    assert!(failed
+        .err()
+        .unwrap()
+        .downcast_ref::<ComputationFailed>()
+        .is_some());
     Ok(())
 }

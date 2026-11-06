@@ -8,6 +8,8 @@ import hashlib
 import json
 import pathlib
 import queue
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -205,6 +207,42 @@ def main():
             server.stop()
             server.event("Stopped")
             server.wait(0)
+
+            # Both terminal paths race an already submitted code. The same
+            # child's control pipe must not issue a second authentication.
+            for ending in ("stop", "eof"):
+                server, address, code = offer()
+                client = connect(address)
+                commands = [{"command": "Code", "code": code}]
+                if ending == "stop":
+                    commands.append({"command": "Stop"})
+                frames = b"".join(json.dumps({"version": 1, "kind": "pairing_command", "body": body},
+                                           separators=(",", ":")).encode() + b"\n" for body in commands)
+                client.process.stdin.write(frames)
+                client.process.stdin.flush()
+                if ending == "eof":
+                    client.process.stdin.close()
+                if client.event("Stopped")["reason"] != "Cancelled":
+                    raise RuntimeError("code/stop race did not cancel child")
+                client.wait(0)
+                if "Authenticated" in client.names:
+                    raise RuntimeError("cancelled code race returned authentication")
+                server.stop()
+                server.event("Stopped")
+                server.wait(0)
+
+            server, address, _ = offer()
+            ip, port = address.rsplit(":", 1)
+            for remaining in range(4, -1, -1):
+                with socket.create_connection((ip, int(port)), timeout=3) as attack:
+                    attack.sendall(struct.pack(">I", 0xffffffff))
+                if server.event("AttemptRejected")["remaining"] != remaining:
+                    raise RuntimeError("offer attempt budget was reset")
+            if server.event("Stopped")["reason"] != "AttemptsExhausted":
+                raise RuntimeError("exhausted offer did not stop")
+            server.wait(0)
+            if server.names.count("Listening") != 1:
+                raise RuntimeError("worker regenerated an offer automatically")
 
             client = connect("127.0.0.1:9")
             client.process.stdin.write(b"x" * 257)

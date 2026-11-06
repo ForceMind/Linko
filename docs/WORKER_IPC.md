@@ -59,6 +59,11 @@ Blocking pipe IO lives on std threads so it cannot pin the async lifecycle or th
 Tokio blocking pool. The whole child retains one120-second deadline. Async panic
 and computation-task failure become terminal failure, not authentication retry.
 After temporary authentication, peer close/unexpected data ends the Session; it
-is invalidated before further local use. There is no commit command in this batch.
+is invalidated before further local use. Expected EOF/reset is a disconnect;
+unexpected application data or malformed TLS is Failed/Protocol, not exit0.
+The dedicated pairing command replaces the default panic hook with typed
+Failed/Internal reporting and a failing exit, avoiding raw panic arguments or a
+blocked stderr hook; it does not suppress the failure outcome. Other CLI modes
+and the GUI panic policy are unchanged. There is no commit command in this batch.
 Stop, EOF, expiry and process exit never mean a device was saved. Native C06 and
 GUI pairing/enrollment remain separate, unfinished acceptance.

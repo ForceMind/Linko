@@ -1,6 +1,6 @@
+mod pairing_worker;
 mod reconnect;
 mod session;
-mod pairing_worker;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
@@ -168,12 +168,16 @@ struct Options {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::PairOffer { identity, bind, managed } => {
-            pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed).await
-        }
-        Command::PairConnect { address, identity, managed } => {
-            pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed).await
-        }
+        Command::PairOffer {
+            identity,
+            bind,
+            managed,
+        } => pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed).await,
+        Command::PairConnect {
+            address,
+            identity,
+            managed,
+        } => pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed).await,
         Command::DiagnoseContext {
             include_application_id,
             observe_ms,
