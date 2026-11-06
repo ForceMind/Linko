@@ -1131,7 +1131,7 @@ impl App {
                     && !self.config.native
                     && !self.config.allow
                     && self.config.fingerprint.is_none();
-                if let Err(error) = check.finish(no_input) {
+                if let Err(error) = check.finish(no_input, self.native_exit_protected()) {
                     self.notice = format!("退出检查回执写入失败：{error:#}");
                 }
             }

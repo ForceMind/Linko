@@ -36,7 +36,7 @@ def main():
                 assert len(data) <= 4096
                 value = json.loads(data)
                 assert value["schema_version"] == 1 and value["scope"] == "isolated_real_appkit_terminate_to_owned_quit"
-                for key in ("success", "terminate_returned", "same_mailbox_quit_received", "no_worker_or_input", "closing_in_gui_logic"):
+                for key in ("success", "terminate_returned", "same_mailbox_quit_received", "no_worker_or_input", "exit_owner_healthy", "closing_in_gui_logic"):
                     assert value[key] is True, (key, value)
                 assert not (profile / "identity").exists() and not (profile / "trusted-peer.crt.der").exists()
                 print("PASS: real AppKit terminate returned, owned Quit reached GUI logic, isolated GUI closed; no native input")

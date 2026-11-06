@@ -90,7 +90,11 @@ impl Check {
     pub(super) fn received_quit(&mut self) {
         self.quit_received = true;
     }
-    pub(super) fn finish(mut self, no_worker_or_input: bool) -> Result<()> {
+    pub(super) fn finish(
+        mut self,
+        no_worker_or_input: bool,
+        exit_owner_healthy: bool,
+    ) -> Result<()> {
         #[derive(Serialize)]
         struct Receipt {
             schema_version: u16,
@@ -99,6 +103,7 @@ impl Check {
             same_mailbox_quit_received: bool,
             application_running_before: Option<bool>,
             no_worker_or_input: bool,
+            exit_owner_healthy: bool,
             closing_in_gui_logic: bool,
             success: bool,
             error: Option<&'static str>,
@@ -110,11 +115,13 @@ impl Check {
             same_mailbox_quit_received: self.quit_received,
             application_running_before: self.running_before,
             no_worker_or_input,
+            exit_owner_healthy,
             closing_in_gui_logic: true,
             success: self.requested
                 && self.returned
                 && self.quit_received
                 && no_worker_or_input
+                && exit_owner_healthy
                 && self.error.is_none(),
             error: self.error,
         };
