@@ -293,13 +293,17 @@ pub async fn send(stream: &mut quinn::SendStream, msg: &Message) -> Result<()> {
 #[derive(Debug)]
 pub struct MessageStreamEnded;
 impl std::fmt::Display for MessageStreamEnded {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("message stream ended at a frame boundary") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("message stream ended at a frame boundary")
+    }
 }
 impl std::error::Error for MessageStreamEnded {}
 #[derive(Debug)]
 pub struct InvalidMessageFrame;
 impl std::fmt::Display for InvalidMessageFrame {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("invalid or incomplete message frame") }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("invalid or incomplete message frame")
+    }
 }
 impl std::error::Error for InvalidMessageFrame {}
 fn frame_read_error(error: std::io::Error) -> anyhow::Error {
@@ -316,13 +320,17 @@ pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
         return Err(MessageStreamEnded.into());
     }
     // A FIN inside a frame is malformed; transport failures keep their class.
-    AsyncReadExt::read_exact(stream, &mut header[1..]).await.map_err(frame_read_error)?;
+    AsyncReadExt::read_exact(stream, &mut header[1..])
+        .await
+        .map_err(frame_read_error)?;
     let size = u32::from_be_bytes(header) as usize;
     if size == 0 || size > MAX_FRAME {
         return Err(anyhow::anyhow!("frame length invalid").context(InvalidMessageFrame));
     }
     let mut bytes = vec![0; size];
-    AsyncReadExt::read_exact(stream, &mut bytes).await.map_err(frame_read_error)?;
+    AsyncReadExt::read_exact(stream, &mut bytes)
+        .await
+        .map_err(frame_read_error)?;
     decode(&bytes).map_err(|error| anyhow::Error::msg(error).context(InvalidMessageFrame))
 }
 
@@ -445,18 +453,32 @@ mod tests {
 mod negative_tests {
     use super::*;
     #[tokio::test]
-    async fn stream_fin_distinguishes_frame_boundaries_from_partial_headers_and_bodies() -> Result<()> {
-        for tail in [vec![], vec![0], vec![0, 0, 0], vec![0, 0, 0, 2, b'{'], vec![0, 0, 0, 0]] {
+    async fn stream_fin_distinguishes_frame_boundaries_from_partial_headers_and_bodies(
+    ) -> Result<()> {
+        for tail in [
+            vec![],
+            vec![0],
+            vec![0, 0, 0],
+            vec![0, 0, 0, 2, b'{'],
+            vec![0, 0, 0, 0],
+        ] {
             let boundary = tail.is_empty();
-            let a = Identity::generate()?; let b = Identity::generate()?;
+            let a = Identity::generate()?;
+            let b = Identity::generate()?;
             let ea = endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
             let eb = endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
             let (seen, observed) = tokio::sync::oneshot::channel();
             let server = async {
                 let c = eb.accept().await.unwrap().await?;
                 let (mut tx, mut rx) = c.accept_bi().await?;
-                assert!(matches!(receive(&mut rx).await?, Message::Ping { lease: 0 }));
-                let error = receive(&mut rx).await.err().context("FIN accepted as a message")?;
+                assert!(matches!(
+                    receive(&mut rx).await?,
+                    Message::Ping { lease: 0 }
+                ));
+                let error = receive(&mut rx)
+                    .await
+                    .err()
+                    .context("FIN accepted as a message")?;
                 assert_eq!(error.is::<MessageStreamEnded>(), boundary);
                 assert_eq!(error.is::<InvalidMessageFrame>(), !boundary);
                 send(&mut tx, &Message::Pong { lease: 0 }).await?;
@@ -468,13 +490,20 @@ mod negative_tests {
                 let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
                 let (mut tx, mut rx) = c.open_bi().await?;
                 send(&mut tx, &Message::Ping { lease: 0 }).await?;
-                tx.write_all(&tail).await?; tx.finish()?;
-                assert!(matches!(receive(&mut rx).await?, Message::Pong { lease: 0 }));
+                tx.write_all(&tail).await?;
+                tx.finish()?;
+                assert!(matches!(
+                    receive(&mut rx).await?,
+                    Message::Pong { lease: 0 }
+                ));
                 let _ = seen.send(());
                 let _ = c.closed().await;
                 Ok::<_, anyhow::Error>(())
             };
-            tokio::time::timeout(Duration::from_secs(5), async { tokio::try_join!(server, client) }).await??;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(server, client)
+            })
+            .await??;
         }
         Ok(())
     }

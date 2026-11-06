@@ -277,7 +277,9 @@ fn normal_close(c: &quinn::Connection) -> bool {
 }
 fn connection_end(reason: quinn::ConnectionError) -> Result<()> {
     match reason {
-        quinn::ConnectionError::ApplicationClosed(closed) if closed.error_code == 0u8.into() => Ok(()),
+        quinn::ConnectionError::ApplicationClosed(closed) if closed.error_code == 0u8.into() => {
+            Ok(())
+        }
         quinn::ConnectionError::LocallyClosed => Ok(()),
         error => Err(error.into()),
     }
@@ -463,7 +465,10 @@ pub(super) async fn run_with_status(
         loop {
             let m = transport::receive(&mut rx).await;
             let failed = m.is_err();
-            if m.as_ref().err().is_some_and(|error| error.is::<transport::InvalidMessageFrame>()) {
+            if m.as_ref()
+                .err()
+                .is_some_and(|error| error.is::<transport::InvalidMessageFrame>())
+            {
                 reader_invalid.store(true, std::sync::atomic::Ordering::Release);
             }
             if mtx.send(m).await.is_err() || failed {
@@ -772,9 +777,11 @@ mod tests {
     use transport::Identity;
 
     #[tokio::test]
-    async fn clean_stream_fin_and_truncated_frame_take_distinct_session_cleanup_paths() -> Result<()> {
+    async fn clean_stream_fin_and_truncated_frame_take_distinct_session_cleanup_paths() -> Result<()>
+    {
         for truncated in [false, true] {
-            let a = Identity::generate()?; let b = Identity::generate()?;
+            let a = Identity::generate()?;
+            let b = Identity::generate()?;
             let ea = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
             let eb = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
             let (_stop, stopped) = tokio::sync::watch::channel(false);
@@ -782,11 +789,26 @@ mod tests {
                 let c = eb.accept().await.unwrap().await?;
                 let (tx, rx) = c.accept_bi().await?;
                 let mut reporter = super::super::InputReporter::new(false);
-                let result = run_with_status(c.clone(), tx, rx, Policy { allow: false, native: false,
-                    edge: Edge::Right, local: InputCapabilities::default(), peer: InputCapabilities::default() },
-                    stopped, &mut reporter).await;
-                if truncated { assert!(result.unwrap_err().is::<transport::InvalidMessageFrame>()); }
-                else { result?; }
+                let result = run_with_status(
+                    c.clone(),
+                    tx,
+                    rx,
+                    Policy {
+                        allow: false,
+                        native: false,
+                        edge: Edge::Right,
+                        local: InputCapabilities::default(),
+                        peer: InputCapabilities::default(),
+                    },
+                    stopped,
+                    &mut reporter,
+                )
+                .await;
+                if truncated {
+                    assert!(result.unwrap_err().is::<transport::InvalidMessageFrame>());
+                } else {
+                    result?;
+                }
                 assert_eq!(reporter.last, Some(WorkerInputState::Disabled));
                 c.close(0u8.into(), b"session framing checked");
                 Ok::<_, anyhow::Error>(())
@@ -795,13 +817,21 @@ mod tests {
                 let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
                 let (mut tx, mut rx) = c.open_bi().await?;
                 send(&mut tx, &Message::Ping { lease: 0 }).await?;
-                assert!(matches!(transport::receive(&mut rx).await?, Message::Pong { lease: 0 }));
-                if truncated { tx.write_all(&[0, 0]).await?; }
+                assert!(matches!(
+                    transport::receive(&mut rx).await?,
+                    Message::Pong { lease: 0 }
+                ));
+                if truncated {
+                    tx.write_all(&[0, 0]).await?;
+                }
                 tx.finish()?;
                 let _ = c.closed().await;
                 Ok::<_, anyhow::Error>(())
             };
-            tokio::time::timeout(Duration::from_secs(5), async { tokio::try_join!(server, client) }).await??;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(server, client)
+            })
+            .await??;
         }
         assert!(connection_end(quinn::ConnectionError::TimedOut).is_err());
         assert!(connection_end(quinn::ConnectionError::Reset).is_err());
