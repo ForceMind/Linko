@@ -418,7 +418,7 @@ async fn authenticated(
                                     Ok(pairing::commit::Message::Saved) if approved && prepared => {
                                         peer_saved = true
                                     }
-                                    Ok(pairing::commit::Message::Closed) => closed = true,
+                                    Ok(pairing::commit::Message::Closed) => (),
                                     _ => return Err(Failure::Protocol),
                                 }
                             }

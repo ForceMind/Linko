@@ -11,6 +11,7 @@ use zeroize::{Zeroize, Zeroizing};
 pub const MAX_EVENT_LINE: usize = 72 * 1024;
 pub const MAX_COMMAND_LINE: usize = 256;
 pub const VERSION: u16 = 2;
+pub fn clear_code(code:&mut String){code.zeroize();}
 const MAX_CERTIFICATE: usize = 16 * 1024;
 
 #[derive(Serialize, Deserialize)]

@@ -79,9 +79,7 @@ fn public_certificate(path: &Path) -> Result<Option<Vec<u8>>> {
 }
 fn validate(proposal: &Proposal) -> Result<()> {
     let next: Config = config_store::decode(&proposal.next_settings)?;
-    if let Some(previous) = &proposal.previous_settings {
-        let _: Config = config_store::decode(previous)?;
-    }
+    let previous: Option<Config> = proposal.previous_settings.as_deref().map(config_store::decode).transpose()?;
     for cert in [
         &proposal.previous_peer,
         &proposal.next_peer,
@@ -104,6 +102,17 @@ fn validate(proposal: &Proposal) -> Result<()> {
             .context("登记记录缺少本机身份")?;
         anyhow::ensure!(peer != local, "登记记录不能信任本机身份");
     }
+    for (config, peer) in [
+        (&next,proposal.next_peer.as_deref()),
+    ].into_iter().chain(previous.as_ref().map(|config|(config,proposal.previous_peer.as_deref()))) {
+        if let Some(receipt) = &config.pairing_receipt {
+            let local = proposal.local_certificate.as_deref().context("配对收据缺少本机身份")?;
+            let peer_fp = peer.map(transport::fingerprint);
+            receipt.validate(&transport::fingerprint(local),peer_fp.as_deref(),config.allow,config.native,config.reconnect)?;
+        }
+    }
+    anyhow::ensure!(next.pairing_receipt.as_ref().is_none_or(|receipt|receipt.is_pending()),
+        "登记意图只能保存待回执状态，不能伪造完成确认");
     Ok(())
 }
 fn journal_bytes(proposal: Proposal) -> Result<Vec<u8>> {
@@ -194,11 +203,22 @@ pub(super) fn commit(
 ) -> Result<()> {
     commit_with(store, next, peer, |_| Ok(()))
 }
+pub(super) fn commit_guarded(
+    store:&mut config_store::Store,next:&Config,peer:&[u8],guard:impl FnOnce()->Result<()>,
+) -> Result<()> {
+    commit_checked(store,next,Some(peer),guard,|_|Ok(()))
+}
 fn commit_with(
     store: &mut config_store::Store,
     next: &Config,
     peer: Option<&[u8]>,
-    mut checkpoint: impl FnMut(Step) -> Result<()>,
+    checkpoint: impl FnMut(Step) -> Result<()>,
+) -> Result<()> {
+    commit_checked(store,next,peer,||Ok(()),checkpoint)
+}
+fn commit_checked(
+    store:&mut config_store::Store,next:&Config,peer:Option<&[u8]>,
+    guard:impl FnOnce()->Result<()>,mut checkpoint:impl FnMut(Step)->Result<()>,
 ) -> Result<()> {
     store.commit_enrollment(next, |settings, previous_settings, next_settings| {
         let dir = settings.parent().context("资料目录不可用")?;
@@ -233,6 +253,9 @@ fn commit_with(
         // Prepare backups before the durable intent; collisions never overwrite.
         config_store::backup(settings, proposal.previous_settings.as_deref())?;
         config_store::backup(&peer_path, proposal.previous_peer.as_deref())?;
+        // Local cancel and the one-shot claim are ordered here, after snapshots
+        // and backups but before any durable enrollment intent is created.
+        guard()?;
         let journal_path = path(settings)?;
         let mut file = config_store::options()
             .create_new(true)

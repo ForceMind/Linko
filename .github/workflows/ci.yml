@@ -46,6 +46,8 @@ jobs:
         run: python tools/pairing_worker_smoke.py
       - name: Pairing v2 commit exchange (synthetic parent save acks, no enrollment)
         run: python tools/pairing_commit_smoke.py
+      - name: Actual GUI-model pairing enrollment (fresh profiles, no display/native input)
+        run: python tools/pairing_gui_model_check.py
       - name: macOS cooperative system-terminate check (no native input)
         if: runner.os == 'macOS'
         run: python tools/macos_exit_smoke.py target/release

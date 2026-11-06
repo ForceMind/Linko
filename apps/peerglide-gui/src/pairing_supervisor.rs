@@ -11,7 +11,7 @@ use std::{
     path::Path,
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc, Arc,
     },
     time::{Duration, Instant},
@@ -39,6 +39,12 @@ pub enum Phase {
     Listening,
     Verifying,
     Verified,
+    WaitingPeer,
+    SaveReady,
+    AwaitingPeerSaved,
+    ReceiptReady,
+    Finishing,
+    Completed,
     Stopping,
     Stopped(StopReason),
     Failed(Failure),
@@ -56,6 +62,49 @@ impl Observation {
     }
 }
 
+#[derive(Default)]
+struct Validity { save: AtomicU8, receipt: AtomicU8 }
+impl Validity {
+    fn invalidate(&self) {
+        for slot in [&self.save, &self.receipt] {
+            let _ = slot.fetch_update(Ordering::AcqRel,Ordering::Acquire,|state| Some(match state {0=>2,1=>3,other=>other}));
+        }
+    }
+}
+struct Proof {
+    generation: u64, context: [u8;32], certificate: Vec<u8>, local_certificate: Vec<u8>,
+    validity: Arc<Validity>, deadline: Instant,
+}
+impl Proof {
+    fn claim(&self, receipt: bool) -> Result<()> {
+        anyhow::ensure!(Instant::now()<self.deadline,"配对确认已过期");
+        let slot=if receipt {&self.validity.receipt} else {&self.validity.save};
+        slot.compare_exchange(0,1,Ordering::AcqRel,Ordering::Acquire)
+            .map_err(|_|anyhow::anyhow!("配对已取消或该次确认已使用"))?;
+        if Instant::now()>=self.deadline { self.validity.invalidate();anyhow::bail!("配对确认已过期"); }
+        Ok(())
+    }
+}
+/// Created only at the real worker's dual-approval save barrier. Claim this
+/// exactly once INSIDE the locked enrollment operation after snapshot checks.
+pub struct SaveClaim(Proof);
+impl SaveClaim {
+    pub fn generation(&self)->u64{self.0.generation}
+    pub fn context(&self)->[u8;32]{self.0.context}
+    pub fn certificate(&self)->&[u8]{&self.0.certificate}
+    pub fn local_certificate(&self)->&[u8]{&self.0.local_certificate}
+    pub fn claim(&self)->Result<()>{self.0.claim(false)}
+}
+/// Metadata confirmation only, never a new enrollment/permission capability.
+pub struct ReceiptClaim(Proof);
+impl ReceiptClaim {
+    pub fn generation(&self)->u64{self.0.generation}
+    pub fn context(&self)->[u8;32]{self.0.context}
+    pub fn certificate(&self)->&[u8]{&self.0.certificate}
+    pub fn local_certificate(&self)->&[u8]{&self.0.local_certificate}
+    pub fn claim(&self)->Result<()>{self.0.claim(true)}
+}
+
 struct Process {
     child: Child,
     generation: u64,
@@ -70,9 +119,20 @@ struct Process {
     local_certificate: Vec<u8>,
     offering: bool,
     remaining: u8,
+    validity: Arc<Validity>,
+    approved: bool,
+    local_saved: bool,
+    receipt_stored: bool,
+    context: Option<[u8;32]>,
 }
 impl Process {
+    fn proof(&self, observed: &Observation)->Proof {
+        Proof {generation:self.generation,context:observed.context,certificate:observed.certificate.clone(),
+            local_certificate:self.local_certificate.clone(),validity:self.validity.clone(),
+            deadline:self.started+Duration::from_secs(120)}
+    }
     fn request_stop(&mut self) {
+        self.validity.invalidate();
         self.stop.store(true, Ordering::Release);
         let _ = self.input.try_send(PairingCommand::stop());
         self.stopping.get_or_insert_with(Instant::now);
@@ -96,6 +156,8 @@ pub struct Supervisor {
     phase: Phase,
     listening: Option<PairingEvent>,
     observed: Option<Observation>,
+    save_request: Option<SaveClaim>,
+    receipt_request: Option<ReceiptClaim>,
 }
 impl Default for Supervisor {
     fn default() -> Self {
@@ -105,6 +167,8 @@ impl Default for Supervisor {
             phase: Phase::Idle,
             listening: None,
             observed: None,
+            save_request: None,
+            receipt_request: None,
         }
     }
 }
@@ -114,6 +178,12 @@ impl Supervisor {
     }
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+    pub fn reset_finished(&mut self)->Result<()> {
+        anyhow::ensure!(self.process.is_none(),"请先等待旧配对进程退出");
+        self.generation=self.generation.checked_add(1).context("配对代次已用尽，请重新打开")?;
+        self.phase=Phase::Idle;self.listening=None;self.observed=None;self.save_request=None;self.receipt_request=None;
+        Ok(())
     }
     pub fn needs_poll(&self) -> bool {
         self.process.is_some()
@@ -128,6 +198,7 @@ impl Supervisor {
             || process.stop.load(Ordering::Acquire)
             || process.faulty.load(Ordering::Acquire)
             || process.stdout_done.load(Ordering::Acquire)
+            || process.validity.save.load(Ordering::Acquire)!=0
             || process.started.elapsed() >= Duration::from_secs(120)
         {
             return None;
@@ -151,11 +222,41 @@ impl Supervisor {
             || process.stop.load(Ordering::Acquire)
             || process.faulty.load(Ordering::Acquire)
             || process.stdout_done.load(Ordering::Acquire)
+            || process.validity.save.load(Ordering::Acquire)!=0
             || process.started.elapsed() >= Duration::from_secs(120)
         {
             return None;
         }
         self.observed.as_ref()
+    }
+    pub fn approve(&mut self)->Result<()> {
+        let context=self.observation().context("请先完成本次身份核验")?.context();
+        let process=self.process.as_mut().context("配对进程已结束")?;
+        anyhow::ensure!(!process.approved,"本次已确认，请等待对端");
+        process.input.try_send(PairingCommand::approve(context)).map_err(|_|anyhow::anyhow!("配对控制通道不可用"))?;
+        process.approved=true; self.phase=Phase::WaitingPeer; self.listening=None;
+        Ok(())
+    }
+    pub fn take_save_request(&mut self)->Option<SaveClaim>{self.save_request.take()}
+    pub fn take_receipt_request(&mut self)->Option<ReceiptClaim>{self.receipt_request.take()}
+    pub fn local_saved(&mut self,context:[u8;32])->Result<()> {
+        let process=self.process.as_mut().context("本机可能已保存，对端回执未知")?;
+        anyhow::ensure!(process.generation==self.generation && self.phase==Phase::SaveReady
+            && process.validity.save.load(Ordering::Acquire)==1 && !process.local_saved
+            && self.observed.as_ref().is_some_and(|o|o.context==context),"本机已保存，配对回执待核验");
+        process.input.try_send(PairingCommand::local_saved(context)).map_err(|_|anyhow::anyhow!("保存通知未送达，对端回执未知"))?;
+        process.local_saved=true; self.phase=Phase::AwaitingPeerSaved;
+        Ok(())
+    }
+    pub fn receipt_stored(&mut self,context:[u8;32])->Result<()> {
+        let process=self.process.as_mut().context("本机收据已保存，进程已结束")?;
+        anyhow::ensure!(process.generation==self.generation && self.phase==Phase::ReceiptReady
+            && process.validity.receipt.load(Ordering::Acquire)==1 && process.local_saved
+            && self.observed.as_ref().is_some_and(|o|o.context==context),"收据状态已变化");
+        process.receipt_stored=true;
+        process.input.try_send(PairingCommand::receipt_stored(context)).map_err(|_|anyhow::anyhow!("收据已保存，完成通知未送达"))?;
+        self.phase=Phase::Finishing;
+        Ok(())
     }
     pub fn start(
         &mut self,
@@ -199,6 +300,7 @@ impl Supervisor {
         let faulty = Arc::new(AtomicBool::new(false));
         let out_done = Arc::new(AtomicBool::new(false));
         let err_done = Arc::new(AtomicBool::new(false));
+        let validity=Arc::new(Validity::default());
         let setup = (|| -> Result<_> {
             let mut input = child.stdin.take().context("缺少配对输入管道")?;
             let output = child.stdout.take().context("缺少配对输出管道")?;
@@ -208,6 +310,7 @@ impl Supervisor {
             let halted = stop.clone();
             let fault = faulty.clone();
             let repaint = wake.clone();
+            let life=validity.clone();
             std::thread::Builder::new()
                 .name("pairing-parent-input".into())
                 .spawn(move || {
@@ -235,6 +338,7 @@ impl Supervisor {
                         },
                     ));
                     if !matches!(result, Ok(Ok(()))) {
+                        life.invalidate();
                         fault.store(true, Ordering::Release);
                     }
                     repaint();
@@ -243,6 +347,7 @@ impl Supervisor {
             let fault = faulty.clone();
             let done = out_done.clone();
             let repaint = wake.clone();
+            let life=validity.clone();
             std::thread::Builder::new()
                 .name("pairing-parent-output".into())
                 .spawn(move || {
@@ -250,6 +355,7 @@ impl Supervisor {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
                         || -> io::Result<()> {
                             while let Some(event) = ipc::read_event(&mut reader)? {
+                            if matches!(event.event,State::Stopped{..}|State::Failed{..}) {life.invalidate();}
                                 if events.try_send((generation, event)).is_err() {
                                     return Err(io::Error::other("pairing inbox unavailable"));
                                 }
@@ -259,6 +365,7 @@ impl Supervisor {
                         },
                     ));
                     if !matches!(result, Ok(Ok(()))) {
+                        life.invalidate();
                         fault.store(true, Ordering::Release);
                         halted.store(true, Ordering::Release);
                         repaint();
@@ -266,11 +373,13 @@ impl Supervisor {
                         let _ = io::copy(&mut reader, &mut io::sink());
                     }
                     done.store(true, Ordering::Release);
+                    life.invalidate();
                     repaint();
                 })?;
             let fault = faulty.clone();
             let done = err_done.clone();
             let repaint = wake.clone();
+            let life=validity.clone();
             std::thread::Builder::new()
                 .name("pairing-parent-diagnostics".into())
                 .spawn(move || {
@@ -279,6 +388,7 @@ impl Supervisor {
                         io::copy(&mut errors, &mut io::sink())
                     }));
                     if !matches!(result, Ok(Ok(_))) {
+                        life.invalidate();
                         fault.store(true, Ordering::Release);
                     }
                     done.store(true, Ordering::Release);
@@ -303,6 +413,7 @@ impl Supervisor {
         self.generation = generation;
         self.listening = None;
         self.observed = None;
+        self.save_request=None; self.receipt_request=None;
         self.phase = Phase::Starting;
         self.process = Some(Process {
             child,
@@ -318,6 +429,7 @@ impl Supervisor {
             local_certificate,
             offering,
             remaining: 5,
+            validity,approved:false,local_saved:false,receipt_stored:false,context:None,
         });
         Ok(())
     }
@@ -325,6 +437,7 @@ impl Supervisor {
         self.generation = self.generation.saturating_add(1);
         self.listening = None;
         self.observed = None;
+        self.save_request=None; self.receipt_request=None;
         if let Some(process) = self.process.as_mut() {
             process.request_stop();
             self.phase = Phase::Stopping;
@@ -349,6 +462,7 @@ impl Supervisor {
         {
             self.listening = None;
             self.observed = None;
+            self.save_request=None; self.receipt_request=None; process.validity.invalidate();
         }
         if process.faulty.load(Ordering::Acquire) {
             process.request_stop();
@@ -376,7 +490,7 @@ impl Supervisor {
             if generation != self.generation {
                 continue;
             }
-            let terminal = matches!(event.event, State::Stopped { .. } | State::Failed { .. });
+            let terminal = matches!(event.event, State::Stopped { .. } | State::Failed { .. } | State::Completed {..});
             if !terminal
                 && (process.stop.load(Ordering::Acquire)
                     || exited.is_some()
@@ -413,7 +527,24 @@ impl Supervisor {
                         certificate: std::mem::take(certificate),
                         context: *context,
                     });
+                    process.context=Some(*context);
                     self.phase = Phase::Verified;
+                }
+                State::ReadyToSave { context } if self.phase==Phase::WaitingPeer && process.approved
+                    && self.observed.as_ref().is_some_and(|o|o.context==*context)
+                    && process.validity.save.load(Ordering::Acquire)==0 && self.save_request.is_none() => {
+                    self.save_request=Some(SaveClaim(process.proof(self.observed.as_ref().unwrap())));
+                    self.phase=Phase::SaveReady;
+                }
+                State::PeerSaved { context } if self.phase==Phase::AwaitingPeerSaved && process.local_saved
+                    && self.observed.as_ref().is_some_and(|o|o.context==*context)
+                    && process.validity.receipt.load(Ordering::Acquire)==0 && self.receipt_request.is_none() => {
+                    self.receipt_request=Some(ReceiptClaim(process.proof(self.observed.as_ref().unwrap())));
+                    self.phase=Phase::ReceiptReady;
+                }
+                State::Completed { context } if process.receipt_stored && process.context==Some(*context) => {
+                    self.phase=Phase::Completed; self.listening=None;self.observed=None;
+                    self.save_request=None;self.receipt_request=None;
                 }
                 State::Stopped { reason } if !matches!(self.phase, Phase::Failed(_)) => {
                     self.phase = Phase::Stopped(*reason);
@@ -437,7 +568,7 @@ impl Supervisor {
         if let Some(status) = exited {
             if !status.success() && !matches!(self.phase, Phase::Failed(_)) {
                 self.phase = Phase::Failed(Failure::Internal);
-            } else if !matches!(self.phase, Phase::Failed(_) | Phase::Stopped(_)) {
+            } else if !matches!(self.phase, Phase::Failed(_) | Phase::Stopped(_) | Phase::Completed) {
                 self.phase = if process.stopping.is_some() && status.success() {
                     Phase::Stopped(StopReason::Cancelled)
                 } else {

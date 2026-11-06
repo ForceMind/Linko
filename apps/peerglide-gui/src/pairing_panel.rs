@@ -1,0 +1,364 @@
+//! Chinese pairing flow; only real owned-child barriers reach enrollment.
+use super::{config_store, enrollment_store, pairing_receipt, pairing_supervisor::{Mode,Phase,Supervisor}, App, Config, Identity};
+use anyhow::{Context,Result};
+use eframe::egui;
+use peerglide_transport as transport;
+use std::{net::{IpAddr,Ipv4Addr,SocketAddr},path::{Path,PathBuf},sync::Arc};
+
+#[derive(Clone)]
+struct Origin {
+    generation:u64, config:Config, raw:Option<Vec<u8>>, peer:Option<Vec<u8>>, local:Vec<u8>,
+    next:Config,
+}
+fn optional_peer(dir:&Path)->Result<Option<Vec<u8>>> {
+    let path=dir.join("trusted-peer.crt.der");
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(None),
+        Err(error)=>Err(error.into()),
+        Ok(_)=>Ok(Some(transport::read_certificate(&path)?)),
+    }
+}
+impl Origin {
+    fn capture(app:&App,next:Config)->Result<Self> {
+        let local=Identity::load(&app.identity_dir())?.certificate;
+        let peer=optional_peer(&app.dir)?;
+        anyhow::ensure!(peer.as_deref().map(transport::fingerprint)==app.config.fingerprint,"旧设备资料不一致，请先核验原文件");
+        Ok(Self {generation:0,config:app.config.clone(),raw:config_store::read(&app.dir.join("settings.json"))?,peer,local,next})
+    }
+    fn check(&self,dir:&Path,expected:&Config)->Result<()> {
+        anyhow::ensure!(config_store::read(&dir.join("settings.json"))?==self.raw,"配对期间设置已变化，原文件保留");
+        anyhow::ensure!(optional_peer(dir)?==self.peer,"配对期间旧设备证书已变化");
+        anyhow::ensure!(Identity::load(&dir.join("identity"))?.certificate==self.local,"配对期间本机身份已变化");
+        anyhow::ensure!(*expected==self.config,"配对期间设备设置已变化");
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Panel {
+    pub(super) open:bool,
+    supervisor:Supervisor,
+    origin:Option<Origin>,
+    name:String,address:String,code:String,
+    message:String,
+}
+impl Drop for Panel {
+    fn drop(&mut self){peerglide_protocol::pairing_worker::clear_code(&mut self.code);}
+}
+impl Panel {
+    pub(super) fn open(&mut self,name:&str,address:&str) {
+        if !self.needs_poll(){
+            if let Err(error)=self.supervisor.reset_finished(){self.message=format!("无法开始新配对：{error:#}");return;}
+            self.origin=None;
+        }
+        self.open=true;self.name=name.into();
+        self.address=address.parse::<SocketAddr>().map(|mut address|{address.set_port(24871);address.to_string()}).unwrap_or_default();
+        self.message.clear();
+    }
+    pub(super) fn needs_poll(&self)->bool{self.supervisor.needs_poll()}
+    pub(super) fn blocks_actions(&self)->bool{self.open||self.needs_poll()}
+    pub(super) fn cancel(&mut self){self.supervisor.cancel();self.origin=None;peerglide_protocol::pairing_worker::clear_code(&mut self.code);}
+    fn worker()->Result<PathBuf>{Ok(std::env::current_exe()?.with_file_name(if cfg!(windows){"peerglide.exe"}else{"peerglide"}))}
+    fn start(&mut self,app:&App,ctx:&egui::Context,mode:Mode,connect:Option<SocketAddr>,worker:&Path)->Result<()> {
+        anyhow::ensure!(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked,"设备资料只读，请先恢复原文件");
+        app.validate_pairing_receipt()?;
+        anyhow::ensure!(!app.quit_check_mode&&!app.recording_mode&&!app.close_requested,"当前窗口不能开始配对");
+        anyhow::ensure!(app.child.is_none()&&!app.recovery_blocked&&app.pending_start.is_none(),"请先停止会话并确认本机输入已恢复");
+        anyhow::ensure!(!self.needs_poll(),"请等待上次配对进程结束");
+        anyhow::ensure!(self.name.chars().count()<=80,"电脑名称过长");
+        let mut next=app.config.clone();next.peer_name=if self.name.trim().is_empty(){"另一台电脑".into()}else{self.name.clone()};next.allow=false;next.native=false;next.reconnect=false;
+        next.listen=connect.is_none();next.address=connect.map(|mut address|{address.set_port(24870);address.to_string()}).unwrap_or_default();
+        let mut origin=Origin::capture(app,next)?;
+        let repaint=ctx.clone();
+        self.supervisor.start(worker,&app.identity_dir(),mode,Arc::new(move||repaint.request_repaint()))?;
+        origin.generation=self.supervisor.generation();self.origin=Some(origin);self.message.clear();
+        Ok(())
+    }
+    fn approve(&mut self,app:&App)->Result<()> {
+        let origin=self.origin.as_ref().context("本次配对已失效")?;
+        origin.check(&app.dir,&app.config)?;
+        anyhow::ensure!(origin.generation==self.supervisor.generation(),"配对目标已变化");
+        self.supervisor.approve()
+    }
+    pub(super) fn tick(&mut self,app:&mut App,_ctx:&egui::Context) {
+        if app.close_requested {self.cancel();}
+        self.supervisor.poll();
+        if let Some(origin)=&self.origin {
+            if origin.config!=app.config && self.supervisor.phase()!=Phase::AwaitingPeerSaved
+                && self.supervisor.phase()!=Phase::ReceiptReady && self.supervisor.phase()!=Phase::Finishing
+                && self.supervisor.phase()!=Phase::Completed {
+                self.cancel();self.message="设置已变化，旧配对已停止。".into();
+            }
+        }
+        if let Some(claim)=self.supervisor.take_save_request() {
+            let result=(||->Result<()> {
+                let origin=self.origin.as_ref().context("配对已取消")?;
+                anyhow::ensure!(claim.generation()==origin.generation&&self.supervisor.generation()==origin.generation,"旧配对结果已失效");
+                anyhow::ensure!(claim.local_certificate()==origin.local,"本机身份已变化");
+                let mut next=origin.next.clone();let context=claim.context();
+                next.fingerprint=Some(transport::fingerprint(claim.certificate()));
+                next.pairing_receipt=Some(pairing_receipt::Record::pending(context,&transport::fingerprint(&origin.local),next.fingerprint.as_deref().unwrap())?);
+                let dir=app.dir.clone();let current=app.config.clone();
+                let store=app.config_store.as_mut().context("设置只读")?;
+                enrollment_store::commit_guarded(store,&next,claim.certificate(),||{
+                    origin.check(&dir,&current)?;
+                    anyhow::ensure!(claim.local_certificate()==origin.local,"保存前本机身份已变化");
+                    claim.claim()
+                })?;
+                app.config=next;
+                if let Some(origin)=self.origin.as_mut(){origin.config=app.config.clone();}
+                self.supervisor.local_saved(context)?;
+                Ok(())
+            })();
+            if let Err(error)=result {
+                app.enrollment_blocked=enrollment_store::ensure_idle(&app.dir.join("settings.json")).is_err();
+                // A write error can follow durable intent; keep files and require
+                // recovery, never restore the former trust or fabricate Saved.
+                if !app.pairing_pending(){app.config_store=None;}
+                self.cancel();self.message=format!("保存结果需要核验：{error:#}。不要把取消当作两端都未保存。");
+            }
+        }
+        if let Some(claim)=self.supervisor.take_receipt_request() {
+            let result=(||->Result<()> {
+                let origin=self.origin.as_ref().context("配对已取消")?;
+                anyhow::ensure!(claim.generation()==origin.generation&&self.supervisor.generation()==origin.generation,"旧收据已失效");
+                let mut next=app.config.clone();
+                let receipt=next.pairing_receipt.as_mut().context("缺少本机保存记录")?;
+                anyhow::ensure!(receipt.is_pending()&&receipt.context()==claim.context(),"收据不属于本次待确认登记");
+                receipt.mark_confirmed()?;
+                let pending=app.config.clone();let dir=app.dir.clone();
+                let store=app.config_store.as_mut().context("设置只读，收据待核验")?;
+                store.save_guarded(&next,||{
+                    anyhow::ensure!(Identity::load(&dir.join("identity"))?.certificate==claim.local_certificate(),"本机身份已变化");
+                    let peer=transport::read_certificate(&dir.join("trusted-peer.crt.der"))?;
+                    anyhow::ensure!(peer==claim.certificate()&&pending.fingerprint.as_deref()==Some(transport::fingerprint(&peer).as_str()),"设备已撤销或替换，旧收据无效");
+                    let disk:Config=config_store::decode(&config_store::read(&dir.join("settings.json"))?.context("缺少待确认登记")?)?;
+                    anyhow::ensure!(disk==pending,"待确认登记已变化");
+                    claim.claim()
+                })?;
+                app.config=next;
+                if let Some(origin)=self.origin.as_mut(){origin.config=app.config.clone();}
+                // Notification loss cannot downgrade the genuine stored receipt.
+                self.supervisor.receipt_stored(claim.context())?;
+                Ok(())
+            })();
+            if let Err(error)=result {self.cancel();self.message=format!("本机记录保留，完成通知待核验：{error:#}");}
+        }
+    }
+    pub(super) fn ui(&mut self,app:&mut App,ctx:&egui::Context) {
+        if !self.open{return;}
+        let mut open=true;
+        egui::Window::new("用短码添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).show(ctx,|ui|{
+            ui.heading("记住设备，再单独开启键鼠");
+            ui.label("两台电脑连接同一局域网。短码只核验本次身份，不会开启键鼠、剪贴板或文件传输。");
+            ui.add_space(12.0);
+            if !self.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
+                if app.local_fingerprint().is_none() {
+                    if ui.add_enabled(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked&&!app.quit_check_mode&&!app.recording_mode,egui::Button::new("创建本机身份")).clicked(){
+                        let result=Identity::create(&app.identity_dir());
+                        self.message=match result{Ok(_)=>"本机身份已创建。".into(),Err(error)=>format!("身份未创建，原文件保留：{error:#}")};
+                    }
+                }else{
+                    ui.label("给另一台电脑起个名字");ui.text_edit_singleline(&mut self.name);
+                    if ui.button("在这台显示配对码").clicked(){
+                        let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))),None,&worker));
+                        if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
+                    }
+                    ui.separator();ui.label("或输入另一台显示的信息");
+                    ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IPv4 或 IPv4:24871"));
+                    ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("八位数字配对码"));
+                    if ui.button("核验另一台电脑").clicked(){
+                        let result=(||->Result<()>{
+                            let address=self.address.parse::<SocketAddr>().or_else(|_|self.address.parse::<IpAddr>().map(|ip|SocketAddr::new(ip,24871)))?;
+                            anyhow::ensure!(address.is_ipv4()&&!address.ip().is_unspecified()&&!address.ip().is_multicast()&&address.port()!=0,"请输入实际IPv4地址");
+                            let mode=Mode::connect(address,std::mem::take(&mut self.code))?;
+                            self.start(app,ctx,mode,Some(address),&Self::worker()?)
+                        })();
+                        if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
+                    }
+                    if ui.button("高级：独立核对公开连接信息…").clicked(){self.open=false;app.open_advanced_setup();}
+                }
+            }
+            if let Some((code,address))=self.supervisor.displayed_code(){
+                ui.heading(code);
+                ui.label("请在另一台输入这个短码；不要发到公开群聊。");
+                for interface in if_addrs::get_if_addrs().unwrap_or_default(){
+                    if let IpAddr::V4(ip)=interface.ip(){if !ip.is_loopback()&&!ip.is_unspecified()&&(ip.is_private()||ip.is_link_local()){ui.label(format!("本机地址：{ip}:{}",address.port()));}}
+                }
+            }
+            ui.label(match self.supervisor.phase(){
+                Phase::Idle=>"尚未开始",Phase::Starting=>"正在准备核验",Phase::Listening=>"等待另一台电脑",
+                Phase::Verifying=>"正在核验身份",Phase::Verified=>"身份已核验，尚未记住设备",
+                Phase::WaitingPeer=>"等待两边分别确认记住设备",Phase::SaveReady=>"正在检查并保存本机登记",
+                Phase::AwaitingPeerSaved=>"本机已记住，等待对端保存回执",Phase::ReceiptReady=>"正在保存完成回执",
+                Phase::Finishing=>"本机回执已保存，正在结束核验",Phase::Completed=>"本机已记住，并已收到对端保存回执",
+                Phase::Stopping=>"正在停止核验",Phase::Stopped(_)=>"核验已停止；已写入的记录会保留",Phase::Failed(_)=>"核验未完成，请检查两端状态",
+            });
+            if self.supervisor.phase()==Phase::Verified{
+                ui.label("两台电脑都要点击一次。记住设备后，本机接收、键鼠和自动重连仍关闭。");
+                if app.config.fingerprint.is_some(){ui.weak("若身份不同，这会替换原设备登记。");}
+                if ui.button("记住这台设备").clicked(){if let Err(error)=self.approve(app){self.cancel();self.message=format!("未确认：{error:#}");}}
+            }
+            if app.pairing_pending(){ui.colored_label(egui::Color32::from_rgb(185,110,25),"本机保存了待回执登记，暂不能连接。断线或退出后请重新核验或撤销，不会恢复旧授权。");}
+            if app.pairing_pending() && !self.needs_poll() && ui.button("撤销待确认登记").clicked(){
+                self.cancel();let result=app.revoke();self.message=match result{Ok(())=>"待确认登记已撤销，本机身份保留。".into(),Err(error)=>format!("撤销未确认：{error:#}")};
+            }
+            if !self.message.is_empty(){ui.separator();ui.label(&self.message);}
+            if self.supervisor.phase()==Phase::Completed&&ui.button("下一步：摆好屏幕位置").clicked(){
+                app.page=super::Page::Devices;app.device_tab=super::DeviceTab::Layout;self.open=false;
+            }
+            if self.needs_poll(){if ui.button("停止核验").clicked(){self.cancel();}}
+            else if ui.button("关闭").clicked(){self.open=false;}
+        });
+        if !open{self.open=false;self.cancel();}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration,Instant};
+    #[test]
+    fn pending_disk_metadata_never_recreates_a_session_or_bypasses_future_record_protection()->Result<()> {
+        let fixture=crate::tests::Fixture::new()?;let dir=fixture.path.join("profile");
+        std::fs::create_dir(&dir)?;
+        let local=Identity::create(&dir.join("identity"))?;let peer=Identity::generate()?;
+        std::fs::write(dir.join("trusted-peer.crt.der"),&peer.certificate)?;
+        let config=Config {fingerprint:Some(peer.fingerprint()),pairing_receipt:Some(pairing_receipt::Record::pending([17;32],&local.fingerprint(),&peer.fingerprint())?),..Config::default()};
+        // Synthetic context exercises local metadata validation, never auth.
+        let bytes=config_store::encode(&config)?;std::fs::write(dir.join("settings.json"),&bytes)?;
+        let mut app=App::load(dir.clone());
+        assert!(app.pairing_pending()&&app.config_store.is_some()&&!app.pairing_panel.needs_poll());
+        assert!(app.start(false).is_err()&&app.start(true).is_err());
+        app.native_confirmation=true;assert!(app.request_native().is_err());
+        assert!(!app.config.native&&app.child.is_none());
+        let mut future:serde_json::Value=serde_json::from_slice(&bytes)?;
+        future["data"]["pairing_receipt"]["receipt_version"]=serde_json::json!(99);
+        let future=serde_json::to_vec(&future)?;std::fs::write(dir.join("settings.json"),&future)?;
+        // Even an already-open window cannot reset over a later foreign write.
+        assert!(app.reset_settings().is_err());
+        assert!(std::fs::read(dir.join("settings.json"))?==future);
+        drop(app);
+        let mut app=App::load(dir.clone());
+        assert!(app.config_store.is_none());
+        assert!(app.reset_settings().is_err()&&app.start(false).is_err());
+        assert!(std::fs::read(dir.join("settings.json"))?==future);
+        Ok(())
+    }
+    fn worker()->Result<PathBuf>{
+        let path=std::env::var_os("PEERGLIDE_PAIRING_TEST_WORKER").context("此专项必须提供真实CLI路径")?;
+        let path=PathBuf::from(path);anyhow::ensure!(path.is_file(),"专项CLI不存在");Ok(path)
+    }
+    fn pump(a:&mut App,b:&mut App,pa:&mut Panel,pb:&mut Panel,ctx:&egui::Context,ready:impl Fn(&App,&App,&Panel,&Panel)->bool)->Result<()> {
+        let deadline=Instant::now()+Duration::from_secs(30);
+        while Instant::now()<deadline {
+            pa.tick(a,ctx);pb.tick(b,ctx);
+            if ready(a,b,pa,pb){return Ok(());}
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        anyhow::bail!("GUI配对模型专项超时")
+    }
+    fn claim_order_case(binary:&Path,case:u8)->Result<()> {
+        let fixture=crate::tests::Fixture::new()?;
+        let mut a=App::load(fixture.path.join("a"));let mut b=App::load(fixture.path.join("b"));
+        Identity::create(&a.identity_dir())?;Identity::create(&b.identity_dir())?;
+        let ctx=egui::Context::default();let mut pa=Panel::default();let mut pb=Panel::default();
+        pa.start(&a,&ctx,Mode::Offer("127.0.0.1:0".parse()?),None,binary)?;
+        pump(&mut a,&mut b,&mut pa,&mut pb,&ctx,|_,_,pa,_|pa.supervisor.displayed_code().is_some())?;
+        let (code,address)=pa.supervisor.displayed_code().unwrap();let code=code.to_owned();
+        pb.start(&b,&ctx,Mode::connect(address,code)?,Some(address),binary)?;
+        pump(&mut a,&mut b,&mut pa,&mut pb,&ctx,|_,_,pa,pb|pa.supervisor.observation().is_some()&&pb.supervisor.observation().is_some())?;
+        pa.approve(&a)?;pb.approve(&b)?;
+        let deadline=Instant::now()+Duration::from_secs(10);
+        while Instant::now()<deadline {
+            // Pause before the real GUI transaction callback to inject ordering.
+            pa.supervisor.poll();pb.supervisor.poll();
+            if pa.supervisor.phase()==Phase::SaveReady&&pb.supervisor.phase()==Phase::SaveReady{break;}
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let claim=pa.supervisor.take_save_request().context("missing actual save barrier")?;
+        let origin=pa.origin.as_ref().unwrap().clone();let mut next=origin.next.clone();
+        next.fingerprint=Some(transport::fingerprint(claim.certificate()));
+        next.pairing_receipt=Some(pairing_receipt::Record::pending(claim.context(),&transport::fingerprint(claim.local_certificate()),next.fingerprint.as_deref().unwrap())?);
+        let dir=a.dir.clone();let current=a.config.clone();
+        if case==0 {
+            // An invalid key file must be noticed in the final locked guard.
+            let key=a.identity_dir().join("node.key.der");let original=std::fs::read(&key)?;
+            std::fs::write(&key,b"synthetic invalid key")?;
+            let result=enrollment_store::commit_guarded(a.config_store.as_mut().unwrap(),&next,claim.certificate(),||{origin.check(&dir,&current)?;claim.claim()});
+            std::fs::write(&key,&original)?;
+            assert!(result.is_err()&&!dir.join("settings.json").exists()&&!dir.join("enrollment-pending.json").exists());
+            pa.supervisor.cancel();
+        }else if case==1 {
+            // Let actual peer/process EOF invalidate a held claim before use.
+            pb.supervisor.stop_and_reap();
+            let until=Instant::now()+Duration::from_secs(5);
+            while pa.supervisor.needs_poll()&&Instant::now()<until{pa.supervisor.poll();std::thread::sleep(Duration::from_millis(5));}
+        }
+        let result=enrollment_store::commit_guarded(a.config_store.as_mut().unwrap(),&next,claim.certificate(),||{
+            origin.check(&dir,&current)?;claim.claim()?;
+            if case==2{pa.supervisor.cancel();}
+            Ok(())
+        });
+        if case==2{
+            result?;a.config=next;
+            assert!(a.pairing_pending()&&pa.supervisor.local_saved(claim.context()).is_err());
+            let disk:Config=config_store::decode(&config_store::read(&dir.join("settings.json"))?.unwrap())?;
+            assert!(disk.pairing_receipt.as_ref().is_some_and(|r|r.is_pending()));
+            assert!(!disk.native&&!disk.allow&&!disk.reconnect);
+        }else{
+            assert!(result.is_err()&&!dir.join("settings.json").exists()&&!dir.join("trusted-peer.crt.der").exists()&&!dir.join("enrollment-pending.json").exists());
+        }
+        pa.supervisor.stop_and_reap();pb.supervisor.stop_and_reap();
+        Ok(())
+    }
+    // Workspace unit tests compile this, then CI MUST run it after the matching
+    // release CLI exists. It is not counted as passed while ignored.
+    #[test]
+    #[ignore = "requires exact-built CLI; mandatory post-release CI step"]
+    fn real_gui_model_pairing_commits_pending_then_confirmed_without_native() -> Result<()> {
+        let binary=worker()?;
+        for case in 0..3{claim_order_case(&binary,case)?;}
+        let fixture=crate::tests::Fixture::new()?;
+        let mut a=App::load(fixture.path.join("a"));let mut b=App::load(fixture.path.join("b"));
+        let aid=Identity::create(&a.identity_dir())?;let bid=Identity::create(&b.identity_dir())?;
+        let akey=std::fs::read(a.identity_dir().join("node.key.der"))?;
+        let bkey=std::fs::read(b.identity_dir().join("node.key.der"))?;
+        let ctx=egui::Context::default();let mut pa=Panel::default();let mut pb=Panel::default();
+        pa.name="测试电脑B".into();pb.name="测试电脑A".into();
+        a.pairing_open=true;b.pairing_open=true;
+        pa.start(&a,&ctx,Mode::Offer("127.0.0.1:0".parse()?),None,&binary)?;
+        pump(&mut a,&mut b,&mut pa,&mut pb,&ctx,|_,_,pa,_|pa.supervisor.displayed_code().is_some())?;
+        let (code,address)=pa.supervisor.displayed_code().unwrap();let code=code.to_owned();
+        pb.start(&b,&ctx,Mode::connect(address,code)?,Some(address),&binary)?;
+        pump(&mut a,&mut b,&mut pa,&mut pb,&ctx,|_,_,pa,pb|pa.supervisor.observation().is_some()&&pb.supervisor.observation().is_some())?;
+        assert!(!a.dir.join("trusted-peer.crt.der").exists()&&!b.dir.join("trusted-peer.crt.der").exists());
+        pa.approve(&a)?;pb.approve(&b)?;
+        pump(&mut a,&mut b,&mut pa,&mut pb,&ctx,|a,b,_,_|a.pairing_pending()||b.pairing_pending())?;
+        let pending=if a.pairing_pending(){&mut a}else{&mut b};
+        let was_open=pending.pairing_open;pending.pairing_open=false;
+        assert!(pending.start(false).is_err()&&pending.start(true).is_err());
+        assert!(pending.start_mode(super::super::SessionMode::Native).is_err());
+        pending.native_confirmation=true;assert!(pending.request_native().is_err());
+        assert!(!pending.config.native&&!pending.config.allow&&!pending.config.reconnect&&pending.child.is_none());
+        pending.pairing_open=was_open;
+        pump(&mut a,&mut b,&mut pa,&mut pb,&ctx,|a,b,pa,pb|
+            a.config.pairing_receipt.as_ref().is_some_and(|r|!r.is_pending())
+            &&b.config.pairing_receipt.as_ref().is_some_and(|r|!r.is_pending())
+            &&!pa.needs_poll()&&!pb.needs_poll())?;
+        assert!(a.confirmed_fingerprint.is_none()&&b.confirmed_fingerprint.is_none());
+        assert!(a.config.fingerprint.as_deref()==Some(bid.fingerprint().as_str()));
+        assert!(b.config.fingerprint.as_deref()==Some(aid.fingerprint().as_str()));
+        for app in [&a,&b]{assert!(!app.config.native&&!app.config.allow&&!app.config.reconnect&&app.child.is_none());app.validate_pairing_receipt()?;}
+        assert!(std::fs::read(a.identity_dir().join("node.key.der"))?==akey);
+        assert!(std::fs::read(b.identity_dir().join("node.key.der"))?==bkey);
+        pa.open("再次核验",&a.config.address);
+        assert!(pa.supervisor.phase()==Phase::Idle);
+        pa.start(&a,&ctx,Mode::Offer("127.0.0.1:0".parse()?),None,&binary)?;
+        pa.cancel();pa.supervisor.stop_and_reap();
+        assert!(a.config.pairing_receipt.as_ref().is_some_and(|r|!r.is_pending()));
+        let aa=a.dir.clone();let bb=b.dir.clone();drop(pa);drop(pb);drop(a);drop(b);
+        for dir in [aa,bb]{let app=App::load(dir);assert!(!app.pairing_pending());app.validate_pairing_receipt()?;assert!(app.config_store.is_some()&&!app.config.native&&!app.config.allow&&!app.config.reconnect);}
+        Ok(())
+    }
+}

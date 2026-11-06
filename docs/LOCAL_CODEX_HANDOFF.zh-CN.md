@@ -1121,3 +1121,20 @@ atomic阶段一次接受Code/Approve/LocalSaved/ReceiptStored，提示事件前�
 还未发这些命令。新增pairing_commit_smoke真实管道/TLS但synthetic parent save acks，
 不能当磁盘/GUI登记通过。单独pairing_receipt元数据模块已由子任务写好，尚未接Config
 或编译；后续须Pending拦实际启动、事务内snapshot+claim及Confirmed语义全部落地。
+
+## 47. 中文短码/真实事务闭环初版（2026-11-07，未验收）
+
+0.3.5-dev源码已接Panel中文显示/输入短码→实际owned child核验→双方记住→Pending→
+PeerSaved/Confirmed。新增SaveClaim/ReceiptClaim：IO终态异步失效，claim在持锁backup
+后/journal前消耗；原raw/旧peer/完整local DER/真实key匹配复查。不复用手工指纹
+变量，不从磁盘context恢复Session。Pending深层拒communication/probe/native及
+request_native，旧/未来/矛盾收据只读；交互式reset也走原两文件事务与stale guard。
+None字段省略保旧配置，Confirmed不自动开任何授权，完成后可重开配对（已修Completed
+展示状态未reset的问题）。独立parent模块实际读队列与RootFS桥接，仍仅NoNative child
+能kill回收，普通input worker的Unknown/恢复不变。
+新增mandatory post-release GUI模型专项：用匹配CLI真实两profile/事务/重启验证，
+含claim前Cancel/EOF/坏key拒写、claim后取消仅Pending，Pending真实启动入口拒绝、
+未来receipt与外部改写不能reset覆盖。默认workspace编译但ignore该专项，CI必须另行
+--ignored且严格检查exactly1 passed/0 ignored；未运行不算通过。无显示模型不代替
+真实GUI/物理C06。当前初版尚未编译运行，须继续Clippy/格式/测试/修复和原生界面检查；
+原a791445已获权真实试跑App/配对不动，不要求用户现在重加权限。

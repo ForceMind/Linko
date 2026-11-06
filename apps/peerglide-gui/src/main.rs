@@ -9,6 +9,8 @@ mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
 pub mod pairing_supervisor;
+mod pairing_panel;
+mod pairing_receipt;
 mod quit_check;
 mod worker_permissions;
 use anyhow::{Context, Result};
@@ -74,7 +76,7 @@ fn edge_label(edge: &str) -> &'static str {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Config {
     peer_name: String,
@@ -86,6 +88,8 @@ struct Config {
     edge: String,
     dark: bool,
     fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pairing_receipt: Option<pairing_receipt::Record>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -99,6 +103,7 @@ impl Default for Config {
             edge: "right".into(),
             dark: false,
             fingerprint: None,
+            pairing_receipt: None,
         }
     }
 }
@@ -289,6 +294,8 @@ struct App {
     last_failure: bool,
     logs: VecDeque<String>,
     stopping: Option<Instant>,
+    pairing_panel: pairing_panel::Panel,
+    pairing_open: bool,
 }
 impl App {
     fn new(cc: &eframe::CreationContext<'_>, dir: PathBuf) -> Self {
@@ -402,9 +409,15 @@ impl App {
             last_failure: false,
             logs: VecDeque::new(),
             stopping: None,
+            pairing_panel: pairing_panel::Panel::default(),
+            pairing_open: false,
         };
         if let Err(e) = std::fs::create_dir_all(&app.dir) {
             app.notice = e.to_string();
+        }
+        if let Err(error) = app.validate_pairing_receipt() {
+            app.config_store = None;
+            app.notice = format!("配对收据需要核验，原文件保留且当前只读：{error:#}");
         }
         app
     }
@@ -418,6 +431,8 @@ impl App {
     }
     fn save_config(&mut self) -> Result<()> {
         anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会保存设备设置");
+        anyhow::ensure!(!self.pairing_open,"请先结束当前配对再修改设备设置");
+        self.validate_pairing_receipt()?;
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         self.config_store
             .as_mut()
@@ -426,6 +441,25 @@ impl App {
     }
     fn identity_dir(&self) -> PathBuf {
         self.dir.join("identity")
+    }
+    fn validate_pairing_receipt(&self) -> Result<()> {
+        if let Some(receipt)=&self.config.pairing_receipt {
+            let local=Identity::load(&self.identity_dir())?;
+            let peer=transport::read_certificate(&self.dir.join("trusted-peer.crt.der"))?;
+            let peer_fp=transport::fingerprint(&peer);
+            anyhow::ensure!(self.config.fingerprint.as_deref()==Some(peer_fp.as_str()),"收据与已登记证书不一致");
+            receipt.validate(&local.fingerprint(),Some(&peer_fp),self.config.allow,self.config.native,self.config.reconnect)?;
+        }
+        Ok(())
+    }
+    fn pairing_pending(&self)->bool {
+        self.config.pairing_receipt.as_ref().is_some_and(|receipt|receipt.phase()==pairing_receipt::Phase::Pending)
+    }
+    fn ensure_pairing_ready(&self)->Result<()> {
+        self.validate_pairing_receipt()?;
+        anyhow::ensure!(!self.pairing_pending(),"本机登记尚待对端回执；请重新核验或撤销后再连接");
+        anyhow::ensure!(!self.pairing_open,"请先结束配对再开启会话");
+        Ok(())
     }
     fn local_fingerprint(&self) -> Option<String> {
         Identity::load(&self.identity_dir())
@@ -532,6 +566,7 @@ impl App {
         next.fingerprint = Some(transport::fingerprint(&bytes));
         next.allow = false;
         next.native = false;
+        next.pairing_receipt = None;
         let result =
             enrollment_store::commit(self.config_store.as_mut().unwrap(), &next, Some(&bytes));
         if let Err(error) = result {
@@ -551,6 +586,7 @@ impl App {
         })
     }
     fn start_mode(&mut self, mode: SessionMode) -> Result<()> {
+        self.ensure_pairing_ready()?;
         anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会启动设备会话");
         let probe = mode == SessionMode::Probe;
         anyhow::ensure!(
@@ -701,6 +737,7 @@ impl App {
         Ok(())
     }
     fn stop(&mut self) {
+        self.pairing_panel.cancel();
         self.pending_start = None;
         self.native_confirmation = false;
         self.screen_drag = None;
@@ -748,6 +785,7 @@ impl App {
             std::mem::take(&mut self.native_confirmation),
             "请明确确认启动真实键鼠"
         );
+        self.ensure_pairing_ready()?;
         anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会开启键鼠");
         anyhow::ensure!(
             !self.recovery_blocked && self.stopping.is_none(),
@@ -779,6 +817,7 @@ impl App {
         self.config.fingerprint = None;
         self.config.allow = false;
         self.config.native = false;
+        self.config.pairing_receipt = None;
         let result = self
             .config_store
             .as_mut()
@@ -790,6 +829,14 @@ impl App {
             self.config_store = None;
         }
         result.context("保存设备信任撤销结果；未确认持久完成，请重新打开屏跃检查")
+    }
+    fn reset_settings(&mut self)->Result<()> {
+        anyhow::ensure!(self.idle_writable()&&!self.enrollment_blocked,"当前资料只读或仍有会话，原文件保留");
+        self.validate_pairing_receipt()?;
+        let next=Config::default();
+        enrollment_store::commit(self.config_store.as_mut().context("设置只读")?,&next,None)?;
+        self.config=next;self.confirmed_fingerprint=None;self.native_confirmation=false;self.pending_start=None;
+        Ok(())
     }
     fn poll(&mut self) {
         self.worker_permissions.poll();
@@ -989,6 +1036,7 @@ impl App {
             || self.worker_permissions.needs_poll()
             || self.gesture_lab.needs_tick()
             || self.layout_report.is_some()
+            || self.pairing_panel.needs_poll()
         {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -1084,7 +1132,7 @@ impl App {
             self.native_confirmation = false;
             self.screen_drag = None;
             self.gesture_lab.cancel();
-        } else if self.child.is_some() || self.recovery_blocked {
+        } else if self.child.is_some() || self.recovery_blocked || self.pairing_panel.needs_poll() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_requested = true;
             self.stop();
@@ -1112,6 +1160,13 @@ impl App {
         // Stop/Quit must cancel a queued upgrade before poll can start a successor.
         self.process_tray_commands(ctx);
         self.poll();
+        if ctx.input(|input|!input.focused||input.viewport().close_requested()) {
+            self.pairing_panel.cancel();
+        }
+        let mut pairing=std::mem::take(&mut self.pairing_panel);
+        pairing.tick(self,ctx);
+        self.pairing_open=pairing.blocks_actions();
+        self.pairing_panel=pairing;
         if self.window_hidden && self.recovery_blocked {
             self.show_window(ctx);
             self.dialog = Some(Dialog::Recovery);
@@ -1134,7 +1189,7 @@ impl App {
                 self.tray.as_ref().is_some_and(|tray| tray.is_available()),
             );
         }
-        if self.close_requested && self.child.is_none() && !self.recovery_blocked {
+        if self.close_requested && self.child.is_none() && !self.recovery_blocked && !self.pairing_panel.needs_poll() {
             if self
                 .quit_check
                 .as_ref()
