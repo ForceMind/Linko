@@ -365,7 +365,7 @@ async fn cancellation_after_ke3_and_before_peer_ready_never_returns_a_session() 
 }
 
 #[tokio::test]
-async fn late_ready_result_and_expired_temporary_result_are_rejected() -> Result<()> {
+async fn cancellation_after_ready_work_and_absolute_deadline_are_rejected() -> Result<()> {
     let (lifetime, cancel) = Lifetime::new(Instant::now() + OFFER_LIFETIME);
     assert!(lifetime
         .run(async {
@@ -382,5 +382,28 @@ async fn late_ready_result_and_expired_temporary_result_are_rejected() -> Result
         })
         .await
         .is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_compute_waiter_does_not_release_the_running_cpu_permit() -> Result<()> {
+    let _scenario = CRYPTO_SCENARIOS.lock().await;
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let first = tokio::spawn(crypto::compute(move || {
+        let _ = started_tx.send(());
+        release_rx.recv_timeout(Duration::from_secs(5))?;
+        Ok(())
+    }));
+    started_rx.await?;
+    first.abort();
+    let mut second = tokio::spawn(crypto::compute(|| Ok(())));
+    let still_blocked = tokio::time::timeout(Duration::from_millis(20), &mut second)
+        .await
+        .is_err();
+    // Always release the test task before asserting, including on failure.
+    let _ = release_tx.send(());
+    second.await??;
+    assert!(still_blocked, "cancelled waiter released active computation budget");
     Ok(())
 }
