@@ -43,7 +43,15 @@ impl UntrustedHint {
         port: u16,
         now: Instant,
     ) -> Option<Self> {
-        Self::for_purpose(Purpose::Input, name, fingerprint, version, addresses, port, now)
+        Self::for_purpose(
+            Purpose::Input,
+            name,
+            fingerprint,
+            version,
+            addresses,
+            port,
+            now,
+        )
     }
     /// Pairing-v2 hints are addresses only, never authenticated identities.
     pub fn pairing(
@@ -58,7 +66,15 @@ impl UntrustedHint {
         if pairing_version != "2" {
             return None;
         }
-        Self::for_purpose(Purpose::Pairing, name, fingerprint, input_version, addresses, port, now)
+        Self::for_purpose(
+            Purpose::Pairing,
+            name,
+            fingerprint,
+            input_version,
+            addresses,
+            port,
+            now,
+        )
     }
     fn for_purpose(
         purpose: Purpose,
@@ -358,16 +374,31 @@ mod tests {
         let fp = "a".repeat(64);
         let lan = [Ipv4Addr::new(192, 168, 1, 2)];
         assert!(UntrustedHint::new(&name, &fp, "5", lan, 24871, now).is_none());
-        assert!(UntrustedHint::pairing(&format!("node.{SERVICE}"), &fp, "5", "2", lan, 24870, now).is_none());
+        assert!(
+            UntrustedHint::pairing(&format!("node.{SERVICE}"), &fp, "5", "2", lan, 24870, now)
+                .is_none()
+        );
         for version in ["", "1", "3", "02", "2\n"] {
             assert!(UntrustedHint::pairing(&name, &fp, "5", version, lan, 24871, now).is_none());
         }
         assert!(UntrustedHint::pairing(&name, &fp, "4", "2", lan, 24871, now).is_none());
-        assert!(UntrustedHint::pairing(&name, &fp, "5", "2", [Ipv4Addr::LOCALHOST], 24871, now).is_none());
+        assert!(
+            UntrustedHint::pairing(&name, &fp, "5", "2", [Ipv4Addr::LOCALHOST], 24871, now)
+                .is_none()
+        );
         assert!(UntrustedHint::pairing(&name, &fp, "5", "2", lan, 0, now).is_none());
         let mut table = HintTable::default();
         for i in 0..1000 {
-            let hint = UntrustedHint::pairing(&format!("node{i}.{PAIRING_SERVICE}"), &fp, "5", "2", lan, 24871, now).unwrap();
+            let hint = UntrustedHint::pairing(
+                &format!("node{i}.{PAIRING_SERVICE}"),
+                &fp,
+                "5",
+                "2",
+                lan,
+                24871,
+                now,
+            )
+            .unwrap();
             table.update(hint, now);
         }
         assert_eq!(table.hints().count(), MAX_HINTS);
@@ -377,23 +408,23 @@ mod tests {
     #[test]
     fn daemon_lifecycle_with_disabled_interfaces_withdraws_and_stops() -> Result<()> {
         for purpose in [Purpose::Input, Purpose::Pairing] {
-        let socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
-        let port = socket.local_addr()?.port();
-        drop(socket);
-        let daemon = ServiceDaemon::new_with_port(port)?;
-        // Ordered before browse/register; no interface can send a query or advertisement.
-        daemon.disable_interface(mdns_sd::IfKind::All)?;
-        let mut discovery = Discovery::for_purpose(daemon, purpose)?;
-        assert!(!discovery.is_advertising());
-        discovery.advertise(&"a".repeat(64), 24871)?;
-        assert!(discovery.is_advertising());
-        discovery.unpublish()?;
-        assert!(!discovery.is_advertising());
-        let stop = discovery.request_stop()?;
-        assert!(matches!(
-            stop.0.recv_timeout(Duration::from_secs(2)),
-            Ok(DaemonStatus::Shutdown)
-        ));
+            let socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
+            let port = socket.local_addr()?.port();
+            drop(socket);
+            let daemon = ServiceDaemon::new_with_port(port)?;
+            // Ordered before browse/register; no interface can send a query or advertisement.
+            daemon.disable_interface(mdns_sd::IfKind::All)?;
+            let mut discovery = Discovery::for_purpose(daemon, purpose)?;
+            assert!(!discovery.is_advertising());
+            discovery.advertise(&"a".repeat(64), 24871)?;
+            assert!(discovery.is_advertising());
+            discovery.unpublish()?;
+            assert!(!discovery.is_advertising());
+            let stop = discovery.request_stop()?;
+            assert!(matches!(
+                stop.0.recv_timeout(Duration::from_secs(2)),
+                Ok(DaemonStatus::Shutdown)
+            ));
         }
         Ok(())
     }

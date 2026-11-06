@@ -3,12 +3,20 @@ use eframe::egui;
 use peerglide_discovery::{Discovery, PendingStop};
 use std::net::SocketAddr;
 
+/// Only invalidates an old publication; these counters never authorize a peer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Offer {
+    pub generation: u64,
+    pub attempts_remaining: u8,
+    pub port: u16,
+}
+
 #[derive(Default)]
 pub(super) struct Panel {
     handle: Option<Discovery>,
     stopping: Option<PendingStop>,
     own: Option<String>,
-    published_port: Option<u16>,
+    published: Option<Offer>,
     stop_requested: bool,
     status: String,
 }
@@ -17,7 +25,10 @@ impl Panel {
         self.handle.is_some() || self.stopping.is_some()
     }
     fn start(&mut self, own: Option<String>) -> anyhow::Result<()> {
-        anyhow::ensure!(!self.stop_requested && self.stopping.is_none(), "请等待局域网查找停止");
+        anyhow::ensure!(
+            !self.stop_requested && self.stopping.is_none(),
+            "请等待局域网查找停止"
+        );
         if self.handle.is_none() {
             self.handle = Some(Discovery::start_pairing()?);
         }
@@ -40,12 +51,12 @@ impl Panel {
             }
         }
     }
-    pub(super) fn poll(&mut self, listening_port: Option<u16>) {
+    pub(super) fn poll(&mut self, listening: Option<Offer>) {
         if let Some(stop) = &self.stopping {
             if stop.finished() {
                 self.handle = None;
                 self.stopping = None;
-                self.published_port = None;
+                self.published = None;
                 self.stop_requested = false;
                 self.status = "局域网查找与广播已停止".into();
             }
@@ -57,11 +68,11 @@ impl Panel {
         }
         let mut failed = false;
         if let Some(handle) = &mut self.handle {
-            if self.published_port.is_some() && self.published_port != listening_port {
+            if self.published.is_some() && self.published != listening {
                 if handle.unpublish().is_err() {
                     failed = true;
                 } else {
-                    self.published_port = None;
+                    self.published = None;
                 }
             }
             if handle.poll(self.own.as_deref()).is_err() {
@@ -77,7 +88,7 @@ impl Panel {
         &mut self,
         ui: &mut egui::Ui,
         own: Option<String>,
-        listening_port: Option<u16>,
+        listening: Option<Offer>,
         can_browse: bool,
     ) -> Option<SocketAddr> {
         let mut chosen = None;
@@ -85,12 +96,12 @@ impl Panel {
             ui.weak("正在停止局域网查找与广播，请稍候");
             return None;
         }
-        if let Some(port) = listening_port {
-            if self.published_port.is_some() {
+        if let Some(offer) = listening {
+            if self.published.is_some() {
                 ui.label("已请求在局域网显示本次配对；不会广播配对码");
                 if ui.button("隐藏本次配对").clicked() {
                     if self.handle.as_mut().is_some_and(|h| h.unpublish().is_ok()) {
-                        self.published_port = None;
+                        self.published = None;
                         self.status = "已请求撤下广播；网络缓存可能稍后消失".into();
                     } else {
                         self.stop();
@@ -100,8 +111,8 @@ impl Panel {
                 let result = (|| -> anyhow::Result<()> {
                     let fp = own.as_ref().ok_or_else(|| anyhow::anyhow!("本机身份不可用"))?;
                     self.start(own.clone())?;
-                    self.handle.as_mut().unwrap().advertise(fp, port)?;
-                    self.published_port = Some(port);
+                    self.handle.as_mut().unwrap().advertise(fp, offer.port)?;
+                    self.published = Some(offer);
                     Ok(())
                 })();
                 self.status = if result.is_ok() {
@@ -126,15 +137,18 @@ impl Panel {
                     if handle.table.hints().next().is_none() {
                         ui.label("还没找到？可直接填写另一台显示的 IPv4 地址");
                     }
-                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                        for hint in handle.table.hints() {
-                            for address in &hint.addresses {
-                                if ui.button(format!("选择配对地址 {address}")).clicked() {
-                                    chosen = Some(*address);
+                    egui::ScrollArea::vertical()
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            for hint in handle.table.hints() {
+                                for address in &hint.addresses {
+                                    if ui.button(format!("选择配对地址 {address}")).clicked()
+                                    {
+                                        chosen = Some(*address);
+                                    }
                                 }
                             }
-                        }
-                    });
+                        });
                 }
             }
         }
@@ -158,7 +172,7 @@ mod tests {
         panel.stop();
         panel.poll(None);
         assert!(!panel.needs_poll());
-        assert!(panel.handle.is_none() && panel.published_port.is_none());
+        assert!(panel.handle.is_none() && panel.published.is_none());
         assert!(!panel.stop_requested && panel.stopping.is_none());
     }
 }

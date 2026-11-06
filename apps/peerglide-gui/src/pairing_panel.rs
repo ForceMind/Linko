@@ -121,6 +121,14 @@ impl Panel {
     pub(super) fn blocks_actions(&self) -> bool {
         self.open || self.needs_poll()
     }
+    fn discovery_offer(&self) -> Option<super::pairing_discovery::Offer> {
+        let (address, attempts_remaining) = self.supervisor.offer_hint_state()?;
+        Some(super::pairing_discovery::Offer {
+            generation: self.supervisor.generation(),
+            attempts_remaining,
+            port: address.port(),
+        })
+    }
     pub(super) fn cancel(&mut self) {
         self.supervisor.cancel();
         self.discovery.stop();
@@ -201,11 +209,8 @@ impl Panel {
             self.cancel();
         }
         self.supervisor.poll();
-        self.discovery.poll(
-            (self.supervisor.phase() == Phase::Listening)
-                .then(|| self.supervisor.displayed_code().map(|(_, address)| address.port()))
-                .flatten(),
-        );
+        let offer = self.discovery_offer();
+        self.discovery.poll(offer);
         if !self.open && self.discovery.needs_poll() {
             self.discovery.stop();
         }
@@ -324,7 +329,7 @@ impl Panel {
             return;
         }
         let mut open = true;
-        egui::Window::new("用短码添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).show(ctx,|ui|{
+        egui::Window::new("用短码添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).default_height(600.0).vscroll(true).show(ctx,|ui|{
             ui.heading("记住设备，再单独开启键鼠");
             ui.label("两台电脑连接同一局域网。短码只核验本次身份，不会开启键鼠、剪贴板或文件传输。");
             ui.add_space(12.0);
@@ -361,9 +366,9 @@ impl Panel {
                 for interface in if_addrs::get_if_addrs().unwrap_or_default(){
                     if let IpAddr::V4(ip)=interface.ip(){if !ip.is_loopback()&&!ip.is_unspecified()&&(ip.is_private()||ip.is_link_local()){ui.label(format!("本机地址：{ip}:{}",address.port()));}}
                 }
-                if self.supervisor.phase()==Phase::Listening{
+                if let Some(offer)=self.discovery_offer(){
                     let own=self.supervisor.local_certificate_snapshot().map(transport::fingerprint);
-                    self.discovery.ui(ui,own,Some(address.port()),false);
+                    self.discovery.ui(ui,own,Some(offer),false);
                 }
             }
             ui.label(match self.supervisor.phase(){
