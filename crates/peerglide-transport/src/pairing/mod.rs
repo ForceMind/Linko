@@ -3,6 +3,7 @@
 //! input/data/action authority. The production GUI is not wired to this yet.
 mod crypto;
 mod wire;
+pub mod commit;
 
 use crate::{Identity, MAX_CERTIFICATE_BYTES};
 use anyhow::{Context, Result};
@@ -21,8 +22,8 @@ pub const OFFER_LIFETIME: Duration = Duration::from_secs(120);
 pub const ATTEMPT_LIMIT: u8 = 5;
 const ATTEMPT_LIFETIME: Duration = Duration::from_secs(20);
 const MAX_FRAME: usize = MAX_CERTIFICATE_BYTES + 64;
-const ALPN: &[u8] = b"peerglide-pairing/1";
-const DOMAIN: &[u8] = b"PeerGlide/pairing/1\0OPAQUE-RFC9807/Ristretto255/TripleDh/SHA512/Argon2id-65536-3-1\0input=5\0client=input-code;server=display-code\0";
+const ALPN: &[u8] = b"peerglide-pairing/2";
+const DOMAIN: &[u8] = b"PeerGlide/pairing/2\0OPAQUE-RFC9807/Ristretto255/TripleDh/SHA512/Argon2id-65536-3-1\0input=5\0client=input-code;server=display-code\0";
 
 /// Internal computation failure must stop the child, never become a code retry.
 #[derive(Debug)]
@@ -225,7 +226,7 @@ impl Offer {
                 let ready = wire::read(&mut stream, wire::CLIENT_READY, MAX_FRAME).await?;
                 wire::verify_ready(&ready, &binding)?;
                 Ok(PairingSession {
-                    stream,
+                    stream: Some(stream),
                     peer_certificate: peer,
                     binding,
                     lifetime: self.lifetime.clone(),
@@ -313,7 +314,7 @@ impl CodeEntry {
                 let ready = wire::read(&mut stream, wire::SERVER_READY, MAX_FRAME).await?;
                 wire::verify_ready(&ready, &binding)?;
                 Ok(PairingSession {
-                    stream,
+                    stream: Some(stream),
                     peer_certificate: peer,
                     binding,
                     lifetime: self.lifetime.clone(),
@@ -327,7 +328,7 @@ impl CodeEntry {
 /// Private construction after PAKE, strict TLS and peer ready. A temporary
 /// proposal only; durable two-peer enrollment/receipts are a separate operation.
 pub struct PairingSession {
-    stream: TlsStream<TcpStream>,
+    stream: Option<TlsStream<TcpStream>>,
     peer_certificate: Vec<u8>,
     binding: Binding,
     lifetime: Lifetime,
@@ -340,7 +341,7 @@ pub enum PeerEnd {
 }
 impl Drop for PairingSession {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        if self.stream.is_some() { self.cancellation.cancel(); }
     }
 }
 impl PairingSession {
@@ -349,13 +350,16 @@ impl PairingSession {
     }
     pub fn peer_certificate(&self) -> Result<&[u8]> {
         self.lifetime.check()?;
-        verify_tls(&self.stream, &self.peer_certificate)?;
+        verify_tls(self.stream.as_ref().context("pairing stream transferred")?, &self.peer_certificate)?;
         Ok(&self.peer_certificate)
     }
     pub fn context_id(&self) -> Result<[u8; 32]> {
         self.peer_certificate()?;
         Ok(*blake3::hash(&self.binding.context).as_bytes())
     }
+    /// Transfer this live authenticated connection, without resetting its
+    /// deadline. The channel reports protocol facts; it never writes trust.
+    pub fn into_commit_channel(self) -> Result<commit::Channel> { commit::Channel::new(self) }
     /// While awaiting a local decision, detect closure or unexpected application
     /// data. There must be exactly one stream reader; a future commit protocol
     /// must replace this idle read, never run beside it. Every outcome invalidates
@@ -366,7 +370,7 @@ impl PairingSession {
         let result = lifetime
             .run(async {
                 let mut byte = [0; 1];
-                match self.stream.read(&mut byte).await {
+                match self.stream.as_mut().context("pairing stream transferred")?.read(&mut byte).await {
                     Ok(0) => Ok(PeerEnd::Disconnected),
                     Ok(_) => Ok(PeerEnd::UnexpectedData),
                     Err(error)

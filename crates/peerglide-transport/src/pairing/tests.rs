@@ -78,8 +78,8 @@ async fn authenticated_extra_application_data_invalidates_the_pending_proposal()
         offer.accept(&listener, server),
         entry.connect(listener.local_addr()?, client),
     )?;
-    connected.stream.write_all(&[1]).await?;
-    connected.stream.flush().await?;
+    connected.stream.as_mut().unwrap().write_all(&[1]).await?;
+    connected.stream.as_mut().unwrap().flush().await?;
     let ended = tokio::time::timeout(Duration::from_secs(1), accepted.wait_peer_end()).await??;
     assert_eq!(ended, PeerEnd::UnexpectedData);
     assert!(accepted.peer_certificate().is_err());
@@ -286,7 +286,7 @@ async fn opaque_rejects_parameter_substitution_replay_and_noncanonical_messages(
 #[tokio::test]
 async fn actual_tls_rejects_wrong_pins_absent_client_identity_and_bad_or_missing_alpn() -> Result<()>
 {
-    for case in 0..5 {
+    for case in 0..6 {
         let server = Identity::generate()?;
         let client = Identity::generate()?;
         let stranger = Identity::generate()?;
@@ -319,6 +319,8 @@ async fn actual_tls_rejects_wrong_pins_absent_client_identity_and_bad_or_missing
             client_config.alpn_protocols = vec![b"peerglide/5".to_vec()];
         } else if case == 4 {
             client_config.alpn_protocols.clear();
+        } else if case == 5 {
+            client_config.alpn_protocols = vec![b"peerglide-pairing/1".to_vec()];
         }
         let accept = async {
             let (socket, _) = listener.accept().await?;
@@ -347,6 +349,49 @@ async fn actual_tls_rejects_wrong_pins_absent_client_identity_and_bad_or_missing
         .await?;
         assert!(a.is_err() || b.is_err(), "invalid TLS case {case} accepted");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn commit_channel_preserves_early_peer_facts_and_requires_both_prepares() -> Result<()> {
+    use super::commit::Message;
+    let _scenario = CRYPTO_SCENARIOS.lock().await;
+    let server = Arc::new(Identity::generate()?);
+    let client = Arc::new(Identity::generate()?);
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let mut offer = Offer::new(&server)?;
+    let entry = CodeEntry::new(offer.code()?.to_owned())?;
+    let (a,b) = tokio::try_join!(offer.accept(&listener,server),entry.connect(listener.local_addr()?,client))?;
+    let mut a = a.into_commit_channel()?;
+    let mut b = b.into_commit_channel()?;
+    assert_eq!(a.context(),b.context());
+    assert!(a.saved().await.is_err());
+    // One side can approve/prepare before the other user's local approval.
+    a.prepare().await?;
+    assert_eq!(b.receive().await?,Message::Prepared);
+    assert!(b.saved().await.is_err());
+    b.prepare().await?;
+    assert_eq!(a.receive().await?,Message::Prepared);
+    // The peer's actual Saved fact may precede our local filesystem response.
+    a.saved().await?;
+    assert_eq!(b.receive().await?,Message::Saved);
+    b.saved().await?;
+    assert_eq!(a.receive().await?,Message::Saved);
+    drop(a);
+    assert_eq!(b.receive().await?,Message::Closed);
+    // EOF does not erase previously verified facts in the caller. There is no
+    // automatic disk write or claim that the other parent confirmed a receipt.
+    Ok(())
+}
+
+#[test]
+fn legacy_pairing_bootstrap_is_rejected_before_any_commit_capability() -> Result<()> {
+    let identity = Identity::generate()?;
+    let mut old = wire::hello(&random_id(), &identity.certificate)?;
+    old[..8].copy_from_slice(b"PGPAIR01");
+    assert!(wire::parse_hello(&old).is_err());
+    assert_eq!(peerglide_protocol::VERSION,5);
+    assert_eq!(peerglide_protocol::ALPN,b"peerglide/5");
     Ok(())
 }
 

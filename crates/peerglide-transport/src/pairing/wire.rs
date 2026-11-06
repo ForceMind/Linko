@@ -10,7 +10,7 @@ pub(super) const KE2: u8 = 4;
 pub(super) const KE3: u8 = 5;
 pub(super) const CLIENT_READY: u8 = 6;
 pub(super) const SERVER_READY: u8 = 7;
-const MAGIC: &[u8; 8] = b"PGPAIR01";
+const MAGIC: &[u8; 8] = b"PGPAIR02";
 
 // No buffered reader: bytes following KE3 belong to the TLS engine, even when
 // a TLS ClientHello is coalesced into the same underlying TCP receive.

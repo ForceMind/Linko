@@ -1107,3 +1107,9 @@ Pending实际阻止全部会话入口；最终原配置hash/旧peer/完整local 
 对端Prepare/Saved可能先到，应有界记住；本地命令严格阶段且允许位先于提示事件。
 Confirmed只表示本机保存双方Saved证据；一端正常退出不能抹掉已验证PeerSaved。
 None receipt省略保旧格式，未知/矛盾receipt保只读，撤销/更换后旧回执不能复活。
+
+父监督器9af2d1d最低1.95已编译，平台fmt差异按共享路径去重应用为0e9fd34，正式
+CI42245089202仍待回读。随后开始v2网络提交原语：PGPAIR02/context2/独立ALPN2拒旧
+v1，输入v5保持；同Session转移原deadline、持续reader+2槽队列、有角色/完整context
+绑定Prepared/Saved，不做任何文件写入。当前源码尚待编译/回归，worker的Approve/
+LocalSaved/ReceiptStored状态、parent事务save-claim及中文向导仍须继续实际接通。
