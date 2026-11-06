@@ -1224,3 +1224,16 @@ switch-feedback/0.3.8基于PR60最终17e219f，五项42284800216、驻留4228480
 反馈再按旧离线状态丢弃；改为观察到连接后消费，并加确定性交错回归。离线显示
 仍清旧提示、reader重连重置、每child隔离不变；2处断言格式按runner继续修正。
 394项外部依赖未变。最终精确HEAD结果集中在PR61，NoNative模型不勾物理C06。
+
+## 51. B2首次连接等待（2026-11-07，开发中）
+
+first-connection-wait/0.3.9基于PR61最终7c69b75（五项42291710144、驻留42291710040、
+上游42291709909全过）。修复正确配对的两端启动时序不便：GUI连接端无reconnect
+时显式给首次协商60秒预算，CLI默认不变；只限managed connector，排除probe/listen/
+reconnect。只重试已知瞬时网络错误、地址与身份固定，总预算不重置；成功一次后
+不自动重连。timer只在无捕获协商/退避内，协商/最终身份复查后退休，不包Native
+会话/清理tail。每次和协商后复查真实本机key/cert及peer字节，身份文件错误不当
+网络重试。新增本地WaitingForPeer/PeerWaitExpired，GUI约一分钟/停止/配对保留，
+EOF后再看最终到期记录，恢复仍优先。新进程NoNative专项与参数/政策/GUI回归待CI。
+本机缺Rust继续不安装，Python语法检查过。v5/ALPN、授权、callback/捕获/账本不改，
+现用App/配对/TCC不动。真实双机启动顺序、睡眠/撤权及C06仍未验收。
