@@ -1217,7 +1217,11 @@ mod layout_tests {
             pressed: false,
             modifiers: Default::default(),
         };
-        let events = vec![press.clone(), egui::Event::PointerMoved(end), release.clone()];
+        let events = vec![
+            press.clone(),
+            egui::Event::PointerMoved(end),
+            release.clone(),
+        ];
         let mut draft = None;
         assert_eq!(
             update_layout_drag(&mut draft, &events, peer, local, canvas, true, false),
