@@ -216,7 +216,11 @@ impl Offer {
 }
 impl Drop for Offer {
     fn drop(&mut self) {
-        self.cancellation.cancel();
+        // A successful return transfers lifetime ownership to PairingSession.
+        // Failure/abandonment still invalidates pending work and proposals.
+        if !self.completed {
+            self.cancellation.cancel();
+        }
     }
 }
 
@@ -303,6 +307,11 @@ pub struct PairingSession {
     binding: Binding,
     lifetime: Lifetime,
     cancellation: Cancellation,
+}
+impl Drop for PairingSession {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 impl PairingSession {
     pub fn cancellation(&self) -> Cancellation {

@@ -17,6 +17,12 @@ impl CipherSuite for Suite {
     type Ksf = Argon2<'static>;
 }
 
+#[cfg_attr(test, derive(Clone))]
+pub(super) struct ServerState {
+    state: ServerLogin<Suite>,
+    binding: Binding,
+}
+
 fn ksf() -> Result<Argon2<'static>> {
     let params =
         Params::new(64 * 1024, 3, 1, None).map_err(|_| anyhow::anyhow!("invalid fixed KSF"))?;
@@ -45,7 +51,7 @@ pub(super) fn server_start(
     code: &[u8],
     binding: &Binding,
     bytes: &[u8],
-) -> Result<(ServerLogin<Suite>, Vec<u8>)> {
+) -> Result<(ServerState, Vec<u8>)> {
     let request = CredentialRequest::<Suite>::deserialize(bytes)
         .map_err(|_| anyhow::anyhow!("invalid pairing request"))?;
     // opaque-ke's field-prefix decoder must not admit trailing bytes.
@@ -83,7 +89,10 @@ pub(super) fn server_start(
         parameters(binding),
     )
     .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
-    Ok((login.state, login.message.serialize().to_vec()))
+    Ok((
+        ServerState { state: login.state, binding: binding.clone() },
+        login.message.serialize().to_vec(),
+    ))
 }
 
 pub(super) fn client_finish(
@@ -118,17 +127,22 @@ pub(super) fn client_finish(
 }
 
 pub(super) fn server_finish(
-    state: ServerLogin<Suite>,
+    state: ServerState,
     binding: &Binding,
     bytes: &[u8],
 ) -> Result<()> {
+    // TripleDh's finish verifies its stored expected MAC; its extra context/
+    // identifier parameters are unused. Guard our own immutable-state contract.
+    anyhow::ensure!(state.binding.context == binding.context
+        && state.binding.client == binding.client && state.binding.server == binding.server,
+        "pairing context changed before finalization");
     let message = CredentialFinalization::<Suite>::deserialize(bytes)
         .map_err(|_| anyhow::anyhow!("invalid pairing finalization"))?;
     anyhow::ensure!(
         message.serialize().as_slice() == bytes,
         "noncanonical pairing finalization"
     );
-    let mut finish = state
+    let mut finish = state.state
         .finish(message, parameters(binding))
         .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     use zeroize::Zeroize;
