@@ -1091,3 +1091,19 @@ da0e722的Mac真实EOF case曾失败，run42235077878保留，原断言不变后
 GUI/TCC/真实profile；私有回执在ignored pairing-worker-c6aaf24。无GUI入口/Commit
 命令，不把IPC Authenticated当授信。下一批接父监督器代次/原身份配置及取消，再补
 两端ADR0008事务/绑定回执/提交未知和中文向导。#10/6.83GB及完整C06仍未解决或验收。
+
+## 46. B2父监督器与登记闭环接线（2026-11-06，开发中）
+
+pairing-gui基于ba909eb/PR57（该精确HEAD五项42239541332及上游42239541345已过）。
+新增GUI纯IO父监督器：独立有界队列、owned child/单调代次、Stop/EOF/异常优先于
+缓存Auth、代码不走日志、停后复用禁止；只有只读NoNative子进程能用3秒后kill回收。
+CLI integration test直接编译GUI监督器源码并通过CARGO_BIN_EXE运行真实CLI，非伪造
+Authenticated fixture；build路径不是对端认证。当前仅源码，尚待CI；GUI/保存未开放。
+全闭环仍需：v2拒旧pairing v1（输入v5不动）；双方Approve/Prepare才请求本地Save，
+本地ADR0008写Pending后方可LocalSaved，收到同context对端Saved才持久Confirmed。
+Pending实际阻止全部会话入口；最终原配置hash/旧peer/完整local DER/可用身份复查
+与一次性save-claim放持settings锁、备份后/journal创建前，与Cancel原子排序；claim
+后取消/失败不回滚旧信任。Saved通知丢失为未知，重启只恢复Pending、不重造Session。
+对端Prepare/Saved可能先到，应有界记住；本地命令严格阶段且允许位先于提示事件。
+Confirmed只表示本机保存双方Saved证据；一端正常退出不能抹掉已验证PeerSaved。
+None receipt省略保旧格式，未知/矛盾receipt保只读，撤销/更换后旧回执不能复活。

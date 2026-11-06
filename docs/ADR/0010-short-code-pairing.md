@@ -130,3 +130,28 @@ separate upstream test job42228351494. Fixed KSF compatibility, actual network
 authentication and negative/cancellation cases passed. This qualifies the scoped
 experimental network foundation only, not GUI enrollment or a production security
 review. See VALIDATION for exact evidence and unfinished integration requirements.
+
+## Durable GUI integration constraints (planned, not yet enabled)
+
+The parent supervisor is a separate owned-child channel. Its Authenticated
+observation is not a save capability. Pending enrollment must block real session
+start paths, not just receiving/native/reconnect preferences or disabled buttons.
+The final snapshot/identity checks and one-shot save claim belong inside the
+settings-locked ADR0008 operation, after backups and before creating the journal.
+Cancel and claim need one atomic ordering point; accepted intent cannot be undone
+as if cancelled. There is no globally instantaneous cross-machine cancel order.
+
+Both users approve; both children exchange role-specific Prepare before asking
+their parents to save. Only a fully successful local transaction may emit Saved.
+Pending receipt metadata should be journaled within settings; restart must not
+reconstruct Session or auto-confirm. Lost LocalSaved notification stays unknown.
+Peer Prepare/Saved may arrive before local approval/save and needs bounded storage;
+local commands remain phase-specific, with allowed state published before events.
+
+Confirmed means this machine durably recorded evidence of both Saved messages,
+not that the peer also confirmed or both children exited. A later normal EOF must
+not erase verified PeerSaved evidence; later revoke/replacement must invalidate it.
+Version/context/identity inconsistencies remain read-only. New commit capability
+will use explicit v2 bootstrap/context/ALPN rejection of experimental v1; input v5
+and the manual fallback remain unchanged. These constraints still require code
+and cancellation/crash/notification-loss tests before any GUI trust write.

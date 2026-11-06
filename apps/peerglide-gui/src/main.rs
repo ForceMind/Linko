@@ -10,6 +10,7 @@ mod gesture_lab;
 mod gesture_rules;
 mod quit_check;
 mod worker_permissions;
+pub mod pairing_supervisor;
 use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, RichText, Vec2};

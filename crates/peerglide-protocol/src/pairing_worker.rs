@@ -172,6 +172,7 @@ impl PairingCommand {
             Command::Stop {} => None,
         }
     }
+    pub fn is_stop(&self) -> bool { matches!(self.body, Command::Stop {}) }
     pub fn line(&self) -> Zeroizing<String> {
         Zeroizing::new(serde_json::to_string(self).expect("closed pairing command"))
     }
@@ -213,6 +214,24 @@ pub fn read_command(reader: &mut impl BufRead) -> io::Result<Option<PairingComma
 }
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid pairing command")
+}
+
+/// Pairing stdout is a separate bounded channel, never an ordinary log line.
+pub fn read_event(reader: &mut impl BufRead) -> io::Result<Option<PairingEvent>> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() { return if bytes.is_empty() { Ok(None) } else { Err(invalid()) }; }
+        let end = chunk.iter().position(|byte| *byte == b'\n');
+        let count = end.unwrap_or(chunk.len());
+        if bytes.len() + count > MAX_EVENT_LINE { return Err(invalid()); }
+        bytes.extend_from_slice(&chunk[..count]);
+        reader.consume(count + usize::from(end.is_some()));
+        if end.is_some() {
+            return std::str::from_utf8(&bytes).ok().and_then(PairingEvent::parse)
+                .map(Some).ok_or_else(invalid);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -290,5 +309,12 @@ mod tests {
         assert!(bad.line().is_none());
         assert!(PairingEvent::parse(&" ".repeat(MAX_EVENT_LINE + 1)).is_none());
         assert!(PairingEvent::parse(&PairingCommand::stop().line()).is_none());
+        let mut framed = event.line().unwrap();
+        framed.push('\n');
+        assert!(read_event(&mut io::Cursor::new(framed.as_bytes())).unwrap().is_some());
+        for bytes in [vec![b' '; MAX_EVENT_LINE + 1], vec![255, b'\n'], b"{}".to_vec()] {
+            assert!(read_event(&mut io::Cursor::new(bytes)).is_err());
+        }
+        assert!(read_event(&mut io::Cursor::new(b"")).unwrap().is_none());
     }
 }
