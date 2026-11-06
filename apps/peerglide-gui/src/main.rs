@@ -301,15 +301,16 @@ impl App {
                     (None, Config::default())
                 }
             };
-        let (desktop_store, desktop_preferences) = match config_store::Store::open::<DesktopPreferences>(
-            dir.join("desktop-preferences.json"),
-        ) {
-            Ok((store, preferences)) => (Some(store), preferences),
-            Err(error) => {
-                notice.push_str(&format!(" 桌面选项已保留，当前不可编辑：{error:#}"));
-                (None, DesktopPreferences::default())
-            }
-        };
+        let (desktop_store, desktop_preferences) =
+            match config_store::Store::open::<DesktopPreferences>(
+                dir.join("desktop-preferences.json"),
+            ) {
+                Ok((store, preferences)) => (Some(store), preferences),
+                Err(error) => {
+                    notice.push_str(&format!(" 桌面选项已保留，当前不可编辑：{error:#}"));
+                    (None, DesktopPreferences::default())
+                }
+            };
         let mut app = Self {
             recording_mode: false,
             layout_report: None,
@@ -910,13 +911,20 @@ impl App {
                 self.show_window(ctx);
             }
             self.tray = None;
-            let _ = self.tray_mailbox.take();
+            self.process_tray_commands(ctx);
             return;
         }
         if self.tray.as_ref().is_some_and(|tray| tray.is_available()) {
             return;
         }
         self.tray = None;
+        self.process_tray_commands(ctx);
+        if self.close_requested || self.exit_confirmed {
+            return;
+        }
+        if self.window_hidden {
+            self.show_window(ctx);
+        }
         let wake_context = ctx.clone();
         let mailbox = peerglide_platform::tray::Mailbox::new(Arc::new(move || {
             wake_context.request_repaint();
@@ -937,7 +945,10 @@ impl App {
         preferences: DesktopPreferences,
     ) -> Result<()> {
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此资料");
-        self.desktop_store.as_mut().context("桌面选项只读，原文件已保留")?.save(&preferences)?;
+        self.desktop_store
+            .as_mut()
+            .context("桌面选项只读，原文件已保留")?
+            .save(&preferences)?;
         self.desktop_preferences = preferences;
         self.sync_tray(ctx);
         Ok(())
@@ -1004,7 +1015,10 @@ impl App {
             self.native_confirmation = false;
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
-            self.process_window_close(ctx, self.tray.as_ref().is_some_and(|tray| tray.is_available()));
+            self.process_window_close(
+                ctx,
+                self.tray.as_ref().is_some_and(|tray| tray.is_available()),
+            );
         }
         if self.close_requested && self.child.is_none() && !self.recovery_blocked {
             self.exit_confirmed = true;
@@ -1469,7 +1483,10 @@ mod tests {
         let mut app = App::load(fixture.path.clone());
         app.save_config()?;
         let original = std::fs::read(app.dir.join("settings.json"))?;
-        let preferences = DesktopPreferences { tray_enabled: true, close_to_tray: true };
+        let preferences = DesktopPreferences {
+            tray_enabled: true,
+            close_to_tray: true,
+        };
         app.desktop_store.as_mut().unwrap().save(&preferences)?;
         assert_eq!(std::fs::read(app.dir.join("settings.json"))?, original);
         drop(app);
@@ -1482,7 +1499,10 @@ mod tests {
         let app = App::load(fixture.path.clone());
         assert!(app.desktop_store.is_none());
         assert!(!app.desktop_preferences.tray_enabled && !app.desktop_preferences.close_to_tray);
-        assert_eq!(std::fs::read(app.dir.join("desktop-preferences.json"))?, future);
+        assert_eq!(
+            std::fs::read(app.dir.join("desktop-preferences.json"))?,
+            future
+        );
         assert_eq!(std::fs::read(app.dir.join("settings.json"))?, original);
         Ok(())
     }
@@ -2004,7 +2024,8 @@ mod lifecycle_tests {
         });
         assert!(app.window_hidden && app.stopping.is_none() && !app.close_requested);
         assert!(app.child.is_some());
-        app.tray_mailbox.post(peerglide_platform::tray::Command::Show);
+        app.tray_mailbox
+            .post(peerglide_platform::tray::Command::Show);
         logic_frames(&mut app, &ctx, false);
         assert!(!app.window_hidden && app.stopping.is_none());
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
@@ -2022,8 +2043,10 @@ mod lifecycle_tests {
         app.active_mode = Some(SessionMode::Communication);
         app.pending_start = Some(SessionMode::Native);
         app.window_hidden = true;
-        app.tray_mailbox.post(peerglide_platform::tray::Command::Show);
-        app.tray_mailbox.post(peerglide_platform::tray::Command::Quit);
+        app.tray_mailbox
+            .post(peerglide_platform::tray::Command::Show);
+        app.tray_mailbox
+            .post(peerglide_platform::tray::Command::Quit);
         let ctx = egui::Context::default();
         logic_frames(&mut app, &ctx, true);
         assert!(app.close_requested && !app.window_hidden);
@@ -2036,6 +2059,26 @@ mod lifecycle_tests {
         logic_frames(&mut app, &ctx, true);
         assert!(!app.window_hidden && !app.exit_confirmed);
         assert_eq!(app.dialog, Some(Dialog::Recovery));
+        Ok(())
+    }
+    #[test]
+    fn removing_or_rebuilding_tray_consumes_late_stop_and_quit_intents() -> Result<()> {
+        for enabled in [false, true] {
+            let fixture = super::tests::Fixture::new()?;
+            let mut app = App::load(fixture.path.clone());
+            app.child = Some(managed_child()?);
+            app.active_mode = Some(SessionMode::Communication);
+            app.pending_start = Some(SessionMode::Native);
+            app.desktop_preferences.tray_enabled = enabled;
+            app.tray_mailbox.post(peerglide_platform::tray::Command::Stop);
+            app.tray_mailbox.post(peerglide_platform::tray::Command::Quit);
+            let ctx = egui::Context::default();
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_tray(ctx));
+            assert!(app.close_requested && app.pending_start.is_none());
+            assert!(app.stopping.is_some());
+            assert!(app.tray.is_none());
+            assert!(!app.tray_mailbox.take().quit);
+        }
         Ok(())
     }
     #[test]

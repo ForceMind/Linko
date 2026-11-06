@@ -1,13 +1,19 @@
 //! Main-thread AppKit menu UI only. No input tap, hotkey or permission request.
 use super::{Command, Mailbox};
 use anyhow::{Context, Result};
-use objc2::{define_class, msg_send, rc::{autoreleasepool, Retained}, runtime::AnyObject,
-    sel, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{
+    define_class, msg_send,
+    rc::{autoreleasepool, Retained},
+    runtime::AnyObject,
+    sel, DefinedClass, MainThreadMarker, MainThreadOnly,
+};
 use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSVariableStatusItemLength};
 use objc2_foundation::{NSObject, NSObjectProtocol, NSString};
 use std::sync::Arc;
 
-struct MenuIvars { mailbox: Arc<Mailbox> }
+struct MenuIvars {
+    mailbox: Arc<Mailbox>,
+}
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
@@ -52,7 +58,9 @@ pub struct Tray {
 }
 impl Tray {
     /// Local recovery-UI availability, never input authority or an OS grant.
-    pub fn is_available(&self) -> bool { self.item.isVisible() }
+    pub fn is_available(&self) -> bool {
+        self.item.isVisible()
+    }
 }
 
 pub(super) fn create(mailbox: Arc<Mailbox>) -> Result<Tray> {
@@ -69,11 +77,19 @@ pub(super) fn create(mailbox: Arc<Mailbox>) -> Result<Tray> {
         let items = entries.map(|(title, action)| {
             // SAFETY: action matches our retained target's object-argument
             // selector. An empty key equivalent installs no global shortcut.
-            let item = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(main), &NSString::from_str(title), Some(action), &NSString::new()) };
+            let item = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(main),
+                    &NSString::from_str(title),
+                    Some(action),
+                    &NSString::new(),
+                )
+            };
             // SAFETY: target remains strongly retained by Tray. AppKit's target
             // property itself is weak; teardown detaches it before release.
-            unsafe { item.setTarget(Some(&target)); }
+            unsafe {
+                item.setTarget(Some(&target));
+            }
             item.setEnabled(true);
             menu.addItem(&item);
             item
@@ -81,7 +97,14 @@ pub(super) fn create(mailbox: Arc<Mailbox>) -> Result<Tray> {
         let bar = NSStatusBar::systemStatusBar();
         let item = bar.statusItemWithLength(NSVariableStatusItemLength);
         // From here even a failed button lookup removes the created status item.
-        let tray = Tray { bar, item, menu, items, _target: target, _main: main };
+        let tray = Tray {
+            bar,
+            item,
+            menu,
+            items,
+            _target: target,
+            _main: main,
+        };
         let button = tray.item.button(main).context("无法创建屏跃菜单栏按钮")?;
         button.setTitle(&NSString::from_str("屏跃"));
         tray.item.setMenu(Some(&tray.menu));
@@ -99,7 +122,10 @@ impl Drop for Tray {
             for item in &self.items {
                 // SAFETY: remove selectors/weak targets while our strong target
                 // is still alive; no menu callback can refer to freed Rust ivars.
-                unsafe { item.setAction(None); item.setTarget(None); }
+                unsafe {
+                    item.setAction(None);
+                    item.setTarget(None);
+                }
             }
             self.bar.removeStatusItem(&self.item);
         });
