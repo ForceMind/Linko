@@ -90,7 +90,10 @@ pub(super) fn server_start(
     )
     .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     Ok((
-        ServerState { state: login.state, binding: binding.clone() },
+        ServerState {
+            state: login.state,
+            binding: binding.clone(),
+        },
         login.message.serialize().to_vec(),
     ))
 }
@@ -126,23 +129,23 @@ pub(super) fn client_finish(
     Ok(finish.message.serialize().to_vec())
 }
 
-pub(super) fn server_finish(
-    state: ServerState,
-    binding: &Binding,
-    bytes: &[u8],
-) -> Result<()> {
+pub(super) fn server_finish(state: ServerState, binding: &Binding, bytes: &[u8]) -> Result<()> {
     // TripleDh's finish verifies its stored expected MAC; its extra context/
     // identifier parameters are unused. Guard our own immutable-state contract.
-    anyhow::ensure!(state.binding.context == binding.context
-        && state.binding.client == binding.client && state.binding.server == binding.server,
-        "pairing context changed before finalization");
+    anyhow::ensure!(
+        state.binding.context == binding.context
+            && state.binding.client == binding.client
+            && state.binding.server == binding.server,
+        "pairing context changed before finalization"
+    );
     let message = CredentialFinalization::<Suite>::deserialize(bytes)
         .map_err(|_| anyhow::anyhow!("invalid pairing finalization"))?;
     anyhow::ensure!(
         message.serialize().as_slice() == bytes,
         "noncanonical pairing finalization"
     );
-    let mut finish = state.state
+    let mut finish = state
+        .state
         .finish(message, parameters(binding))
         .map_err(|_| anyhow::anyhow!("pairing authentication failed"))?;
     use zeroize::Zeroize;

@@ -1,6 +1,6 @@
 # ADR-0010: Ephemeral code pairing before pinned mutual TLS
 
-Status: implementation in progress. The network authentication library is being
+Status: implementation in progress; dependency audit blocked. The network authentication library is being
 qualified; GUI enrollment and two-peer durable commit are not wired yet. This is
 not production short-code availability or an independent cryptographic audit.
 
@@ -95,3 +95,12 @@ registration/identity binding and same-socket upgrade. It is source/composition
 review only, not an independent audit or proof of this product composition.
 The upstream 2021 NCC audit of older versions does not cover 4.0.1 automatically.
 Locked transitive licenses, advisory checks, MSRV and platform CI remain required.
+
+The first locked CI (898d33c, run42225212344) passed Linux/macOS workspace tests
+and MSRV, but failed the unchanged audit gate: mandatory elliptic-curve0.13 brings
+crypto-bigint0.5.5, affected by
+[RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html), fixed only
+in >=0.7.6. No ignore or downgrade of the gate is permitted. Do not wire this
+candidate into GUI/production or describe it as qualified. Check a compatible
+upstream repair or review an alternate standard PAKE before proceeding; do not
+force incompatible bigint types or invent cryptographic repairs locally.

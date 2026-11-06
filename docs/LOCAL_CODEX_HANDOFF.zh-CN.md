@@ -1045,3 +1045,11 @@ context确认，独立ALPN、不改输入v5、不写盘/授输入。设计及有
 本机不装Rust，预检仍报告工具缺失；临时lock-proposal工作流只产出新增依赖lock和
 rustfmt候选，不能当locked验收。须回收核对lock/格式、删除临时工作流并完成严格CI，
 随后继续中文向导和两端提交回执，不能把当前网络模块当生产短码已完成。
+
+锁提案42224702730/13504124291摘要已核对，所有原依赖版本/源/校验和保留，新增
+34包，临时提案workflow已删除。898d33c实际locked CI42225212344已过最低Rust和
+Linux/macOS工作区测试，审计失败为新增crypto-bigint0.5.5的RUSTSEC-2026-0387，
+不能ignore。当前查兼容上游修复/标准PAKE替代，未接GUI或生产。后续12c2c66补了
+成功Offer→Session取消责任交接、服务端绑定快照（固定TripleDh的finish只用预存MAC，
+不会重核额外context参数）、真实OPAQUE替换/重放、TLS负例及KE3/TLS/ready迟到取消。
+该批初次平台fmt失败，已按官方差异修正；新回归仍需实际运行，未把范围复核当审计。
