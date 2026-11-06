@@ -5,6 +5,7 @@ mod desktop_state;
 mod desktop_style;
 mod desktop_ui;
 mod discovery_panel;
+mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
 mod worker_permissions;
@@ -256,6 +257,7 @@ struct App {
     dir: PathBuf,
     config: Config,
     config_store: Option<config_store::Store>,
+    enrollment_blocked: bool,
     instance_lock: Option<config_store::Lock>,
     page: Page,
     import_path: String,
@@ -293,11 +295,19 @@ impl App {
                 e
             })
             .ok();
+        if instance_lock.is_some() {
+            match enrollment_store::recover(&dir) {
+                Ok(true) => notice = "已完成上次设备登记收尾，键鼠与接收权限保持关闭。".into(),
+                Ok(false) => (),
+                Err(error) => notice = format!("设备登记恢复未完成，原文件已保留：{error:#}"),
+            }
+        }
+        let enrollment_blocked = enrollment_store::ensure_idle(&dir.join("settings.json")).is_err();
         let (config_store, config) =
             match config_store::Store::open::<Config>(dir.join("settings.json")) {
                 Ok((store, config)) => (Some(store), config),
                 Err(e) => {
-                    notice = format!("设置已保留，需要恢复：{e:#}");
+                    notice.push_str(&format!(" 设置已保留，需要恢复：{e:#}"));
                     (None, Config::default())
                 }
             };
@@ -345,6 +355,7 @@ impl App {
             dir,
             config,
             config_store,
+            enrollment_blocked,
             instance_lock,
             page: Page::Home,
             import_path: String::new(),
@@ -473,26 +484,33 @@ impl App {
             "登记设备前需要可写入的设置"
         );
         anyhow::ensure!(self.child.is_none(), "登记设备前请先停止当前会话");
+        self.native_confirmation = false;
+        self.pending_start = None;
+        self.screen_drag = None;
         let confirmed = self
             .confirmed_fingerprint
-            .as_deref()
+            .take()
             .context("请先在两台电脑上独立核对指纹")?;
         let bytes = self.candidate()?;
         anyhow::ensure!(
             transport::fingerprint(&bytes) == confirmed,
             "证书已变化，请重新核对指纹"
         );
-        if let Ok(local) = Identity::load(&self.identity_dir()) {
-            anyhow::ensure!(bytes != local.certificate, "请选择另一台电脑的证书");
+        let local = Identity::load(&self.identity_dir()).context("请先创建可用的本机身份")?;
+        anyhow::ensure!(bytes != local.certificate, "请选择另一台电脑的证书");
+        let mut next = self.config.clone();
+        next.fingerprint = Some(transport::fingerprint(&bytes));
+        next.allow = false;
+        next.native = false;
+        let result =
+            enrollment_store::commit(self.config_store.as_mut().unwrap(), &next, Some(&bytes));
+        if let Err(error) = result {
+            self.enrollment_blocked =
+                enrollment_store::ensure_idle(&self.dir.join("settings.json")).is_err();
+            self.config_store = None;
+            return Err(error).context("设备登记未完成，请重新打开屏跃检查收尾；不会开启键鼠");
         }
-        std::fs::write(self.dir.join("trusted-peer.crt.der"), &bytes)?;
-        let fingerprint = transport::fingerprint(&bytes);
-        if self.config.fingerprint.as_deref() != Some(fingerprint.as_str()) {
-            self.config.allow = false;
-        }
-        self.config.fingerprint = Some(fingerprint);
-        self.save_config()?;
-        self.confirmed_fingerprint = None;
+        self.config = next;
         Ok(())
     }
     fn start(&mut self, probe: bool) -> Result<()> {
@@ -718,12 +736,18 @@ impl App {
         self.connected = false;
         self.config.fingerprint = None;
         self.config.allow = false;
-        match std::fs::remove_file(self.dir.join("trusted-peer.crt.der")) {
-            Ok(()) => (),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) => return Err(e).context("对端已禁用，但移除证书失败"),
+        self.config.native = false;
+        let result = self
+            .config_store
+            .as_mut()
+            .context("设置只读，设备信任撤销尚未持久保存")
+            .and_then(|store| enrollment_store::commit(store, &self.config, None));
+        if result.is_err() {
+            self.enrollment_blocked =
+                enrollment_store::ensure_idle(&self.dir.join("settings.json")).is_err();
+            self.config_store = None;
         }
-        self.save_config().context("保存设备信任撤销结果")
+        result.context("保存设备信任撤销结果；未确认持久完成，请重新打开屏跃检查")
     }
     fn poll(&mut self) {
         self.worker_permissions.poll();
@@ -1872,6 +1896,36 @@ mod tests {
         assert!(
             app.enroll().is_err(),
             "revocation must invalidate pending confirmation"
+        );
+        Ok(())
+    }
+    #[test]
+    fn settings_conflict_during_enrollment_preserves_existing_peer_and_consumes_confirmation(
+    ) -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        Identity::create(&app.identity_dir())?;
+        let original = Identity::generate()?;
+        let candidate = fixture.path.join("candidate.der");
+        std::fs::write(&candidate, &original.certificate)?;
+        app.import_path = candidate.display().to_string();
+        app.confirmed_fingerprint = Some(original.fingerprint());
+        app.enroll()?;
+        let other = Identity::generate()?;
+        std::fs::write(&candidate, &other.certificate)?;
+        app.confirmed_fingerprint = Some(other.fingerprint());
+        app.native_confirmation = true;
+        app.pending_start = Some(SessionMode::Native);
+        let future = br#"{"store_version":999,"data":{}}"#;
+        std::fs::write(fixture.path.join("settings.json"), future)?;
+        assert!(app.enroll().is_err());
+        assert_eq!(app.config.fingerprint, Some(original.fingerprint()));
+        assert!(app.confirmed_fingerprint.is_none() && app.config_store.is_none());
+        assert!(!app.native_confirmation && app.pending_start.is_none() && app.child.is_none());
+        assert_eq!(std::fs::read(fixture.path.join("settings.json"))?, future);
+        assert_eq!(
+            std::fs::read(fixture.path.join("trusted-peer.crt.der"))?,
+            original.certificate
         );
         Ok(())
     }
