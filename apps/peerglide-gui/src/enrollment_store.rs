@@ -176,7 +176,8 @@ fn apply(
     anyhow::ensure!(
         config_store::read(settings)?.as_deref() == Some(&proposal.next_settings)
             && public_certificate(&peer_path)? == proposal.next_peer
-            && public_certificate(&dir.join("identity/node.crt.der"))? == proposal.local_certificate,
+            && public_certificate(&dir.join("identity/node.crt.der"))?
+                == proposal.local_certificate,
         "登记提交后文件再次变化，已保留收尾记录"
     );
     anyhow::ensure!(
