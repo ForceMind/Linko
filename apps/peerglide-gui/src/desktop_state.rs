@@ -88,10 +88,20 @@ pub(super) fn present(s: Snapshot) -> View {
             );
         }
         if s.pairing {
-            return View::new("正在添加电脑","请在配对窗口核验身份；不会开启键鼠或数据同步。",Tone::Accent,Action::None);
+            return View::new(
+                "正在添加电脑",
+                "请在配对窗口核验身份；不会开启键鼠或数据同步。",
+                Tone::Accent,
+                Action::None,
+            );
         }
         if s.pairing_pending {
-            return View::new("登记等待对端回执","本机记录已保留，尚不能开始协同。请重新核验或撤销待确认登记。",Tone::Warning,Action::AddDevice);
+            return View::new(
+                "登记等待对端回执",
+                "本机记录已保留，尚不能开始协同。请重新核验或撤销待确认登记。",
+                Tone::Warning,
+                Action::AddDevice,
+            );
         }
         if !s.registered {
             return View::new(
@@ -219,14 +229,20 @@ mod tests {
     }
     #[test]
     fn pairing_busy_and_pending_are_not_mislabeled_as_readonly_or_ready() {
-        let mut s=snapshot();s.pairing=true;
-        assert_eq!(present(s).title,"正在添加电脑");
-        assert_eq!(present(s).action,Action::None);
-        s.pairing=false;s.pairing_pending=true;
-        assert_eq!(present(s).title,"登记等待对端回执");
-        assert_eq!(present(s).action,Action::AddDevice);
-        s.writable=false;
-        assert_eq!(present(s).title,"这个窗口只读");
+        let mut s = snapshot();
+        s.pairing = true;
+        let view = present(s);
+        assert_eq!(view.title, "正在添加电脑");
+        assert_eq!(view.action, Action::None);
+        let mut s = snapshot();
+        s.pairing_pending = true;
+        let view = present(s);
+        assert_eq!(view.title, "登记等待对端回执");
+        assert_eq!(view.action, Action::AddDevice);
+        let mut s = snapshot();
+        s.pairing_pending = true;
+        s.writable = false;
+        assert_eq!(present(s).title, "这个窗口只读");
     }
     #[test]
     fn dead_or_disconnected_process_cannot_present_stale_remote_control() {

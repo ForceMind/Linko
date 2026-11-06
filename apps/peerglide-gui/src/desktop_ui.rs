@@ -83,7 +83,9 @@ impl App {
             registered: self.config.fingerprint.is_some()
                 && !self.pairing_pending()
                 && self.config_store.is_some(),
-            writable: !self.quit_check_mode && self.instance_lock.is_some() && self.config_store.is_some(),
+            writable: !self.quit_check_mode
+                && self.instance_lock.is_some()
+                && self.config_store.is_some(),
             running: self.child.is_some(),
             connected: self.connected,
             failed: self.last_failure,
