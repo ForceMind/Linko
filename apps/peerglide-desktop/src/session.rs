@@ -275,6 +275,13 @@ async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
 fn normal_close(c: &quinn::Connection) -> bool {
     matches!(c.close_reason(),Some(quinn::ConnectionError::ApplicationClosed(closed)) if closed.error_code==0u8.into())
 }
+fn connection_end(reason: quinn::ConnectionError) -> Result<()> {
+    match reason {
+        quinn::ConnectionError::ApplicationClosed(closed) if closed.error_code == 0u8.into() => Ok(()),
+        quinn::ConnectionError::LocallyClosed => Ok(()),
+        error => Err(error.into()),
+    }
+}
 pub struct Policy {
     pub allow: bool,
     pub native: bool,
@@ -450,10 +457,15 @@ pub(super) async fn run_with_status(
         .as_ref()
         .map(|driver| super::NativeRecoveryRegistration::new(driver.control(), *stop.borrow()));
     let (mtx, mut messages) = mpsc::channel(64);
+    let invalid_frame = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader_invalid = invalid_frame.clone();
     let reader = tokio::spawn(async move {
         loop {
             let m = transport::receive(&mut rx).await;
             let failed = m.is_err();
+            if m.as_ref().err().is_some_and(|error| error.is::<transport::InvalidMessageFrame>()) {
+                reader_invalid.store(true, std::sync::atomic::Ordering::Release);
+            }
             if mtx.send(m).await.is_err() || failed {
                 break;
             }
@@ -501,7 +513,9 @@ pub(super) async fn run_with_status(
         else{input_status.routing(outgoing.is_some(), recovery.receiver.active().is_some());}
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
-            _=c.closed()=>return Ok(()),
+            closed=c.closed()=>return if invalid_frame.load(std::sync::atomic::Ordering::Acquire) {
+                Err(transport::InvalidMessageFrame.into())
+            } else { connection_end(closed) },
             _=tick.tick()=>{
                 let now=now_ms();
                 if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
@@ -517,7 +531,12 @@ pub(super) async fn run_with_status(
             },
             m=messages.recv()=>{
                 let Some(m)=m else{return Ok(());};
-                let m=match m {Ok(m)=>m,Err(_) if normal_close(&c)=>return Ok(()),Err(e)=>return Err(e)};
+                let m=match m {
+                    Ok(m)=>m,
+                    Err(e) if e.is::<transport::MessageStreamEnded>()=>return c.close_reason().map(connection_end).unwrap_or(Ok(())),
+                    Err(e) if !e.is::<transport::InvalidMessageFrame>() && normal_close(&c)=>return Ok(()),
+                    Err(e)=>return Err(e),
+                };
                 let now=now_ms();
                 match m {
                     Message::Acquire{lease,edge:remote_edge,along}=>{
@@ -751,6 +770,43 @@ fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
 mod tests {
     use super::*;
     use transport::Identity;
+
+    #[tokio::test]
+    async fn clean_stream_fin_and_truncated_frame_take_distinct_session_cleanup_paths() -> Result<()> {
+        for truncated in [false, true] {
+            let a = Identity::generate()?; let b = Identity::generate()?;
+            let ea = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
+            let eb = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
+            let (_stop, stopped) = tokio::sync::watch::channel(false);
+            let server = async {
+                let c = eb.accept().await.unwrap().await?;
+                let (tx, rx) = c.accept_bi().await?;
+                let mut reporter = super::super::InputReporter::new(false);
+                let result = run_with_status(c.clone(), tx, rx, Policy { allow: false, native: false,
+                    edge: Edge::Right, local: InputCapabilities::default(), peer: InputCapabilities::default() },
+                    stopped, &mut reporter).await;
+                if truncated { assert!(result.unwrap_err().is::<transport::InvalidMessageFrame>()); }
+                else { result?; }
+                assert_eq!(reporter.last, Some(WorkerInputState::Disabled));
+                c.close(0u8.into(), b"session framing checked");
+                Ok::<_, anyhow::Error>(())
+            };
+            let client = async {
+                let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
+                let (mut tx, mut rx) = c.open_bi().await?;
+                send(&mut tx, &Message::Ping { lease: 0 }).await?;
+                assert!(matches!(transport::receive(&mut rx).await?, Message::Pong { lease: 0 }));
+                if truncated { tx.write_all(&[0, 0]).await?; }
+                tx.finish()?;
+                let _ = c.closed().await;
+                Ok::<_, anyhow::Error>(())
+            };
+            tokio::time::timeout(Duration::from_secs(5), async { tokio::try_join!(server, client) }).await??;
+        }
+        assert!(connection_end(quinn::ConnectionError::TimedOut).is_err());
+        assert!(connection_end(quinn::ConnectionError::Reset).is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn shutdown_timeout_keeps_the_worker_future_alive_until_the_original_capture_drains() {

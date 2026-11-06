@@ -68,3 +68,11 @@ an input grant. The GUI names the other computer, offers Stop and distinguishes
 expiry while preserving recovery priority. Readiness/explicit native consent,
 receiver permission, fresh physical switching intention, v5 and ALPN remain.
 Real startup order, Wi-Fi/suspend/permission and native cleanup are still C06.
+
+A subsequent Windows cooperative-close regression exposed clean stream FIN being
+reported as UnexpectedEof before the connection-close notification. Framing now
+distinguishes FIN between complete messages from FIN within a header/body. Clean
+boundary end returns through the same session cleanup; truncated FIN/invalid
+length/decode remains a protocol failure, not a reconnectable network error.
+Known transport losses retain their original class; nonzero/timeout connection
+closure is not silently mapped to success. No bytes, wire version or ALPN change.

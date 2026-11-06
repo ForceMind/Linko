@@ -62,7 +62,8 @@ impl Backoff {
     }
 }
 pub fn retryable(error: &anyhow::Error) -> bool {
-    if error.is::<IdentityFilesUnavailable>() || error.is::<InitialWaitExpired>() {
+    if error.is::<IdentityFilesUnavailable>() || error.is::<InitialWaitExpired>()
+        || error.is::<peerglide_transport::InvalidMessageFrame>() {
         return false;
     }
     error.chain().any(|cause| {
@@ -132,6 +133,7 @@ mod tests {
         assert!(expired.check().is_err() && expired.negotiated().is_err());
         assert!(expired.waiting());
         assert!(!retryable(&InitialWaitExpired.into()));
+        assert!(!retryable(&anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::TimedOut)).context(peerglide_transport::InvalidMessageFrame)));
         let disk_error = anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::TimedOut))
             .context(IdentityFilesUnavailable);
         assert!(!retryable(&disk_error));

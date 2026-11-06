@@ -97,3 +97,11 @@ not an execution credential or a replacement for actual worker startup checks.
 It does not prove remote receiving permission, OS injection success or future
 permission availability. No permission request, persisted readiness or automatic
 native start is introduced. See NATIVE_CONTEXT.md for lifetime and test scope.
+
+Input framing distinguishes a clean stream FIN at the boundary between complete
+messages from truncated FIN inside a length header/body. Invalid lengths/payloads
+and observed malformed frames cannot be excused by an ordinary close notice;
+network loss retains its transport classification. Session end still executes
+owned-input release and capture shutdown. This changes error classification, not
+v5 encoding/ALPN, peer authentication or permission. Actual native cleanup remains
+C06; NoNative FIN/truncation regressions do not prove physical release.

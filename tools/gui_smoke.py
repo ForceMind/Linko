@@ -5,9 +5,14 @@ import json
 import pathlib
 import subprocess
 import tempfile
+import sys
 import time
 
 # Keep both successful and failed isolated-render evidence for Chinese text/layout.
+
+def run_external(arguments, **options):
+    options.setdefault("timeout", 10)
+    return subprocess.run(arguments, **options)
 
 root = pathlib.Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
@@ -26,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                 for _ in range(100):
                     if gui.poll() is not None:
                         raise RuntimeError(log.read_text())
-                    found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid), "--name", "PeerGlide"], capture_output=True, text=True)
+                    found = run_external(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid), "--name", "PeerGlide"], capture_output=True, text=True)
                     if found.returncode == 0 and found.stdout.strip():
                         window = found.stdout.splitlines()[0]
                         break
@@ -36,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                 assert (profile / "gui-instance.lock").is_file(), "explicit data directory must own the GUI configuration"
                 assert not (fallback / "peerglide").exists(), "explicit directory must not touch the default profile"
                 time.sleep(1)
-                subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
+                run_external(["xdotool", "windowfocus", "--sync", window], check=True)
                 if name == "gesture-lab":
                     # Fixed-size, scale-1 virtual window. This is synthetic GUI
                     # input on our isolated X server, never a user desktop.
@@ -51,16 +56,16 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     cx, cy, cw, ch = layout["canvas"]
                     sx, sy, sw, sh = layout["save"]
                     start_x, start_y = int(cx + 45), int(cy + ch / 2)
-                    subprocess.run(["xdotool", "mousemove", "--window", window, str(start_x), str(start_y)], check=True)
-                    subprocess.run(["xdotool", "mousedown", "3"], check=True)
+                    run_external(["xdotool", "mousemove", "--window", window, str(start_x), str(start_y)], check=True)
+                    run_external(["xdotool", "mousedown", "3"], check=True)
                     for delta in (20, 45, 70, 100, 120):
-                        subprocess.run(["xdotool", "mousemove", "--window", window, str(start_x + delta), str(start_y)], check=True)
+                        run_external(["xdotool", "mousemove", "--window", window, str(start_x + delta), str(start_y)], check=True)
                         time.sleep(0.06)
-                    subprocess.run(["xdotool", "mouseup", "3"], check=True)
+                    run_external(["xdotool", "mouseup", "3"], check=True)
                     time.sleep(0.3)
                     folder = profile / "gesture-samples"
                     assert not folder.exists(), "recording must not autosave"
-                    subprocess.run(["xdotool", "mousemove", "--window", window, str(int(sx + sw / 2)), str(int(sy + sh / 2)), "click", "1"], check=True)
+                    run_external(["xdotool", "mousemove", "--window", window, str(int(sx + sw / 2)), str(int(sy + sh / 2)), "click", "1"], check=True)
                     sample = None
                     for _ in range(30):
                         files = list(folder.glob("*.json"))
@@ -80,7 +85,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     points = sample["samples"]
                     assert 2 <= len(points) <= 2048
                     assert points[-1]["x"] - points[0]["x"] > 60
-                    evaluation = subprocess.run([
+                    evaluation = run_external([
                         "cargo", "run", "--quiet", "--locked", "-p", "peerglide-gestures",
                         "--example", "evaluate", "--", str(folder)
                     ], cwd=root, capture_output=True, text=True, timeout=60, check=True)
@@ -94,9 +99,9 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                 dest.mkdir(exist_ok=True)
                 # Capture the virtual display; helper windows are not app windows.
                 path = dest / f"peerglide-{name}.png"
-                subprocess.run(["import", "-window", "root", str(path)], check=True)
+                run_external(["import", "-window", "root", str(path)], check=True)
                 assert path.stat().st_size > 1000
-                subprocess.run(["xdotool", "windowclose", window], check=True)
+                run_external(["xdotool", "windowclose", window], check=True)
                 try:
                     gui.wait(timeout=3)
                 except subprocess.TimeoutExpired:
@@ -104,13 +109,25 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     gui.wait(timeout=3)
                 print(f"PASS: {name} native GUI launched and rendered under isolated Xvfb")
             finally:
+                primary_failure = sys.exc_info()[0] is not None
+                cleanup_error = None
+                commands = []
                 if gui.poll() is None:
                     dest = root / "dist"
                     dest.mkdir(exist_ok=True)
-                    subprocess.run(["import", "-window", "root", str(dest / f"peerglide-{name}-final.png")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["xdotool", "mouseup", "3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if gui.poll() is None:
-                    gui.kill()
-                    gui.wait()
+                    commands.append(["import", "-window", "root", str(dest / f"peerglide-{name}-final.png")])
+                commands.append(["xdotool", "mouseup", "3"])
+                try:
+                    for command in commands:
+                        try:
+                            run_external(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                        except (subprocess.SubprocessError, OSError) as error:
+                            cleanup_error = error
+                finally:
+                    if gui.poll() is None:
+                        gui.kill()
+                        gui.wait(timeout=5)
+                if cleanup_error is not None and not primary_failure:
+                    raise RuntimeError("isolated GUI cleanup did not finish") from cleanup_error
     capture([], "home")
     capture(["--gesture-lab"], "gesture-lab")

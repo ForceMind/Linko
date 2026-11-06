@@ -1739,3 +1739,15 @@ lost/timed out失败，原“退出0”断言失败。0b0b44d改正常场景为�
 私钥不可用），原NoNative/terminal要求保留；参数拒绝、政策、GUI命令/显示回归均过。
 最低1.95/审计/三平台Clippy与工作区测试亦过，其他平台后续/驻留仍待回读；394项
 外部依赖未变。后续只补记录，最终精确HEAD结果集中回读PR62；物理C06仍未验收。
+
+4498b51仅补记录，但Windows重现协作关闭失败unexpected end of file：完整Hello后
+无更多应用帧，FIN先于连接关闭通知时，read_u32不能区分帧边界与截断。现明确首字节
+读取区分正常边界EOF；剩余header/body的截断FIN、非法长度/解码打InvalidFrame标记，
+不能被normal-close掩盖或当网络重试。普通连接丢失保留原错误类别，c.closed不再
+无条件成功。已观察到无效帧用原子标记防关闭竞态吞错；清理tail始终执行，v5字节/
+ALPN与权限不变。固定quinn0.11.12源码包按Cargo.lock SHA核对，确认Tokio AsyncRead
+下ConnectionLost映射NotConnected而非UnexpectedEof，未升级依赖。
+新增真实TLS完整帧后FIN/截断header/body/零长与NoNative session清理回归，原超长
+测试仍验证不读body即拒绝，改用精确错误类型。另给隔离GUI辅助命令10秒（已有cargo
+60秒保留）、step5分钟边界及finally始终回收自有GUI；原Linux长作业已自行成功，未
+因观察超时重启。当前修复仍待新CI，先前4498b51 Windows失败保留，不计最终通过。

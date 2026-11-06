@@ -1244,3 +1244,11 @@ smoke因强杀被当正常断开期待0失败，实际程序保留connection los
 42298681886已成功，8项真实NoNative进程PASS，涵盖晚启动、预算退休/不重置、停止、
 pin/私钥变化、错TLS和不重连，未放宽旧断言。其他平台后续/驻留与最终纯记录HEAD
 须继续回读PR62；394项外部依赖不变。现用App/身份/配对/TCC及物理未验状态不动。
+
+4498b51的Windows再次失败，协作关闭收到unexpected end of file（非强杀timed out）。
+已定位实现缺口：帧边界FIN早于c.close_reason通知，旧read_u32把它混同截断；现
+首字节识别完整帧间FIN，截断FIN/非法帧类型单独失败，transport loss不改成帧错误，
+连接timeout/nonzero不再无条件成功；观察到的无效帧不能被关闭竞态盖掉。真实TLS
+帧及NoNative session回归新增，所有结束仍走原清理tail，v5/ALPN不改。quinn0.11.12
+官方源码下载摘要与锁一致，确认其IO错误转换，未改依赖。隔离GUI外部工具加timeout
+及始终回收，原Linux作业最终自行成功未重启。新修复待CI，不能沿用先前绿灯交付。
