@@ -70,13 +70,14 @@ struct Validity {
 impl Validity {
     fn invalidate(&self) {
         for slot in [&self.save, &self.receipt] {
-            let _ = slot.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
-                Some(match state {
-                    0 => 2,
-                    1 => 3,
-                    other => other,
-                })
-            });
+            let mut state = slot.load(Ordering::Acquire);
+            loop {
+                let next = match state { 0 => 2, 1 => 3, _ => break };
+                match slot.compare_exchange_weak(state,next,Ordering::AcqRel,Ordering::Acquire) {
+                    Ok(_) => break,
+                    Err(current) => state=current,
+                }
+            }
         }
     }
 }
