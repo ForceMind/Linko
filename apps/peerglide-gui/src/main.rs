@@ -874,6 +874,9 @@ impl App {
         self.poll();
         if ctx.input(|i| {
             !i.focused
+                || i.events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::WindowFocused(false)))
                 || i.viewport().minimized.unwrap_or(false)
                 || i.viewport().occluded.unwrap_or(false)
         }) {
@@ -1866,6 +1869,17 @@ mod lifecycle_tests {
         assert_eq!(app.config.edge, original);
         assert!(!app.dir.join("settings.json").exists());
         assert!(app.child.is_none());
+        app.native_confirmation = true;
+        let input = egui::RawInput {
+            focused: true,
+            events: vec![
+                egui::Event::WindowFocused(false),
+                egui::Event::WindowFocused(true),
+            ],
+            ..Default::default()
+        };
+        let _ = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
+        assert!(!app.native_confirmation);
         Ok(())
     }
     #[test]
