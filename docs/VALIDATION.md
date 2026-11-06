@@ -1751,3 +1751,10 @@ ALPN与权限不变。固定quinn0.11.12源码包按Cargo.lock SHA核对，确�
 测试仍验证不读body即拒绝，改用精确错误类型。另给隔离GUI辅助命令10秒（已有cargo
 60秒保留）、step5分钟边界及finally始终回收自有GUI；原Linux长作业已自行成功，未
 因观察超时重启。当前修复仍待新CI，先前4498b51 Windows失败保留，不计最终通过。
+
+7efc07d已应用EOF回归fmt，42303853610 Linux完整成功：真实TLS完整帧间FIN与截断
+header/body/零长的区分、NoNative session对应清理路径通过；8项首次等待进程检查
+逐项PASS。隔离Xvfb home/gesture-lab在新的工具与step边界内均通过。最低1.95、
+审计及三平台Clippy/工作区测试通过，其他平台后续与驻留仍须最终回读。修复不把
+所有EOF当正常，也不把连接中断一概当非法帧；关闭timeout/reset继续失败，已观察
+到的非法帧不被普通关闭通知吞掉。最终精确候选状态集中在PR62，物理仍未验收。

@@ -1252,3 +1252,8 @@ pin/私钥变化、错TLS和不重连，未放宽旧断言。其他平台后续/
 帧及NoNative session回归新增，所有结束仍走原清理tail，v5/ALPN不改。quinn0.11.12
 官方源码下载摘要与锁一致，确认其IO错误转换，未改依赖。隔离GUI外部工具加timeout
 及始终回收，原Linux作业最终自行成功未重启。新修复待CI，不能沿用先前绿灯交付。
+
+7efc07d的42303853610 Linux完整过：真实TLS FIN/截断与NoNative session清理回归、
+8项startup进程检查及有界Xvfb两页都通过，最低1.95/审计与三平台工作区/Clippy过。
+其他平台后续/驻留待最终回读PR62。正常帧边界EOF、截断FIN和transport loss有区别，
+不一概吞错，timeout/reset仍失败；不据NoNative证明Native清理/双机，现用包不动。
