@@ -28,10 +28,15 @@ unsafe extern "C-unwind" fn should_terminate(
     application: *mut NSApplication,
 ) -> NSApplicationTerminateReply {
     if MainThreadMarker::new().is_some() {
-        let mailbox = REGISTRY.try_with(|registry| {
-            registry.try_borrow().ok()
-                .and_then(|registry| registry.mailbox(delegate as usize, application as usize))
-        }).ok().flatten();
+        let mailbox = REGISTRY
+            .try_with(|registry| {
+                registry
+                    .try_borrow()
+                    .ok()
+                    .and_then(|registry| registry.mailbox(delegate as usize, application as usize))
+            })
+            .ok()
+            .flatten();
         // Drop the TLS borrow before wake; a scheduling callback can re-enter.
         if let Some(mailbox) = mailbox {
             mailbox.post(Command::Quit);
@@ -46,7 +51,11 @@ fn bridge_imp() -> Imp {
     // are 64-bit; the type encoding is Q@:@. No callback reference is retained.
     unsafe {
         std::mem::transmute::<
-            unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut NSApplication) -> NSApplicationTerminateReply,
+            unsafe extern "C-unwind" fn(
+                *mut AnyObject,
+                Sel,
+                *mut NSApplication,
+            ) -> NSApplicationTerminateReply,
             Imp,
         >(should_terminate)
     }
@@ -56,26 +65,38 @@ fn checked_delegate(app: &NSApplication) -> Result<Retained<AnyObject>> {
     // Retain the actual delegate on the main thread; never replace it, proxy it
     // or alter its instance/class/lifecycle implementation.
     let delegate = app.delegate().context("应用退出代理尚未初始化")?;
-    let object: &AnyObject = &delegate;
+    let object: &AnyObject = (*delegate).as_ref();
     let class = object.class();
     anyhow::ensure!(
         cfg!(target_pointer_width = "64")
             && class.name() == c"WinitApplicationDelegate"
-            && class.superclass().is_some_and(|parent| parent.name() == c"NSObject"),
+            && class
+                .superclass()
+                .is_some_and(|parent| parent.name() == c"NSObject"),
         "应用退出代理不是已核对的 winit 0.30.13 类型，不能启用原生协同"
     );
-    for selector in [sel!(applicationDidFinishLaunching:), sel!(applicationWillTerminate:)] {
-        class.verify_sel::<(&NSNotification,), ()>(selector)
+    for selector in [
+        sel!(applicationDidFinishLaunching:),
+        sel!(applicationWillTerminate:),
+    ] {
+        class
+            .verify_sel::<(&NSNotification,), ()>(selector)
             .map_err(|_| anyhow::anyhow!("应用退出代理生命周期签名未知，不能启用原生协同"))?;
     }
-    Ok(Retained::from(object))
+    Ok(Retained::from(&*delegate))
 }
 
 fn check_bridge(class: &AnyClass) -> bool {
-    class.instance_method(sel!(applicationShouldTerminate:)).is_some_and(|method| {
-        std::ptr::fn_addr_eq(method.implementation(), bridge_imp())
-            && class.verify_sel::<(&NSApplication,), NSApplicationTerminateReply>(sel!(applicationShouldTerminate:)).is_ok()
-    })
+    class
+        .instance_method(sel!(applicationShouldTerminate:))
+        .is_some_and(|method| {
+            std::ptr::fn_addr_eq(method.implementation(), bridge_imp())
+                && class
+                    .verify_sel::<(&NSApplication,), NSApplicationTerminateReply>(
+                        sel!(applicationShouldTerminate:),
+                    )
+                    .is_ok()
+        })
 }
 
 fn install_bridge(class: &AnyClass) -> Result<()> {
@@ -87,16 +108,24 @@ fn install_bridge(class: &AnyClass) -> Result<()> {
         // this exact ABI and is process-lifetime code with a weak TLS registry.
         let added = unsafe {
             objc2::ffi::class_addMethod(
-                (class as *const AnyClass).cast_mut(), selector, bridge_imp(), c"Q@:@".as_ptr(),
+                (class as *const AnyClass).cast_mut(),
+                selector,
+                bridge_imp(),
+                c"Q@:@".as_ptr(),
             )
         };
         anyhow::ensure!(added.as_bool(), "无法安装应用退出保护，不能启用原生协同");
     }
-    anyhow::ensure!(check_bridge(class), "应用退出保护存在未知冲突，不能启用原生协同");
+    anyhow::ensure!(
+        check_bridge(class),
+        "应用退出保护存在未知冲突，不能启用原生协同"
+    );
     Ok(())
 }
 
-struct MenuIvars { mailbox: Arc<Mailbox> }
+struct MenuIvars {
+    mailbox: Arc<Mailbox>,
+}
 define_class!(
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
@@ -149,41 +178,69 @@ impl Owner {
         let current_menu = self.app.mainMenu();
         let current_delegate = self.app.delegate();
         let expected_target: &AnyObject = &self.target;
-        current_menu.as_deref().is_some_and(|menu| std::ptr::eq(menu, &*self.menu))
+        current_menu
+            .as_deref()
+            .is_some_and(|menu| std::ptr::eq(menu, &*self.menu))
             && current_delegate.as_deref().is_some_and(|delegate| {
-                let object: &AnyObject = delegate;
+                let object: &AnyObject = delegate.as_ref();
                 std::ptr::eq(object, &*self.delegate) && check_bridge(object.class())
             })
             && REGISTRY.with(|registry| registry.borrow().contains(self.generation))
             && self.menu.numberOfItems() == 1
-            && self.menu.itemAtIndex(0).and_then(|root| root.submenu())
-                .as_deref().is_some_and(|menu| std::ptr::eq(menu, &*self.app_menu))
+            && self
+                .menu
+                .itemAtIndex(0)
+                .and_then(|root| root.submenu())
+                .as_deref()
+                .is_some_and(|menu| std::ptr::eq(menu, &*self.app_menu))
             && self.app_menu.numberOfItems() == 11
-            && [(2, 1, sel!(showMainWindow:)), (3, 2, sel!(stopCollaboration:)), (10, 7, sel!(quitPeerGlide:))]
-                .into_iter().all(|(position, owned, selector)| {
-                    self.app_menu.itemAtIndex(position).as_deref()
-                        .is_some_and(|item| std::ptr::eq(item, &*self.items[owned])
-                            && item.action() == Some(selector) && item.isEnabled()
-                            && item.target().as_deref().is_some_and(|target| std::ptr::eq(target, expected_target)))
-                })
+            && [
+                (2, 1, sel!(showMainWindow:)),
+                (3, 2, sel!(stopCollaboration:)),
+                (10, 7, sel!(quitPeerGlide:)),
+            ]
+            .into_iter()
+            .all(|(position, owned, selector)| {
+                self.app_menu
+                    .itemAtIndex(position)
+                    .as_deref()
+                    .is_some_and(|item| {
+                        std::ptr::eq(item, &*self.items[owned])
+                            && item.action() == Some(selector)
+                            && item.isEnabled()
+                            && item
+                                .target()
+                                .as_deref()
+                                .is_some_and(|target| std::ptr::eq(target, expected_target))
+                    })
+            })
             && self.items[7].keyEquivalent().to_string() == "q"
             && self.items[7].keyEquivalentModifierMask() == NSEventModifierFlags::Command
     }
 }
 
 fn item(
-    main: MainThreadMarker, menu: &NSMenu, title: &str, key: &str,
-    action: Sel, target: &AnyObject,
+    main: MainThreadMarker,
+    menu: &NSMenu,
+    title: &str,
+    key: &str,
+    action: Sel,
+    target: &AnyObject,
 ) -> Retained<NSMenuItem> {
     // SAFETY: every selector below is either an SDK NSApplication action or an
     // own target's void/object action. Owner holds both targets strongly.
     let item = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(main), &NSString::from_str(title), Some(action), &NSString::from_str(key),
+            NSMenuItem::alloc(main),
+            &NSString::from_str(title),
+            Some(action),
+            &NSString::from_str(key),
         )
     };
     // SAFETY: the matching target remains strongly retained by Owner.
-    unsafe { item.setTarget(Some(target)); }
+    unsafe {
+        item.setTarget(Some(target));
+    }
     item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
     item.setEnabled(true);
     menu.addItem(&item);
@@ -196,10 +253,15 @@ pub(super) fn install(mailbox: Arc<Mailbox>) -> Result<Owner> {
         let app = NSApplication::sharedApplication(main);
         let delegate = checked_delegate(&app)?;
         install_bridge(delegate.class())?;
-        let generation = REGISTRY.with(|registry| registry.borrow_mut().attach(
-            (&*delegate as *const AnyObject) as usize,
-            (&*app as *const NSApplication) as usize, &mailbox,
-        )).context("已有应用菜单所有者，不能重复安装")?;
+        let generation = REGISTRY
+            .with(|registry| {
+                registry.borrow_mut().attach(
+                    (&*delegate as *const AnyObject) as usize,
+                    (&*app as *const NSApplication) as usize,
+                    &mailbox,
+                )
+            })
+            .context("已有应用菜单所有者，不能重复安装")?;
         let target = PeerGlideApplicationMenuTarget::new(main, mailbox);
         let menu = NSMenu::new(main);
         let services = NSMenu::new(main);
@@ -210,10 +272,31 @@ pub(super) fn install(mailbox: Arc<Mailbox>) -> Result<Owner> {
         root.setTitle(&NSString::from_str("屏跃"));
         root.setSubmenu(Some(&app_menu));
         menu.addItem(&root);
-        let mut items = vec![item(main, &app_menu, "关于屏跃", "", sel!(orderFrontStandardAboutPanel:), &app)];
+        let mut items = vec![item(
+            main,
+            &app_menu,
+            "关于屏跃",
+            "",
+            sel!(orderFrontStandardAboutPanel:),
+            &app,
+        )];
         app_menu.addItem(&NSMenuItem::separatorItem(main));
-        items.push(item(main, &app_menu, "显示主窗口", "", sel!(showMainWindow:), &target));
-        items.push(item(main, &app_menu, "停止协同", "", sel!(stopCollaboration:), &target));
+        items.push(item(
+            main,
+            &app_menu,
+            "显示主窗口",
+            "",
+            sel!(showMainWindow:),
+            &target,
+        ));
+        items.push(item(
+            main,
+            &app_menu,
+            "停止协同",
+            "",
+            sel!(stopCollaboration:),
+            &target,
+        ));
         app_menu.addItem(&NSMenuItem::separatorItem(main));
         let service_item = NSMenuItem::new(main);
         service_item.setTitle(&NSString::from_str("服务"));
@@ -221,16 +304,47 @@ pub(super) fn install(mailbox: Arc<Mailbox>) -> Result<Owner> {
         app_menu.addItem(&service_item);
         items.push(service_item);
         items.push(item(main, &app_menu, "隐藏屏跃", "h", sel!(hide:), &app));
-        let hide_others = item(main, &app_menu, "隐藏其他应用", "h", sel!(hideOtherApplications:), &app);
-        hide_others.setKeyEquivalentModifierMask(NSEventModifierFlags::Command | NSEventModifierFlags::Option);
+        let hide_others = item(
+            main,
+            &app_menu,
+            "隐藏其他应用",
+            "h",
+            sel!(hideOtherApplications:),
+            &app,
+        );
+        hide_others.setKeyEquivalentModifierMask(
+            NSEventModifierFlags::Command | NSEventModifierFlags::Option,
+        );
         items.push(hide_others);
-        items.push(item(main, &app_menu, "显示全部", "", sel!(unhideAllApplications:), &app));
+        items.push(item(
+            main,
+            &app_menu,
+            "显示全部",
+            "",
+            sel!(unhideAllApplications:),
+            &app,
+        ));
         app_menu.addItem(&NSMenuItem::separatorItem(main));
-        items.push(item(main, &app_menu, "退出屏跃", "q", sel!(quitPeerGlide:), &target));
+        items.push(item(
+            main,
+            &app_menu,
+            "退出屏跃",
+            "q",
+            sel!(quitPeerGlide:),
+            &target,
+        ));
         let owner = Owner {
             previous_menu: app.mainMenu(),
             previous_services: app.servicesMenu(),
-            app, delegate, menu, app_menu, services, items, target, generation, _main: main,
+            app,
+            delegate,
+            menu,
+            app_menu,
+            services,
+            items,
+            target,
+            generation,
+            _main: main,
         };
         owner.app.setServicesMenu(Some(&owner.services));
         owner.app.setMainMenu(Some(&owner.menu));
@@ -246,12 +360,25 @@ impl Drop for Owner {
             self.menu.cancelTracking();
             for item in &self.items {
                 // SAFETY: clear weak targets/actions while strong targets live.
-                unsafe { item.setAction(None); item.setTarget(None); }
+                unsafe {
+                    item.setAction(None);
+                    item.setTarget(None);
+                }
             }
-            if self.app.mainMenu().as_deref().is_some_and(|menu| std::ptr::eq(menu, &*self.menu)) {
+            if self
+                .app
+                .mainMenu()
+                .as_deref()
+                .is_some_and(|menu| std::ptr::eq(menu, &*self.menu))
+            {
                 self.app.setMainMenu(self.previous_menu.as_deref());
             }
-            if self.app.servicesMenu().as_deref().is_some_and(|menu| std::ptr::eq(menu, &*self.services)) {
+            if self
+                .app
+                .servicesMenu()
+                .as_deref()
+                .is_some_and(|menu| std::ptr::eq(menu, &*self.services))
+            {
                 self.app.setServicesMenu(self.previous_services.as_deref());
             }
         });
@@ -287,7 +414,9 @@ mod tests {
     #[test]
     fn missing_selector_is_added_once_and_has_the_checked_abi() {
         let class = PeerGlideEmptyTerminationFixture::class();
-        assert!(class.instance_method(sel!(applicationShouldTerminate:)).is_none());
+        assert!(class
+            .instance_method(sel!(applicationShouldTerminate:))
+            .is_none());
         install_bridge(class).unwrap();
         assert!(check_bridge(class));
         install_bridge(class).unwrap();
@@ -295,7 +424,13 @@ mod tests {
         // call NSApplication.terminate: or a real delegate in this regression.
         // SAFETY: callback treats both pointers as identity values only; it
         // never dereferences them, and no registration accepts these null IDs.
-        let result = unsafe { should_terminate(std::ptr::null_mut(), sel!(applicationShouldTerminate:), std::ptr::null_mut()) };
+        let result = unsafe {
+            should_terminate(
+                std::ptr::null_mut(),
+                sel!(applicationShouldTerminate:),
+                std::ptr::null_mut(),
+            )
+        };
         assert_eq!(result, NSApplicationTerminateReply::TerminateCancel);
     }
     #[test]
@@ -304,7 +439,10 @@ mod tests {
         let selector = sel!(applicationShouldTerminate:);
         let original = class.instance_method(selector).unwrap().implementation();
         assert!(install_bridge(class).is_err());
-        assert!(std::ptr::fn_addr_eq(original, class.instance_method(selector).unwrap().implementation()));
+        assert!(std::ptr::fn_addr_eq(
+            original,
+            class.instance_method(selector).unwrap().implementation()
+        ));
         assert!(!check_bridge(class));
     }
 }

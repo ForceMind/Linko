@@ -70,7 +70,9 @@ const fn reviewed_winit_lock(lock: &str) -> bool {
         }
         if line_is(bytes, start, end, b"[[package]]") {
             if winit {
-                if !reviewed { return false; }
+                if !reviewed {
+                    return false;
+                }
                 count += 1;
             }
             winit = false;
@@ -83,7 +85,9 @@ const fn reviewed_winit_lock(lock: &str) -> bool {
         offset += 1;
     }
     if winit {
-        if !reviewed { return false; }
+        if !reviewed {
+            return false;
+        }
         count += 1;
     }
     count == 1
@@ -115,7 +119,12 @@ struct Registration {
 }
 #[cfg(any(target_os = "macos", test))]
 impl Registry {
-    fn attach(&mut self, delegate: usize, application: usize, mailbox: &Arc<Mailbox>) -> Option<u64> {
+    fn attach(
+        &mut self,
+        delegate: usize,
+        application: usize,
+        mailbox: &Arc<Mailbox>,
+    ) -> Option<u64> {
         if self.current.is_some() {
             return None;
         }
@@ -137,7 +146,9 @@ impl Registry {
         current.mailbox.upgrade()
     }
     fn contains(&self, generation: u64) -> bool {
-        self.current.as_ref().is_some_and(|entry| entry.generation == generation)
+        self.current
+            .as_ref()
+            .is_some_and(|entry| entry.generation == generation)
     }
     fn detach(&mut self, generation: u64) {
         if self.contains(generation) {
@@ -188,7 +199,10 @@ mod tests {
     }
     #[test]
     fn exhausted_generation_refuses_registration() {
-        let mut registry = Registry { next: u64::MAX, current: None };
+        let mut registry = Registry {
+            next: u64::MAX,
+            current: None,
+        };
         assert!(registry.attach(1, 2, &mailbox()).is_none());
         assert!(registry.current.is_none());
     }
@@ -202,7 +216,9 @@ mod tests {
         assert!(reviewed_winit_lock(&good.replace('\n', "\r\n")));
         assert!(!reviewed_winit_lock(&good.replace("0.30.13", "0.30.14")));
         assert!(!reviewed_winit_lock(&format!("{good}{good}")));
-        assert!(!reviewed_winit_lock("[[package]]\nname = \"other\"\nversion = \"0.30.13\"\n"));
+        assert!(!reviewed_winit_lock(
+            "[[package]]\nname = \"other\"\nversion = \"0.30.13\"\n"
+        ));
     }
     #[cfg(not(target_os = "macos"))]
     #[test]

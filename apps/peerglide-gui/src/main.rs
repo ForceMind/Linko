@@ -541,8 +541,10 @@ impl App {
             mode != SessionMode::Native || cfg!(any(windows, target_os = "macos")),
             "此平台只支持通信诊断，原生输入尚未实现"
         );
-        anyhow::ensure!(mode != SessionMode::Native || self.native_exit_protected(),
-            "退出恢复入口未就绪，不能开启新的键鼠会话；仍可使用通信诊断");
+        anyhow::ensure!(
+            mode != SessionMode::Native || self.native_exit_protected(),
+            "退出恢复入口未就绪，不能开启新的键鼠会话；仍可使用通信诊断"
+        );
         anyhow::ensure!(self.stopping.is_none(), "停止和恢复尚未完成");
         anyhow::ensure!(
             mode != SessionMode::Native || !self.recovery_blocked,
@@ -726,12 +728,18 @@ impl App {
         }
     }
     fn request_native(&mut self) -> Result<()> {
-        anyhow::ensure!(std::mem::take(&mut self.native_confirmation), "请明确确认启动真实键鼠");
+        anyhow::ensure!(
+            std::mem::take(&mut self.native_confirmation),
+            "请明确确认启动真实键鼠"
+        );
         anyhow::ensure!(
             !self.recovery_blocked && self.stopping.is_none(),
             "恢复未确认，不能开始新的键鼠会话"
         );
-        anyhow::ensure!(self.native_exit_protected(), "退出恢复入口未就绪，不能开启键鼠");
+        anyhow::ensure!(
+            self.native_exit_protected(),
+            "退出恢复入口未就绪，不能开启键鼠"
+        );
         self.config.native = true;
         self.save_config()?;
         if self.child.is_some() {
@@ -927,12 +935,18 @@ impl App {
 }
 impl App {
     fn native_exit_protected(&self) -> bool {
-        !cfg!(target_os = "macos") || (self.application_menu_error.is_none()
-            && self.application_menu.as_ref().is_some_and(|owner| owner.is_available()))
+        !cfg!(target_os = "macos")
+            || (self.application_menu_error.is_none()
+                && self
+                    .application_menu
+                    .as_ref()
+                    .is_some_and(|owner| owner.is_available()))
     }
     fn check_exit_protection(&mut self, ctx: &egui::Context) {
-        if cfg!(target_os = "macos") && self.application_menu.is_some()
-            && self.application_menu_error.is_none() && !self.native_exit_protected()
+        if cfg!(target_os = "macos")
+            && self.application_menu.is_some()
+            && self.application_menu_error.is_none()
+            && !self.native_exit_protected()
         {
             self.exit_protection_lost(ctx);
         }
@@ -941,7 +955,9 @@ impl App {
         self.application_menu_error = Some("应用退出入口发生变化".into());
         self.native_confirmation = false;
         self.pending_start = None;
-        if self.active_mode == Some(SessionMode::Native) { self.stop(); }
+        if self.active_mode == Some(SessionMode::Native) {
+            self.stop();
+        }
         self.show_window(ctx);
         self.notice = "退出恢复入口发生变化，已请求停止键鼠。请确认恢复状态并重新打开屏跃。".into();
     }
@@ -2205,11 +2221,14 @@ mod lifecycle_tests {
         app.native_confirmation = true;
         app.window_hidden = true;
         let ctx = egui::Context::default();
-        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.exit_protection_lost(ctx));
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            app.exit_protection_lost(ctx)
+        });
         assert!(!app.window_hidden && !app.native_confirmation && app.pending_start.is_none());
         assert!(app.application_menu_error.is_some() && app.stopping.is_some());
         app.recovery_blocked = true;
-        app.tray_mailbox.post(peerglide_platform::tray::Command::Quit);
+        app.tray_mailbox
+            .post(peerglide_platform::tray::Command::Quit);
         logic_frames(&mut app, &ctx, true);
         assert!(!app.exit_confirmed && !app.window_hidden);
         assert_eq!(app.dialog, Some(Dialog::Recovery));
@@ -2221,7 +2240,11 @@ mod lifecycle_tests {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         app.native_confirmation = true;
-        assert!(app.request_native().unwrap_err().to_string().contains("退出恢复入口"));
+        assert!(app
+            .request_native()
+            .unwrap_err()
+            .to_string()
+            .contains("退出恢复入口"));
         assert!(!app.native_confirmation && !app.config.native && app.child.is_none());
         assert!(!fixture.path.join("settings.json").exists());
         let error = app.start_mode(SessionMode::Native).unwrap_err();

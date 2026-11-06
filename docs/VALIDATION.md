@@ -1435,3 +1435,19 @@ Mac匹配artifact13488684105外层e4e6c013da53ea16bd4c83c83d8860c27ef622c11454f6
 Windows原生GUI/真实断电、手工冲突修复、生产短码仍未验/未交付；现有已获权0.2.4
 包与实际配对保留供用户就绪后的单向物理短测，不反复要求新中间包授权。本轮为有
 源码、回归、CI、本机GUI与推送证据的progress，完整Goal继续active，不合并或发布。
+
+## Mac中文菜单与正常退出保护（2026-11-06，开发/验证中）
+
+macos-safe-quit/PR55从1960986继续已批准B3，版本0.3.4-dev。锁定winit默认菜单英文且
+Cmd+Q直达terminate/WillTerminate，绕过GUI的CloseRequested等待；新平台owner不依赖
+tray偏好，中文菜单/缺失ShouldTerminate桥接转入同一Quit。保留原delegate/既有IMP，
+编译期锁winit0.30.13，运行时核对实例/ABI/菜单绑定；弱注册先解绑，进程永久selector
+无owner仍取消终止。GUI邮箱在所有owner创建前一次建立，托盘不换Arc；缺失保护拒新
+Native，丢失保护请求Stop显窗，Unknown不能被Quit覆盖。无新输入hook或全局快捷键，
+v5/身份/配置/独立授权不改。SIGKILL/Force Quit及注销完整保证除外；详ADR-0009。
+
+复用localize_panels sol/high独占平台四文件，根负责GUI/测试/版本/文档；无递归派工。
+首轮b1d2fbe最低1.95/审计过，平台仅fmt35hunks未过；Mac资源编译报3处ProtocolObject
+向AnyObject转换不匹配。已按锁定objc2 0.6.5的AsRef API与CI格式精确修正，待新候选
+全量检查，未把失败标过。本机preflight-20261106T093137433792Z-63984因Rust缺失停止，
+按用户决定不安装；原生菜单/正常系统terminate与真实C06尚未验，无Native或OS权限变化。
