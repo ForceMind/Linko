@@ -2745,7 +2745,10 @@ mod lifecycle_tests {
             snapshot.publish_switch(WorkerSwitchState::Denied);
         }
         snapshot.publish_switch(WorkerSwitchState::TimedOut);
-        assert_eq!(snapshot.take_switch(true), Some(WorkerSwitchState::TimedOut));
+        assert_eq!(
+            snapshot.take_switch(true),
+            Some(WorkerSwitchState::TimedOut)
+        );
         snapshot.publish_switch(WorkerSwitchState::Denied);
         snapshot.publish(WorkerState::Disconnected);
         snapshot.publish(WorkerState::Listening);
@@ -2763,7 +2766,10 @@ mod lifecycle_tests {
         snapshot.publish_switch(WorkerSwitchState::PeerUnavailable);
         assert_eq!(snapshot.take_switch(false), None);
         assert_eq!(snapshot.take().0, Some(WorkerState::Authenticated));
-        assert_eq!(snapshot.take_switch(true), Some(WorkerSwitchState::PeerUnavailable));
+        assert_eq!(
+            snapshot.take_switch(true),
+            Some(WorkerSwitchState::PeerUnavailable)
+        );
     }
 
     use super::*;
