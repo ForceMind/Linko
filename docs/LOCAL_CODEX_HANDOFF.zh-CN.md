@@ -792,3 +792,13 @@ worker_permissions/版本/文档，复用sol/high的localize_panels只拥有desk
 进程验证不能跳过。新GUI/浏览器/物理C06尚未验收，旧0.2.4权限Granted不替代新包。
 新包冻结前不重复要求系统授权，真实双机短测可沿用现有fd8包和配对，需当时Windows
 准备与用户同意；不得自动捕获或把后台计划当已在后台执行。6.83GB根因仍未知。
+
+
+B1首次aeea772五项CI42147723479已过；Mac完整包13471755307下载/摘要/安全内容/
+strict签名/metadata均核对，ignored workspace-aeea772/mac。实际GUI测试profile的指针
+在ignored workspace-b430519/gui-profile.json：新随机身份由匹配CLI生成，不复制原私钥，
+只复制公开设备配置并关闭native/allow/reconnect；未联网。监测92.86秒峰114944KiB，
+正常退出无残留，原配对资料未操作。下载完成前的部分摘要失败不代表完整包异常。
+本机GUI确实发现主操作落到首屏下方，现正在修紧凑卡片/主操作前置/水平画布高度并
+加入最小窗口主按钮不裁剪的渲染回归。必须等此修正候选CI及实际UI，不能以aeea绿灯
+替代新源码。保持同一0.3.0-dev调试版本，不反复升级；旧0.2.4实际获权包仍保留。

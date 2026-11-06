@@ -1165,6 +1165,57 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn workspace_primary_action_stays_visible_in_supported_windows() -> Result<()> {
+        fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.visual_bounding_rect())
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().find_map(|shape| text_rect(shape, label))
+                }
+                _ => None,
+            }
+        }
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // Rendering metadata only. No peer certificate, identity or worker is created.
+        app.config.fingerprint = Some("workspace-presentation-only".into());
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        let label = app.workspace_view().action.label();
+        for dark in [false, true] {
+            app.config.dark = dark;
+            app.theme(&ctx);
+            for size in [Vec2::new(920.0, 700.0), Vec2::new(1180.0, 820.0)] {
+                for page in [Page::Home, Page::Devices] {
+                    app.page = page;
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |ui| app.desktop(ui),
+                    );
+                    let (clip, bounds) = output
+                        .shapes
+                        .iter()
+                        .find_map(|paint| {
+                            text_rect(&paint.shape, label).map(|bounds| (paint.clip_rect, bounds))
+                        })
+                        .context("primary action was not painted in the initial viewport")?;
+                    assert!(
+                        clip.contains_rect(bounds),
+                        "primary action clipped at {size:?}: {bounds:?} outside {clip:?}"
+                    );
+                    assert!(app.child.is_none());
+                    output.drop_without_applying_deltas();
+                }
+            }
+        }
+        Ok(())
+    }
+    #[test]
     fn full_desktop_and_dialogs_render_without_starting_workers_or_exporting_samples() -> Result<()>
     {
         let fixture = Fixture::new()?;

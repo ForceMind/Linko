@@ -124,10 +124,6 @@ impl App {
     }
     fn work_controls(&mut self, ui: &mut egui::Ui) {
         let view = self.workspace_view();
-        desktop_style::pill(ui, view.title, view.tone);
-        ui.add_space(8.0);
-        ui.label(view.detail);
-        ui.add_space(12.0);
         ui.horizontal_wrapped(|ui| {
             if view.action != desktop_state::Action::None
                 && ui
@@ -143,6 +139,8 @@ impl App {
                 self.page = Page::Settings;
             }
         });
+        ui.add_space(6.0);
+        ui.weak(view.detail);
     }
     pub(super) fn home(&mut self, ui: &mut egui::Ui) {
         Self::heading(
@@ -155,6 +153,7 @@ impl App {
         ui.heading("也可以只用这台电脑");
         ui.add_space(8.0);
         desktop_style::card(ui).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
                 ui.strong("鼠标手势");
                 desktop_style::pill(ui, "全局功能开发中", desktop_style::Tone::Neutral);
@@ -177,8 +176,8 @@ impl App {
         if self.config.fingerprint.is_none() {
             desktop_style::card(ui).show(ui, |ui| {
                 ui.add_space(8.0);
+                ui.set_min_width(ui.available_width());
                 ui.heading("让另一台电脑加入这里");
-                ui.label("添加并核验一次，屏跃会记住它。已有设备和身份不会被覆盖。");
                 ui.add_space(14.0);
                 self.work_controls(ui);
                 ui.add_space(14.0);
@@ -188,56 +187,45 @@ impl App {
         }
         let local = |this: &mut Self, ui: &mut egui::Ui| {
             desktop_style::card(ui).show(ui, |ui| {
-                ui.weak("这台电脑");
-                ui.heading(local_device_name());
-                ui.add_space(8.0);
-                desktop_style::pill(
-                    ui,
-                    if this.config.allow {
-                        "接收偏好：允许"
+                ui.horizontal_wrapped(|ui| {
+                    ui.heading(RichText::new(local_device_name()).size(18.0));
+                    desktop_style::pill(ui, "本机", desktop_style::Tone::Neutral);
+                });
+                ui.horizontal_wrapped(|ui| {
+                    let (label, tone) = if this.config.allow {
+                        ("允许接收键鼠", desktop_style::Tone::Good)
                     } else {
-                        "接收偏好：关闭"
-                    },
-                    if this.config.allow {
-                        desktop_style::Tone::Good
-                    } else {
-                        desktop_style::Tone::Neutral
-                    },
-                );
-                ui.add_space(6.0);
-                ui.weak("键鼠权限由本机决定");
-                if ui.button("管理本机接收权限").clicked() {
-                    this.page = Page::Devices;
-                    this.device_tab = DeviceTab::Permissions;
-                }
+                        ("不接收控制", desktop_style::Tone::Neutral)
+                    };
+                    desktop_style::pill(ui, label, tone);
+                    if ui.button("接收设置").clicked() {
+                        this.page = Page::Devices;
+                        this.device_tab = DeviceTab::Permissions;
+                    }
+                });
+                ui.weak("本机保存的接收选择，不表示正在被控制。");
             });
         };
         let peer = |this: &mut Self, ui: &mut egui::Ui| {
             desktop_style::card(ui).show(ui, |ui| {
-                ui.weak("另一台电脑");
-                ui.heading(&this.config.peer_name);
-                ui.add_space(8.0);
-                desktop_style::pill(
-                    ui,
-                    if this.child.is_some() && this.connected {
-                        "已连接"
+                ui.horizontal_wrapped(|ui| {
+                    ui.heading(RichText::new(&this.config.peer_name).size(18.0));
+                    let (label, tone) = if this.child.is_some() && this.connected {
+                        ("已连接", desktop_style::Tone::Good)
                     } else {
-                        "已记住这台电脑"
-                    },
-                    if this.child.is_some() && this.connected {
-                        desktop_style::Tone::Good
-                    } else {
-                        desktop_style::Tone::Neutral
-                    },
-                );
-                ui.add_space(6.0);
-                ui.weak("对方是否允许控制，以连接时的实际结果为准");
-                if ui
-                    .add_enabled(this.idle_writable(), egui::Button::new("重新核验身份…"))
-                    .clicked()
-                {
-                    this.open_setup();
-                }
+                        ("已记住", desktop_style::Tone::Neutral)
+                    };
+                    desktop_style::pill(ui, label, tone);
+                });
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(this.idle_writable(), egui::Button::new("重新核验…"))
+                        .clicked()
+                    {
+                        this.open_setup();
+                    }
+                });
+                ui.weak("能否控制对方，需要它独立同意。");
             });
         };
         if ui.available_width() >= 600.0 {
@@ -252,9 +240,10 @@ impl App {
         }
         ui.add_space(14.0);
         desktop_style::card(ui).show(ui, |ui| {
-            self.displays(ui);
-            ui.separator();
             self.work_controls(ui);
+            ui.add_space(8.0);
+            ui.separator();
+            self.displays(ui);
         });
         self.recovery_panel(ui);
     }
@@ -361,7 +350,12 @@ impl App {
         let editable =
             self.idle_writable() && registered && self.wizard.is_none() && self.dialog.is_none();
         let width = ui.available_width().max(1.0);
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 230.0), egui::Sense::hover());
+        let height = if matches!(self.config.edge.as_str(), "top" | "bottom") {
+            230.0
+        } else {
+            180.0
+        };
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
         let (local, peer) = screen_rects(rect, &self.config.edge);
         if !editable
             || !ui.input(|i| i.focused)
