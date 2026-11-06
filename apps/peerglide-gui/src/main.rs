@@ -811,6 +811,10 @@ impl App {
             self.native_exit_protected(),
             "退出恢复入口未就绪，不能开启键鼠"
         );
+        anyhow::ensure!(
+            self.worker_permissions.readiness() == worker_permissions::Readiness::Ready,
+            "请先重新检查本机键鼠权限，再明确确认本次开启"
+        );
         self.config.native = true;
         self.save_config()?;
         if self.child.is_some() {
@@ -1182,6 +1186,12 @@ impl App {
         // Stop/Quit must cancel a queued upgrade before poll can start a successor.
         self.process_tray_commands(ctx);
         self.poll();
+        if let Some(remaining) = self.worker_permissions.expires_in() {
+            ctx.request_repaint_after(remaining);
+        }
+        if self.worker_permissions.readiness() != worker_permissions::Readiness::Ready {
+            self.native_confirmation = false;
+        }
         if ctx.input(|input| !input.focused || input.viewport().close_requested()) {
             self.pairing_panel.cancel();
         }
@@ -1495,6 +1505,17 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn native_confirmation_without_fresh_worker_check_does_not_write_or_spawn() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.native_confirmation = true;
+        assert!(app.request_native().is_err());
+        assert!(!app.native_confirmation && !app.config.native && !app.config.allow);
+        assert!(app.child.is_none() && app.pending_start.is_none());
+        assert!(!app.dir.join("settings.json").exists() && !app.identity_dir().exists());
+        Ok(())
+    }
+    #[test]
     fn workspace_start_only_opens_fresh_consent_and_readonly_recovery_blocks_it() -> Result<()> {
         let fixture = Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
@@ -1529,12 +1550,14 @@ mod tests {
         readonly.config.fingerprint = app.config.fingerprint.clone();
         for action in [
             desktop_state::Action::StartInput,
+            desktop_state::Action::CheckPermissions,
             desktop_state::Action::Connect,
             desktop_state::Action::AddDevice,
         ] {
             readonly.workspace_action(action);
             assert!(
                 readonly.child.is_none()
+                    && !readonly.worker_permissions.needs_poll()
                     && readonly.dialog.is_none()
                     && readonly.wizard.is_none()
                     && !readonly.pairing_open

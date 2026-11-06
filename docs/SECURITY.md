@@ -88,3 +88,12 @@ This process-local UI bridge is not an input hook or network authority. Force Qu
 SIGKILL, physical releases and full shutdown/logout guarantees remain outside this
 claim; see [ADR-0009](ADR/0009-macos-cooperative-termination.md). Permission snapshots,
 OS grants and explicit native-session consent remain separate requirements.
+
+The first-use workspace now consumes a short-lived sibling-worker permission
+observation before enabling its native consent form. The observation expires
+from task completion, not GUI receipt; stale/unknown/denied/failed results do not
+enable the form or write native preferences. This is additional GUI guidance,
+not an execution credential or a replacement for actual worker startup checks.
+It does not prove remote receiving permission, OS injection success or future
+permission availability. No permission request, persisted readiness or automatic
+native start is introduced. See NATIVE_CONTEXT.md for lifetime and test scope.
