@@ -1399,5 +1399,3 @@ Shell_NotifyIconW只读指针，无门槛放宽；e499299仅补GUI操作说明�
 119728KiB、无残留。上述两次保护结束均不是原生菜单Quit正常退出证明。Mac完整
 Show/Stop/Quit、Windows托盘/Explorer重启、真实双机C06仍需原生补验；历史6.83GB和
 #10根因不变。不得把本批CI或范围化复核当完整独立安全审计。
-
-
