@@ -58,6 +58,7 @@ fn start_offer(
     )?;
     wait(a, b, |a, _| a.displayed_code().is_some())?;
     let (code, address) = a.displayed_code().context("missing private display code")?;
+    assert_eq!(a.offer_hint_state(), Some((address, 5)));
     Ok((code.to_owned(), address))
 }
 
@@ -146,10 +147,13 @@ fn failed_code_and_missing_identity_never_produce_an_observation() -> Result<()>
         Mode::connect(address, wrong.into())?,
         Arc::new(|| {}),
     )?;
-    wait(&mut a, &mut b, |_, b| !b.needs_poll())?;
+    wait(&mut a, &mut b, |a, b| {
+        !b.needs_poll() && a.offer_hint_state() == Some((address, 4))
+    })?;
     assert!(matches!(b.phase(), Phase::Failed(Failure::Authentication)));
     assert!(b.observation().is_none());
     a.stop_and_reap();
+    assert!(a.offer_hint_state().is_none());
     assert!(a
         .start(
             binary,

@@ -8,6 +8,7 @@ mod discovery_panel;
 mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
+mod pairing_discovery;
 mod pairing_panel;
 mod pairing_receipt;
 pub mod pairing_supervisor;

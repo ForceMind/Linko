@@ -10,8 +10,8 @@ Discovery is off at every launch. Existing manual address/enrollment remains usa
 All results are `UntrustedHint`. Names/TXT may be spoofed. Use address only fills
 the next connection address; the pinned certificate and its separate grant are
 unchanged. A different certificate still requires independent comparison/enrollment,
-which clears the old peer's grant. No short-code authentication or automatic trust
-is implemented. A hint does not mean an authenticated/connected computer.
+which clears the old peer's grant. Hints do not perform short-code authentication
+or automatic trust. A hint does not mean an authenticated/connected computer.
 
 ## Bounds and lifecycle
 
@@ -52,3 +52,33 @@ and daemon shutdown with all interfaces disabled on a custom port (no advertisem
 or network query). Final Windows/macOS/Linux matrix is a separate gate.
 Actual cross-computer multicast, firewall/local-network permission prompts,
 network change, sleep and multiple NICs are NOT verified by that lifecycle test.
+
+## Short-code address hints (0.3.6-dev)
+
+The Chinese short-code window has a separate, opt-in browse action for
+`_peerglide-pair._tcp.local.`. Old `_peerglide._udp.local.` input-listener hints
+cannot be selected as pairing endpoints. Pairing hints require TXT `p=2` plus
+input `v=5`, a bounded public fingerprint and the same LAN-address/table limits.
+Neither TXT version nor the claimed fingerprint authenticates a peer.
+
+Selecting a result only fills its address and clears the previous code buffer;
+it does not send a code, connect, enroll, create an identity or grant anything.
+The user enters the code currently displayed by the selected computer and starts
+one explicit attempt. There is no automatic trial against multiple servers.
+The existing PAKE/mTLS identity binding and both save confirmations remain required.
+
+Showing a code does not advertise it. A separate Chinese button opts into a
+public address/version/fingerprint advertisement while the actual owned worker is
+Listening. Its fingerprint comes from that worker's frozen local certificate.
+No code, OS hostname, username, permission, receipt or private key is published.
+Leaving Listening withdraws it; it is not automatically republished after a failed
+attempt. Cancel, focus loss, dialog close and Quit request daemon shutdown. The
+GUI keeps polling the stop acknowledgement and prevents a replacement daemon
+until it completes. Network caches/loss can retain stale hints; a hint never
+extends the worker's original deadline or authorizes a connection.
+
+The macOS bundle declares both service types. This is not a local-network
+permission grant. Cross-host multicast, platform prompts, adapter changes and
+sleep remain native acceptance work. New metadata/expiry and disabled-interface
+daemon lifecycle tests, plus address-selection/default-off GUI regressions, do
+not replace those checks. Candidate CI evidence is in VALIDATION.md.

@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.3.5-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.6-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -99,14 +99,16 @@ These checks never request OS permissions or authorize control/actions. See
 1. 两端使用同一版、相同协议的完整开发包。Windows 解压后保留两个程序在一起；
    macOS 保留完整 app 包。不要混用旧 CLI 和新 GUI，也不要覆盖既有身份或配置。
    安全策略拒绝未签名程序时保留防护，不关闭 Gatekeeper、UAC 或防火墙。
-2. 在总览点击“添加另一台电脑”，或在“设备与屏幕 → 高级连接与身份”添加/重新核验，
-   各自准备不同的本机身份。一端先点击“复制这台电脑的连接卡”，通过可信渠道发送给另一端。
-   连接信息只含公开证书、协议版本和等待方的局域网 IPv4，不含私钥或权限。
-3. 另一端粘贴并点击“读取连接卡”，自动选择连接角色及地址；多个网卡时选择
-   与等待方同一局域网的实际地址。再复制本机公开连接信息回传，等待方粘贴读取。
-   两端各交换一次，不用搬证书文件、填文件路径或照抄示例 IP。已有登记保持可用。
-4. 两端通过独立可信渠道对照对方“本机公钥与指纹”的完整 BLAKE3 指纹，一致后
-   才勾选确认并登记。读取信息不授信，修改后需重新读取和核对；连接信息不是短码认证。
+2. 在总览点击“添加另一台电脑”，各自准备不同的本机身份。一端选择“在这台显示配对码”，
+   另一端输入它显示的实际 IPv4 地址与八位码，再点击“核验另一台电脑”。可选局域网查找：
+   显示码的一端还要点击让其他电脑找到本次配对，另一端点击查找并选择地址。
+   发现不发送码或授信，选择后重新输入这台电脑当前的码；没有结果仍可手动填写地址。
+3. 两端分别点击“记住这台设备”，等待本机已保存且收到对端保存回执。没有完成回执时
+   不能视为两端完成，待回执登记会阻止连接；请重新核验或明确撤销，不会恢复旧授权。
+   短码不会广播或写入日志/配置，完成记住设备也不会开启键鼠。已有登记保持可用。
+4. 高级回退仍可交换公开连接卡，或沿用证书路径；它们只含公开材料，不含私钥。
+   该路径须通过独立可信渠道对照对方完整 BLAKE3 指纹，一致后才勾选确认并登记。
+   读取信息不授信，修改后需重新读取和核对；连接卡不是短码认证。
    在“协作权限”分别选择是否接收对端键鼠，双向控制需要两端分别同意。
    剪贴板和文件仍不开放。高级区域保留原有证书路径登记及未认证发现提示。
 5. 可在“高级连接与身份”先由等待方建立“只连接，不开启键鼠”，主动连接方运行

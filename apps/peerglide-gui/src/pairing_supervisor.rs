@@ -249,6 +249,14 @@ impl Supervisor {
         let process = self.process.as_ref()?;
         (process.generation == self.generation).then_some(process.local_certificate.as_slice())
     }
+    /// Public address/lifecycle metadata, never an authentication ticket.
+    pub fn offer_hint_state(&self) -> Option<(SocketAddr, u8)> {
+        if self.phase != Phase::Listening {
+            return None;
+        }
+        let (_, address) = self.displayed_code()?;
+        Some((address, self.process.as_ref()?.remaining))
+    }
     pub fn displayed_code(&self) -> Option<(&str, SocketAddr)> {
         let process = self.process.as_ref()?;
         if process.generation != self.generation

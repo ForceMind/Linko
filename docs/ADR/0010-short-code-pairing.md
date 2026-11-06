@@ -1,7 +1,8 @@
 # ADR-0010: Ephemeral code pairing before pinned mutual TLS
 
-Status: experimental network foundation qualified; GUI enrollment and two-peer
-durable commit are not wired yet. Prerelease dependency admission and production
+Status: experimental network foundation and GUI durable commit are wired and
+automatically qualified in PR58; physical cross-host acceptance is still pending.
+Prerelease dependency admission and production
 review remain open. This is
 not production short-code availability or an independent cryptographic audit.
 
@@ -81,6 +82,16 @@ fingerprint confirmation. Bind two-peer commit messages to the same authenticate
 context, preserve closed input/receiving/reconnect, and represent lost acknowledgments
 as commit unknown. Local durable intent cannot be rolled back as if cancelled;
 later cancellation is revocation. No claim of a distributed atomic commit.
+
+PR58 implements those GUI/worker/guarded local transaction and same-context
+Prepared/Saved barriers (see VALIDATION.md for exact commits and test scope).
+The subsequent 0.3.6 discovery slice uses a separate, opt-in
+`_peerglide-pair._tcp.local.` hint with TXT pairing version2/input version5.
+Selection only fills an address and clears any previous code; it never trusts
+the hint's fingerprint, changes the PAKE context, retries a code against a list
+or refreshes deadlines/budgets. Public advertisement is a second explicit action
+limited to the actual worker's Listening phase and withdraws on cancellation.
+No code is included in DNS. See DISCOVERY.md for privacy, bounds and cache limits.
 
 Required validation includes actual TCP/PAKE/TLS success, wrong code, identity/
 role/context substitution, replay, malformed/pipelined/fragmented boundaries,

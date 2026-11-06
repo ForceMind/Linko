@@ -88,6 +88,7 @@ pub(super) struct Panel {
     address: String,
     code: String,
     message: String,
+    discovery: super::pairing_discovery::Panel,
 }
 impl Drop for Panel {
     fn drop(&mut self) {
@@ -115,13 +116,22 @@ impl Panel {
         self.message.clear();
     }
     pub(super) fn needs_poll(&self) -> bool {
-        self.supervisor.needs_poll()
+        self.supervisor.needs_poll() || self.discovery.needs_poll()
     }
     pub(super) fn blocks_actions(&self) -> bool {
         self.open || self.needs_poll()
     }
+    fn discovery_offer(&self) -> Option<super::pairing_discovery::Offer> {
+        let (address, attempts_remaining) = self.supervisor.offer_hint_state()?;
+        Some(super::pairing_discovery::Offer {
+            generation: self.supervisor.generation(),
+            attempts_remaining,
+            port: address.port(),
+        })
+    }
     pub(super) fn cancel(&mut self) {
         self.supervisor.cancel();
+        self.discovery.stop();
         self.origin = None;
         peerglide_protocol::pairing_worker::clear_code(&mut self.code);
     }
@@ -153,7 +163,7 @@ impl Panel {
             app.child.is_none() && !app.recovery_blocked && app.pending_start.is_none(),
             "请先停止会话并确认本机输入已恢复"
         );
-        anyhow::ensure!(!self.needs_poll(), "请等待上次配对进程结束");
+        anyhow::ensure!(!self.supervisor.needs_poll(), "请等待上次配对进程结束");
         anyhow::ensure!(self.name.chars().count() <= 80, "电脑名称过长");
         let mut next = app.config.clone();
         next.peer_name = if self.name.trim().is_empty() {
@@ -172,6 +182,7 @@ impl Panel {
             })
             .unwrap_or_default();
         let mut origin = Origin::capture(app, next)?;
+        self.discovery.stop();
         let repaint = ctx.clone();
         self.supervisor.start(
             worker,
@@ -198,6 +209,11 @@ impl Panel {
             self.cancel();
         }
         self.supervisor.poll();
+        let offer = self.discovery_offer();
+        self.discovery.poll(offer);
+        if !self.open && self.discovery.needs_poll() {
+            self.discovery.stop();
+        }
         if let Some(origin) = &self.origin {
             if origin.config != app.config
                 && self.supervisor.phase() != Phase::AwaitingPeerSaved
@@ -313,11 +329,11 @@ impl Panel {
             return;
         }
         let mut open = true;
-        egui::Window::new("用短码添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).show(ctx,|ui|{
+        egui::Window::new("用短码添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).default_height(600.0).vscroll(true).show(ctx,|ui|{
             ui.heading("记住设备，再单独开启键鼠");
             ui.label("两台电脑连接同一局域网。短码只核验本次身份，不会开启键鼠、剪贴板或文件传输。");
             ui.add_space(12.0);
-            if !self.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
+            if !self.supervisor.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
                 if app.local_fingerprint().is_none() {
                     if ui.add_enabled(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked&&!app.quit_check_mode&&!app.recording_mode,egui::Button::new("创建本机身份")).clicked(){
                         let result=Identity::create(&app.identity_dir());
@@ -330,6 +346,7 @@ impl Panel {
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
                     ui.separator();ui.label("或输入另一台显示的信息");
+                    if let Some(address)=self.discovery.ui(ui,app.local_fingerprint(),None,true){self.select_address(address);}
                     ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IPv4 或 IPv4:24871"));
                     ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("八位数字配对码"));
                     if ui.button("核验另一台电脑").clicked(){
@@ -348,6 +365,10 @@ impl Panel {
                 ui.label("请在另一台输入这个短码；不要发到公开群聊。");
                 for interface in if_addrs::get_if_addrs().unwrap_or_default(){
                     if let IpAddr::V4(ip)=interface.ip(){if !ip.is_loopback()&&!ip.is_unspecified()&&(ip.is_private()||ip.is_link_local()){ui.label(format!("本机地址：{ip}:{}",address.port()));}}
+                }
+                if let Some(offer)=self.discovery_offer(){
+                    let own=self.supervisor.local_certificate_snapshot().map(transport::fingerprint);
+                    self.discovery.ui(ui,own,Some(offer),false);
                 }
             }
             ui.label(match self.supervisor.phase(){
@@ -371,13 +392,18 @@ impl Panel {
             if self.supervisor.phase()==Phase::Completed&&ui.button("下一步：摆好屏幕位置").clicked(){
                 app.page=super::Page::Devices;app.device_tab=super::DeviceTab::Layout;self.open=false;
             }
-            if self.needs_poll(){if ui.button("停止核验").clicked(){self.cancel();}}
-            else if ui.button("关闭").clicked(){self.open=false;}
+            if self.supervisor.needs_poll()&&ui.button("停止核验").clicked(){self.cancel();}
+            if ui.button("关闭").clicked(){self.open=false;self.cancel();}
         });
         if !open {
             self.open = false;
             self.cancel();
         }
+    }
+    fn select_address(&mut self, address: SocketAddr) {
+        self.address = address.to_string();
+        peerglide_protocol::pairing_worker::clear_code(&mut self.code);
+        self.message = "已填写地址，请输入这台电脑当前显示的配对码；发现结果不代表已核验。".into();
     }
 }
 
@@ -385,6 +411,23 @@ impl Panel {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+    #[test]
+    fn selecting_a_pairing_hint_only_fills_address_and_invalidates_old_code() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let app = App::load(fixture.path.join("profile"));
+        let before = app.config.clone();
+        let mut panel = Panel::default();
+        panel.open("测试设备", "");
+        let generation = panel.supervisor.generation();
+        panel.code = "12345678".into(); // Synthetic UI buffer, never authentication.
+        panel.select_address("192.168.1.2:24871".parse()?);
+        assert_eq!(panel.address, "192.168.1.2:24871");
+        assert!(panel.code.is_empty() && panel.origin.is_none() && !panel.needs_poll());
+        assert_eq!(panel.supervisor.generation(), generation);
+        assert!(app.config == before && app.child.is_none() && app.confirmed_fingerprint.is_none());
+        assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        Ok(())
+    }
     #[test]
     fn address_errors_are_chinese_and_never_echo_untrusted_text() -> Result<()> {
         assert_eq!(
