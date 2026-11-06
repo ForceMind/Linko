@@ -1939,7 +1939,10 @@ mod lifecycle_tests {
         assert!(app.last_failure);
         set_state(&mut app, WorkerState::Stopped);
         app.poll();
-        assert!(app.last_failure, "a final stop must not hide the earlier failure");
+        assert!(
+            app.last_failure,
+            "a final stop must not hide the earlier failure"
+        );
         assert_eq!(app.workspace_view().title, "连接未完成，正在结束");
         app.stop();
         set_state(&mut app, WorkerState::Authenticated);
