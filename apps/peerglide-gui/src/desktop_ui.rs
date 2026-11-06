@@ -51,7 +51,7 @@ impl App {
         self.pairing_panel.open(&self.config.peer_name,&self.config.address);
         self.pairing_open=true;
     }
-    fn open_advanced_setup(&mut self) {
+    pub(super) fn open_advanced_setup(&mut self) {
         self.screen_drag = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
