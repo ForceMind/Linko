@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI-only idle GUI RSS/optional Darwin footprint diagnostic. No input/network permissions.
+"""CI-only idle GUI RSS/CPU/optional Darwin footprint diagnostic. No input/network permissions.
 
 Run on a CI desktop (Linux: xvfb-run), not a user's active desktop. RSS is not
 Activity Monitor's total memory: compressed memory and some GPU allocations are
@@ -83,6 +83,35 @@ def sample_rss_kib(pid):
     return rss
 
 
+def parse_cpu_time_ns(output):
+    """ps TIME is cumulative user+system CPU, with platform-dependent precision."""
+    if not isinstance(output, bytes) or len(output) > 64:
+        raise ValueError("CPU time unavailable")
+    match = re.fullmatch(rb"(?:(\d{1,9})-)?(\d{1,9}):(?:(\d{2}):)?(\d{2})(?:\.(\d{1,9}))?", output.strip())
+    if match is None:
+        raise ValueError("CPU time unavailable")
+    days, first, minutes, seconds, fraction = match.groups()
+    first, seconds = int(first), int(seconds)
+    if seconds >= 60 or (minutes is not None and int(minutes) >= 60):
+        raise ValueError("CPU time unavailable")
+    if days is not None and (minutes is None or first >= 24):
+        raise ValueError("CPU time unavailable")
+    whole = ((int(days or 0) * 24 + first) * 3600 + int(minutes) * 60 + seconds
+             if minutes is not None else first * 60 + seconds)
+    value = whole * 1_000_000_000 + int((fraction or b"").ljust(9, b"0"))
+    if not 0 <= value <= (1 << 63) - 1:
+        raise ValueError("CPU time unavailable")
+    return value
+
+
+def sample_cpu_time_ns(pid):
+    output = subprocess.check_output(
+        ["ps", "-o", "time=", "-p", str(pid)], stderr=subprocess.DEVNULL, timeout=2,
+        env={**os.environ, "LC_ALL": "C"}
+    )
+    return parse_cpu_time_ns(output)
+
+
 
 def parse_footprint_summary(output):
     """Extract only two finite numeric lines; discard all paths/summary text."""
@@ -141,7 +170,7 @@ def exit_status(child):
 
 
 def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss_kib,
-            clock=time.monotonic, sleep=time.sleep, popen=subprocess.Popen, footprint=None):
+            clock=time.monotonic, sleep=time.sleep, popen=subprocess.Popen, footprint=None, cpu=None):
     """Injectable supervision; tests use fake RSS or a small Python child, no GUI."""
     stop = stop or StopFlag()
     result = {"scenario": scenario, "pid": None, "passed": False, "reason": "start_failed",
@@ -155,6 +184,15 @@ def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss
                 "warmup_baseline_available": False, "final_sample_available": False,
                 "post_warmup_samples": 0, "samples": []}
     result["physical_footprint"] = physical
+    processor = {"availability": "not_requested" if cpu is None else "unavailable",
+                 "sampling_complete": None if cpu is None else False,
+                 "peak_interval_percent": None, "average_percent": None,
+                 "observed_cpu_sec": None, "covered_wall_sec": None,
+                 "intervals": 0, "samples": []}
+    result["cpu_usage"] = processor
+    previous_cpu = None
+    cpu_delta_ns = 0
+    cpu_wall_sec = 0
     next_footprint = 0
     warmup_attempted = False
     final_attempted = False
@@ -206,6 +244,39 @@ def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss
             if stop.signum:
                 result["reason"] = "interrupted"
                 break
+            if cpu is not None:
+                item = {"elapsed_sec": round(max(0, clock() - started), 3),
+                        "availability": "unavailable", "cpu_time_ns": None,
+                        "interval_percent": None}
+                try:
+                    counter = cpu(child.pid)
+                    sampled_at = clock()
+                    if type(counter) is not int or not 0 <= counter <= (1 << 63) - 1:
+                        raise ValueError("CPU time unavailable")
+                    if previous_cpu is not None:
+                        wall = sampled_at - previous_cpu[0]
+                        delta = counter - previous_cpu[1]
+                        if not math.isfinite(wall) or wall <= 0 or delta < 0:
+                            raise ValueError("CPU interval unavailable")
+                        percent = 100 * delta / 1_000_000_000 / wall
+                        if not math.isfinite(percent):
+                            raise ValueError("CPU interval unavailable")
+                        item["interval_percent"] = round(percent, 6)
+                        processor["peak_interval_percent"] = (percent if processor["peak_interval_percent"] is None
+                                                              else max(processor["peak_interval_percent"], percent))
+                        cpu_delta_ns += delta
+                        cpu_wall_sec += wall
+                        processor["intervals"] += 1
+                    previous_cpu = (sampled_at, counter)
+                    item.update(elapsed_sec=round(max(0, sampled_at - started), 3),
+                                availability="available", cpu_time_ns=counter)
+                except Exception:
+                    previous_cpu = None  # Never interpolate across missing/regressed counters.
+                processor["samples"].append(item)
+                elapsed = max(0, clock() - started)
+                if stop.signum:
+                    result["reason"] = "interrupted"
+                    break
             is_warmup = elapsed >= limits.warmup and not warmup_attempted
             is_final = elapsed >= limits.duration
             if footprint is not None and (elapsed >= next_footprint or is_warmup or is_final):
@@ -276,6 +347,19 @@ def monitor(command, limits, *, scenario, env=None, stop=None, sample=sample_rss
                 physical["checks_passed"] = False
             elif result["passed"] and complete:
                 physical["checks_passed"] = True
+        if cpu is not None:
+            available = sum(item["availability"] == "available" for item in processor["samples"])
+            complete = (result["rss_checks_passed"] and available == len(processor["samples"])
+                        and available == len(result["samples"]) and processor["intervals"] >= 2)
+            processor["sampling_complete"] = complete
+            processor["availability"] = "available" if complete else "partial" if available else "unavailable"
+            if processor["intervals"]:
+                processor["observed_cpu_sec"] = round(cpu_delta_ns / 1_000_000_000, 9)
+                processor["covered_wall_sec"] = round(cpu_wall_sec, 6)
+                processor["average_percent"] = round(100 * cpu_delta_ns / 1_000_000_000 / cpu_wall_sec, 6)
+            if result["passed"] and not complete:
+                result["passed"] = False
+                result["reason"] = "cpu_sample_incomplete"
     return result
 
 
@@ -339,6 +423,7 @@ def run_scenarios(binary_dir, limits, stop):
                     continue
             result = monitor([str(binary_dir / "peerglide-gui"), "--data-dir", str(profile)],
                              limits, scenario=scenario, env=env, stop=stop,
+                             cpu=sample_cpu_time_ns,
                              footprint=sample_footprint_kib if sys.platform == "darwin" else None)
             if initialization is not None:
                 result["initialization"] = initialization
@@ -351,11 +436,19 @@ def report(limits, scenarios, reason):
     physical_passed = (False if False in physical_results else
                        True if len(physical_results) == 2 and all(value is True for value in physical_results) else None)
     coverage = "rss_and_physical_footprint" if physical_passed is True else "rss_only_or_partial_physical_footprint"
-    return {"schema_version": 1, "scope": "isolated_ci_gui_rss", "measurement": "ps_rss_kib", "optional_measurement": "vmmap_physical_footprint_kib",
+    cpu_results = [item.get("cpu_usage", {}).get("sampling_complete") for item in scenarios]
+    cpu_complete = (False if False in cpu_results else
+                    True if len(cpu_results) == 2 and all(value is True for value in cpu_results) else None)
+    if cpu_complete is True:
+        coverage = "rss_cpu_and_physical_footprint" if physical_passed is True else "rss_cpu_optional_physical_footprint"
+    return {"schema_version": 2, "scope": "isolated_ci_gui_resources", "measurement": "ps_rss_kib", "optional_measurement": "vmmap_physical_footprint_kib",
+            "cpu_measurement": "ps_cumulative_cpu_time", "cpu_sampling_complete": cpu_complete,
             "coverage": coverage, "physical_footprint_checks_passed": physical_passed,
             "limitations": ["rss_excludes_compressed_memory", "some_gpu_memory_not_measured", "sampled_peak_not_process_lifetime_peak",
-                            "resident_process_only_not_render_or_native_acceptance", "rss_and_footprint_are_distinct_accounting_scopes"],
-            "passed": reason == "completed" and len(scenarios) == 2
+                            "resident_process_only_not_render_or_native_acceptance", "rss_and_footprint_are_distinct_accounting_scopes",
+                            "cpu_percent_100_equals_one_logical_cpu", "ps_cpu_time_platform_precision",
+                            "cpu_does_not_measure_gpu_load", "owned_gui_process_only_not_worker_tree"],
+            "passed": reason == "completed" and len(scenarios) == 2 and cpu_complete is True
                       and all(item["passed"] for item in scenarios),
             "rss_checks_passed": reason == "completed" and len(scenarios) == 2
                                  and all(item.get("rss_checks_passed", False) for item in scenarios),
@@ -409,8 +502,8 @@ def main(argv=None):
         value = report(limits, scenarios, reason)
         write_report(output, value)
     if value["passed"]:
-        print("PASS: RSS and physical footprint sampled within limits" if value["physical_footprint_checks_passed"] is True
-              else "PASS: RSS only; physical footprint unavailable or incomplete")
+        print("PASS: RSS limits and CPU sampling complete; physical footprint sampled within limits" if value["physical_footprint_checks_passed"] is True
+              else "PASS: RSS limits and CPU sampling complete; physical footprint unavailable or incomplete")
     else:
         print("FAIL: GUI memory diagnostic")
     return 0 if value["passed"] else 1
