@@ -97,6 +97,7 @@ impl App {
             native_supported: cfg!(any(windows, target_os = "macos")),
             pairing: self.pairing_open,
             pairing_pending: self.pairing_pending(),
+            readiness: self.worker_permissions.readiness(),
         })
     }
     fn native_start_available(&self) -> bool {
@@ -112,6 +113,10 @@ impl App {
     }
     pub(super) fn workspace_action(&mut self, action: desktop_state::Action) {
         match action {
+            desktop_state::Action::CheckPermissions if self.native_start_available() => {
+                self.native_confirmation = false;
+                self.worker_permissions.start();
+            }
             desktop_state::Action::AddDevice if self.idle_writable() => self.open_setup(),
             desktop_state::Action::StartInput if self.native_start_available() => {
                 self.native_confirmation = false;
@@ -1027,17 +1032,21 @@ impl App {
             Dialog::ForceStop => "强制停止工作进程",
             Dialog::Recovery => "停止与恢复状态",
         };
-        egui::Window::new(title).open(&mut open).collapsible(false).default_width(580.0).show(ctx,|ui|{
+        egui::Window::new(title).open(&mut open).collapsible(false).default_width(580.0).default_height(540.0).vscroll(true).show(ctx,|ui|{
             if ui.button("立即停止并恢复本机").clicked(){self.stop();}
             ui.separator();match dialog{
                 Dialog::NativeStart=>{
+                    let permission_idle=self.child.is_none()||self.active_mode==Some(SessionMode::Communication);
+                    self.worker_permissions.ui(ui,permission_idle&&self.stopping.is_none());
+                    let permissions_fresh=self.worker_permissions.readiness()==worker_permissions::Readiness::Ready;
+                    if !permissions_fresh{self.native_confirmation=false;}
                     ui.label("这会启动真实原生键鼠捕获与注入；实际工作进程将重新检查系统权限。连接/认证不代表对端允许本机控制。");
                     ui.label(if self.config.allow{"本机接收偏好：允许已登记对端控制本机。"}else{"本机接收偏好：不允许对端控制本机；可请求控制已授权本机的对端。"});
                     if self.child.is_some(){ui.weak("当前仅通信会话将先停止；清理成功后再以键鼠模式重连。失败不自动继续。");}
                     ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");
                     ui.label("接收端首次物理动作仅用于收回控制，不执行或回放。切回本机后先松开物理按键／鼠标按钮，再继续操作。");
-                    ui.checkbox(&mut self.native_confirmation,"我明确同意本次使用真实键鼠协同");
-                    if ui.add_enabled(cfg!(any(windows,target_os="macos"))&&self.writable()&&self.native_confirmation&&self.stopping.is_none()&&!self.recovery_blocked,egui::Button::new("确认并开启键鼠")).clicked(){let result=self.request_native();let success=result.is_ok();self.feedback(result,"正在准备真实键鼠会话，输入归属等待进程报告。");if success{self.dialog=None;}}
+                    ui.add_enabled(permissions_fresh,egui::Checkbox::new(&mut self.native_confirmation,"我明确同意本次使用真实键鼠协同"));
+                    if ui.add_enabled(cfg!(any(windows,target_os="macos"))&&self.writable()&&self.worker_permissions.readiness()==worker_permissions::Readiness::Ready&&self.native_confirmation&&self.stopping.is_none()&&!self.recovery_blocked,egui::Button::new("确认并开启键鼠")).clicked(){let result=self.request_native();let success=result.is_ok();self.feedback(result,"正在准备真实键鼠会话，输入归属等待进程报告。");if success{self.dialog=None;}}
                 },
                 Dialog::Revoke=>{ui.label("停止会话并清除对端信任与本机接收许可。保留本机身份；下次需重新核验。");if ui.button("撤销并停止会话").clicked(){let result=self.revoke();self.feedback(result,"设备信任已撤销，旧会话正在停止。");self.dialog=None;}},
                 Dialog::Reset=>{ui.label("先备份设置和设备登记，再恢复默认并撤销信任。本机身份保持；无效或未来版本只读保留。");if ui.add_enabled(self.idle_writable(),egui::Button::new("确认备份并恢复设置")).clicked(){match self.reset_settings(){Ok(())=>{self.theme(ctx);self.notice="已备份并恢复默认，设备信任和授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},

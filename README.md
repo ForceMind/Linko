@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.3.6-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.7-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -47,8 +47,8 @@ Use stable Rust (GUI requires at least 1.95). Run `cargo build --workspace --rel
 executables. Launch `peerglide-gui` with `peerglide` beside it. The Chinese GUI has
 five pages: 总览、设备与屏幕、本机鼠标、剪贴板与文件、设置. 设备与屏幕 provides
 identity/enrollment, independent receiving permission, harmless communication/probes
-and primary-display direction. Starting a keyboard/mouse session requires a fresh
-explicit confirmation; saved preferences never enable native input on a normal
+and primary-display direction. Starting a keyboard/mouse session requires a recent
+read-only worker permission check and fresh explicit confirmation; saved preferences never enable native input on a normal
 connection. 本机鼠标 edits offline rules and tests window-local gestures; its global
 G1 switch remains unavailable. See [actual GUI interactions](docs/GUI_INTERACTIONS.zh-CN.md).
 No config file editing is required.
@@ -114,7 +114,9 @@ These checks never request OS permissions or authorize control/actions. See
 5. 可在“高级连接与身份”先由等待方建立“只连接，不开启键鼠”，主动连接方运行
    “检查两台电脑的连接”。通过并正常退出后，再摆放屏幕：例如 Windows 在左、Mac 在右，则 Windows
    选“右侧”、Mac 选“左侧”。这是相对方向，不是多显示器精细拓扑。
-6. 先在等待方、再在主动连接方点击“开启键鼠协同…”，分别明确确认本次使用。
+6. 两端先点击“检查本机键鼠权限”。通过后，先在等待方、再在主动连接方点击
+   “开启键鼠协同…”，分别明确确认本次使用。检查不申请系统权限，过期需重新检查；
+   实际输入程序开启时仍会重新验权。
    macOS 需对实际运行的 app/输入程序具备辅助功能和输入监控权限；“设置 → 检查键鼠权限”
    查询实际输入程序，上次快照不授予执行许可。系统权限由用户明确处理，软件不会代授。
 7. 松开物理键和鼠标按钮后跨边，键盘跟随控制目标；先移入对端，再在对端按下

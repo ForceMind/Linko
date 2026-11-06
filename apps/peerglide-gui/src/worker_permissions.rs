@@ -14,7 +14,74 @@ use std::{
 };
 
 const MAX_REPORT: usize = 8192;
+const FRESHNESS: Duration = Duration::from_secs(30);
 type Outcome = Result<PermissionReport, &'static str>;
+
+/// Short-lived presentation only; not consent or proof that injection works.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Readiness {
+    Unchecked,
+    Checking,
+    Ready,
+    Accessibility,
+    InputMonitoring,
+    InputDesktop,
+    SecureInput,
+    Unknown,
+    Unsupported,
+    Failed,
+}
+impl Readiness {
+    pub(super) fn detail(self) -> &'static str {
+        match self {
+            Self::Unchecked => "先检查实际输入程序的本机权限；不会联网、捕获输入或更改系统设置。",
+            Self::Checking => "正在读取实际输入程序的权限，检查不会开启键鼠。",
+            Self::Ready => "本机权限刚刚检查通过；仍需明确确认，且另一台电脑必须独立允许接收。",
+            Self::Accessibility => {
+                "请在macOS系统设置的辅助功能中允许本次运行的屏跃，再返回重新检查。"
+            }
+            Self::InputMonitoring => {
+                "请在macOS系统设置的输入监控中允许本次运行的屏跃，再返回重新检查。"
+            }
+            Self::InputDesktop => {
+                "当前输入桌面不可访问。请返回普通桌面再检查；屏跃不会绕过UAC或安全桌面。"
+            }
+            Self::SecureInput => {
+                "系统正在保护输入。请结束当前受保护的输入后重新检查，屏跃不会关闭Secure Input。"
+            }
+            Self::Unknown => "实际输入程序未能确认权限，请重新检查；未知状态不能视为已允许。",
+            Self::Unsupported => "当前环境未提供所需的输入权限检查，暂不能从这个窗口开启键鼠。",
+            Self::Failed => "实际输入程序的权限检查未完成，请重新检查；可在设置查看原因。",
+        }
+    }
+}
+fn readiness(report: PermissionReport) -> Readiness {
+    if report.secure_input == SecureInput::Active {
+        return Readiness::SecureInput;
+    }
+    for (status, denied) in [
+        (report.accessibility, Readiness::Accessibility),
+        (report.input_monitoring, Readiness::InputMonitoring),
+        (report.input_desktop, Readiness::InputDesktop),
+    ] {
+        match status {
+            PermissionStatus::Denied => return denied,
+            PermissionStatus::Unknown => return Readiness::Unknown,
+            PermissionStatus::Unsupported => return Readiness::Unsupported,
+            PermissionStatus::Granted | PermissionStatus::NotRequired => (),
+        }
+    }
+    if report.secure_input == SecureInput::Unknown {
+        Readiness::Unknown
+    } else {
+        Readiness::Ready
+    }
+}
+#[derive(Clone, Copy)]
+struct Observation {
+    outcome: Outcome,
+    finished: Instant,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -170,12 +237,39 @@ fn run_with_timeout(path: &Path, cancel: &AtomicBool, timeout: Duration) -> Outc
 
 #[derive(Default)]
 pub struct Checker {
-    receiver: Option<mpsc::Receiver<Outcome>>,
+    receiver: Option<mpsc::Receiver<Observation>>,
     cancel: Option<Arc<AtomicBool>>,
     task: Option<std::thread::JoinHandle<()>>,
-    result: Option<Outcome>,
+    result: Option<Observation>,
 }
 impl Checker {
+    pub(super) fn readiness(&self) -> Readiness {
+        self.readiness_at(Instant::now())
+    }
+    fn readiness_at(&self, now: Instant) -> Readiness {
+        if self.receiver.is_some() {
+            return Readiness::Checking;
+        }
+        let Some(observed) = self.result else {
+            return Readiness::Unchecked;
+        };
+        if !now
+            .checked_duration_since(observed.finished)
+            .is_some_and(|age| age < FRESHNESS)
+        {
+            return Readiness::Unchecked;
+        }
+        match observed.outcome {
+            Ok(report) => readiness(report),
+            Err(_) => Readiness::Failed,
+        }
+    }
+    pub(super) fn expires_in(&self) -> Option<Duration> {
+        let age = Instant::now().checked_duration_since(self.result?.finished)?;
+        FRESHNESS
+            .checked_sub(age)
+            .filter(|remaining| !remaining.is_zero())
+    }
     pub fn needs_poll(&self) -> bool {
         self.receiver.is_some()
     }
@@ -186,7 +280,10 @@ impl Checker {
         let result = match receiver.try_recv() {
             Ok(result) => result,
             Err(mpsc::TryRecvError::Empty) => return,
-            Err(mpsc::TryRecvError::Disconnected) => Err("工作进程诊断未完成"),
+            Err(mpsc::TryRecvError::Disconnected) => Observation {
+                outcome: Err("工作进程诊断未完成"),
+                finished: Instant::now(),
+            },
         };
         self.result = Some(result);
         self.receiver = None;
@@ -195,13 +292,16 @@ impl Checker {
             let _ = task.join();
         }
     }
-    fn start(&mut self) {
+    pub(super) fn start(&mut self) {
         if self.receiver.is_some() {
             return;
         }
         self.result = None;
         let Ok(path) = std::env::current_exe() else {
-            self.result = Some(Err("无法定位同包工作进程"));
+            self.result = Some(Observation {
+                outcome: Err("无法定位同包工作进程"),
+                finished: Instant::now(),
+            });
             return;
         };
         let path = path.with_file_name(if cfg!(windows) {
@@ -216,7 +316,12 @@ impl Checker {
         let task_cancel = cancel.clone();
         let (tx, rx) = mpsc::sync_channel(1);
         self.task = Some(std::thread::spawn(move || {
-            let _ = tx.send(run(&path, &task_cancel));
+            let outcome = run(&path, &task_cancel);
+            // Stamp before queueing: a paused GUI must not refresh an old report.
+            let _ = tx.send(Observation {
+                outcome,
+                finished: Instant::now(),
+            });
         }));
         self.receiver = Some(rx);
         self.cancel = Some(cancel);
@@ -237,7 +342,7 @@ impl Checker {
         if self.receiver.is_some() {
             ui.label("正在检查键鼠权限…");
         }
-        match self.result {
+        match self.result.map(|observation| observation.outcome) {
             Some(Ok(report)) => {
                 let label = |value| match value {
                     PermissionStatus::Granted => "已授予",
@@ -267,6 +372,9 @@ impl Checker {
             }
             None => (),
         }
+        if self.result.is_some() && self.readiness() == Readiness::Unchecked {
+            ui.weak("上次结果已过期，开启前请重新检查。检查通过也不代表对端许可或实际输入效果。");
+        }
     }
 }
 impl Drop for Checker {
@@ -286,6 +394,124 @@ mod tests {
     use super::*;
     fn report() -> serde_json::Value {
         serde_json::json!({"schema_version":1,"platform":std::env::consts::OS,"native_capture_started":false,"action_execution_supported":false,"observation_scope":"sampled_no_notifications","permissions":{"accessibility":"granted","input_monitoring":"denied","input_desktop":"not_required","secure_input":"inactive"},"foreground_status":"available","focus_status":"permission_denied","recheck_status":"permission_denied"})
+    }
+    fn ready() -> PermissionReport {
+        PermissionReport {
+            accessibility: PermissionStatus::Granted,
+            input_monitoring: PermissionStatus::Granted,
+            input_desktop: PermissionStatus::NotRequired,
+            secure_input: SecureInput::Inactive,
+        }
+    }
+    #[test]
+    fn readiness_preserves_denials_unknown_and_system_protection() {
+        let original = ready();
+        assert_eq!(readiness(original), Readiness::Ready);
+        for (field, expected) in [
+            (0, Readiness::Accessibility),
+            (1, Readiness::InputMonitoring),
+            (2, Readiness::InputDesktop),
+        ] {
+            for (status, expected) in [
+                (PermissionStatus::Denied, expected),
+                (PermissionStatus::Unknown, Readiness::Unknown),
+                (PermissionStatus::Unsupported, Readiness::Unsupported),
+            ] {
+                let mut report = original;
+                match field {
+                    0 => report.accessibility = status,
+                    1 => report.input_monitoring = status,
+                    _ => report.input_desktop = status,
+                }
+                assert_eq!(readiness(report), expected);
+            }
+        }
+        for (secure_input, expected) in [
+            (SecureInput::Active, Readiness::SecureInput),
+            (SecureInput::Unknown, Readiness::Unknown),
+            (SecureInput::Unsupported, Readiness::Ready),
+        ] {
+            assert_eq!(
+                readiness(PermissionReport {
+                    secure_input,
+                    ..original
+                }),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn delayed_gui_poll_does_not_refresh_old_observation_or_persist_authority() {
+        let finished = Instant::now() - FRESHNESS;
+        let (tx, rx) = mpsc::sync_channel(1);
+        // Synthetic permission metadata only; no native worker or grant exists.
+        assert!(tx
+            .send(Observation {
+                outcome: Ok(ready()),
+                finished
+            })
+            .is_ok());
+        let mut checker = Checker {
+            receiver: Some(rx),
+            cancel: None,
+            task: None,
+            result: None,
+        };
+        assert_eq!(checker.readiness(), Readiness::Checking);
+        checker.poll();
+        // Instant arithmetic need not represent a one-nanosecond delta on every OS.
+        // Establish real ordering before testing either side of the deadline.
+        let before_expiry = finished + FRESHNESS - Duration::from_millis(1);
+        let before_observation = finished - Duration::from_millis(1);
+        assert!(before_observation < finished && before_expiry < finished + FRESHNESS);
+        assert_eq!(checker.readiness_at(before_expiry), Readiness::Ready);
+        assert_eq!(
+            checker.readiness_at(finished + FRESHNESS),
+            Readiness::Unchecked
+        );
+        assert_eq!(
+            checker.readiness_at(before_observation),
+            Readiness::Unchecked
+        );
+        assert_eq!(checker.readiness(), Readiness::Unchecked);
+        assert!(checker.expires_in().is_none() && !checker.needs_poll());
+        checker.result = Some(Observation {
+            outcome: Err("工作进程诊断失败"),
+            finished: Instant::now(),
+        });
+        assert_eq!(checker.readiness(), Readiness::Failed);
+    }
+    #[test]
+    #[ignore = "requires exact-built CLI; mandatory post-release CI step"]
+    fn real_worker_readiness_remains_readonly_and_requires_separate_consent() {
+        let binary = std::path::PathBuf::from(
+            std::env::var_os("PEERGLIDE_READINESS_TEST_WORKER")
+                .expect("matching release CLI required"),
+        );
+        assert!(binary.is_file());
+        let mut checker = Checker::default();
+        checker.start_path(binary);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while checker.needs_poll() && Instant::now() < deadline {
+            checker.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!checker.needs_poll() && checker.task.is_none());
+        let report = checker
+            .result
+            .and_then(|observed| observed.outcome.ok())
+            .expect("actual worker did not return a bounded read-only permission report");
+        assert_eq!(checker.readiness(), readiness(report));
+        assert!(checker.expires_in().is_some());
+        let fixture = crate::tests::Fixture::new().unwrap();
+        let mut app = crate::App::load(fixture.path.join("profile"));
+        let original = app.config.clone();
+        app.worker_permissions = checker;
+        // Even a real Granted observation is not the user's native consent.
+        assert!(app.request_native().is_err());
+        assert!(app.config == original && app.child.is_none() && app.pending_start.is_none());
+        assert!(!app.native_confirmation && !app.dir.join("settings.json").exists());
+        assert!(!app.identity_dir().exists());
     }
     #[test]
     fn worker_snapshot_preserves_denial_and_does_not_infer_authority() {

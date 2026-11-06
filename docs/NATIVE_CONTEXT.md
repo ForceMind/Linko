@@ -154,3 +154,25 @@ and late native rechecks reduce these gaps but do not prove zero missed events o
 atomic check-and-submit. No Backend or global G1 path is enabled by this increment.
 The existing single capture lifecycle, ownership/escape/watchdog, explicit local
 worker consent, owned action injection and C06 remain gates before execution.
+
+## First-use GUI readiness (0.3.7-dev)
+
+The workspace routes a remembered device through the existing sibling-worker
+read-only diagnostic before offering native-session confirmation. Local denial,
+unknown/unsupported state and Secure Input receive distinct Chinese guidance.
+Probe, active native ownership, network failure and recovery retain their own
+state priority. A ready local snapshot never claims that the peer allows control.
+
+Reports expire 30 monotonic seconds after the diagnostic task finishes, stamped
+before queueing to the GUI. Pausing the GUI cannot renew an old observation.
+Expiry uses a single scheduled repaint, not a new idle polling loop. Starting a
+new check clears the previous result. Only a fresh ready report permits the GUI
+confirmation checkbox; expiry/failure clears uncommitted consent. The final GUI
+request rechecks freshness before changing preferences or starting/stopping a
+session. Existing native worker permission checks remain authoritative at startup.
+
+No snapshot, counter or timestamp is a user/peer grant. Results are not serialized
+to config, do not enroll identities and never request TCC, start input, subscribe
+to focus notifications or connect to a peer. The explicit native consent, peer
+receiving grant, single capture lifecycle and recovery gates are unchanged.
+Real two-machine permission/revocation acceptance remains C06.
