@@ -5,6 +5,7 @@ mod desktop_state;
 mod desktop_style;
 mod desktop_ui;
 mod discovery_panel;
+mod pairing_discovery;
 mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;

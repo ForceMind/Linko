@@ -115,6 +115,7 @@ class Packaging(unittest.TestCase):
                 self.assertEqual(info["CFBundleIdentifier"], package.APP_IDENTIFIER)
                 self.assertEqual(info["CFBundleVersion"], "0.2.3")
                 self.assertEqual(info["CFBundleExecutable"], "peerglide-gui")
+                self.assertEqual(info["NSBonjourServices"], ["_peerglide._udp", "_peerglide-pair._tcp"])
                 self.assertIn(app + "_CodeSignature/CodeResources", zipped.namelist())
                 self.assertTrue(zipped.read(app + "MacOS/peerglide").endswith(b"-fake-signed"))
                 warning = zipped.read(label + "/PROTOTYPE.txt").decode()
