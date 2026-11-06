@@ -30,7 +30,7 @@ impl App {
         }
     }
     pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-        ui.heading(RichText::new(title).size(27.0));
+        ui.heading(RichText::new(title).size(25.0));
         ui.add_space(7.0);
         ui.weak(subtitle);
         ui.add_space(20.0);
@@ -46,6 +46,7 @@ impl App {
             });
     }
     fn open_setup(&mut self) {
+        self.screen_drag = None;
         self.wizard_name = self.config.peer_name.clone();
         self.wizard_address = self.config.address.clone();
         self.wizard_listen = self.config.listen;
@@ -59,307 +60,287 @@ impl App {
         });
         self.page = Page::Devices;
     }
-    fn connection_actions(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    self.idle_writable() && self.config.fingerprint.is_some(),
-                    egui::Button::new("连接设备 · 仅通信"),
-                )
-                .clicked()
-            {
-                let result = self.start(false);
-                self.feedback(result, "正在建立通信连接，未开启原生键鼠。");
-            }
-            if ui
-                .add_enabled(
-                    self.idle_writable() && self.config.fingerprint.is_some(),
-                    egui::Button::new("通信探针"),
-                )
-                .clicked()
-            {
-                let result = self.start(true);
-                self.feedback(result, "正在运行通信探针，不捕获或注入输入。");
-            }
-            if ui
-                .add_enabled(
-                    cfg!(any(windows, target_os = "macos"))
-                        && self.writable()
-                        && self.config.fingerprint.is_some()
-                        && self.stopping.is_none()
-                        && !self.recovery_blocked
-                        && (self.child.is_none()
-                            || self.active_mode == Some(SessionMode::Communication)),
-                    egui::Button::new("启用键鼠会话…"),
-                )
-                .clicked()
-            {
+    pub(super) fn workspace_view(&self) -> desktop_state::View {
+        desktop_state::present(desktop_state::Snapshot {
+            registered: self.config.fingerprint.is_some(),
+            writable: self.writable(),
+            running: self.child.is_some(),
+            connected: self.connected,
+            failed: self.last_failure,
+            stopping: self.stopping.is_some(),
+            recovery_blocked: self.recovery_blocked,
+            terminal: self.input_terminal,
+            mode: self.active_mode,
+            input: self.input_state,
+            native_supported: cfg!(any(windows, target_os = "macos")),
+        })
+    }
+    fn native_start_available(&self) -> bool {
+        cfg!(any(windows, target_os = "macos"))
+            && self.writable()
+            && self.config.fingerprint.is_some()
+            && self.stopping.is_none()
+            && !self.recovery_blocked
+            && (self.child.is_none() || self.active_mode == Some(SessionMode::Communication))
+    }
+    pub(super) fn workspace_action(&mut self, action: desktop_state::Action) {
+        match action {
+            desktop_state::Action::AddDevice if self.idle_writable() => self.open_setup(),
+            desktop_state::Action::StartInput if self.native_start_available() => {
                 self.native_confirmation = false;
                 self.dialog = Some(Dialog::NativeStart);
+            }
+            desktop_state::Action::Connect if self.idle_writable() => {
+                let result = self.start(false);
+                self.feedback(result, "正在连接电脑，键鼠尚未开启。");
+            }
+            desktop_state::Action::Recovery => self.dialog = Some(Dialog::Recovery),
+            _ => (),
+        }
+    }
+    fn connection_actions(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            if ui.add_enabled(self.idle_writable() && self.config.fingerprint.is_some(), egui::Button::new("只连接，不开启键鼠")).clicked() {
+                let result = self.start(false);
+                self.feedback(result, "正在建立连接，键鼠尚未开启。");
+            }
+            if ui.add_enabled(self.idle_writable() && self.config.fingerprint.is_some(), egui::Button::new("检查两台电脑的连接")).clicked() {
+                let result = self.start(true);
+                self.feedback(result, "正在检查连接，不读取或控制键鼠。");
+            }
+        });
+    }
+    fn work_controls(&mut self, ui: &mut egui::Ui) {
+        let view = self.workspace_view();
+        desktop_style::pill(ui, view.title, view.tone);
+        ui.add_space(8.0);
+        ui.label(view.detail);
+        ui.add_space(12.0);
+        ui.horizontal_wrapped(|ui| {
+            if view.action != desktop_state::Action::None
+                && ui.add(desktop_style::primary(view.action.label())).clicked()
+            {
+                self.workspace_action(view.action);
+            }
+            if self.child.is_some() && ui.button("停止协同").clicked() {
+                self.stop();
+            }
+            if ui.button("检查本机权限").clicked() {
+                self.page = Page::Settings;
             }
         });
     }
     pub(super) fn home(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "先从一件事开始",
-            "一台电脑先配置本机鼠标；连接另一台电脑后，再分别选择协作方式。",
-        );
-        ui.columns(2, |columns| {
-            egui::Frame::group(columns[0].style())
-                .inner_margin(18.0)
-                .show(&mut columns[0], |ui| {
-                    ui.heading("本机鼠标");
-                    ui.weak("全局功能开发中");
-                    ui.add_space(10.0);
-                    ui.label("画轨迹、选择动作、测试并保存规则，无需创建身份或连接设备。");
-                    ui.add_space(15.0);
-                    if ui.button("配置本机鼠标").clicked() {
-                        self.page = Page::GestureLab;
-                        self.mouse_tab = MouseTab::Rules;
-                    }
-                    if ui.button("先在窗口里试画").clicked() {
-                        self.page = Page::GestureLab;
-                        self.mouse_tab = MouseTab::Practice;
-                    }
-                    ui.add_space(10.0);
-                    ui.weak("当前只支持离线配置与窗口内测试，不启动全局捕获或执行动作。");
-                });
-            egui::Frame::group(columns[1].style())
-                .inner_margin(18.0)
-                .show(&mut columns[1], |ui| {
-                    ui.heading("多机协同");
-                    ui.weak("当前支持一个可信对端");
-                    ui.add_space(10.0);
-                    ui.label("核验身份、建立连接，再把电脑摆到与桌面一致的方向。");
-                    ui.add_space(15.0);
-                    if ui
-                        .add_enabled(self.idle_writable(), egui::Button::new("添加电脑"))
-                        .clicked()
-                    {
-                        self.open_setup();
-                    }
-                    if ui.button("管理设备与屏幕").clicked() {
-                        self.page = Page::Devices;
-                    }
-                    ui.add_space(10.0);
-                    ui.weak("通信已连接不代表正在控制，剪贴板和文件尚未接通。");
-                });
-        });
-        ui.add_space(22.0);
-        ui.strong("下一步");
-        ui.add_space(10.0);
-        let identity = self.local_fingerprint().is_some();
-        egui::Frame::group(ui.style())
-            .inner_margin(16.0)
-            .show(ui, |ui| {
-                if !identity {
-                    ui.label("1  创建本机身份（仅多机协同需要）");
-                    if ui
-                        .add_enabled(self.idle_writable(), egui::Button::new("开始添加电脑"))
-                        .clicked()
-                    {
-                        self.open_setup();
-                    }
-                } else if self.config.fingerprint.is_none() {
-                    ui.label("1  登记另一台电脑，独立核对证书指纹");
-                    if ui
-                        .add_enabled(self.idle_writable(), egui::Button::new("继续核验设备"))
-                        .clicked()
-                    {
-                        self.open_setup();
-                    }
-                } else {
-                    ui.label(format!("✓ 已登记：{}", self.config.peer_name));
-                    self.connection_actions(ui);
-                }
-                ui.separator();
-                ui.label("2  选择方向与本机接收权限");
-                if ui.button("布局与设备权限").clicked() {
-                    self.page = Page::Devices;
-                    self.device_tab = DeviceTab::Layout;
-                }
-                ui.separator();
-                ui.label("3  明确开启键鼠，或只进行通信诊断");
-                ui.weak("Ctrl+Alt+Esc 紧急恢复；接收端物理输入可接管。实际兼容性仍须实机验收。");
+        Self::heading(ui, "你的协作空间", "两台电脑，一套键鼠。先连接，再自然地跨过屏幕边缘。");
+        self.workspace(ui);
+        ui.add_space(20.0);
+        ui.heading("也可以只用这台电脑");
+        ui.add_space(8.0);
+        desktop_style::card(ui).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("鼠标手势");
+                desktop_style::pill(ui, "全局功能开发中", desktop_style::Tone::Neutral);
             });
+            ui.label("先在窗口里画一条轨迹，试试识别结果，或为常用应用保存规则。");
+            ui.weak("现在可离线配置和预览；不会捕获全局鼠标或执行动作。");
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("试画一条手势").clicked() {
+                    self.page = Page::GestureLab;
+                    self.mouse_tab = MouseTab::Practice;
+                }
+                if ui.button("管理应用规则").clicked() {
+                    self.page = Page::GestureLab;
+                    self.mouse_tab = MouseTab::Rules;
+                }
+            });
+        });
+    }
+    fn workspace(&mut self, ui: &mut egui::Ui) {
+        if self.config.fingerprint.is_none() {
+            desktop_style::card(ui).show(ui, |ui| {
+                ui.add_space(8.0);
+                ui.heading("让另一台电脑加入这里");
+                ui.label("添加并核验一次，屏跃会记住它。已有设备和身份不会被覆盖。");
+                ui.add_space(14.0);
+                self.work_controls(ui);
+                ui.add_space(14.0);
+                ui.weak("当前连接方式：交换公开连接卡并核对身份。短码配对尚未提供。");
+            });
+            return;
+        }
+        let local = |this: &mut Self, ui: &mut egui::Ui| {
+            desktop_style::card(ui).show(ui, |ui| {
+                ui.weak("这台电脑");
+                ui.heading(local_device_name());
+                ui.add_space(8.0);
+                desktop_style::pill(ui, if this.config.allow { "接收偏好：允许" } else { "接收偏好：关闭" }, if this.config.allow { desktop_style::Tone::Good } else { desktop_style::Tone::Neutral });
+                ui.add_space(6.0);
+                ui.weak("键鼠权限由本机决定");
+                if ui.button("管理本机接收权限").clicked() {
+                    this.page = Page::Devices;
+                    this.device_tab = DeviceTab::Permissions;
+                }
+            });
+        };
+        let peer = |this: &mut Self, ui: &mut egui::Ui| {
+            desktop_style::card(ui).show(ui, |ui| {
+                ui.weak("另一台电脑");
+                ui.heading(&this.config.peer_name);
+                ui.add_space(8.0);
+                desktop_style::pill(ui, if this.child.is_some() && this.connected { "已连接" } else { "已记住这台电脑" }, if this.child.is_some() && this.connected { desktop_style::Tone::Good } else { desktop_style::Tone::Neutral });
+                ui.add_space(6.0);
+                ui.weak("对方是否允许控制，以连接时的实际结果为准");
+                if ui.add_enabled(this.idle_writable(), egui::Button::new("重新核验身份…")).clicked() {
+                    this.open_setup();
+                }
+            });
+        };
+        if ui.available_width() >= 600.0 {
+            ui.columns(2, |columns| {
+                local(self, &mut columns[0]);
+                peer(self, &mut columns[1]);
+            });
+        } else {
+            local(self, ui);
+            ui.add_space(10.0);
+            peer(self, ui);
+        }
+        ui.add_space(14.0);
+        desktop_style::card(ui).show(ui, |ui| {
+            self.displays(ui);
+            ui.separator();
+            self.work_controls(ui);
+        });
         self.recovery_panel(ui);
     }
     pub(super) fn devices(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "设备与屏幕",
-            "身份、通信和输入授权分别表达。当前为单对端与主显示器，配对码和多设备尚未实现。",
-        );
+        Self::heading(ui, "设备与屏幕", "把电脑摆成桌面上的样子，选择需要的协作方式。");
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.device_tab, DeviceTab::Device, "电脑与连接");
-            ui.selectable_value(&mut self.device_tab, DeviceTab::Layout, "屏幕布局");
-            ui.selectable_value(&mut self.device_tab, DeviceTab::Permissions, "本设备权限");
-            if ui
-                .add_enabled(self.idle_writable(), egui::Button::new("添加／重新核验…"))
-                .clicked()
-            {
-                self.open_setup();
-            }
+            ui.selectable_value(&mut self.device_tab, DeviceTab::Device, "工作空间");
+            ui.selectable_value(&mut self.device_tab, DeviceTab::Layout, "摆放屏幕");
+            ui.selectable_value(&mut self.device_tab, DeviceTab::Permissions, "协作权限");
         });
-        ui.add_space(16.0);
+        ui.add_space(14.0);
         match self.device_tab {
-            DeviceTab::Layout => self.displays(ui),
-            DeviceTab::Permissions => self.device_permissions(ui),
-            DeviceTab::Device => {
-                egui::Frame::group(ui.style())
-                    .inner_margin(18.0)
-                    .show(ui, |ui| {
-                        ui.heading(&self.config.peer_name);
-                        ui.label(if self.config.fingerprint.is_some() {
-                            "身份：已登记可信证书"
-                        } else {
-                            "身份：尚未核验"
-                        });
-                        ui.label(format!("通信：{}", self.status));
-                        ui.label(format!("键鼠：{}", self.input_label()));
-                        ui.weak("本机不能代替对端授予接收控制权限；控制请求由对端独立决定。");
-                        if matches!(self.input_state, Some(WorkerInputState::ReceivingRemote | WorkerInputState::Recovering)) {
-                            ui.label("本机首次物理动作只用于收回控制，不执行或回放；请先松开按键和鼠标按钮再继续操作。");
-                        }
-                        ui.add_space(12.0);
-                        self.connection_actions(ui);
-                        if self.config.fingerprint.is_some() && ui.button("撤销设备信任…").clicked()
-                        {
-                            self.dialog = Some(Dialog::Revoke);
-                        }
-                    });
-                ui.add_space(16.0);
-                egui::CollapsingHeader::new("发现与高级连接").default_open(self.config.fingerprint.is_none()).show(ui,|ui|{
-                    let own=self.local_fingerprint();let publishing=self.child.is_some()&&self.stopping.is_none()&&self.config.listen;let idle=self.child.is_none();let writable=self.writable();
-                    if let Some(address)=self.discovery.ui(ui,own,publishing,idle,writable){
-                        let result=self.use_discovery_address(address);self.feedback(result,"仅选择了地址，尚未登记或授权。");
-                        if self.notice.starts_with("仅选择"){self.open_setup();self.wizard=Some(SetupStep::Verify);}
-                    }
-                    ui.weak("手动地址与等待连接方式可在添加向导中设置；证书选择器尚未提供，暂用文件路径。");
-                });
+            DeviceTab::Device => self.workspace(ui),
+            DeviceTab::Layout => {
+                desktop_style::card(ui).show(ui, |ui| self.displays(ui));
+            }
+            DeviceTab::Permissions => {
+                desktop_style::card(ui).show(ui, |ui| self.device_permissions(ui));
             }
         }
+        ui.add_space(16.0);
+        egui::CollapsingHeader::new("高级连接与身份").show(ui, |ui| {
+            ui.label(format!("连接详情：{}", self.status));
+            ui.label(if self.config.listen { "连接方式：等待另一台电脑" } else { "连接方式：连接另一台电脑" });
+            if !self.config.address.is_empty() {
+                ui.monospace(&self.config.address);
+            }
+            self.connection_actions(ui);
+            if ui.add_enabled(self.idle_writable(), egui::Button::new("添加或重新核验电脑…")).clicked() {
+                self.open_setup();
+            }
+            if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked() {
+                self.dialog = Some(Dialog::Revoke);
+            }
+            let own = self.local_fingerprint();
+            let publishing = self.child.is_some() && self.stopping.is_none() && self.config.listen;
+            let idle = self.child.is_none();
+            let writable = self.writable();
+            if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
+                let result = self.use_discovery_address(address);
+                self.feedback(result, "仅选择了地址，尚未登记或授权。");
+                if self.notice.starts_with("仅选择") {
+                    self.open_setup();
+                    self.wizard = Some(SetupStep::Verify);
+                }
+            }
+            if let Some(fp) = &self.config.fingerprint {
+                ui.label("已登记的完整身份指纹");
+                ui.monospace(fp);
+            }
+            ui.weak("自动短码配对、多设备和精细多屏拓扑尚未提供。");
+        });
     }
     fn device_permissions(&mut self, ui: &mut egui::Ui) {
-        ui.heading("本机这端的授权");
-        ui.weak("允许此设备控制本机，不代表本机也可以控制对端。下面的偏好用于下一次键鼠会话。");
-        ui.add_enabled_ui(
-            self.idle_writable() && self.config.fingerprint.is_some(),
-            |ui| {
-                if ui
-                    .checkbox(&mut self.config.allow, "允许已登记对端控制本机键鼠")
-                    .changed()
-                {
-                    self.save();
-                }
-            },
-        );
-        // Correct the direction in plain language, not a network role.
-        ui.label(
-            "此项实际含义：允许对端把键鼠输入发送到本机。对端是否允许本机输入，须在对端设置。",
-        );
-        if self.child.is_some()
-            && self.active_mode == Some(SessionMode::Native)
-            && self.config.allow
-            && ui.button("撤回本机接收许可并停止会话").clicked()
+        ui.heading("让另一台电脑控制我");
+        ui.label("只影响这台电脑接收键鼠；对方是否接受你的控制，需要它自己同意。");
+        ui.add_enabled_ui(self.idle_writable() && self.config.fingerprint.is_some(), |ui| {
+            if ui.checkbox(&mut self.config.allow, "允许已核验的电脑控制本机键鼠").changed() {
+                self.save();
+            }
+        });
+        ui.weak("修改用于下一次键鼠会话，不会自动开启控制。");
+        if self.child.is_some() && self.active_mode == Some(SessionMode::Native) && self.config.allow
+            && ui.button("撤回接收许可并停止协同").clicked()
         {
             self.config.allow = false;
             self.stop();
             let result = self.save_config();
-            self.feedback(result, "本机接收许可已撤回，正在停止旧会话。");
+            self.feedback(result, "接收许可已撤回，正在结束原有会话。");
         }
         ui.add_space(16.0);
-        Self::unavailable(
-            ui,
-            "文字剪贴板 · 尚未接通",
-            "不会因键鼠授权而读取或同步系统剪贴板，未来按方向单独授权。",
-        );
-        ui.add_space(12.0);
-        Self::unavailable(
-            ui,
-            "文件接收 · 尚未接通",
-            "不会发送或保存文件，未来逐次询问接收位置和同意。",
-        );
+        ui.separator();
+        ui.strong("更多协作方式");
+        ui.label("文字、图片和文件尚未接通，当前不会读取或同步这些内容。");
+        ui.weak("后续逐项开放，并分别询问你的同意，不包含在键鼠许可里。");
     }
     pub(super) fn displays(&mut self, ui: &mut egui::Ui) {
-        ui.heading("排列主显示器");
-        ui.weak("方向从下一次会话生效；请在另一台电脑设置相反方向。");
-        ui.add_enabled_ui(self.idle_writable(), |ui| {
-            let width = ui.available_width().min(700.0);
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 270.0), egui::Sense::hover());
-            let center = rect.center();
-            let size = Vec2::new(140.0, 85.0);
-            let local = egui::Rect::from_center_size(center, size);
-            let offset = match self.config.edge.as_str() {
-                "left" => Vec2::new(-155.0, 0.0),
-                "top" => Vec2::new(0.0, -95.0),
-                "bottom" => Vec2::new(0.0, 95.0),
-                _ => Vec2::new(155.0, 0.0),
-            };
-            let peer = egui::Rect::from_center_size(center + offset, size);
-            let response = ui.interact(
-                peer,
-                ui.scope_id().with("peer-display"),
-                egui::Sense::drag(),
-            );
-            let displayed = if response.dragged() {
-                peer.translate(response.drag_delta())
-            } else {
-                peer
-            };
-            let painter = ui.painter();
-            for (r, text) in [
-                (local, "这台电脑"),
-                (displayed, self.config.peer_name.as_str()),
-            ] {
-                painter.rect_filled(r, 6.0, ui.visuals().faint_bg_color);
-                painter.rect_stroke(
-                    r,
-                    6.0,
-                    egui::Stroke::new(1.0, ui.visuals().text_color()),
-                    egui::StrokeKind::Inside,
-                );
-                painter.text(
-                    r.center(),
-                    egui::Align2::CENTER_CENTER,
-                    text,
-                    egui::FontId::proportional(15.0),
-                    ui.visuals().text_color(),
-                );
+        ui.strong("屏幕的位置");
+        ui.weak("拖动另一台电脑的屏幕，或直接选择方向。位置用于下一次会话。");
+        let registered = self.config.fingerprint.is_some();
+        let editable = self.idle_writable() && registered && self.wizard.is_none() && self.dialog.is_none();
+        let width = ui.available_width().max(1.0);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 230.0), egui::Sense::hover());
+        let (local, peer) = screen_rects(rect, &self.config.edge);
+        if !editable || !ui.input(|i| i.focused) || self.screen_drag.is_some_and(|(_, _, old)| old != rect) {
+            self.screen_drag = None;
+        }
+        let response = ui.interact(peer, ui.scope_id().with("peer-display"), if editable { egui::Sense::drag() } else { egui::Sense::hover() });
+        if response.drag_started() {
+            if let Some(origin) = ui.input(|i| i.pointer.press_origin()) {
+                self.screen_drag = Some((origin - peer.center(), peer.center(), rect));
             }
-            if response.drag_stopped() {
-                if let Some(p) = response.interact_pointer_pos() {
-                    let d = p - center;
-                    self.config.edge = if d.x.abs() >= d.y.abs() {
-                        if d.x < 0.0 {
-                            "left"
-                        } else {
-                            "right"
-                        }
-                    } else if d.y < 0.0 {
-                        "top"
-                    } else {
-                        "bottom"
+        }
+        if response.dragged() {
+            if let (Some((offset, center, _)), Some(pointer)) = (self.screen_drag.as_mut(), response.interact_pointer_pos()) {
+                *center = pointer - *offset;
+            }
+        }
+        let displayed = self.screen_drag.map_or(peer, |(_, center, _)| egui::Rect::from_center_size(center, peer.size()));
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 12.0, ui.visuals().faint_bg_color);
+        painter.line_segment([local.center(), displayed.center()], egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+        desktop_style::monitor(&painter, local, local_device_name(), true, self.child.is_some() && self.active_mode == Some(SessionMode::Native) && self.input_state == Some(WorkerInputState::Local), self.config.dark);
+        desktop_style::monitor(&painter, displayed, if registered { &self.config.peer_name } else { "等待添加电脑" }, false, self.child.is_some() && self.connected && self.input_state == Some(WorkerInputState::ControllingRemote), self.config.dark);
+        if response.drag_stopped() {
+            if let Some((_, center, _)) = self.screen_drag.take() {
+                if editable && rect.contains(center) {
+                    if let Some(edge) = dropped_edge(center, local) {
+                        self.config.edge = edge.into();
+                        self.save();
                     }
-                    .into();
-                    self.save();
                 }
             }
+        }
+        ui.add_space(8.0);
+        ui.add_enabled_ui(editable && self.screen_drag.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label("对端位于本机");
+                ui.label("另一台电脑在我的");
                 for side in ["left", "right", "top", "bottom"] {
-                    if ui
-                        .selectable_value(&mut self.config.edge, side.into(), edge_label(side))
-                        .changed()
-                    {
+                    if ui.selectable_value(&mut self.config.edge, side.into(), edge_label(side)).changed() {
                         self.save();
                     }
                 }
             });
         });
-        ui.add_space(12.0);
-        ui.weak("多显示器精细拓扑尚未实现；此区域只配置一个对端的相对方向，不表示真实屏幕尺寸。");
+        if !registered {
+            ui.weak("添加电脑后即可调整位置。");
+        } else if !self.idle_writable() {
+            ui.weak("当前位置已锁定，停止协同后可以调整。");
+        }
+        ui.weak("仅表示两台主显示器的相对方向，不代表真实尺寸。另一端需设置相反方向。");
     }
     fn mouse(&mut self, ui: &mut egui::Ui) {
         if self.recording_mode {
@@ -450,38 +431,45 @@ impl App {
         ui.weak("连接成功不包含上述权限。离线数据模块和设计原型都不是已可用的数据共享功能。");
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        Self::heading(
-            ui,
-            "设置",
-            "管理系统权限、外观、配置与诊断。设备授权在对应设备页设置。",
-        );
+        Self::heading(ui, "设置", "让屏跃按你的习惯工作。");
         if !self.writable() {
-            ui.strong("设置当前只读，原文件已保留");
-            ui.label("配置损坏、版本过新或另一窗口占用时不会覆盖。恢复会备份原设置，保留身份并关闭授权。");
-            if self.instance_lock.is_some()
-                && self.config_store.is_none()
-                && ui.button("备份并恢复设置…").clicked()
-            {
-                self.dialog = Some(Dialog::Reset);
-            }
-            ui.separator();
+            desktop_style::card(ui).show(ui, |ui| {
+                desktop_style::pill(ui, "设置只读，原资料已保留", desktop_style::Tone::Warning);
+                ui.label("可能是另一窗口正在使用资料，或设置需要恢复。恢复前会备份，不改变本机身份。");
+                if self.instance_lock.is_some() && self.config_store.is_none() && ui.button("备份并恢复设置…").clicked() {
+                    self.dialog = Some(Dialog::Reset);
+                }
+            });
+            ui.add_space(14.0);
         }
-        ui.add_enabled_ui(self.writable(), |ui| {
-            if ui.checkbox(&mut self.config.dark, "深色外观").changed() {
-                self.theme(ctx);
-                self.save();
-            }
+        desktop_style::card(ui).show(ui, |ui| {
+            ui.strong("外观与连接");
+            ui.add_enabled_ui(self.writable(), |ui| {
+                if ui.checkbox(&mut self.config.dark, "深色外观").changed() {
+                    self.theme(ctx);
+                    self.save();
+                }
+            });
+            ui.add_enabled_ui(self.idle_writable(), |ui| {
+                if ui.checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑").changed() {
+                    self.save();
+                }
+            });
+            ui.weak("重连会回到本机控制，不恢复上次的按键或控制状态。");
         });
-        ui.add_enabled_ui(self.idle_writable(), |ui| {
-            if ui
-                .checkbox(&mut self.config.reconnect, "自动重连可信设备")
-                .changed()
-            {
-                self.save();
-            }
-            ui.weak("重连后先回到本机控制，需重新发起切换，不复用旧控制状态。");
+        ui.add_space(14.0);
+        desktop_style::card(ui).show(ui, |ui| {
+            let idle = self.child.is_none() && self.stopping.is_none();
+            self.worker_permissions.ui(ui, idle);
+        });
+        ui.add_space(14.0);
+        desktop_style::card(ui).show(ui, |ui| {
+            ui.strong("关闭窗口时");
+            ui.label("停止协同，清理输入，然后退出。");
+            ui.weak("托盘和菜单栏尚未接通，目前不会在关闭后留在后台。");
         });
         ui.add_space(16.0);
+        egui::CollapsingHeader::new("高级诊断").show(ui, |ui| {
         ui.strong("本GUI进程的系统权限");
         ui.weak("只在点击时读取，不申请或修改权限。实际输入进程会独立复查。");
         if ui.button("检查当前系统权限").clicked() {
@@ -510,15 +498,10 @@ impl App {
             });
         }
         ui.weak("macOS按需要在系统设置中处理辅助功能/输入监控，再重新检查。Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
-        let idle = self.child.is_none() && self.stopping.is_none();
-        self.worker_permissions.ui(ui, idle);
-        ui.add_space(16.0);
-        ui.strong("后台运行");
-        ui.weak("托盘/菜单栏尚未提供。关闭窗口会请求停止并等待清理，不暗示仍在后台运行。");
-        egui::CollapsingHeader::new("会话诊断 · 不含按键内容").show(ui, |ui| {
-            for line in &self.logs {
-                ui.monospace(line);
-            }
+
+            ui.separator();
+            ui.strong("会话记录 · 不含按键内容");
+            for line in &self.logs { ui.monospace(line); }
         });
     }
     fn recovery_panel(&mut self, ui: &mut egui::Ui) {
@@ -528,7 +511,7 @@ impl App {
         }
     }
     pub(super) fn connection_exchange_ui(&mut self, ui: &mut egui::Ui) {
-        if ui.button("复制本机公开连接信息").clicked() {
+        if ui.button("复制这台电脑的连接卡").clicked() {
             match self.local_connection_info() {
                 Ok(text) => {
                     ui.ctx().copy_text(text);
@@ -540,7 +523,7 @@ impl App {
             }
         }
         ui.weak("公开信息仍需在对端独立核对完整指纹；不要发送私钥。自动短码配对尚未提供。");
-        ui.label("粘贴另一台电脑的连接信息");
+        ui.label("粘贴另一台电脑的连接卡");
         let changed = egui::ScrollArea::vertical()
             .id_salt("connection-info-text")
             .max_height(96.0)
@@ -550,7 +533,7 @@ impl App {
                         .desired_width(ui.available_width())
                         .desired_rows(3)
                         .char_limit(connection_info::MAX_TEXT_BYTES)
-                        .hint_text("PG-CONNECTION-1:…"),
+                        .hint_text("粘贴另一台电脑发来的完整连接卡"),
                 )
                 .changed()
             })
@@ -560,7 +543,7 @@ impl App {
             self.connection_addresses.clear();
             self.loaded_connection_info = None;
         }
-        if ui.button("读取对端连接信息").clicked() {
+        if ui.button("读取连接卡").clicked() {
             let result = self.read_connection_info();
             self.feedback(
                 result,
@@ -583,11 +566,11 @@ impl App {
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (value, text) in [
-                        (SetupStep::Identity, "1 本机身份"),
-                        (SetupStep::Find, "2 选择连接"),
-                        (SetupStep::Verify, "3 核验身份"),
-                        (SetupStep::Permissions, "4 独立权限"),
-                        (SetupStep::Layout, "5 屏幕布局"),
+                        (SetupStep::Identity, "1 准备本机"),
+                        (SetupStep::Find, "2 找到电脑"),
+                        (SetupStep::Verify, "3 确认是它"),
+                        (SetupStep::Permissions, "4 选择用途"),
+                        (SetupStep::Layout, "5 摆放屏幕"),
                     ] {
                         ui.label(if step == value {
                             RichText::new(text).strong()
@@ -602,7 +585,7 @@ impl App {
                 }
                 ui.add_enabled_ui(self.idle_writable(), |ui| match step {
                     SetupStep::Identity => {
-                        ui.heading("本机鼠标不需要身份，多机协同需要");
+                        ui.heading("先为这台电脑做准备");
                         if self.local_fingerprint().is_some() {
                             ui.label("本机身份已存在，将继续使用，不覆盖。");
                             if ui.button("使用已有身份继续").clicked() {
@@ -610,8 +593,8 @@ impl App {
                             }
                             return;
                         }
-                        ui.label("只创建本机身份，不登记或授权其他设备。私钥不导出。");
-                        if ui.button("创建本机身份").clicked() {
+                        ui.label("为这台电脑创建独立身份，用于确认连接对象。不会因此允许任何电脑控制你。");
+                        if ui.button("准备这台电脑").clicked() {
                             let result = Identity::create(&self.identity_dir()).map(|_| ());
                             let success = result.is_ok();
                             self.feedback(result, "身份已创建，仅交换公钥证书。");
@@ -621,16 +604,16 @@ impl App {
                         }
                     }
                     SetupStep::Find => {
-                        ui.heading("复制连接信息，不用搬证书文件");
-                        ui.label("先在一端复制公开信息，粘贴到另一端；另一端再复制回传。两端各交换一次即可，之后保留登记。");
+                        ui.heading("交换连接卡，让两台电脑认识彼此");
+                        ui.label("先在一台复制连接卡，在另一台读取后复制回传，再回到第一台读取。两端各交换一次，之后会记住设备。短码配对尚未提供。");
+                        self.connection_exchange_ui(ui);
+                        egui::CollapsingHeader::new("高级：设备发现或手动证书登记").show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
                             if ui.selectable_value(&mut self.wizard_listen, true, "这台先等待连接").changed()
                                 | ui.selectable_value(&mut self.wizard_listen, false, "这台连接另一台").changed() {
                                 self.confirmed_fingerprint = None;
                             }
                         });
-                        self.connection_exchange_ui(ui);
-                        egui::CollapsingHeader::new("高级：设备发现或手动证书登记").show(ui, |ui| {
                             let own = self.local_fingerprint();
                             let writable = self.writable();
                             if let Some(address) = self.discovery.ui(ui, own, false, true, writable) {
@@ -648,11 +631,11 @@ impl App {
                         });
                     }
                     SetupStep::Verify => {
-                        ui.heading("核验另一台电脑的身份");
-                        ui.label("对端名称");
+                        ui.heading("确认连接的是你的电脑");
+                        ui.label("给这台电脑取个名字");
                         ui.text_edit_singleline(&mut self.wizard_name);
                         ui.horizontal_wrapped(|ui| {
-                            if ui.selectable_value(&mut self.use_connection_info, true, "粘贴连接信息").changed()
+                            if ui.selectable_value(&mut self.use_connection_info, true, "使用连接卡").changed()
                                 | ui.selectable_value(&mut self.use_connection_info, false, "高级证书文件").changed() {
                                 self.confirmed_fingerprint = None;
                             }
@@ -712,7 +695,7 @@ impl App {
                             self.confirmed_fingerprint = if compared { candidate } else { None };
                         }
                         if ui
-                            .add_enabled(compared && address_valid, egui::Button::new("核验并登记设备"))
+                            .add_enabled(compared && address_valid, egui::Button::new("确认并记住这台电脑"))
                             .clicked()
                         {
                             let old = self.config.clone();
@@ -731,7 +714,7 @@ impl App {
                         }
                     }
                     SetupStep::Permissions => {
-                        ui.heading("只选择你需要的权限");
+                        ui.heading("选择你需要的协作方式");
                         ui.checkbox(&mut self.wizard_allow, "允许此对端把键鼠输入发送到本机");
                         ui.weak("不能代授对端接收本机控制。剪贴板/文件尚未提供，默认不开放。");
                         if ui.button("保存本机许可并继续").clicked() {
@@ -749,7 +732,7 @@ impl App {
                         }
                     }
                     SetupStep::Layout => {
-                        ui.heading("摆好屏幕，先测试通信");
+                        ui.heading("已添加，摆好屏幕就可以继续");
                         ui.label(format!(
                             "已登记 {}。当前方向：{}",
                             self.config.peer_name,
@@ -759,7 +742,7 @@ impl App {
                             self.wizard = None;
                             self.device_tab = DeviceTab::Layout;
                         }
-                        if ui.button("建立仅通信连接").clicked() {
+                        if ui.button("先检查连接（不开启键鼠）").clicked() {
                             let result = self.start(false);
                             let success = result.is_ok();
                             self.feedback(result, "通信工作进程正在启动，原生输入关闭。");
@@ -813,7 +796,7 @@ impl App {
         };
         let mut open = true;
         let title = match dialog {
-            Dialog::NativeStart => "明确开启键鼠会话",
+            Dialog::NativeStart => "开启键鼠协同",
             Dialog::Revoke => "撤销设备信任",
             Dialog::Reset => "备份并恢复设置",
             Dialog::ForceStop => "强制停止工作进程",
@@ -829,7 +812,7 @@ impl App {
                     ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");
                     ui.label("接收端首次物理动作仅用于收回控制，不执行或回放。切回本机后先松开物理按键／鼠标按钮，再继续操作。");
                     ui.checkbox(&mut self.native_confirmation,"我明确同意本次使用真实键鼠协同");
-                    if ui.add_enabled(cfg!(any(windows,target_os="macos"))&&self.writable()&&self.native_confirmation&&self.stopping.is_none()&&!self.recovery_blocked,egui::Button::new("确认并启动键鼠会话")).clicked(){let result=self.request_native();let success=result.is_ok();self.feedback(result,"正在准备真实键鼠会话，输入归属等待进程报告。");if success{self.dialog=None;}}
+                    if ui.add_enabled(cfg!(any(windows,target_os="macos"))&&self.writable()&&self.native_confirmation&&self.stopping.is_none()&&!self.recovery_blocked,egui::Button::new("确认并开启键鼠")).clicked(){let result=self.request_native();let success=result.is_ok();self.feedback(result,"正在准备真实键鼠会话，输入归属等待进程报告。");if success{self.dialog=None;}}
                 },
                 Dialog::Revoke=>{ui.label("停止会话并清除对端信任与本机接收许可。保留本机身份；下次需重新核验。");if ui.button("撤销并停止会话").clicked(){let result=self.revoke();self.feedback(result,"设备信任已撤销，旧会话正在停止。");self.dialog=None;}},
                 Dialog::Reset=>{ui.label("先备份原设置，再恢复默认并关闭授权。本机身份保持。无效或未来版本不会直接覆盖。");if ui.add_enabled(self.child.is_none()&&self.instance_lock.is_some(),egui::Button::new("确认备份并恢复设置")).clicked(){match config_store::Store::reset::<Config>(self.dir.join("settings.json")){Ok((store,config))=>{self.config_store=Some(store);self.config=config;self.theme(ctx);self.notice="已备份并恢复设置，授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},
@@ -854,11 +837,14 @@ impl App {
             self.gesture_lab.cancel();
         }
         egui::Panel::left("navigation")
-            .exact_size(190.0)
+            .exact_size(168.0)
             .show(root, |ui| {
                 ui.add_space(24.0);
-                ui.heading(RichText::new("屏跃").size(27.0));
-                ui.weak("鼠标增强与多机协同");
+                ui.horizontal(|ui| {
+                    desktop_style::pill(ui, "PG", desktop_style::Tone::Accent);
+                    ui.heading(RichText::new("屏跃").size(22.0));
+                });
+                ui.weak("让电脑自在协作");
                 ui.add_space(28.0);
                 for (page, label) in [
                     (Page::Home, "总览"),
@@ -870,40 +856,37 @@ impl App {
                     let selected = self.page == page
                         || (page == Page::Devices && self.page == Page::Displays)
                         || (page == Page::GestureLab && self.page == Page::GestureRules);
-                    if ui
-                        .selectable_label(selected, RichText::new(label).size(17.0))
-                        .clicked()
-                    {
+                    if ui.selectable_label(selected, RichText::new(label).size(15.0)).clicked() {
                         self.page = page;
                     }
-                    ui.add_space(12.0);
+                    ui.add_space(10.0);
                 }
+                ui.add_space(18.0);
                 ui.separator();
-                ui.weak(format!("{} · 实验性开发版", env!("CARGO_PKG_VERSION")));
-                ui.weak("未完成实机验收的能力会明确标注");
+                ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
+                ui.small("当前支持两台电脑的主屏");
             });
         egui::Panel::top("global-actions").show(root, |ui| {
+            ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
-                ui.label(format!("通信：{}", self.status));
-                ui.separator();
-                ui.strong(self.input_label());
-                if self.child.is_some() && ui.button("停止协同并恢复本机").clicked() {
+                let view = self.workspace_view();
+                desktop_style::pill(ui, view.title, view.tone);
+                if self.child.is_some() && ui.button("停止协同").clicked() {
                     self.stop();
                 }
-                if (self.stopping.is_some() || self.recovery_blocked)
-                    && ui.button("恢复状态…").clicked()
-                {
+                if (self.stopping.is_some() || self.recovery_blocked) && ui.button("查看恢复状态").clicked() {
                     self.dialog = Some(Dialog::Recovery);
                 }
-                if ui.button("紧急恢复本机控制").clicked() {
+                if ui.button("紧急恢复本机").on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认").clicked() {
                     self.stop();
                     self.gesture_lab.cancel();
                 }
             });
+            ui.add_space(8.0);
         });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.weak("本机全局手势：未启用　·　剪贴板/文件：尚未接通");
+                ui.small("全局手势、剪贴板与文件尚未开放");
                 if !self.notice.is_empty() {
                     ui.separator();
                     ui.label(&self.notice);
@@ -916,8 +899,8 @@ impl App {
         {
             self.gesture_lab.cancel();
         }
-        egui::CentralPanel::default().show(root, |ui| {
-            ui.add_space(18.0);
+        egui::CentralPanel::default().frame(egui::Frame::default().inner_margin(20.0).fill(root.visuals().panel_fill)).show(root, |ui| {
+            ui.add_space(4.0);
             egui::ScrollArea::vertical().show(ui, |ui| match self.page {
                 Page::Home => self.home(ui),
                 Page::Devices => self.devices(ui),
@@ -948,6 +931,52 @@ impl App {
                     self.notice = format!("UI几何报告未写入：{error:#}");
                 }
             }
+        }
+    }
+}
+
+
+fn local_device_name() -> &'static str {
+    if cfg!(target_os = "macos") { "这台 Mac" } else if cfg!(windows) { "这台 Windows 电脑" } else { "这台电脑" }
+}
+fn screen_rects(canvas: egui::Rect, edge: &str) -> (egui::Rect, egui::Rect) {
+    let scale = (canvas.width() / 470.0).min(canvas.height() / 260.0).clamp(0.0, 1.0);
+    let size = Vec2::new(166.0, 112.0) * scale;
+    let offset = match edge {
+        "left" => Vec2::new(-(size.x + 26.0 * scale) / 2.0, 0.0),
+        "top" => Vec2::new(0.0, -(size.y + 14.0 * scale) / 2.0),
+        "bottom" => Vec2::new(0.0, (size.y + 14.0 * scale) / 2.0),
+        _ => Vec2::new((size.x + 26.0 * scale) / 2.0, 0.0),
+    };
+    (egui::Rect::from_center_size(canvas.center() - offset, size), egui::Rect::from_center_size(canvas.center() + offset, size))
+}
+fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
+    if !center.x.is_finite() || !center.y.is_finite() || local.expand(10.0).contains(center) { return None; }
+    let d = center - local.center();
+    Some(if d.x.abs() >= d.y.abs() { if d.x < 0.0 { "left" } else { "right" } } else if d.y < 0.0 { "top" } else { "bottom" })
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn relative_screens_fit_the_canvas_in_all_directions_and_small_windows() {
+        for width in [200.0, 320.0, 600.0, 1000.0] {
+            let canvas = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), Vec2::new(width, 260.0));
+            for edge in ["left", "right", "top", "bottom"] {
+                let (local, peer) = screen_rects(canvas, edge);
+                assert!(canvas.contains_rect(local)); assert!(canvas.contains_rect(peer));
+                assert_eq!(dropped_edge(peer.center(), local), Some(edge));
+                assert_eq!(dropped_edge(local.center(), local), None);
+                assert!(!local.intersects(peer));
+            }
+        }
+    }
+    #[test]
+    fn dropping_over_local_screen_or_nonfinite_position_cannot_change_layout() {
+        let local = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(166.0, 112.0));
+        for center in [local.center(), local.min, local.max, egui::pos2(f32::NAN, 0.0), egui::pos2(0.0, f32::INFINITY)] {
+            assert_eq!(dropped_edge(center, local), None);
         }
     }
 }

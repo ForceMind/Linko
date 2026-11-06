@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.2.4-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.0-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -96,22 +96,22 @@ These checks never request OS permissions or authorize control/actions. See
 1. 两端使用同一版、相同协议的完整开发包。Windows 解压后保留两个程序在一起；
    macOS 保留完整 app 包。不要混用旧 CLI 和新 GUI，也不要覆盖既有身份或配置。
    安全策略拒绝未签名程序时保留防护，不关闭 Gatekeeper、UAC 或防火墙。
-2. 在两端打开“设备与屏幕 → 添加／重新核验”，各自创建不同的本机身份。
-   一端保留“这台先等待连接”，点击“复制本机公开连接信息”，通过可信渠道发送给另一端。
+2. 在总览点击“添加另一台电脑”，或在“设备与屏幕 → 高级连接与身份”添加/重新核验，
+   各自准备不同的本机身份。一端先点击“复制这台电脑的连接卡”，通过可信渠道发送给另一端。
    连接信息只含公开证书、协议版本和等待方的局域网 IPv4，不含私钥或权限。
-3. 另一端粘贴并点击“读取对端连接信息”，自动选择连接角色及地址；多个网卡时选择
+3. 另一端粘贴并点击“读取连接卡”，自动选择连接角色及地址；多个网卡时选择
    与等待方同一局域网的实际地址。再复制本机公开连接信息回传，等待方粘贴读取。
    两端各交换一次，不用搬证书文件、填文件路径或照抄示例 IP。已有登记保持可用。
 4. 两端通过独立可信渠道对照对方“本机公钥与指纹”的完整 BLAKE3 指纹，一致后
    才勾选确认并登记。读取信息不授信，修改后需重新读取和核对；连接信息不是短码认证。
-   在“本设备权限”分别选择是否接收对端键鼠，双向控制需要两端分别同意。
+   在“协作权限”分别选择是否接收对端键鼠，双向控制需要两端分别同意。
    剪贴板和文件仍不开放。高级区域保留原有证书路径登记及未认证发现提示。
-5. 先由等待方建立“仅通信连接”，主动连接方运行“通信探针”。看到探针通过并
-   正常退出后，再设置“屏幕布局”：例如 Windows 在左、Mac 在右，则 Windows
+5. 可在“高级连接与身份”先由等待方建立“只连接，不开启键鼠”，主动连接方运行
+   “检查两台电脑的连接”。通过并正常退出后，再摆放屏幕：例如 Windows 在左、Mac 在右，则 Windows
    选“右侧”、Mac 选“左侧”。这是相对方向，不是多显示器精细拓扑。
-6. 先在等待方、再在主动连接方点击“启用键鼠会话…”，分别明确确认本次使用。
-   macOS 需对实际运行的 app/工作进程具备辅助功能和输入监控权限；设置中的GUI
-   权限快照不代表实际 worker 已获许可。系统权限由用户明确处理，软件不会代授。
+6. 先在等待方、再在主动连接方点击“开启键鼠协同…”，分别明确确认本次使用。
+   macOS 需对实际运行的 app/输入程序具备辅助功能和输入监控权限；“设置 → 检查键鼠权限”
+   查询实际输入程序，上次快照不授予执行许可。系统权限由用户明确处理，软件不会代授。
 7. 松开物理键和鼠标按钮后跨边，键盘跟随控制目标；先移入对端，再在对端按下
    鼠标拖拽。按住按钮时不跨屏，原生文件跨屏拖放未提供。Control/Command 保持
    各自物理语义，快捷键、布局和输入法由目标系统解释，不是 Unicode/IME 文本转发。
@@ -129,13 +129,20 @@ These checks never request OS permissions or authorize control/actions. See
 曾出现 GUI 两项权限已授予、worker 仍因辅助功能未获许可而退出；不能反复要求用户给
 旧应用加同一权限。macOS 包现在从内到外采用 ad-hoc 完整性签名并验证 plist/嵌套代码，
 没有 Developer ID 身份、没有公证；不同构建的系统授权不保证自动沿用。不要关闭防护。
-当前仍待签名候选的真实 worker/TCC 验证，不宣称该事故或 GUI 6.83GB 内存事故已修复。
+0.2.4在用户移除旧0.1.0授权条目、重新添加正确应用后，实际worker两项权限只读检查
+已通过；这不证明未来构建会自动沿用授权或真实键鼠已可用。GUI 6.83GB根因仍未定位。
 已通过真实双机无输入通信；物理键鼠 C06 仍未通过。此增量不改输入 v5/设备身份或授权。
 
 0.2.4-dev 在没有会话、停止/重连、发现、工作进程诊断或画布超时时，不再强制每100ms
 重绘。活动工作仍保持状态轮询，隐藏窗口仍处理停止与最终输出；窗口内画布遮挡后取消。
 这是空闲资源改进，不代表此前GUI6.83GB根因已定位。Oink全模块参考、用户确认的原创
 MIT授权范围和安全差异见[参考研究](docs/REFERENCE_RESEARCH.md)。
+
+0.3.0-dev把设备卡、相对屏幕摆放和键鼠主操作放进同一工作区，采用新的浅深色卡片与
+简洁中文状态。总览也能直接管理已登记电脑，证书/网络角色/连接测试和GUI自身快照
+收进高级区域。开启仍需本次明确确认，旧控制状态和普通通信不会变成执行许可。
+连接卡仍需独立核对完整指纹，认证短码、托盘、G1、数据与音频未因界面改版而接通。
+版本及真实候选验证见VALIDATION，整合顺序见DEVELOPMENT_PLAN。
 
 ## Explicit two-peer enrollment
 

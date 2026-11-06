@@ -125,11 +125,12 @@ storage fails closed. Aggregate durable quota is implemented; persistent detaile
 history, free-space/reclamation policy, network/GUI and native media remain open.
 See TRANSFER_MANAGER.md and exact-candidate evidence in VALIDATION.md.
 
-## Oink功能与设计整合提案（2026-11-06，待用户确认）
+## Oink功能与设计整合方案（2026-11-06，用户已确认）
 
-本节回答“什么时候把Oink的功能、设计都整合进来”，是完整方案，不是已经完成的
-功能列表，也不授权提前安装服务、插件、开机启动或发布稳定版。确认前只整理方案
-和已经获准的实测记录。保留上文M0–M5、G1/G2及C/P/U/G/D/R/S任务编号，不另起工程。
+本节回答“什么时候把Oink的功能、设计都整合进来”。用户已确认整体路线，并明确
+界面参考Oink后融入屏跃、减少工程化表达。本节不是已经完成的功能列表，也不授权
+提前安装服务、插件、开机启动或发布稳定版。保留上文M0–M5、G1/G2及C/P/U/G/D/R/S
+任务编号，不另起工程。当前展开A/B，先交付B1设备工作区与真实状态/操作接线。
 
 ### 1. 事实基线与本次目标
 
@@ -317,5 +318,5 @@ GUI/浏览器验证遵守已有授权范围；新增浏览器测试另行明确�
 安全审计，Issue #10历史根因也不因近期CI成功而关闭。
 
 每批交付明确四类：①实现且自动验证；②实现但原生未验；③尚未实现；④客观受阻。
-完整整合提案待用户确认；建议首先确认A/B作为下一迭代，其余按上表顺序连续推进。
+完整整合路线已确认，当前迭代展开A/B，其余按上表顺序连续推进。
 确认研发范围不等于批准系统安装、凭据采购、合并受保护主线或发布稳定版。

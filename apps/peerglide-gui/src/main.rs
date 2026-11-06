@@ -1,6 +1,8 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod config_store;
 mod connection_info;
+mod desktop_state;
+mod desktop_style;
 mod desktop_ui;
 mod discovery_panel;
 mod gesture_lab;
@@ -111,7 +113,7 @@ enum CollaborationTab {
     Clipboard,
     Files,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dialog {
     NativeStart,
     Revoke,
@@ -234,6 +236,7 @@ struct App {
     exit_confirmed: bool,
     permission_report: Option<peerglide_platform::context::PermissionReport>,
     worker_permissions: worker_permissions::Checker,
+    screen_drag: Option<(egui::Vec2, egui::Pos2, egui::Rect)>,
     discovery: discovery_panel::Panel,
     gesture_lab: gesture_lab::GestureLab,
     gesture_rules: gesture_rules::RuleEditor,
@@ -254,6 +257,7 @@ struct App {
     worker_state: Option<Arc<WorkerSnapshot>>,
     status: String,
     connected: bool,
+    last_failure: bool,
     logs: VecDeque<String>,
     stopping: Option<Instant>,
 }
@@ -304,6 +308,7 @@ impl App {
             exit_confirmed: false,
             permission_report: None,
             worker_permissions: worker_permissions::Checker::default(),
+            screen_drag: None,
             discovery: discovery_panel::Panel::default(),
             gesture_lab: gesture_lab::GestureLab::new(&dir),
             gesture_rules: gesture_rules::RuleEditor::new(&dir),
@@ -324,6 +329,7 @@ impl App {
             worker_state: None,
             status: "离线".into(),
             connected: false,
+            last_failure: false,
             logs: VecDeque::new(),
             stopping: None,
         };
@@ -333,11 +339,7 @@ impl App {
         app
     }
     fn theme(&self, ctx: &egui::Context) {
-        ctx.set_visuals(if self.config.dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        desktop_style::install(ctx, self.config.dark);
     }
     fn save(&mut self) {
         if let Err(e) = self.save_config() {
@@ -559,6 +561,7 @@ impl App {
         self.logs.clear();
         self.connected = false;
         self.stopping = None;
+        self.last_failure = false;
         self.status = "正在启动".into();
         Ok(())
     }
@@ -760,6 +763,7 @@ impl App {
                     }
                     Some(WorkerState::Stopped | WorkerState::Failed) => {
                         self.connected = false;
+                        self.last_failure = state == Some(WorkerState::Failed);
                         self.status = "工作进程已停止".into();
                     }
                     _ => (),
@@ -776,6 +780,7 @@ impl App {
             match child.try_wait() {
                 Ok(Some(exit)) => {
                     self.connected = false;
+                    self.last_failure = !exit.success();
                     self.status = if exit.success() {
                         "离线".into()
                     } else {
@@ -870,6 +875,7 @@ impl App {
                 || i.viewport().occluded.unwrap_or(false)
         }) {
             self.gesture_lab.cancel();
+            self.screen_drag = None;
         }
         if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
             if self.child.is_some() || self.recovery_blocked {
@@ -1121,6 +1127,35 @@ mod tests {
         app.native_confirmation = true;
         assert!(app.request_native().is_err());
         assert!(app.child.is_none());
+        Ok(())
+    }
+    #[test]
+    fn workspace_start_only_opens_fresh_consent_and_readonly_recovery_blocks_it() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // Presentation fixture only: no identity, certificate or worker is created.
+        app.config.fingerprint = Some("presentation-only".into());
+        app.native_confirmation = true;
+        app.workspace_action(desktop_state::Action::StartInput);
+        if cfg!(any(windows, target_os = "macos")) {
+            assert_eq!(app.dialog, Some(Dialog::NativeStart));
+            assert!(!app.native_confirmation);
+        }
+        assert!(app.child.is_none());
+        assert!(!app.config.native && !app.config.allow);
+        assert!(!app.identity_dir().exists());
+        app.dialog = None;
+        app.recovery_blocked = true;
+        app.workspace_action(desktop_state::Action::StartInput);
+        assert!(app.dialog.is_none());
+        app.workspace_action(desktop_state::Action::Recovery);
+        assert_eq!(app.dialog, Some(Dialog::Recovery));
+        let mut readonly = App::load(fixture.path.clone());
+        readonly.config.fingerprint = app.config.fingerprint.clone();
+        for action in [desktop_state::Action::StartInput, desktop_state::Action::Connect, desktop_state::Action::AddDevice] {
+            readonly.workspace_action(action);
+            assert!(readonly.child.is_none() && readonly.dialog.is_none() && readonly.wizard.is_none());
+        }
         Ok(())
     }
     #[test]
@@ -1626,6 +1661,20 @@ mod lifecycle_tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()?)
+    }
+    #[test]
+    fn hidden_or_unfocused_window_cancels_only_layout_draft_without_saving() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let original = app.config.edge.clone();
+        app.screen_drag = Some((Vec2::ZERO, egui::pos2(10.0, 10.0), egui::Rect::EVERYTHING));
+        let ctx = egui::Context::default();
+        logic_frames(&mut app, &ctx, true);
+        assert!(app.screen_drag.is_none());
+        assert_eq!(app.config.edge, original);
+        assert!(!app.dir.join("settings.json").exists());
+        assert!(app.child.is_none());
+        Ok(())
     }
     #[test]
     fn idle_logic_stops_periodic_paints_but_hidden_worker_and_stop_keep_ticking() -> Result<()> {
