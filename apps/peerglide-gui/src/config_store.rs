@@ -69,9 +69,7 @@ impl Store {
         let expected = bytes.as_deref().map(blake3::hash);
         let data = match bytes {
             None => T::default(),
-            Some(bytes) => {
-                decode(&bytes)?
-            }
+            Some(bytes) => decode(&bytes)?,
         };
         Ok((Self { path, expected }, data))
     }
@@ -148,57 +146,57 @@ pub(super) fn encode<T: Serialize>(data: &T) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 pub(super) fn backup(path: &Path, previous: Option<&[u8]>) -> Result<()> {
-        if let Some(previous) = previous {
-            let backup = path.with_extension(format!("bak-{}", blake3::hash(previous).to_hex()));
-            match options().create_new(true).open(&backup) {
-                Ok(mut f) => {
-                    f.write_all(previous)?;
-                    f.sync_all()?;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    anyhow::ensure!(
-                        read(&backup)?.as_deref() == Some(previous),
-                        "配置备份内容不一致，已拒绝覆盖"
-                    );
-                }
-                Err(e) => return Err(e).context("创建配置备份失败"),
+    if let Some(previous) = previous {
+        let backup = path.with_extension(format!("bak-{}", blake3::hash(previous).to_hex()));
+        match options().create_new(true).open(&backup) {
+            Ok(mut f) => {
+                f.write_all(previous)?;
+                f.sync_all()?;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                anyhow::ensure!(
+                    read(&backup)?.as_deref() == Some(previous),
+                    "配置备份内容不一致，已拒绝覆盖"
+                );
+            }
+            Err(e) => return Err(e).context("创建配置备份失败"),
         }
-        Ok(())
+    }
+    Ok(())
 }
 
 pub(super) fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<()> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let parent = destination.parent().context("读取配置目录失败")?;
-        let mut temporary = None;
-        for _ in 0..16 {
-            let path = parent.join(format!(
-                ".peerglide-config-{}-{}.tmp",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
-            match options().create_new(true).open(&path) {
-                Ok(file) => {
-                    temporary = Some((path, file));
-                    break;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e).context("创建配置临时文件失败"),
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let parent = destination.parent().context("读取配置目录失败")?;
+    let mut temporary = None;
+    for _ in 0..16 {
+        let path = parent.join(format!(
+            ".peerglide-config-{}-{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match options().create_new(true).open(&path) {
+            Ok(file) => {
+                temporary = Some((path, file));
+                break;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).context("创建配置临时文件失败"),
         }
-        let (path, mut file) = temporary.context("预留配置临时文件失败")?;
-        struct Cleanup(PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
-            }
+    }
+    let (path, mut file) = temporary.context("预留配置临时文件失败")?;
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
         }
-        let cleanup = Cleanup(path);
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&cleanup.0, destination).context("原子替换配置失败")?;
-        sync_parent(destination)
+    }
+    let cleanup = Cleanup(path);
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&cleanup.0, destination).context("原子替换配置失败")?;
+    sync_parent(destination)
 }
 pub(super) fn sync_parent(path: &Path) -> Result<()> {
     #[cfg(unix)]

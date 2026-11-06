@@ -481,6 +481,9 @@ impl App {
             "登记设备前需要可写入的设置"
         );
         anyhow::ensure!(self.child.is_none(), "登记设备前请先停止当前会话");
+        self.native_confirmation = false;
+        self.pending_start = None;
+        self.screen_drag = None;
         let confirmed = self
             .confirmed_fingerprint
             .take()
@@ -496,7 +499,8 @@ impl App {
         next.fingerprint = Some(transport::fingerprint(&bytes));
         next.allow = false;
         next.native = false;
-        let result = enrollment_store::commit(self.config_store.as_mut().unwrap(), &next, Some(&bytes));
+        let result =
+            enrollment_store::commit(self.config_store.as_mut().unwrap(), &next, Some(&bytes));
         if let Err(error) = result {
             self.config_store = None;
             return Err(error).context("设备登记未完成，请重新打开屏跃检查收尾；不会开启键鼠");
@@ -728,9 +732,14 @@ impl App {
         self.config.fingerprint = None;
         self.config.allow = false;
         self.config.native = false;
-        let result = self.config_store.as_mut().context("设置只读，设备信任撤销尚未持久保存")
+        let result = self
+            .config_store
+            .as_mut()
+            .context("设置只读，设备信任撤销尚未持久保存")
             .and_then(|store| enrollment_store::commit(store, &self.config, None));
-        if result.is_err() { self.config_store = None; }
+        if result.is_err() {
+            self.config_store = None;
+        }
         result.context("保存设备信任撤销结果；未确认持久完成，请重新打开屏跃检查")
     }
     fn poll(&mut self) {
@@ -1884,7 +1893,8 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn settings_conflict_during_enrollment_preserves_existing_peer_and_consumes_confirmation() -> Result<()> {
+    fn settings_conflict_during_enrollment_preserves_existing_peer_and_consumes_confirmation(
+    ) -> Result<()> {
         let fixture = Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         Identity::create(&app.identity_dir())?;
@@ -1897,13 +1907,19 @@ mod tests {
         let other = Identity::generate()?;
         std::fs::write(&candidate, &other.certificate)?;
         app.confirmed_fingerprint = Some(other.fingerprint());
+        app.native_confirmation = true;
+        app.pending_start = Some(SessionMode::Native);
         let future = br#"{"store_version":999,"data":{}}"#;
         std::fs::write(fixture.path.join("settings.json"), future)?;
         assert!(app.enroll().is_err());
         assert_eq!(app.config.fingerprint, Some(original.fingerprint()));
         assert!(app.confirmed_fingerprint.is_none() && app.config_store.is_none());
+        assert!(!app.native_confirmation && app.pending_start.is_none() && app.child.is_none());
         assert_eq!(std::fs::read(fixture.path.join("settings.json"))?, future);
-        assert_eq!(std::fs::read(fixture.path.join("trusted-peer.crt.der"))?, original.certificate);
+        assert_eq!(
+            std::fs::read(fixture.path.join("trusted-peer.crt.der"))?,
+            original.certificate
+        );
         Ok(())
     }
     #[test]
