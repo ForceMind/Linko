@@ -109,7 +109,9 @@ impl Panel {
                 }
             } else if ui.button("让局域网内的电脑找到本次配对").clicked() {
                 let result = (|| -> anyhow::Result<()> {
-                    let fp = own.as_ref().ok_or_else(|| anyhow::anyhow!("本机身份不可用"))?;
+                    let fp = own
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("本机身份不可用"))?;
                     self.start(own.clone())?;
                     self.handle.as_mut().unwrap().advertise(fp, offer.port)?;
                     self.published = Some(offer);
