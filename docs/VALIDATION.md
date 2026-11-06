@@ -1451,3 +1451,25 @@ v5/身份/配置/独立授权不改。SIGKILL/Force Quit及注销完整保证除
 向AnyObject转换不匹配。已按锁定objc2 0.6.5的AsRef API与CI格式精确修正，待新候选
 全量检查，未把失败标过。本机preflight-20261106T093137433792Z-63984因Rust缺失停止，
 按用户决定不安装；原生菜单/正常系统terminate与真实C06尚未验，无Native或OS权限变化。
+
+fb187af完整五项42200296381及两平台驻留42200296460通过。c22713a五项42204109595
+通过，Mac真实AppKit检查回执含running/returned/quit/ownerHealthy/noInput全true，
+两端仍未做物理C06。Mac artifact13495433513外层c524e13df993262a667fd2b702c2f3408df2b168bc9213053964fd4c283868b5、
+内层fa68d7a3ef7a936e269313d5ace401a7e3eb70d3cf29cc90fb2dacc9a8acc0cf，解压安全路径/
+strict签名/metadata已过。本机同包隔离系统检查两次SIGABRT，失败stderr为winit
+事件重入（event_handler.rs:135）；崩溃栈在AppKit persistent-state嵌套RunLoop，
+直接从GUI logic调用terminate不适用于宿主26.2。此为当前辅助检查的可复现失败，
+不能套到#10历史根因，也未改变系统防护或winit重入保护。
+
+46d2f85改为NSOperationQueue主队列异步票据，执行时重新核对真实app/delegate/菜单/
+bridge/registry，Pending禁止Close和owner拆卸。返回后才能出回执，超时/缺回执/abort
+仍失败；正常生产菜单仍只postQuit，未随诊断改动。该源码最低1.95/审计及两平台
+驻留42208139236通过，平台只fmt10hunks失败，按日志修正后再跑全量及宿主复验。
+
+本机c227正常菜单已独立观察中文Show/Stop/Quit等项、Show恢复窗口、实际无Native
+回环双CLI认证、菜单Stop、再连接、托盘on/off/on及close-to-tray=true时CmdQ退出。
+352.4秒GUI在资源截止360秒前退出（LS观察，未收集GUI退出码），双peer退出0/0，
+看到两个独立GUI工作进程且无--native/--allow-control；峰RSS129760KiB，测试身份未变，
+native/allow/reconnect仍false，最终无残留。并未点击实际Dock退出，也未做隐藏后
+菜单栏唤回或真实键鼠。私有脚本/回执在ignored safe-quit-c22713a，测试身份不得用于
+真实Windows配对。主Goal有新实现/CI/失败诊断/本机UI证据，继续active，不合并/发布。

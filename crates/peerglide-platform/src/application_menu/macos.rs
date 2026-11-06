@@ -12,7 +12,10 @@ use objc2_app_kit::{
     NSApplication, NSApplicationTerminateReply, NSEventModifierFlags, NSMenu, NSMenuItem,
 };
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSOperationQueue, NSString};
-use std::{cell::RefCell, sync::{atomic::Ordering, Arc, Weak}};
+use std::{
+    cell::RefCell,
+    sync::{atomic::Ordering, Arc, Weak},
+};
 
 thread_local! {
     static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
@@ -266,26 +269,37 @@ fn queued_termination(
 ) -> Result<bool> {
     let main = MainThreadMarker::new().context("退出检查没有在主队列执行")?;
     let registered = || {
-        REGISTRY.with(|registry| {
-            let registry = registry.try_borrow().ok()?;
-            if !registry.contains(generation) {
-                return None;
-            }
-            let current = registry.mailbox(delegate, application)?;
-            let expected = mailbox.upgrade()?;
-            Arc::ptr_eq(&current, &expected).then_some(())
-        }).is_some()
+        REGISTRY
+            .with(|registry| {
+                let registry = registry.try_borrow().ok()?;
+                if !registry.contains(generation) {
+                    return None;
+                }
+                let current = registry.mailbox(delegate, application)?;
+                let expected = mailbox.upgrade()?;
+                Arc::ptr_eq(&current, &expected).then_some(())
+            })
+            .is_some()
     };
     anyhow::ensure!(registered(), "退出检查所有者已变化");
     autoreleasepool(|_| {
         let app = NSApplication::sharedApplication(main);
-        anyhow::ensure!((&*app as *const NSApplication) as usize == application, "退出检查应用已变化");
+        anyhow::ensure!(
+            (&*app as *const NSApplication) as usize == application,
+            "退出检查应用已变化"
+        );
         let current_delegate = checked_delegate(&app)?;
-        anyhow::ensure!((&*current_delegate as *const AnyObject) as usize == delegate
-            && check_bridge(current_delegate.class()), "退出检查代理保护已变化");
-        anyhow::ensure!(app.mainMenu().as_deref().is_some_and(|current| {
-            (current as *const NSMenu) as usize == menu
-        }), "退出检查菜单已变化");
+        anyhow::ensure!(
+            (&*current_delegate as *const AnyObject) as usize == delegate
+                && check_bridge(current_delegate.class()),
+            "退出检查代理保护已变化"
+        );
+        anyhow::ensure!(
+            app.mainMenu()
+                .as_deref()
+                .is_some_and(|current| { (current as *const NSMenu) as usize == menu }),
+            "退出检查菜单已变化"
+        );
         let running = app.isRunning();
         // No TLS/RefCell borrow survives any AppKit query or this real call.
         // terminate: can run a nested run loop; the GUI must not close or tear

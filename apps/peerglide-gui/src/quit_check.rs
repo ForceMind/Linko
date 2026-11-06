@@ -58,11 +58,15 @@ impl Check {
         if let Some(check) = &self.termination {
             match check.status() {
                 TerminationStatus::Pending => (),
-                TerminationStatus::Returned { application_running_before } => {
+                TerminationStatus::Returned {
+                    application_running_before,
+                } => {
                     self.running_before = Some(application_running_before);
                     self.returned = true;
                 }
-                TerminationStatus::Failed => self.error = Some("deferred AppKit termination request failed"),
+                TerminationStatus::Failed => {
+                    self.error = Some("deferred AppKit termination request failed")
+                }
             }
         }
         if self.error.is_some() {
@@ -98,7 +102,11 @@ impl Check {
         false
     }
     pub(super) fn ready_to_close(&self) -> bool {
-        if self.termination.as_ref().is_some_and(|check| check.status() == TerminationStatus::Pending) {
+        if self
+            .termination
+            .as_ref()
+            .is_some_and(|check| check.status() == TerminationStatus::Pending)
+        {
             return false;
         }
         self.error.is_some() || self.returned

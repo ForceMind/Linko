@@ -29,14 +29,20 @@ pub struct TerminationCheck {
 impl TerminationCheck {
     #[cfg(target_os = "macos")]
     fn pending() -> Self {
-        Self { state: Arc::new(AtomicU8::new(0)) }
+        Self {
+            state: Arc::new(AtomicU8::new(0)),
+        }
     }
 
     pub fn status(&self) -> TerminationStatus {
         match self.state.load(Ordering::Acquire) {
             0 => TerminationStatus::Pending,
-            1 => TerminationStatus::Returned { application_running_before: false },
-            2 => TerminationStatus::Returned { application_running_before: true },
+            1 => TerminationStatus::Returned {
+                application_running_before: false,
+            },
+            2 => TerminationStatus::Returned {
+                application_running_before: true,
+            },
             _ => TerminationStatus::Failed,
         }
     }
