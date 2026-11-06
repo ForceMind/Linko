@@ -1,5 +1,5 @@
 //! Bounded, versioned local JSON with compare-before-save and cooperating-writer
-//! OS locks. No key/trust-file transaction or hostile-filesystem guarantee.
+//! OS locks. Enrollment uses a separate journal; no hostile-filesystem guarantee.
 use anyhow::{Context, Result};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
@@ -24,7 +24,7 @@ pub struct Store {
     path: PathBuf,
     expected: Option<blake3::Hash>,
 }
-fn read(path: &Path) -> Result<Option<Vec<u8>>> {
+pub(super) fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -40,7 +40,7 @@ fn read(path: &Path) -> Result<Option<Vec<u8>>> {
     anyhow::ensure!(bytes.len() <= MAX_BYTES, "配置超过 64 KiB 限制");
     Ok(Some(bytes))
 }
-fn options() -> OpenOptions {
+pub(super) fn options() -> OpenOptions {
     let mut o = OpenOptions::new();
     o.write(true).read(true);
     #[cfg(unix)]
@@ -64,20 +64,13 @@ pub fn lock(path: &Path) -> Result<Lock> {
 }
 impl Store {
     pub fn open<T: DeserializeOwned + Default>(path: PathBuf) -> Result<(Self, T)> {
+        super::enrollment_store::ensure_idle(&path)?;
         let bytes = read(&path)?;
         let expected = bytes.as_deref().map(blake3::hash);
         let data = match bytes {
             None => T::default(),
             Some(bytes) => {
-                let value: serde_json::Value =
-                    serde_json::from_slice(&bytes).context("配置 JSON 无效，原文件已保留")?;
-                if value.get("store_version").is_some() {
-                    let e: Envelope<T> = serde_json::from_value(value)?;
-                    anyhow::ensure!(e.store_version == 1, "暂不支持此配置版本，原文件已保留");
-                    e.data
-                } else {
-                    serde_json::from_value(value).context("旧版配置无效，原文件已保留")?
-                }
+                decode(&bytes)?
             }
         };
         Ok((Self { path, expected }, data))
@@ -85,6 +78,7 @@ impl Store {
     pub fn save<T: Serialize>(&mut self, data: &T) -> Result<()> {
         let path = self.path.clone();
         let _lock = lock(&path.with_extension("lock"))?;
+        super::enrollment_store::ensure_idle(&path)?;
         let previous = read(&path)?;
         anyhow::ensure!(
             previous.as_deref().map(blake3::hash) == self.expected,
@@ -92,9 +86,29 @@ impl Store {
         );
         self.commit(data, previous)
     }
+    /// The caller holds the GUI owner lock. Keep the settings lock across the
+    /// journal and both public-file replacements, never across native callbacks.
+    pub(super) fn commit_enrollment<T: Serialize>(
+        &mut self,
+        data: &T,
+        operation: impl FnOnce(&Path, Option<Vec<u8>>, &[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let _lock = lock(&self.path.with_extension("lock"))?;
+        super::enrollment_store::ensure_idle(&self.path)?;
+        let previous = read(&self.path)?;
+        anyhow::ensure!(
+            previous.as_deref().map(blake3::hash) == self.expected,
+            "其他进程已修改配置，请重新加载后再保存"
+        );
+        let bytes = encode(data)?;
+        operation(&self.path, previous, &bytes)?;
+        self.expected = Some(blake3::hash(&bytes));
+        Ok(())
+    }
     /// Only invoked by an explicit GUI reset, never automatic on parse/version error.
     pub fn reset<T: Serialize + Default>(path: PathBuf) -> Result<(Self, T)> {
         let _lock = lock(&path.with_extension("lock"))?;
+        super::enrollment_store::ensure_idle(&path)?;
         let previous = read(&path)?;
         let mut store = Self {
             path,
@@ -105,31 +119,57 @@ impl Store {
         Ok((store, data))
     }
     fn commit<T: Serialize>(&mut self, data: &T, previous: Option<Vec<u8>>) -> Result<()> {
-        let bytes = serde_json::to_vec_pretty(&EnvelopeRef {
-            store_version: 1,
-            data,
-        })?;
-        anyhow::ensure!(bytes.len() <= MAX_BYTES, "配置超过 64 KiB 限制");
+        let bytes = encode(data)?;
+        backup(&self.path, previous.as_deref())?;
+        atomic_write(&self.path, &bytes)?;
+        self.expected = Some(blake3::hash(&bytes));
+        Ok(())
+    }
+}
+
+pub(super) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    anyhow::ensure!(bytes.len() <= MAX_BYTES, "配置超过 64 KiB 限制");
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).context("配置 JSON 无效，原文件已保留")?;
+    if value.get("store_version").is_some() {
+        let e: Envelope<T> = serde_json::from_value(value)?;
+        anyhow::ensure!(e.store_version == 1, "暂不支持此配置版本，原文件已保留");
+        Ok(e.data)
+    } else {
+        serde_json::from_value(value).context("旧版配置无效，原文件已保留")
+    }
+}
+pub(super) fn encode<T: Serialize>(data: &T) -> Result<Vec<u8>> {
+    let bytes = serde_json::to_vec_pretty(&EnvelopeRef {
+        store_version: 1,
+        data,
+    })?;
+    anyhow::ensure!(bytes.len() <= MAX_BYTES, "配置超过 64 KiB 限制");
+    Ok(bytes)
+}
+pub(super) fn backup(path: &Path, previous: Option<&[u8]>) -> Result<()> {
         if let Some(previous) = previous {
-            let backup = self
-                .path
-                .with_extension(format!("bak-{}", blake3::hash(&previous).to_hex()));
+            let backup = path.with_extension(format!("bak-{}", blake3::hash(previous).to_hex()));
             match options().create_new(true).open(&backup) {
                 Ok(mut f) => {
-                    f.write_all(&previous)?;
+                    f.write_all(previous)?;
                     f.sync_all()?;
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     anyhow::ensure!(
-                        read(&backup)?.as_deref() == Some(previous.as_slice()),
+                        read(&backup)?.as_deref() == Some(previous),
                         "配置备份内容不一致，已拒绝覆盖"
                     );
                 }
                 Err(e) => return Err(e).context("创建配置备份失败"),
             }
         }
+        Ok(())
+}
+
+pub(super) fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<()> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let parent = self.path.parent().context("读取配置目录失败")?;
+        let parent = destination.parent().context("读取配置目录失败")?;
         let mut temporary = None;
         for _ in 0..16 {
             let path = parent.join(format!(
@@ -154,17 +194,20 @@ impl Store {
             }
         }
         let cleanup = Cleanup(path);
-        file.write_all(&bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&cleanup.0, &self.path).context("原子替换配置失败")?;
-        self.expected = Some(blake3::hash(&bytes));
-        #[cfg(unix)]
-        File::open(parent)?
-            .sync_all()
-            .context("配置已替换，但目录同步失败")?;
-        Ok(())
-    }
+        std::fs::rename(&cleanup.0, destination).context("原子替换配置失败")?;
+        sync_parent(destination)
+}
+pub(super) fn sync_parent(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(path.parent().context("读取配置目录失败")?)?
+        .sync_all()
+        .context("文件已替换，但目录同步失败")?;
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 #[cfg(test)]

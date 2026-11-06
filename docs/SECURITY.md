@@ -17,6 +17,14 @@ Keys use exclusive file creation and Unix mode 0600. On Windows store identity
 files under a user-private directory with normal user ACLs; hardened ACL/keychain
 provisioning is pending. Never exchange private keys.
 
+The GUI's local enrollment/revocation commit now prepares a bounded public-material
+journal before replacing its certificate/settings pair. Only the profile owner
+can recover it, and changed identity/files or unsupported records stop read-only.
+Recovery never opens input/receiving permission. Pending records block ordinary
+saves/reset; their checksum detects corruption, not network authentication. See
+[ADR-0008](ADR/0008-recoverable-device-enrollment.md) for commit/durability and older
+GUI limitations. Conflict repair and physical power-loss acceptance remain pending.
+
 Identity certificate/private-key loads and GUI/CLI peer-certificate reads are
 bounded to 16 KiB each before parsing (actual reads cap at limit + 1 to detect
 growth). Non-regular, empty, oversized and malformed material rejects. Identity

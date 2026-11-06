@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.3.2-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.3-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
