@@ -1359,3 +1359,24 @@ GUI/helper退出0、worker_reaped=true。约30.158秒GUI平均单核CPU0.364750%
 [NSMenu action](https://developer.apple.com/documentation/appkit/nsmenu/performactionforitem(at:))
 执行本应用保留的selector，不是物理菜单点击。此记录后仅补文档，最终精确HEAD五项/
 资源/上游状态集中在PR65/Issue5，不把早期短窗当最终数值或8h/24h/Native/C06通过。
+
+## 56. B1中文设备工作区重设计（2026-11-07，开发中）
+
+chinese-device-workspace/0.3.13基于PR65最终f4351e9，响应用户“UI和交互仍未整合”的
+纠正：优先实际GUI，Windows PR66独立WIP已推送保留，不覆盖/撤销其代码。固定参考
+Oink3ca82127的App/DeviceList/Arrangement组织方式，在原eframe实现设备名单→所选
+设备→主屏画布→对应操作；不搬Tauri、不复制第三方图标或Oink品牌，MIT/字体许可不改。
+
+默认进入设备页，真实本机与已登记对端在左侧名单；未添加时只有本机与明确的添加
+按钮，不能冒充示例电脑。画布单批mesh网格/原有monitor图形，点击选择、拖动保存
+方向复用既有有界/失焦/clip/只读/会话锁定处理；选择不写配置，未变化方向不重复保存。
+主动作复用workspace_action/实际worker权限与独立Native确认，停止/恢复入口保留。
+设置分常规/系统权限/诊断资料，权限跳转直接到对应分区；地址/证书/原始日志收进
+详情，详情按钮不再误打开重新登记。错误仍可展开全文。短码向导调整中文任务层级，
+沿用真实后台阶段/取消/两端确认与存储事务；未接通数据和全局手势继续明确标注。
+
+源码当前待CI编译/fmt/Clippy/测试/build与实际截图检查；本机预检缺Rust不安装。
+增加默认工作区无身份/网络/授权副作用及紧凑画布边界回归，旧主按钮可见性、布局
+失焦/剪切/只读测试保留。Linux隔离Xvfb真实通信场景可显式请求独占PNG，默认不
+截图、不读用户桌面，CI测试身份/NoNative与物理双机分开。浏览器未验证，宿主锁屏
+不操作现用App/TCC/配对。Oink原始设计参考与实际GUI验收不以一份新方案替代。

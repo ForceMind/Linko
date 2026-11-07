@@ -332,13 +332,13 @@ impl Panel {
             return;
         }
         let mut open = true;
-        egui::Window::new("用短码添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).default_height(600.0).vscroll(true).show(ctx,|ui|{
-            ui.heading("记住设备，再单独开启键鼠");
-            ui.label("两台电脑连接同一局域网。短码只核验本次身份，不会开启键鼠、剪贴板或文件传输。");
+        egui::Window::new("添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).default_height(600.0).vscroll(true).show(ctx,|ui|{
+            ui.heading("把另一台电脑加入工作区");
+            ui.label("两台电脑连到同一 Wi-Fi 或局域网。任选一台显示配对码，另一台输入；双方确认后会记住彼此。键鼠与数据权限仍单独选择。");
             ui.add_space(12.0);
             if !self.supervisor.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
                 if app.local_fingerprint().is_none() {
-                    if ui.add_enabled(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked&&!app.quit_check_mode&&!app.recording_mode,egui::Button::new("创建本机身份")).clicked(){
+                    if ui.add_enabled(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked&&!app.quit_check_mode&&!app.recording_mode,egui::Button::new("准备这台电脑")).clicked(){
                         let result=Identity::create(&app.identity_dir());
                         self.message=match result{Ok(_)=>"本机身份已创建。".into(),Err(error)=>format!("身份未创建，原文件保留：{error:#}")};
                     }
@@ -348,7 +348,7 @@ impl Panel {
                         let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))),None,&worker));
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
-                    ui.separator();ui.label("或输入另一台显示的信息");
+                    ui.separator();ui.strong("另一台已经显示了配对码？");
                     if let Some(address)=self.discovery.ui(ui,app.local_fingerprint(),None,true){self.select_address(address);}
                     ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IPv4 或 IPv4:24871"));
                     ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("八位数字配对码"));

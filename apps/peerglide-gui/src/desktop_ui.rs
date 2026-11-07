@@ -1,7 +1,7 @@
 //! Actual desktop interactions. No example devices or simulated permissions.
 use super::*;
 impl App {
-    fn writable(&self) -> bool {
+    pub(super) fn writable(&self) -> bool {
         !self.quit_check_mode
             && !self.resource_check_mode
             && self.instance_lock.is_some()
@@ -49,7 +49,7 @@ impl App {
                 ui.add_enabled(false, egui::Button::new("尚未提供"));
             });
     }
-    fn open_setup(&mut self) {
+    pub(super) fn open_setup(&mut self) {
         self.peer_wait_expired = false;
         self.native_confirmation = false;
         self.pending_start = None;
@@ -107,7 +107,7 @@ impl App {
             peer_wait_expired: self.peer_wait_expired,
         })
     }
-    fn native_start_available(&self) -> bool {
+    pub(super) fn native_start_available(&self) -> bool {
         cfg!(any(windows, target_os = "macos"))
             && self.application_menu_error.is_none()
             && self.writable()
@@ -137,7 +137,7 @@ impl App {
             _ => (),
         }
     }
-    fn connection_actions(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn connection_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
@@ -180,6 +180,7 @@ impl App {
             }
             if ui.button("检查本机权限").clicked() {
                 self.page = Page::Settings;
+                self.settings_section = SettingsSection::Permissions;
             }
         });
         ui.add_space(6.0);
@@ -191,7 +192,13 @@ impl App {
             "你的协作空间",
             "两台电脑，一套键鼠。先连接，再自然地跨过屏幕边缘。",
         );
-        self.workspace(ui);
+        desktop_style::card(ui).show(ui, |ui| {
+            let view = self.workspace_view();
+            ui.heading(view.title);
+            ui.add_space(10.0);
+            self.work_controls(ui);
+            if ui.button("打开设备工作区 →").clicked() { self.page = Page::Devices; }
+        });
         ui.add_space(20.0);
         ui.heading("也可以只用这台电脑");
         ui.add_space(8.0);
@@ -215,104 +222,12 @@ impl App {
             });
         });
     }
-    fn workspace(&mut self, ui: &mut egui::Ui) {
-        if self.config.fingerprint.is_none() {
-            desktop_style::card(ui).show(ui, |ui| {
-                ui.add_space(8.0);
-                ui.set_min_width(ui.available_width());
-                ui.heading("让另一台电脑加入这里");
-                ui.add_space(14.0);
-                self.work_controls(ui);
-                ui.add_space(14.0);
-                ui.weak("推荐使用短码核验并记住设备；高级入口仍可独立核对公开连接信息。");
-            });
-            return;
-        }
-        let local = |this: &mut Self, ui: &mut egui::Ui| {
-            desktop_style::card(ui).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.heading(RichText::new(local_device_name()).size(18.0));
-                    desktop_style::pill(ui, "本机", desktop_style::Tone::Neutral);
-                });
-                ui.horizontal_wrapped(|ui| {
-                    let (label, tone) = if this.config.allow {
-                        ("允许接收键鼠", desktop_style::Tone::Good)
-                    } else {
-                        ("不接收控制", desktop_style::Tone::Neutral)
-                    };
-                    desktop_style::pill(ui, label, tone);
-                    if ui.button("接收设置").clicked() {
-                        this.page = Page::Devices;
-                        this.device_tab = DeviceTab::Permissions;
-                    }
-                });
-                ui.weak("本机保存的接收选择，不表示正在被控制。");
-            });
-        };
-        let peer = |this: &mut Self, ui: &mut egui::Ui| {
-            desktop_style::card(ui).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.heading(RichText::new(&this.config.peer_name).size(18.0));
-                    let (label, tone) = if this.child.is_some() && this.connected {
-                        ("已连接", desktop_style::Tone::Good)
-                    } else {
-                        ("已记住", desktop_style::Tone::Neutral)
-                    };
-                    desktop_style::pill(ui, label, tone);
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if ui
-                        .add_enabled(this.idle_writable(), egui::Button::new("重新核验…"))
-                        .clicked()
-                    {
-                        this.open_setup();
-                    }
-                });
-                ui.weak("能否控制对方，需要它独立同意。");
-            });
-        };
-        if ui.available_width() >= 600.0 {
-            ui.columns(2, |columns| {
-                local(self, &mut columns[0]);
-                peer(self, &mut columns[1]);
-            });
-        } else {
-            local(self, ui);
-            ui.add_space(10.0);
-            peer(self, ui);
-        }
-        ui.add_space(14.0);
-        desktop_style::card(ui).show(ui, |ui| {
-            self.work_controls(ui);
-            ui.add_space(8.0);
-            ui.separator();
-            self.displays(ui);
-        });
-        self.recovery_panel(ui);
-    }
     pub(super) fn devices(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "设备与屏幕",
-            "把电脑摆成桌面上的样子，选择需要的协作方式。",
-        );
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.device_tab, DeviceTab::Device, "工作空间");
-            ui.selectable_value(&mut self.device_tab, DeviceTab::Layout, "摆放屏幕");
-            ui.selectable_value(&mut self.device_tab, DeviceTab::Permissions, "协作权限");
-        });
-        ui.add_space(14.0);
-        match self.device_tab {
-            DeviceTab::Device => self.workspace(ui),
-            DeviceTab::Layout => {
-                desktop_style::card(ui).show(ui, |ui| self.displays(ui));
-            }
-            DeviceTab::Permissions => {
-                desktop_style::card(ui).show(ui, |ui| self.device_permissions(ui));
-            }
-        }
-        ui.add_space(16.0);
-        egui::CollapsingHeader::new("高级连接与身份").show(ui, |ui| {
+        self.device_workspace(ui);
+        ui.add_space(10.0);
+        if self.connection_details_open {
+        desktop_style::card(ui).show(ui, |ui| {
+            ui.strong("连接与身份详情");
             ui.label(format!("连接详情：{}", self.status));
             ui.label(if self.config.listen {
                 "连接方式：等待另一台电脑"
@@ -326,11 +241,11 @@ impl App {
             if ui
                 .add_enabled(
                     self.idle_writable(),
-                    egui::Button::new("添加或重新核验电脑…"),
+                    egui::Button::new("手动设置地址与核验…"),
                 )
                 .clicked()
             {
-                self.open_setup();
+                self.open_advanced_setup();
             }
             if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
             {
@@ -354,8 +269,9 @@ impl App {
             }
             ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
         });
+        }
     }
-    fn device_permissions(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn device_permissions(&mut self, ui: &mut egui::Ui) {
         ui.heading("让另一台电脑控制我");
         ui.label("只影响这台电脑接收键鼠；对方是否接受你的控制，需要它自己同意。");
         ui.add_enabled_ui(
@@ -617,6 +533,14 @@ impl App {
             });
             ui.add_space(14.0);
         }
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.settings_section, SettingsSection::General, "常规");
+            ui.selectable_value(&mut self.settings_section, SettingsSection::Permissions, "系统权限");
+            ui.selectable_value(&mut self.settings_section, SettingsSection::Advanced, "诊断与资料");
+        });
+        ui.add_space(18.0);
+        match self.settings_section {
+            SettingsSection::General => {
         desktop_style::card(ui).show(ui, |ui| {
             ui.strong("外观与连接");
             ui.add_enabled_ui(self.writable(), |ui| {
@@ -634,11 +558,6 @@ impl App {
                 }
             });
             ui.weak("重连会回到本机控制，不恢复上次的按键或控制状态。");
-        });
-        ui.add_space(14.0);
-        desktop_style::card(ui).show(ui, |ui| {
-            let idle = self.child.is_none() && self.stopping.is_none();
-            self.worker_permissions.ui(ui, idle);
         });
         ui.add_space(14.0);
         desktop_style::card(ui).show(ui, |ui| {
@@ -706,6 +625,15 @@ impl App {
             ui.weak("默认不启用后台保留；不会注册开机启动。");
         });
         ui.add_space(16.0);
+            }
+            SettingsSection::Permissions => {
+        desktop_style::card(ui).show(ui, |ui| {
+            let idle = self.child.is_none() && self.stopping.is_none();
+            self.worker_permissions.ui(ui, idle);
+        });
+        ui.add_space(14.0);
+            }
+            SettingsSection::Advanced => {
         egui::CollapsingHeader::new("高级诊断").show(ui, |ui| {
         ui.strong("本GUI进程的系统权限");
         ui.weak("只在点击时读取，不申请或修改权限。实际输入进程会独立复查。");
@@ -740,6 +668,8 @@ impl App {
             ui.strong("会话记录 · 不含按键内容");
             for line in &self.logs { ui.monospace(line); }
         });
+            }
+        }
     }
     fn recovery_panel(&mut self, ui: &mut egui::Ui) {
         if self.stopping.is_some() || self.recovery_blocked {
@@ -1009,7 +939,10 @@ impl App {
                     }
                 });
                 if !self.notice.is_empty() {
-                    ui.label(&self.notice);
+                    let mut summary: String = self.notice.chars().take(64).collect();
+                    if self.notice.chars().count() > 64 { summary.push('…'); }
+                    ui.small(summary).on_hover_text(&self.notice);
+                    if ui.small_button("详情").clicked() { self.notice_details = true; }
                 }
                 if let Some(fp) = self.local_fingerprint() {
                     egui::CollapsingHeader::new("本机公钥与指纹").show(ui, |ui| {
@@ -1079,15 +1012,12 @@ impl App {
             self.gesture_lab.cancel();
         }
         egui::Panel::left("navigation")
-            .exact_size(168.0)
+            .exact_size(224.0)
             .show(root, |ui| {
-                ui.add_space(24.0);
-                ui.horizontal(|ui| {
-                    desktop_style::pill(ui, "PG", desktop_style::Tone::Accent);
-                    ui.heading(RichText::new("屏跃").size(22.0));
-                });
-                ui.weak("让电脑自在协作");
-                ui.add_space(28.0);
+                ui.add_space(14.0);
+                ui.heading(RichText::new("屏跃").size(26.0));
+                ui.weak("多台电脑，顺手协作");
+                ui.add_space(22.0);
                 for (page, label) in [
                     (Page::Home, "总览"),
                     (Page::Devices, "设备与屏幕"),
@@ -1099,17 +1029,18 @@ impl App {
                         || (page == Page::Devices && self.page == Page::Displays)
                         || (page == Page::GestureLab && self.page == Page::GestureRules);
                     if ui
-                        .selectable_label(selected, RichText::new(label).size(15.0))
+                        .add_sized([ui.available_width(), 36.0], egui::Button::new(RichText::new(label).size(14.0)).selected(selected))
                         .clicked()
                     {
                         self.page = page;
                     }
-                    ui.add_space(10.0);
+                    if page == Page::Devices && selected { self.device_roster(ui); }
+                    ui.add_space(6.0);
                 }
                 ui.add_space(18.0);
                 ui.separator();
                 ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
-                ui.small("当前支持两台电脑的主屏");
+                ui.small("简体中文 · 主屏协作");
             });
         egui::Panel::top("global-actions").show(root, |ui| {
             ui.add_space(8.0);
@@ -1137,10 +1068,13 @@ impl App {
         });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.small("全局手势、剪贴板与文件尚未开放");
+                ui.small("屏跃");
                 if !self.notice.is_empty() {
                     ui.separator();
-                    ui.label(&self.notice);
+                    let mut summary: String = self.notice.chars().take(64).collect();
+                    if self.notice.chars().count() > 64 { summary.push('…'); }
+                    ui.small(summary).on_hover_text(&self.notice);
+                    if ui.small_button("详情").clicked() { self.notice_details = true; }
                 }
             });
         });
@@ -1170,6 +1104,9 @@ impl App {
                     Page::Transfers => self.collaboration(ui),
                 });
             });
+        if self.notice_details {
+            egui::Window::new("操作详情").open(&mut self.notice_details).default_width(480.0).show(&ctx, |ui| { ui.label(&self.notice); });
+        }
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
         let mut pairing = std::mem::take(&mut self.pairing_panel);
@@ -1196,7 +1133,7 @@ impl App {
     }
 }
 
-fn local_device_name() -> &'static str {
+pub(super) fn local_device_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "这台 Mac"
     } else if cfg!(windows) {
@@ -1239,7 +1176,7 @@ fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
     })
 }
 
-fn update_layout_drag(
+pub(super) fn update_layout_drag(
     draft: &mut Option<(Vec2, egui::Pos2, egui::Rect)>,
     events: &[egui::Event],
     peer: egui::Rect,
