@@ -1,8 +1,11 @@
 """Receipt/entry/parent bounds; never launches a GUI or device session."""
 import json
+import importlib.util
 import os
 from pathlib import Path
+import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +13,23 @@ import gui_worker_resource_smoke as check
 
 
 class ResourceCheck(unittest.TestCase):
+    @staticmethod
+    def png(width=1280, height=800):
+        return (b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR"
+                + width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"x" * 1100)
+
+    @staticmethod
+    def gui():
+        return SimpleNamespace(pid=456, poll=lambda: None)
+
+    @staticmethod
+    def owner_query(arguments, **options):
+        if arguments == ["xdotool", "search", "--onlyvisible", "--pid", "456"]:
+            return b"12345\n"
+        if arguments == ["xdotool", "getwindowpid", "12345"]:
+            return b"456\n"
+        raise AssertionError("unexpected owner query")
+
     def test_existing_screenshot_is_preserved_before_any_external_capture(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "existing.png"
@@ -20,6 +40,131 @@ class ResourceCheck(unittest.TestCase):
                     check.capture_workspace(None, path)
                 capture.assert_not_called(); query.assert_not_called()
             self.assertEqual(path.read_bytes(), b"preserve existing bytes")
+
+    def test_existing_compact_screenshot_prevents_all_capture_and_resize(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "workspace.png"
+            compact = Path(folder) / "workspace-compact.png"
+            compact.write_bytes(b"preserve compact")
+            with patch.object(check.subprocess, "run") as run, \
+                    patch.object(check.subprocess, "check_output") as query:
+                with self.assertRaises(FileExistsError):
+                    check.capture_workspace(self.gui(), path)
+                run.assert_not_called(); query.assert_not_called()
+            self.assertFalse(path.exists())
+            self.assertEqual(compact.read_bytes(), b"preserve compact")
+
+    def test_capture_uses_exact_owned_xid_and_preserves_original_bytes(self):
+        data = self.png()
+        def capture(arguments, **options):
+            self.assertEqual(arguments, ["import", "-window", "12345", "png:-"])
+            self.assertTrue(options["check"])
+            self.assertEqual(options["timeout"], 10)
+            options["stdout"].write(data)
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(os.environ, {"CI": "true", "DISPLAY": ":99"}), \
+                patch.object(check.sys, "platform", "linux"), \
+                patch.object(check.subprocess, "check_output", side_effect=self.owner_query) as query, \
+                patch.object(check.subprocess, "run", side_effect=capture) as run, \
+                patch.object(check.os, "open", wraps=os.open) as create:
+            path = Path(folder) / "app.png"
+            self.assertEqual(check.capture_owned_window(self.gui(), path), "12345")
+            create.assert_called_once_with(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            self.assertEqual(path.read_bytes(), data)
+            if os.name == "posix":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(query.call_count, 4, "ownership must be checked before and after capture")
+            self.assertEqual(run.call_count, 1)
+
+    def test_missing_ambiguous_or_wrong_owner_never_imports_any_window(self):
+        cases = [(b"", None), (b"12345 67890", None), (b"root", None),
+                 (b"0", None), (b"9" * 21, None), (b"12345", b"789"),
+                 (b"12345", b"456\n789")]
+        for windows, owner in cases:
+            with self.subTest(windows=windows, owner=owner), tempfile.TemporaryDirectory() as folder, \
+                    patch.dict(os.environ, {"CI": "true", "DISPLAY": ":99"}), \
+                    patch.object(check.sys, "platform", "linux"), \
+                    patch.object(check.subprocess, "check_output", side_effect=[windows, owner]), \
+                    patch.object(check.subprocess, "run") as run:
+                with self.assertRaises(ValueError):
+                    check.capture_owned_window(self.gui(), Path(folder) / "rejected.png")
+                run.assert_not_called()
+
+    def test_window_replacement_after_capture_is_rejected_with_evidence_kept(self):
+        data = self.png()
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(os.environ, {"CI": "true", "DISPLAY": ":99"}), \
+                patch.object(check.sys, "platform", "linux"), \
+                patch.object(check.subprocess, "check_output", side_effect=[b"12345", b"456", b"54321", b"456"]), \
+                patch.object(check.subprocess, "run", side_effect=lambda *a, **kw: kw["stdout"].write(data)):
+            path = Path(folder) / "changed-window.png"
+            with self.assertRaises(ValueError):
+                check.capture_owned_window(self.gui(), path)
+            self.assertEqual(path.read_bytes(), data)
+
+    def test_import_failure_propagates_and_partial_bytes_are_not_rewritten(self):
+        def failed(arguments, **options):
+            options["stdout"].write(b"partial evidence")
+            raise subprocess.CalledProcessError(1, arguments)
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(os.environ, {"CI": "true", "DISPLAY": ":99"}), \
+                patch.object(check.sys, "platform", "linux"), \
+                patch.object(check.subprocess, "check_output", side_effect=self.owner_query), \
+                patch.object(check.subprocess, "run", side_effect=failed):
+            path = Path(folder) / "failed.png"
+            with self.assertRaises(subprocess.CalledProcessError):
+                check.capture_owned_window(self.gui(), path)
+            self.assertEqual(path.read_bytes(), b"partial evidence")
+
+    def test_png_size_signature_and_dimensions_remain_bounded(self):
+        cases = [b"short", b"not-png" * 160, self.png(0, 800), self.png(4097, 800),
+                 self.png() + b"x" * (16 * 1024 * 1024)]
+        for index, data in enumerate(cases):
+            with self.subTest(case=index), tempfile.TemporaryDirectory() as folder, \
+                    patch.dict(os.environ, {"CI": "true", "DISPLAY": ":99"}), \
+                    patch.object(check.sys, "platform", "linux"), \
+                    patch.object(check.subprocess, "check_output", side_effect=self.owner_query), \
+                    patch.object(check.subprocess, "run", side_effect=lambda *a, **kw: kw["stdout"].write(data)):
+                with self.assertRaises(ValueError):
+                    check.capture_owned_window(self.gui(), Path(folder) / "invalid.png")
+
+    def test_workspace_captures_owned_standard_and_compact_then_restores_1280_800(self):
+        size = [1280, 800]
+        commands = []
+        def command(arguments, **options):
+            commands.append(arguments)
+            if arguments == ["import", "-window", "12345", "png:-"]:
+                options["stdout"].write(self.png(*size))
+            elif arguments[:4] == ["xdotool", "windowsize", "--sync", "12345"]:
+                size[:] = map(int, arguments[4:])
+            else:
+                raise AssertionError("unexpected screenshot command")
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(os.environ, {"CI": "true", "DISPLAY": ":99"}), \
+                patch.object(check.sys, "platform", "linux"), patch.object(check.time, "sleep"), \
+                patch.object(check.subprocess, "check_output", side_effect=self.owner_query), \
+                patch.object(check.subprocess, "run", side_effect=command):
+            path = Path(folder) / "workspace.png"
+            check.capture_workspace(self.gui(), path)
+            self.assertEqual(path.read_bytes(), self.png(1280, 800))
+            self.assertEqual(path.with_name("workspace-compact.png").read_bytes(), self.png(920, 700))
+            self.assertEqual(size, [1280, 800])
+            self.assertEqual([c for c in commands if c[0] == "import"],
+                             [["import", "-window", "12345", "png:-"]] * 2)
+
+    def test_gui_smoke_import_and_non_ci_entry_never_launch_or_capture(self):
+        spec = importlib.util.spec_from_file_location("gui_smoke_import_probe",
+                                                     Path(check.__file__).with_name("gui_smoke.py"))
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {"CI": "false", "DISPLAY": ":99"}), \
+                patch.object(check.sys, "platform", "linux"), \
+                patch.object(check.subprocess, "Popen") as launch, \
+                patch.object(check.subprocess, "run") as capture, \
+                patch.object(check.subprocess, "check_output") as query:
+            spec.loader.exec_module(module)
+            with self.assertRaises(ValueError):
+                module.main()
+            launch.assert_not_called(); capture.assert_not_called(); query.assert_not_called()
 
     def record(self):
         return {"schema_version": 2, "scope": "ci_owned_gui_communication_resources", "state": "connected",

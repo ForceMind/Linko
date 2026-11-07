@@ -48,7 +48,7 @@ impl App {
             };
         }
         match self.input_state {
-            Some(WorkerInputState::Disabled) => "原生输入关闭 · 仅通信",
+            Some(WorkerInputState::Disabled) => "键鼠未开启",
             Some(WorkerInputState::Local) => "本机控制（进程报告）",
             Some(WorkerInputState::ControllingRemote) => "正在控制对端",
             Some(WorkerInputState::ReceivingRemote) => "对端正在控制本机",
@@ -59,7 +59,7 @@ impl App {
         }
     }
     pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-        ui.heading(RichText::new(title).size(25.0));
+        ui.heading(desktop_style::heading_text(title));
         ui.add_space(7.0);
         ui.weak(subtitle);
         ui.add_space(20.0);
@@ -1130,19 +1130,57 @@ impl App {
             self.stop();
             self.gesture_lab.cancel();
         }
+        egui::Panel::top("global-actions")
+            .exact_size(52.0)
+            .resizable(false)
+            .show_separator_line(false)
+            .show(root, |ui| {
+                ui.add_space(4.0);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), 40.0),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if ui
+                            .button("紧急恢复本机")
+                            .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
+                            .clicked()
+                        {
+                            self.stop();
+                            self.gesture_lab.cancel();
+                        }
+                        if ui
+                            .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
+                            .clicked()
+                        {
+                            self.stop();
+                        }
+                        if self.stopping.is_some() || self.recovery_blocked {
+                            if ui.button("查看恢复状态").clicked() {
+                                self.dialog = Some(Dialog::Recovery);
+                            }
+                            let view = self.workspace_view();
+                            ui.label(desktop_style::status_text(
+                                view.title,
+                                self.config.dark,
+                                view.tone,
+                            ));
+                        }
+                    },
+                );
+                ui.add_space(4.0);
+            });
         egui::Panel::left("navigation")
-            .exact_size(190.0)
+            .exact_size(196.0)
             .show(root, |ui| {
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     desktop_style::brand_mark(ui);
                     ui.vertical(|ui| {
-                        ui.heading(RichText::new("Linko").size(25.0));
+                        ui.heading(desktop_style::heading_text("Linko"));
                         ui.small("屏跃");
                     });
                 });
-                ui.weak("让协作顺手发生");
-                ui.add_space(22.0);
+                ui.add_space(28.0);
                 for (page, label) in [
                     (Page::Devices, "设备"),
                     (Page::Displays, "屏幕布局"),
@@ -1152,7 +1190,8 @@ impl App {
                     (Page::Settings, "设置"),
                 ] {
                     if page == Page::Settings {
-                        ui.add_space((ui.available_height() - 130.0).max(12.0));
+                        ui.separator();
+                        ui.add_space(12.0);
                     }
                     let selected = self.page == page
                         || (page == Page::Shortcuts
@@ -1175,40 +1214,18 @@ impl App {
                         self.navigate_to(page);
                         self.device_tab = DeviceTab::Device;
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(2.0);
                 }
-                ui.add_space(18.0);
-                ui.separator();
-                ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
-                ui.small("简体中文 · 主屏协作");
+                ui.allocate_ui_with_layout(
+                    ui.available_size(),
+                    egui::Layout::bottom_up(egui::Align::LEFT),
+                    |ui| {
+                        ui.small("简体中文 · 主屏协作");
+                        ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
+                        ui.separator();
+                    },
+                );
             });
-        egui::Panel::top("global-actions").show(root, |ui| {
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                let view = self.workspace_view();
-                desktop_style::pill(ui, view.title, view.tone);
-                if ui
-                    .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
-                    .clicked()
-                {
-                    self.stop();
-                }
-                if (self.stopping.is_some() || self.recovery_blocked)
-                    && ui.button("查看恢复状态").clicked()
-                {
-                    self.dialog = Some(Dialog::Recovery);
-                }
-                if ui
-                    .button("紧急恢复本机")
-                    .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
-                    .clicked()
-                {
-                    self.stop();
-                    self.gesture_lab.cancel();
-                }
-            });
-            ui.add_space(8.0);
-        });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.small("Linko / 屏跃");
@@ -1234,11 +1251,10 @@ impl App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .inner_margin(20.0)
+                    .inner_margin(egui::Margin::symmetric(24, 16))
                     .fill(root.visuals().panel_fill),
             )
             .show(root, |ui| {
-                ui.add_space(4.0);
                 egui::ScrollArea::vertical().show(ui, |ui| match self.page {
                     Page::Home => self.home(ui),
                     Page::Devices => self.devices(ui),

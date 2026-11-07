@@ -342,15 +342,16 @@ impl Panel {
             return;
         }
         let mut open = true;
-        let height = if app.local_fingerprint().is_none() {
-            340.0
+        let requested_height: f32 = if app.local_fingerprint().is_none() {
+            500.0
         } else if self.join_entry {
             560.0
         } else {
-            460.0
+            520.0
         };
+        let height = requested_height.min((ctx.viewport_rect().height() - 48.0).max(1.0));
         egui::Window::new("添加电脑").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).fixed_size(egui::vec2(510.0,height)).vscroll(true).show(ctx,|ui|{
-            ui.heading("把另一台电脑加入工作区");
+            ui.label(super::desktop_style::semibold("把另一台电脑加入工作区",21.0));
             ui.label("两台电脑连到同一 Wi-Fi 或局域网。任选一台显示配对码，另一台输入；双方确认后会记住彼此。键鼠与数据权限仍单独选择。");
             ui.add_space(12.0);
             if !self.supervisor.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
@@ -442,6 +443,60 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn first_pairing_window_keeps_prepare_and_close_visible_in_both_entry_modes() -> Result<()> {
+        fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.visual_bounding_rect())
+                }
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(|s| text_rect(s, label)),
+                _ => None,
+            }
+        }
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        app.open_setup();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        for size in [egui::vec2(1280.0, 800.0), egui::vec2(920.0, 700.0)] {
+            for join in [false, true] {
+                app.pairing_panel.select_entry(join);
+                for pass in 0..2 {
+                    let output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            ..Default::default()
+                        },
+                        |root| app.desktop(root),
+                    );
+                    let controls: Vec<_> = ["准备这台电脑", "关闭"]
+                        .into_iter()
+                        .map(|label| {
+                            let bounds = output.shapes.iter().find_map(|s| {
+                                text_rect(&s.shape, label).map(|rect| (s.clip_rect, rect))
+                            });
+                            (label, bounds)
+                        })
+                        .collect();
+                    output.drop_without_applying_deltas();
+                    if pass == 1 {
+                        for (label, bounds) in controls {
+                            let (clip, rect) = bounds.with_context(|| format!("{label} absent"))?;
+                            assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");
+                        }
+                    }
+                }
+                assert!(app.config == before && app.child.is_none());
+                assert!(!app.pairing_panel.needs_poll() && !app.native_confirmation);
+                assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+            }
+        }
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
     #[test]
     fn changing_entry_clears_old_short_code_without_starting_pairing_or_network() {
         let mut panel = Panel::default();
@@ -564,7 +619,7 @@ mod tests {
         let mut b = App::load(fixture.path.join("b"));
         Identity::create(&a.identity_dir())?;
         Identity::create(&b.identity_dir())?;
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let mut pa = Panel::default();
         let mut pb = Panel::default();
         pa.start(&a, &ctx, Mode::Offer("127.0.0.1:0".parse()?), None, binary)?;
@@ -693,7 +748,7 @@ mod tests {
         let bid = Identity::create(&b.identity_dir())?;
         let akey = std::fs::read(a.identity_dir().join("node.key.der"))?;
         let bkey = std::fs::read(b.identity_dir().join("node.key.der"))?;
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let mut pa = Panel::default();
         let mut pb = Panel::default();
         pa.name = "测试电脑B".into();

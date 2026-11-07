@@ -14,6 +14,7 @@ mod pairing_receipt;
 pub mod pairing_supervisor;
 mod quit_check;
 mod resource_check;
+mod visual_assets;
 mod worker_permissions;
 mod workspace_ui;
 use anyhow::{Context, Result};
@@ -69,15 +70,49 @@ struct Options {
 
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let name = "noto-sans-sc".to_owned();
-    let mut data = egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
-    // The upstream variable face defaults to Thin (100); use Regular for UI text.
-    data.tweak.coords.push(b"wght", 400.0);
-    fonts.font_data.insert(name.clone(), Arc::new(data));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push(name.clone());
+    let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
+    for (name, weight) in [
+        ("noto-sans-sc", 400.0),
+        ("linko-semibold", 550.0),
+        ("linko-heading", 650.0),
+    ] {
+        let mut data =
+            egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
+        // Reuse the same licensed variable font bytes with real weight axes;
+        // RichText::strong only changes color in egui, not the font weight.
+        data.tweak.coords.push(b"wght", weight);
+        fonts.font_data.insert(name.into(), Arc::new(data));
+        if name != "noto-sans-sc" {
+            let mut family = vec![name.to_owned()];
+            family.extend(fallback.iter().cloned());
+            fonts
+                .families
+                .insert(egui::FontFamily::Name(name.into()), family);
+        }
     }
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "noto-sans-sc".into());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push("noto-sans-sc".into());
     ctx.set_fonts(fonts);
+    let marker = egui::Id::unique("linko-fonts-installed");
+    ctx.data_mut(|memory| memory.insert_temp(marker, true));
+}
+
+fn ensure_fonts(ctx: &egui::Context) {
+    if !ctx.data(|memory| {
+        memory
+            .get_temp::<bool>(egui::Id::unique("linko-fonts-installed"))
+            .unwrap_or(false)
+    }) {
+        install_fonts(ctx);
+    }
 }
 
 fn edge_label(edge: &str) -> &'static str {
@@ -539,6 +574,7 @@ impl App {
         app
     }
     fn theme(&self, ctx: &egui::Context) {
+        ensure_fonts(ctx);
         desktop_style::install(ctx, self.config.dark);
     }
     fn save(&mut self) {
@@ -1539,7 +1575,7 @@ fn main() -> eframe::Result<()> {
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 820.0])
+            .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([920.0, 700.0]),
         ..Default::default()
     };
@@ -1592,6 +1628,13 @@ fn default_data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn ui_context() -> egui::Context {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        desktop_style::install(&ctx, false);
+        ctx
+    }
 
     #[test]
     fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants() -> Result<()>
@@ -1833,7 +1876,7 @@ mod tests {
         let mut app = App::load(fixture.path.clone());
         // Rendering metadata only. No peer certificate, identity or worker is created.
         app.config.fingerprint = Some("workspace-presentation-only".into());
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         let label = app.workspace_view().action.label();
         for dark in [false, true] {
@@ -1921,7 +1964,7 @@ mod tests {
         app.config.peer_name = "B".into();
         app.page = Page::Devices;
         app.device_tab = DeviceTab::Layout;
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         app.theme(&ctx);
         step(&mut app, &ctx, 0.0, vec![]);
@@ -2022,7 +2065,7 @@ mod tests {
     {
         let fixture = Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         for page in [
             Page::Home,
@@ -2063,7 +2106,7 @@ mod tests {
     }
     #[test]
     fn bundled_font_covers_chinese_ui_without_system_fonts() {
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
@@ -2212,7 +2255,7 @@ mod tests {
         let fixture = Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         app.connection_text = connection_info::encode(&Identity::generate()?.certificate, &[])?;
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         for width in [300.0, 600.0] {
             let output = ctx.run_ui(
@@ -2474,7 +2517,7 @@ mod tests {
         let dir = fixture.path.clone();
         {
             let mut app = App::load(dir.clone());
-            let ctx = egui::Context::default();
+            let ctx = ui_context();
             install_fonts(&ctx);
             for dark in [true, false] {
                 app.config.dark = dark;
