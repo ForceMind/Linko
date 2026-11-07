@@ -228,6 +228,7 @@ impl App {
                         },
                     ));
                 let response = frame.show(column, |ui| {
+                    ui.set_min_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = if compact { 3.0 } else { 8.0 };
                     ui.set_min_height(if compact { 70.0 } else { 96.0 });
                     ui.add(
@@ -293,7 +294,7 @@ impl App {
         let height = if ui.available_width() < 440.0 {
             180.0
         } else {
-            250.0
+            270.0
         };
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
@@ -402,6 +403,7 @@ impl App {
         let margin = if compact { 12.0 } else { 18.0 };
         let gap = if compact { 10.0 } else { 16.0 };
         card(ui).inner_margin(margin).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.label(desktop_style::semibold("连接状态", 16.0));
             ui.add_space(4.0);
@@ -434,6 +436,7 @@ impl App {
         });
         ui.add_space(gap);
         card(ui).inner_margin(margin).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = if compact { 5.0 } else { 8.0 };
             ui.label(desktop_style::semibold("快捷操作", 17.0));
             ui.horizontal(|ui| {
@@ -516,6 +519,7 @@ impl App {
         });
         ui.add_space(gap);
         card(ui).inner_margin(margin).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.label(desktop_style::semibold("协作能力", 16.0));
             ui.horizontal(|ui| {
@@ -561,13 +565,7 @@ fn draw_workspace_device(
     selected: bool,
 ) {
     let (name, status) = labels;
-    let label_height = if node.height() >= 110.0 {
-        46.0
-    } else if node.height() >= 80.0 {
-        24.0
-    } else {
-        0.0
-    };
+    let label_height = node.height() * 0.21;
     let image_area =
         egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
     let aspect = visual_assets::device_aspect(kind);
@@ -597,7 +595,7 @@ fn draw_workspace_device(
             egui::StrokeKind::Inside,
         );
     }
-    if label_height == 0.0 {
+    if label_height < 22.0 {
         return;
     }
     let labels = painter.with_clip_rect(node);
@@ -675,7 +673,7 @@ fn workspace_rects(
 ) -> (egui::Rect, egui::Rect) {
     let vertical = paired && matches!(edge, "top" | "bottom");
     let scale = (canvas.width() / if vertical { 270.0 } else { 530.0 })
-        .min(canvas.height() / if vertical { 420.0 } else { 240.0 })
+        .min(canvas.height() / if vertical { 500.0 } else { 240.0 })
         .clamp(0.0, 1.35);
     let zoom = if zoom.is_finite() {
         zoom.clamp(0.6, 1.0)
@@ -683,7 +681,7 @@ fn workspace_rects(
         1.0
     };
     let scale = scale * zoom;
-    let size = Vec2::new(220.0, 180.0) * scale;
+    let size = Vec2::new(220.0, 220.0) * scale;
     let delta = if vertical {
         Vec2::new(0.0, (size.y + 20.0 * scale) / 2.0)
     } else {
@@ -978,15 +976,19 @@ mod tests {
             let at = output
                 .shapes
                 .iter()
-                .find_map(|s| text_center(&s.shape, label))
-                .context("navigation entry absent")?;
-            for safety_label in ["停止协同", "紧急恢复本机"] {
-                assert!(output
-                    .shapes
-                    .iter()
-                    .any(|s| text_center(&s.shape, safety_label).is_some()));
-            }
+                .find_map(|s| text_center(&s.shape, label));
+            let safety_controls: Vec<_> = ["停止协同", "紧急恢复本机"]
+                .into_iter()
+                .map(|safety_label| {
+                    output.shapes.iter().find_map(|s| text_center(&s.shape, safety_label))
+                })
+                .collect();
             output.drop_without_applying_deltas();
+            let at = at.context("navigation entry absent")?;
+            for control in safety_controls {
+                let center = control.context("fixed safety control absent")?;
+                assert!(center.y <= 52.0, "safety toolbar grew beyond its bounded row");
+            }
             app.native_confirmation = true;
             click(&mut app, &ctx, at);
             assert!(app.page == page && !app.native_confirmation && app.screen_drag.is_none());

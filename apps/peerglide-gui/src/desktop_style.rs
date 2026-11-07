@@ -248,13 +248,12 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
     let response = ui
         .scope(|ui| {
             ui.spacing_mut().button_padding.x = 42.0;
-            let mut button = egui::Button::new("")
+            let button = egui::Button::new("")
                 .left_text(semibold(label, 15.0).color(color))
                 .selected(selected)
-                .frame(selected);
-            if selected {
-                button = button.fill(fill).stroke(Stroke::NONE);
-            }
+                .frame(true)
+                .fill(if selected { fill } else { Color32::TRANSPARENT })
+                .stroke(Stroke::NONE);
             ui.add_sized([ui.available_width(), 44.0], button)
         })
         .inner;
@@ -264,6 +263,21 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
         egui::vec2(18.0, 16.0),
     );
     let stroke = Stroke::new(1.4, color);
+    if response.hovered() || response.has_focus() {
+        painter.rect_stroke(
+            response.rect.shrink(0.5),
+            9.0,
+            Stroke::new(
+                if response.has_focus() { 1.5 } else { 1.0 },
+                if response.has_focus() {
+                    palette(ui.visuals().dark_mode).accent
+                } else {
+                    palette(ui.visuals().dark_mode).line
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
     match label {
         "设备" | "屏幕布局" => {
             painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);

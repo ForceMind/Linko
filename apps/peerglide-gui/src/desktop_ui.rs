@@ -1181,37 +1181,45 @@ impl App {
                 ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
                 ui.small("简体中文 · 主屏协作");
             });
-        egui::Panel::top("global-actions").show(root, |ui| {
-            ui.add_space(4.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .button("紧急恢复本机")
-                    .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
-                    .clicked()
-                {
-                    self.stop();
-                    self.gesture_lab.cancel();
-                }
-                if ui
-                    .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
-                    .clicked()
-                {
-                    self.stop();
-                }
-                if self.stopping.is_some() || self.recovery_blocked {
-                    if ui.button("查看恢复状态").clicked() {
-                        self.dialog = Some(Dialog::Recovery);
-                    }
-                    let view = self.workspace_view();
-                    ui.label(desktop_style::status_text(
-                        view.title,
-                        self.config.dark,
-                        view.tone,
-                    ));
-                }
+        egui::Panel::top("global-actions")
+            .exact_size(52.0)
+            .resizable(false)
+            .show_separator_line(false)
+            .show(root, |ui| {
+                ui.add_space(4.0);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), 40.0),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if ui
+                            .button("紧急恢复本机")
+                            .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
+                            .clicked()
+                        {
+                            self.stop();
+                            self.gesture_lab.cancel();
+                        }
+                        if ui
+                            .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
+                            .clicked()
+                        {
+                            self.stop();
+                        }
+                        if self.stopping.is_some() || self.recovery_blocked {
+                            if ui.button("查看恢复状态").clicked() {
+                                self.dialog = Some(Dialog::Recovery);
+                            }
+                            let view = self.workspace_view();
+                            ui.label(desktop_style::status_text(
+                                view.title,
+                                self.config.dark,
+                                view.tone,
+                            ));
+                        }
+                    },
+                );
+                ui.add_space(4.0);
             });
-            ui.add_space(4.0);
-        });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.small("Linko / 屏跃");
