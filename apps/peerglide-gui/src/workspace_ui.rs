@@ -621,21 +621,16 @@ mod tests {
                     },
                     |root| app.desktop(root),
                 );
-                let controls: Vec<_> = [
-                    "快捷操作",
-                    "所选设备",
-                    "内容共享",
-                    "连接与身份详情",
-                ]
-                .into_iter()
-                .map(|label| {
-                    let bounds = output
-                        .shapes
-                        .iter()
-                        .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)));
-                    (label, bounds)
-                })
-                .collect();
+                let controls: Vec<_> = ["快捷操作", "所选设备", "内容共享", "连接与身份详情"]
+                    .into_iter()
+                    .map(|label| {
+                        let bounds = output
+                            .shapes
+                            .iter()
+                            .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)));
+                        (label, bounds)
+                    })
+                    .collect();
                 output.drop_without_applying_deltas();
                 for (label, bounds) in controls {
                     let (clip, rect) = bounds
