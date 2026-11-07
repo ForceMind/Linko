@@ -54,14 +54,26 @@ impl App {
     }
 
     pub(super) fn device_workspace(&mut self, ui: &mut egui::Ui) {
-        ui.heading(
-            RichText::new(if self.page == Page::Devices {
-                "设备"
-            } else {
-                "屏幕布局"
-            })
-            .size(26.0),
-        );
+        ui.horizontal_wrapped(|ui| {
+            ui.heading(
+                RichText::new(if self.page == Page::Devices {
+                    "设备"
+                } else {
+                    "屏幕布局"
+                })
+                .size(26.0),
+            );
+            if ui
+                .small_button(if self.connection_details_open {
+                    "收起连接详情"
+                } else {
+                    "连接与身份详情"
+                })
+                .clicked()
+            {
+                self.connection_details_open = !self.connection_details_open;
+            }
+        });
         ui.weak(if self.page == Page::Devices {
             "管理已记住的电脑与独立协作许可。"
         } else {
@@ -114,26 +126,14 @@ impl App {
             ui.add_space(12.0);
             self.workspace_device_detail(ui);
         }
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            if self.page == Page::Displays {
-                ui.small(if self.child.is_some() {
-                    "会话中布局已锁定，停止后可以调整。"
-                } else {
-                    "两台主屏的相对方向；另一端需设置相反方向。"
-                });
-            }
-            if ui
-                .small_button(if self.connection_details_open {
-                    "收起连接详情"
-                } else {
-                    "连接与身份详情"
-                })
-                .clicked()
-            {
-                self.connection_details_open = !self.connection_details_open;
-            }
-        });
+        if self.page == Page::Displays {
+            ui.add_space(8.0);
+            ui.small(if self.child.is_some() {
+                "会话中布局已锁定，停止后可以调整。"
+            } else {
+                "两台主屏的相对方向；另一端需设置相反方向。"
+            });
+        }
     }
 
     fn workspace_screen_card(&mut self, ui: &mut egui::Ui) {
@@ -621,16 +621,27 @@ mod tests {
                     },
                     |root| app.desktop(root),
                 );
-                for label in ["快捷操作", "所选设备", "内容共享", "连接与身份详情"]
-                {
-                    let (clip, rect) = output
+                let controls: Vec<_> = [
+                    "快捷操作",
+                    "所选设备",
+                    "内容共享",
+                    "连接与身份详情",
+                ]
+                .into_iter()
+                .map(|label| {
+                    let bounds = output
                         .shapes
                         .iter()
-                        .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)))
-                        .context("essential workspace control absent")?;
+                        .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)));
+                    (label, bounds)
+                })
+                .collect();
+                output.drop_without_applying_deltas();
+                for (label, bounds) in controls {
+                    let (clip, rect) = bounds
+                        .with_context(|| format!("{label} absent at {size:?}, paired={paired}"))?;
                     assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");
                 }
-                output.drop_without_applying_deltas();
                 assert!(app.child.is_none() && !app.config.native && !app.config.allow);
             }
         }
