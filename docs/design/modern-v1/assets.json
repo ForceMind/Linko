@@ -98,6 +98,15 @@
       "png_color_type": 2,
       "origin": "built-in image_gen",
       "status": "rejected_by_user"
+    },
+    {
+      "path": "effects/device-hub-graphite-rejected.png",
+      "sha256": "13b4b9fdae6238866a09d84d3dd2c92c88f6d8b151269841d1aecf2423a07d01",
+      "width": 1586,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen",
+      "status": "rejected_by_user"
     }
   ],
   "validation": {
@@ -117,6 +126,16 @@
       "id": 2,
       "palette": "forest-sage-lime",
       "status": "rejected_by_user"
+    },
+    {
+      "id": 3,
+      "palette": "graphite-fog-warm-copper",
+      "status": "rejected_by_user"
+    },
+    {
+      "id": 4,
+      "palette": "anime-sakura-pink-misty-lilac",
+      "status": "pending_review"
     }
   ]
 }
