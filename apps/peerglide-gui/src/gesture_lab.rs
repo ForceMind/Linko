@@ -381,7 +381,7 @@ mod tests {
         let mut app = crate::App::load(fixture.path.clone());
         app.page = crate::Page::GestureLab;
         app.mouse_tab = crate::MouseTab::Practice;
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let ticks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = ticks.clone();
         ctx.set_request_repaint_callback(move |request| {
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn egui_pointer_frames_draw_and_recognize_without_a_worker_or_identity() {
         let mut lab = GestureLab::new(Path::new("unused"));
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let rect = frame(&mut lab, &ctx, 0., vec![], true, false).unwrap();
         let start = rect.min + egui::vec2(10., 30.);
         let end = start + egui::vec2(100., 0.);
@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn idle_frames_expire_a_held_candidate_and_worker_start_cancels_it() {
         let mut lab = GestureLab::new(Path::new("unused"));
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let rect = frame(&mut lab, &ctx, 0., vec![], true, false).unwrap();
         let pos = rect.min + egui::vec2(20., 30.);
         frame(
@@ -524,7 +524,7 @@ mod tests {
     fn inspection_reports_only_current_canvas_and_visible_save_widget() -> Result<()> {
         let fixture = super::super::tests::Fixture::new()?;
         let mut lab = GestureLab::new(&fixture.path);
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         for theme in [egui::Theme::Light, egui::Theme::Dark] {
             ctx.style_mut_of(theme, |style| style.animation_time = 0.);
         }
@@ -556,7 +556,7 @@ mod tests {
         let fixture = super::super::tests::Fixture::new()?;
         let mut lab = GestureLab::new(&fixture.path);
         right(&mut lab);
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         for tick in 0..3 {
             assert!(frame(&mut lab, &ctx, f64::from(tick), vec![], true, false).is_some());
         }

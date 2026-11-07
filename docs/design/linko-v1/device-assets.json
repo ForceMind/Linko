@@ -1,0 +1,22 @@
+{
+  "tool": "built-in image_gen",
+  "purpose": "Original decorative hardware illustrations, not actual device models or screen content.",
+  "assets": [
+    {
+      "path": "apps/peerglide-gui/assets/devices/local-laptop.png",
+      "prompt": "Use case: product-mockup. Asset type: original transparent PNG product illustration for a premium desktop utility UI. Straight-on front view, realistic refined 3D product visualization, orthographic feel with almost no perspective, neutral brushed-silver/chrome hardware, very thin charcoal bezels, crisp fine edges and subtle natural material detail. Screen shows an ORIGINAL fluid electric-blue and pale-blue abstract folded-silk/cloud composition inspired by our blue #4263EB brand, with no OS symbols or recognizable third-party wallpaper. Object fills 90% of image width and about 80% of height, full hardware visible, small transparent safety margin. Genuine transparent background, no backdrop, no floor/pedestal, no big cast shadow or baked white rectangle. Clean readable silhouette at 220px display width. No text, letters, logos, brand marks, ports closeups, wires, stickers, surrounding objects, hands or watermark. This is decorative hardware imagery, not actual device data or live screen content. Primary subject: ONE elegant generic open silver laptop, landscape screen, viewed directly from front, lid perpendicular to thin base, small plausible dark keyboard surface only as product detail and a low thin silver base with no letters or branding. Restrained practical shape, not futuristic/gaming. Centered square canvas approximately1024x1024. No external monitor, no mouse.",
+      "sha256": "93b574a651d636ce2da8f66557d56ee6c69ec657a93576ea5266d0735c4daece",
+      "width": 1254,
+      "height": 1254,
+      "png_color_type": 6
+    },
+    {
+      "path": "apps/peerglide-gui/assets/devices/desktop-monitor.png",
+      "prompt": "Use case: product-mockup. Asset type: original transparent PNG product illustration for a premium desktop utility UI. Straight-on front view, realistic refined 3D product visualization, orthographic feel with almost no perspective, neutral brushed-silver/chrome hardware, very thin charcoal bezels, crisp fine edges and subtle natural material detail. Screen shows an ORIGINAL fluid electric-blue and pale-blue abstract folded-silk/cloud composition inspired by our blue #4263EB brand, with no OS symbols or recognizable third-party wallpaper. Object fills 90% of image width and about 80% of height, full hardware visible, small transparent safety margin. Genuine transparent background, no backdrop, no floor/pedestal, no big cast shadow or baked white rectangle. Clean readable silhouette at 220px display width. No text, letters, logos, brand marks, ports closeups, wires, stickers, surrounding objects, hands or watermark. This is decorative hardware imagery, not actual device data or live screen content. Primary subject: ONE elegant slim standalone widescreen desktop monitor in landscape 16:10 ratio, viewed directly from front. A fine silver outer edge, dark almost-black screen border, minimalist slender central silver pedestal and low wide foot. Convincing edge thickness and subtle bezel highlights, calm and professional. Centered square canvas approximately1024x1024. No laptop, no keyboard, no visible words.",
+      "sha256": "0dfb661e6b21477d336478a9c403877e84ee77ba8ba2487d60cbecef905b22f1",
+      "width": 1254,
+      "height": 1254,
+      "png_color_type": 6
+    }
+  ]
+}

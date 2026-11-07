@@ -129,28 +129,49 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     visuals.widgets.open.bg_fill = colors.hover;
     visuals.widgets.open.weak_bg_fill = colors.hover;
     style.visuals = visuals;
-    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-    style.spacing.button_padding = egui::vec2(12.0, 7.0);
-    style.spacing.interact_size = egui::vec2(32.0, 32.0);
+    style.spacing.item_spacing = egui::vec2(12.0, 8.0);
+    style.spacing.button_padding = egui::vec2(14.0, 8.0);
+    style.spacing.interact_size = egui::vec2(36.0, 36.0);
     style.spacing.window_margin = egui::Margin::same(18);
     style.spacing.menu_margin = egui::Margin::same(8);
     style
         .text_styles
-        .insert(TextStyle::Heading, FontId::proportional(24.0));
+        .insert(
+            TextStyle::Heading,
+            FontId::new(28.0, egui::FontFamily::Name("linko-heading".into())),
+        );
     style
         .text_styles
-        .insert(TextStyle::Body, FontId::proportional(14.0));
+        .insert(TextStyle::Body, FontId::proportional(15.0));
     style
         .text_styles
-        .insert(TextStyle::Button, FontId::proportional(14.0));
+        .insert(TextStyle::Button, FontId::proportional(15.0));
     style
         .text_styles
-        .insert(TextStyle::Small, FontId::proportional(12.0));
+        .insert(TextStyle::Small, FontId::proportional(13.0));
     style
         .text_styles
         .insert(TextStyle::Monospace, FontId::monospace(13.0));
     ctx.set_style_of(theme, style);
     ctx.set_theme(theme);
+}
+
+pub(super) fn heading_text(text: impl Into<String>) -> RichText {
+    RichText::new(text.into()).font(FontId::new(
+        28.0,
+        egui::FontFamily::Name("linko-heading".into()),
+    ))
+}
+
+pub(super) fn semibold(text: impl Into<String>, size: f32) -> RichText {
+    RichText::new(text.into()).font(FontId::new(
+        size,
+        egui::FontFamily::Name("linko-semibold".into()),
+    ))
+}
+
+pub(super) fn status_text(text: &str, dark: bool, tone: Tone) -> RichText {
+    RichText::new(text).size(14.0).color(tone_colors(dark, tone).1)
 }
 
 /// Small original dual-screen mark, painted locally without assets or timers.
@@ -185,6 +206,12 @@ pub(super) fn card(ui: &egui::Ui) -> egui::Frame {
         .stroke(Stroke::new(1.0, colors.line))
         .corner_radius(egui::CornerRadius::same(14))
         .inner_margin(18.0)
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 2],
+            blur: 10,
+            spread: 0,
+            color: Color32::from_black_alpha(if ui.visuals().dark_mode { 12 } else { 5 }),
+        })
 }
 
 /// A noninteractive label: color supplements the text and does not grant access.
@@ -200,16 +227,11 @@ pub(super) fn pill(ui: &mut egui::Ui, label: &str, tone: Tone) {
 }
 
 pub(super) fn primary(label: &str) -> egui::Button<'static> {
-    egui::Button::new(
-        RichText::new(label.to_owned())
-            .size(14.0)
-            .strong()
-            .color(Color32::WHITE),
-    )
+    egui::Button::new(semibold(label, 15.0).color(Color32::WHITE))
     .fill(Color32::from_rgb(66, 99, 235))
     .stroke(Stroke::new(1.0, Color32::from_rgb(54, 81, 204)))
     .corner_radius(egui::CornerRadius::same(9))
-    .min_size(egui::vec2(112.0, 36.0))
+    .min_size(egui::vec2(120.0, 38.0))
 }
 
 pub(super) fn selection_colors(ui: &egui::Ui) -> (Color32, Color32) {
@@ -223,19 +245,60 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
     } else {
         ui.visuals().text_color()
     };
-    let mut button = egui::Button::new(RichText::new(label).size(14.0).color(color))
-        .selected(selected)
-        .frame(selected);
-    if selected {
-        button = button.fill(fill).stroke(Stroke::NONE);
+    let response = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding.x = 42.0;
+            let mut button = egui::Button::new("")
+                .left_text(semibold(label, 15.0).color(color))
+                .selected(selected)
+                .frame(selected);
+            if selected {
+                button = button.fill(fill).stroke(Stroke::NONE);
+            }
+            ui.add_sized([ui.available_width(), 44.0], button)
+        })
+        .inner;
+    let painter = ui.painter_at(response.rect);
+    let icon = egui::Rect::from_center_size(
+        egui::pos2(response.rect.left() + 22.0, response.rect.center().y),
+        egui::vec2(18.0, 16.0),
+    );
+    let stroke = Stroke::new(1.4, color);
+    match label {
+        "设备" | "屏幕布局" => {
+            painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
+            painter.line_segment([
+                icon.center_bottom(),
+                icon.center_bottom() + egui::vec2(0.0, 3.0),
+            ], stroke);
+            if label == "屏幕布局" {
+                painter.line_segment([
+                    icon.center_top() + egui::vec2(3.0, 2.0),
+                    icon.center_bottom() + egui::vec2(3.0, -2.0),
+                ], stroke);
+            }
+        }
+        "文件传输" => {
+            painter.arrow(icon.center() - egui::vec2(5.0, 5.0), egui::vec2(0.0, 11.0), stroke);
+            painter.arrow(icon.center() + egui::vec2(5.0, 5.0), egui::vec2(0.0, -11.0), stroke);
+        }
+        "设置" => {
+            painter.circle_stroke(icon.center(), 7.0, stroke);
+            painter.circle_stroke(icon.center(), 2.5, stroke);
+        }
+        _ => {
+            painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
+            for offset in [-4.0, 0.0, 4.0] {
+                painter.line_segment([
+                    icon.center() + egui::vec2(-5.0, offset),
+                    icon.center() + egui::vec2(5.0, offset),
+                ], stroke);
+            }
+        }
     }
-    let response = ui.add_sized([ui.available_width(), 36.0], button);
     if selected {
-        ui.painter().rect_filled(
-            egui::Rect::from_min_size(
-                response.rect.min + egui::vec2(0.0, 8.0),
-                egui::vec2(3.0, 20.0),
-            ),
+        painter.rect_filled(
+            egui::Rect::from_min_size(response.rect.min + egui::vec2(0.0, 9.0), egui::vec2(3.0, 26.0)),
             1.5,
             palette(ui.visuals().dark_mode).accent,
         );

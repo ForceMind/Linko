@@ -419,7 +419,7 @@ impl RuleEditor {
 mod tests {
     use super::*;
     fn render(editor: &mut RuleEditor, dir: &Path, writable: bool) {
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let output = ctx.run_ui(egui::RawInput::default(), |root| {
             egui::CentralPanel::default().show(root, |ui| {
                 editor.ui(ui, dir, writable);

@@ -71,27 +71,69 @@ def wait_for(test, child, timeout, stop):
     raise TimeoutError("resource check timeout")
 
 
-def capture_workspace(gui, path):
-    """Explicit CI-only virtual display capture; never a normal app behavior."""
-    def save(destination):
-        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as output:
-            subprocess.run(["import", "-window", "root", "png:-"], stdout=output,
-                           stderr=subprocess.DEVNULL, check=True, timeout=10)
-        if not 1000 < destination.stat().st_size <= 16 * 1024 * 1024:
-            raise ValueError("isolated screenshot invalid")
-    time.sleep(1)
-    save(path)
+def require_isolated_x11():
+    if (sys.platform != "linux" or os.environ.get("CI", "").lower() not in {"true", "1"}
+            or not os.environ.get("DISPLAY")):
+        raise ValueError("screenshot requires the isolated CI X11 display")
+
+
+def require_new_screenshot(path):
+    if path.exists() or path.is_symlink():
+        raise FileExistsError("screenshot destination already exists")
+
+
+def owned_x11_window(gui, expected=None):
+    """Resolve exactly one visible window and verify its actual owner PID."""
+    if gui is None or type(gui.pid) is not int or gui.pid <= 0 or gui.poll() is not None:
+        raise ValueError("isolated GUI process unavailable")
     windows = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid)],
                                      stderr=subprocess.DEVNULL, timeout=2).split()
-    if len(windows) != 1 or not windows[0].isdigit():
+    if len(windows) != 1 or not windows[0].isdigit() or len(windows[0]) > 20 or int(windows[0]) <= 0:
         raise ValueError("isolated GUI window unavailable")
     window = windows[0].decode("ascii")
+    owner = subprocess.check_output(["xdotool", "getwindowpid", window],
+                                   stderr=subprocess.DEVNULL, timeout=2).strip()
+    if owner != str(gui.pid).encode("ascii") or (expected is not None and window != expected):
+        raise ValueError("isolated GUI window ownership changed")
+    return window
+
+
+def capture_owned_window(gui, path, expected=None):
+    """Capture original pixels from one owned XID, never root or a cropped image."""
+    require_new_screenshot(path)
+    require_isolated_x11()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as output:
+        window = owned_x11_window(gui, expected)
+        subprocess.run(["import", "-window", window, "png:-"], stdout=output,
+                       stderr=subprocess.DEVNULL, check=True, timeout=10)
+    if not 1000 < path.stat().st_size <= 16 * 1024 * 1024:
+        raise ValueError("isolated screenshot invalid")
+    with path.open("rb") as captured:
+        header = captured.read(24)
+    if (header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR"
+            or not 0 < int.from_bytes(header[16:20], "big") <= 4096
+            or not 0 < int.from_bytes(header[20:24], "big") <= 4096):
+        raise ValueError("isolated screenshot PNG bounds invalid")
+    owned_x11_window(gui, window)
+    return window
+
+
+def capture_workspace(gui, path):
+    """Explicit CI-only owned-window capture; never a normal app behavior."""
+    compact = path.with_name(path.stem + "-compact.png")
+    for destination in (path, compact):
+        require_new_screenshot(destination)
+    require_isolated_x11()
+    time.sleep(1)
+    window = capture_owned_window(gui, path)
+    owned_x11_window(gui, window)
     subprocess.run(["xdotool", "windowsize", "--sync", window, "920", "700"],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     time.sleep(1)
-    save(path.with_name(path.stem + "-compact.png"))
-    subprocess.run(["xdotool", "windowsize", "--sync", window, "1180", "820"],
+    capture_owned_window(gui, compact, window)
+    owned_x11_window(gui, window)
+    subprocess.run(["xdotool", "windowsize", "--sync", window, "1280", "800"],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
 
 

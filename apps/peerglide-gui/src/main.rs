@@ -14,6 +14,7 @@ mod pairing_receipt;
 pub mod pairing_supervisor;
 mod quit_check;
 mod resource_check;
+mod visual_assets;
 mod worker_permissions;
 mod workspace_ui;
 use anyhow::{Context, Result};
@@ -69,15 +70,45 @@ struct Options {
 
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    let name = "noto-sans-sc".to_owned();
-    let mut data = egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
-    // The upstream variable face defaults to Thin (100); use Regular for UI text.
-    data.tweak.coords.push(b"wght", 400.0);
-    fonts.font_data.insert(name.clone(), Arc::new(data));
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().push(name.clone());
+    let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
+    for (name, weight) in [
+        ("noto-sans-sc", 400.0),
+        ("linko-semibold", 550.0),
+        ("linko-heading", 650.0),
+    ] {
+        let mut data = egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
+        // Reuse the same licensed variable font bytes with real weight axes;
+        // RichText::strong only changes color in egui, not the font weight.
+        data.tweak.coords.push(b"wght", weight);
+        fonts.font_data.insert(name.into(), Arc::new(data));
+        if name != "noto-sans-sc" {
+            let mut family = vec![name.to_owned()];
+            family.extend(fallback.iter().cloned());
+            fonts.families.insert(egui::FontFamily::Name(name.into()), family);
+        }
     }
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .insert(0, "noto-sans-sc".into());
+    fonts
+        .families
+        .entry(egui::FontFamily::Monospace)
+        .or_default()
+        .push("noto-sans-sc".into());
     ctx.set_fonts(fonts);
+    ctx.data_mut(|memory| memory.insert_temp(egui::Id::new("linko-fonts-installed"), true));
+}
+
+fn ensure_fonts(ctx: &egui::Context) {
+    if !ctx.data(|memory| {
+        memory
+            .get_temp::<bool>(egui::Id::new("linko-fonts-installed"))
+            .unwrap_or(false)
+    }) {
+        install_fonts(ctx);
+    }
 }
 
 fn edge_label(edge: &str) -> &'static str {
@@ -539,6 +570,7 @@ impl App {
         app
     }
     fn theme(&self, ctx: &egui::Context) {
+        ensure_fonts(ctx);
         desktop_style::install(ctx, self.config.dark);
     }
     fn save(&mut self) {
@@ -1539,7 +1571,7 @@ fn main() -> eframe::Result<()> {
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 820.0])
+            .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([920.0, 700.0]),
         ..Default::default()
     };
@@ -1592,6 +1624,14 @@ fn default_data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    pub(super) fn ui_context() -> egui::Context {
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        desktop_style::install(&ctx, false);
+        ctx
+    }
+
 
     #[test]
     fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants() -> Result<()>
@@ -1833,7 +1873,7 @@ mod tests {
         let mut app = App::load(fixture.path.clone());
         // Rendering metadata only. No peer certificate, identity or worker is created.
         app.config.fingerprint = Some("workspace-presentation-only".into());
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         let label = app.workspace_view().action.label();
         for dark in [false, true] {
@@ -1921,7 +1961,7 @@ mod tests {
         app.config.peer_name = "B".into();
         app.page = Page::Devices;
         app.device_tab = DeviceTab::Layout;
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         app.theme(&ctx);
         step(&mut app, &ctx, 0.0, vec![]);
@@ -2022,7 +2062,7 @@ mod tests {
     {
         let fixture = Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         for page in [
             Page::Home,
@@ -2063,7 +2103,7 @@ mod tests {
     }
     #[test]
     fn bundled_font_covers_chinese_ui_without_system_fonts() {
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         let output = ctx.run_ui(egui::RawInput::default(), |ui| {
             for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
@@ -2212,7 +2252,7 @@ mod tests {
         let fixture = Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         app.connection_text = connection_info::encode(&Identity::generate()?.certificate, &[])?;
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         install_fonts(&ctx);
         for width in [300.0, 600.0] {
             let output = ctx.run_ui(
@@ -2474,7 +2514,7 @@ mod tests {
         let dir = fixture.path.clone();
         {
             let mut app = App::load(dir.clone());
-            let ctx = egui::Context::default();
+            let ctx = ui_context();
             install_fonts(&ctx);
             for dark in [true, false] {
                 app.config.dark = dark;
@@ -2585,7 +2625,7 @@ mod lifecycle_tests {
         app.active_mode = Some(SessionMode::Communication);
         app.desktop_preferences.tray_enabled = true;
         app.desktop_preferences.close_to_tray = true;
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
             app.process_window_close(ctx, true);
         });
@@ -2614,7 +2654,7 @@ mod lifecycle_tests {
             .post(peerglide_platform::tray::Command::Show);
         app.tray_mailbox
             .post(peerglide_platform::tray::Command::Quit);
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         logic_frames(&mut app, &ctx, true);
         assert!(app.close_requested && !app.window_hidden);
         assert!(app.pending_start.is_none());
@@ -2641,7 +2681,7 @@ mod lifecycle_tests {
                 .post(peerglide_platform::tray::Command::Stop);
             app.tray_mailbox
                 .post(peerglide_platform::tray::Command::Quit);
-            let ctx = egui::Context::default();
+            let ctx = ui_context();
             let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_tray(ctx));
             assert!(app.close_requested && app.pending_start.is_none());
             assert!(app.stopping.is_some());
@@ -2655,7 +2695,7 @@ mod lifecycle_tests {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let handle = app.tray_mailbox.clone();
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         app.desktop_preferences.tray_enabled = false;
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_tray(ctx));
         assert!(Arc::ptr_eq(&handle, &app.tray_mailbox));
@@ -2685,7 +2725,7 @@ mod lifecycle_tests {
         app.pending_start = Some(SessionMode::Native);
         app.native_confirmation = true;
         app.window_hidden = true;
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
             app.exit_protection_lost(ctx)
         });
@@ -2759,7 +2799,7 @@ mod lifecycle_tests {
         let original = app.config.edge.clone();
         app.native_confirmation = true;
         app.screen_drag = Some((Vec2::ZERO, egui::pos2(10.0, 10.0), egui::Rect::EVERYTHING));
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         logic_frames(&mut app, &ctx, true);
         assert!(app.screen_drag.is_none());
         assert!(!app.native_confirmation);
@@ -2851,7 +2891,7 @@ mod lifecycle_tests {
     fn communication_sleeps_but_native_eof_and_stop_keep_ticking() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         let ticks = count_activity_ticks(&ctx);
         logic_frames(&mut app, &ctx, false);
         assert_eq!(
@@ -2908,7 +2948,7 @@ mod lifecycle_tests {
         let mut app = App::load(fixture.path.clone());
         app.child = Some(managed_child()?);
         app.active_mode = Some(SessionMode::Communication);
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         let mut input = egui::RawInput::default();
         let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
         viewport.occluded = Some(true);
@@ -2948,7 +2988,7 @@ mod lifecycle_tests {
         let mut app = App::load(fixture.path.clone());
         app.recovery_blocked = true;
         app.input_state = Some(WorkerInputState::RecoveryUnconfirmed);
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         let mut input = egui::RawInput::default();
         let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
         viewport.occluded = Some(true);
@@ -2984,7 +3024,7 @@ mod lifecycle_tests {
         );
         app.worker_state = Some(snapshot);
         app.events = Some(rx);
-        let ctx = egui::Context::default();
+        let ctx = ui_context();
         let ticks = count_activity_ticks(&ctx);
         logic_frames(&mut app, &ctx, true);
         assert!(app.child.is_some() && ticks.load(Ordering::SeqCst) > 0);

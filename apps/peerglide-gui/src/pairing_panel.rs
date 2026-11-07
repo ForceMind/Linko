@@ -564,7 +564,7 @@ mod tests {
         let mut b = App::load(fixture.path.join("b"));
         Identity::create(&a.identity_dir())?;
         Identity::create(&b.identity_dir())?;
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let mut pa = Panel::default();
         let mut pb = Panel::default();
         pa.start(&a, &ctx, Mode::Offer("127.0.0.1:0".parse()?), None, binary)?;
@@ -693,7 +693,7 @@ mod tests {
         let bid = Identity::create(&b.identity_dir())?;
         let akey = std::fs::read(a.identity_dir().join("node.key.der"))?;
         let bkey = std::fs::read(b.identity_dir().join("node.key.der"))?;
-        let ctx = egui::Context::default();
+        let ctx = crate::tests::ui_context();
         let mut pa = Panel::default();
         let mut pb = Panel::default();
         pa.name = "测试电脑B".into();

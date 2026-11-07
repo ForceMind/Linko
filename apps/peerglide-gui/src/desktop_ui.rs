@@ -59,7 +59,7 @@ impl App {
         }
     }
     pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-        ui.heading(RichText::new(title).size(25.0));
+        ui.heading(desktop_style::heading_text(title));
         ui.add_space(7.0);
         ui.weak(subtitle);
         ui.add_space(20.0);
@@ -1131,18 +1131,17 @@ impl App {
             self.gesture_lab.cancel();
         }
         egui::Panel::left("navigation")
-            .exact_size(190.0)
+            .exact_size(196.0)
             .show(root, |ui| {
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     desktop_style::brand_mark(ui);
                     ui.vertical(|ui| {
-                        ui.heading(RichText::new("Linko").size(25.0));
+                        ui.heading(desktop_style::heading_text("Linko"));
                         ui.small("屏跃");
                     });
                 });
-                ui.weak("让协作顺手发生");
-                ui.add_space(22.0);
+                ui.add_space(28.0);
                 for (page, label) in [
                     (Page::Devices, "设备"),
                     (Page::Displays, "屏幕布局"),
@@ -1175,7 +1174,7 @@ impl App {
                         self.navigate_to(page);
                         self.device_tab = DeviceTab::Device;
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
                 ui.add_space(18.0);
                 ui.separator();
@@ -1183,21 +1182,8 @@ impl App {
                 ui.small("简体中文 · 主屏协作");
             });
         egui::Panel::top("global-actions").show(root, |ui| {
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                let view = self.workspace_view();
-                desktop_style::pill(ui, view.title, view.tone);
-                if ui
-                    .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
-                    .clicked()
-                {
-                    self.stop();
-                }
-                if (self.stopping.is_some() || self.recovery_blocked)
-                    && ui.button("查看恢复状态").clicked()
-                {
-                    self.dialog = Some(Dialog::Recovery);
-                }
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .button("紧急恢复本机")
                     .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
@@ -1206,8 +1192,21 @@ impl App {
                     self.stop();
                     self.gesture_lab.cancel();
                 }
+                if ui
+                    .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
+                    .clicked()
+                {
+                    self.stop();
+                }
+                if self.stopping.is_some() || self.recovery_blocked {
+                    if ui.button("查看恢复状态").clicked() {
+                        self.dialog = Some(Dialog::Recovery);
+                    }
+                    let view = self.workspace_view();
+                    ui.label(desktop_style::status_text(view.title, self.config.dark, view.tone));
+                }
             });
-            ui.add_space(8.0);
+            ui.add_space(4.0);
         });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1234,7 +1233,7 @@ impl App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .inner_margin(20.0)
+                    .inner_margin(24.0)
                     .fill(root.visuals().panel_fill),
             )
             .show(root, |ui| {

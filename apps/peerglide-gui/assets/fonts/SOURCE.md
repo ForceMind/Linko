@@ -7,3 +7,5 @@ Git blob: `fb0637bafbcd804fe32152370a1225990745b4bc` (17,772,300 bytes).
 License: SIL Open Font License 1.1; original copyright/reserved-name notice is in OFL.txt.
 The font is embedded in the GUI executable and is not installed into the operating system.
 OFL.txt and this source notice accompany all portable packages under third-party/bundled-font-NotoSansSC.
+
+UI presentation reuses these same variable font bytes at wght 400 (body), 550 (section/device headings) and 650 (page/brand headings). The original font file is unchanged; no system font is installed.
