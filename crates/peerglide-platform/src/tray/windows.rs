@@ -68,15 +68,33 @@ impl Tray {
     /// isolated NoNative diagnostic. This is not a physical menu selection.
     pub fn request_command_for_check(&self, command: Command) -> Result<()> {
         ensure!(self.is_available(), "托盘恢复入口不可用");
-        let id = match command { Command::Show => SHOW_ID, Command::Stop => STOP_ID, Command::Quit => QUIT_ID };
-        let lifetime = self.window.lock().unwrap_or_else(|error| error.into_inner());
+        let id = match command {
+            Command::Show => SHOW_ID,
+            Command::Stop => STOP_ID,
+            Command::Quit => QUIT_ID,
+        };
+        let lifetime = self
+            .window
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let window = (*lifetime).context("托盘检查窗口已退出")?;
         let mut result = 0;
         // SAFETY: the lifetime mutex pins this exact private HWND; its native
         // thread only posts mailbox intent. No input/session work runs here.
-        ensure!(unsafe { SendMessageTimeoutW(window as HWND, WM_COMMAND, id, 0,
-            SMTO_ABORTIFHUNG | SMTO_BLOCK, 2000, &mut result) } != 0,
-            "托盘原生命令未完成");
+        ensure!(
+            unsafe {
+                SendMessageTimeoutW(
+                    window as HWND,
+                    WM_COMMAND,
+                    id,
+                    0,
+                    SMTO_ABORTIFHUNG | SMTO_BLOCK,
+                    2000,
+                    &mut result,
+                )
+            } != 0,
+            "托盘原生命令未完成"
+        );
         Ok(())
     }
 }
@@ -166,9 +184,15 @@ fn add_icon(window: HWND, state: &State) -> bool {
 fn menu_command(w: WPARAM, l: LPARAM) -> Option<Command> {
     // Menu commands have a zero high word and no control HWND. Reject control,
     // accelerator and unknown notifications; none of these are input grants.
-    if l != 0 || w > u16::MAX as usize { return None; }
-    match w { SHOW_ID => Some(Command::Show), STOP_ID => Some(Command::Stop),
-        QUIT_ID => Some(Command::Quit), _ => None }
+    if l != 0 || w > u16::MAX as usize {
+        return None;
+    }
+    match w {
+        SHOW_ID => Some(Command::Show),
+        STOP_ID => Some(Command::Stop),
+        QUIT_ID => Some(Command::Quit),
+        _ => None,
+    }
 }
 
 unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: LPARAM) -> LRESULT {
@@ -201,7 +225,9 @@ unsafe extern "system" fn window_proc(window: HWND, message: u32, w: WPARAM, l: 
         // and all nested menu callbacks. No mutable borrow survives an OS call.
         let state = unsafe { &*pointer };
         if message == WM_COMMAND && !state.stop.load(Ordering::Acquire) {
-            if let Some(command) = menu_command(w, l) { state.mailbox.post(command); }
+            if let Some(command) = menu_command(w, l) {
+                state.mailbox.post(command);
+            }
             return 0;
         }
         if message == state.taskbar_created {
@@ -471,12 +497,18 @@ mod tests {
 
     #[test]
     fn only_menu_command_ids_reach_recovery_intent() {
-        for (id, command) in [(SHOW_ID, Command::Show), (STOP_ID, Command::Stop), (QUIT_ID, Command::Quit)] {
+        for (id, command) in [
+            (SHOW_ID, Command::Show),
+            (STOP_ID, Command::Stop),
+            (QUIT_ID, Command::Quit),
+        ] {
             assert_eq!(menu_command(id, 0), Some(command));
             assert_eq!(menu_command(id | (1 << 16), 0), None);
             assert_eq!(menu_command(id, 123), None);
         }
-        for id in [0, 4, usize::MAX] { assert_eq!(menu_command(id, 0), None); }
+        for id in [0, 4, usize::MAX] {
+            assert_eq!(menu_command(id, 0), None);
+        }
     }
 
     #[test]

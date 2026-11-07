@@ -224,10 +224,18 @@ impl Check {
         self.tray_stop_received |= pending.stop;
     }
     fn visible_state() -> &'static str {
-        if cfg!(windows) { "win32_visible" } else { "appkit_visible" }
+        if cfg!(windows) {
+            "win32_visible"
+        } else {
+            "appkit_visible"
+        }
     }
     fn hidden_state() -> &'static str {
-        if cfg!(windows) { "win32_hidden" } else { "appkit_hidden" }
+        if cfg!(windows) {
+            "win32_hidden"
+        } else {
+            "appkit_hidden"
+        }
     }
     fn visible(&self, app: &App) -> Result<bool> {
         #[cfg(any(target_os = "macos", windows))]
