@@ -3,6 +3,7 @@ import ctypes as C
 import os
 import subprocess
 import sys
+import time
 import unittest
 
 import win_process_resources as win
@@ -81,6 +82,14 @@ class WindowsResources(unittest.TestCase):
                 getattr(win.Native(kernel), method)(123)
             self.assertEqual(kernel.closed, [99])
 
+    def test_successful_zero_counter_is_distinct_from_an_api_failure(self):
+        kernel = Kernel()
+        def zero(handle, pointer, size):
+            return 1  # SDK success, zero-initialized working set retained.
+        kernel.K32GetProcessMemoryInfo = zero
+        self.assertEqual(win.Native(kernel).rss_kib(123), 0)
+        self.assertEqual(kernel.closed, [99])
+
     def test_parent_snapshot_matches_only_requested_pid_and_closes_on_missing_pid(self):
         kernel = Kernel(); query = win.Native(kernel)
         self.assertEqual(query.parent_pid(123), 456)
@@ -100,7 +109,12 @@ class WindowsResources(unittest.TestCase):
         try:
             query = win.native()
             self.assertEqual(query.parent_pid(child.pid), os.getpid())
-            self.assertGreater(query.rss_kib(child.pid), 0)
+            deadline = time.monotonic() + 2
+            resident = query.rss_kib(child.pid)
+            while resident == 0 and child.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+                resident = query.rss_kib(child.pid)
+            self.assertGreater(resident, 0)
             before = query.cpu_time_ns(child.pid)
             self.assertGreaterEqual(query.cpu_time_ns(child.pid), before)
             child.stdin.write(b"stop\n"); child.stdin.flush()

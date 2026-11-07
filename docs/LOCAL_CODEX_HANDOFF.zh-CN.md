@@ -1377,7 +1377,7 @@ Windows采样用QUERY_LIMITED_INFORMATION读取工作集与GetProcessTimes内核
 工作集向上取整KiB，不等同private commit/Activity Monitor总内存；100ns是单位而非
 保证计时分辨率。缺测/句柄失败仍失败、finally关闭自有查询句柄，缺失不填零。
 
-本机8项收据回归、5项Windows ABI/句柄/失败纯回归、原24项采样/回收回归已过；
+本机8项收据回归、6项Windows ABI/句柄/失败/有效零值纯回归、原24项采样/回收回归已过；
 真实Windows自有子进程API用例在Mac明确skip，Windows CI必须实际执行。新增Windows
 GUI普通/隐藏各30秒资源job，交互station与Shell元数据如实记录；缺桌面/托盘/渲染
 环境则失败，不以内部标志或跳过制造通过。当前待fmt/Clippy/工作区/Release/专项与

@@ -74,7 +74,7 @@ class Native:
             value = MemoryCounters(); value.cb = C.sizeof(value)
             if not self.kernel.K32GetProcessMemoryInfo(handle, C.byref(value), value.cb):
                 raise ValueError("Windows working set unavailable")
-            if not 0 < value.working_set <= (1 << 63) - 1:
+            if not 0 <= value.working_set <= (1 << 63) - 1:
                 raise ValueError("Windows working set unavailable")
             return (value.working_set + 1023) // 1024
 
