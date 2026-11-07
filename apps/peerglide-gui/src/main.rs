@@ -2897,6 +2897,15 @@ mod lifecycle_tests {
         app.child = Some(child);
         app.active_mode = Some(SessionMode::Communication);
         let (tx, rx) = mpsc::sync_channel(2);
+        // Real stdout EOF can precede stderr's final diagnostic and disconnect.
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        read_worker_output(
+            std::io::Cursor::new(Vec::<u8>::new()),
+            snapshot.clone(),
+            tx.clone(),
+            Arc::new(|| {}),
+        );
+        app.worker_state = Some(snapshot);
         app.events = Some(rx);
         let ctx = egui::Context::default();
         let ticks = count_activity_ticks(&ctx);
