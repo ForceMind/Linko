@@ -34,7 +34,11 @@ impl RawFrame {
         {
             return Err(Error::InvalidFrame);
         }
-        Ok(Self { stamp, size, pixels })
+        Ok(Self {
+            stamp,
+            size,
+            pixels,
+        })
     }
 
     pub fn stamp(&self) -> FrameStamp {

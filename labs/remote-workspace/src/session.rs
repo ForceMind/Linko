@@ -232,7 +232,10 @@ impl SessionGate {
         if !self.matches_stamp(stamp) {
             return Err(Error::StaleTarget);
         }
-        if self.last_frame.is_some_and(|(last, _)| stamp.sequence <= last) {
+        if self
+            .last_frame
+            .is_some_and(|(last, _)| stamp.sequence <= last)
+        {
             return Err(Error::InvalidSequence);
         }
         self.last_frame = Some((stamp.sequence, now));
@@ -254,7 +257,9 @@ impl SessionGate {
         let check = ContentCheck {
             request_id,
             stamp: self.frame_stamp(sequence),
-            deadline: now.checked_add(CONTENT_CHECK_MS).ok_or(Error::InvalidTime)?,
+            deadline: now
+                .checked_add(CONTENT_CHECK_MS)
+                .ok_or(Error::InvalidTime)?,
         };
         self.check_sequence = request_id;
         self.pending_check = Some(check);
@@ -450,7 +455,10 @@ mod tests {
         let check = g.request_content_check(10).unwrap();
         assert_eq!(g.request_content_check(11), Err(Error::InvalidState));
         assert_eq!(g.confirm_unchanged(check, 1010), Err(Error::StaleFrame));
-        assert_eq!(g.presented(g.frame_stamp(1), 1011), Err(Error::InvalidSequence));
+        assert_eq!(
+            g.presented(g.frame_stamp(1), 1011),
+            Err(Error::InvalidSequence)
+        );
         assert_eq!(g.can_control(2000), Err(Error::StaleFrame));
     }
 
