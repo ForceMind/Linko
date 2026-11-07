@@ -175,9 +175,29 @@ pub(super) fn primary(label: &str) -> egui::Button<'static> {
             .color(Color32::WHITE),
     )
     .fill(Color32::from_rgb(192, 54, 94))
-    .stroke(Stroke::new(1.0, Color32::from_rgb(38, 80, 170)))
+    .stroke(Stroke::new(1.0, Color32::from_rgb(158, 42, 78)))
     .corner_radius(egui::CornerRadius::same(9))
     .min_size(egui::vec2(112.0, 36.0))
+}
+
+pub(super) fn selection_colors(ui: &egui::Ui) -> (Color32, Color32) {
+    tone_colors(ui.visuals().dark_mode, Tone::Accent)
+}
+
+pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let (fill, text) = selection_colors(ui);
+    let color = if selected {
+        text
+    } else {
+        ui.visuals().text_color()
+    };
+    let mut button = egui::Button::new(RichText::new(label).size(14.0).color(color))
+        .selected(selected)
+        .frame(selected);
+    if selected {
+        button = button.fill(fill).stroke(Stroke::NONE);
+    }
+    ui.add_sized([ui.available_width(), 36.0], button)
 }
 
 /// Draw one illustrative main monitor inside `rect`, including its stand.

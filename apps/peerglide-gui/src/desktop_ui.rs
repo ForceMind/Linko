@@ -197,7 +197,9 @@ impl App {
             ui.heading(view.title);
             ui.add_space(10.0);
             self.work_controls(ui);
-            if ui.button("打开设备工作区 →").clicked() { self.page = Page::Devices; }
+            if ui.button("打开设备工作区 →").clicked() {
+                self.page = Page::Devices;
+            }
         });
         ui.add_space(20.0);
         ui.heading("也可以只用这台电脑");
@@ -226,49 +228,50 @@ impl App {
         self.device_workspace(ui);
         ui.add_space(10.0);
         if self.connection_details_open {
-        desktop_style::card(ui).show(ui, |ui| {
-            ui.strong("连接与身份详情");
-            ui.label(format!("连接详情：{}", self.status));
-            ui.label(if self.config.listen {
-                "连接方式：等待另一台电脑"
-            } else {
-                "连接方式：连接另一台电脑"
-            });
-            if !self.config.address.is_empty() {
-                ui.monospace(&self.config.address);
-            }
-            self.connection_actions(ui);
-            if ui
-                .add_enabled(
-                    self.idle_writable(),
-                    egui::Button::new("手动设置地址与核验…"),
-                )
-                .clicked()
-            {
-                self.open_advanced_setup();
-            }
-            if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
-            {
-                self.dialog = Some(Dialog::Revoke);
-            }
-            let own = self.local_fingerprint();
-            let publishing = self.child.is_some() && self.stopping.is_none() && self.config.listen;
-            let idle = self.child.is_none();
-            let writable = self.writable();
-            if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
-                let result = self.use_discovery_address(address);
-                self.feedback(result, "仅选择了地址，尚未登记或授权。");
-                if self.notice.starts_with("仅选择") {
-                    self.open_setup();
-                    self.wizard = Some(SetupStep::Verify);
+            desktop_style::card(ui).show(ui, |ui| {
+                ui.strong("连接与身份详情");
+                ui.label(format!("连接详情：{}", self.status));
+                ui.label(if self.config.listen {
+                    "连接方式：等待另一台电脑"
+                } else {
+                    "连接方式：连接另一台电脑"
+                });
+                if !self.config.address.is_empty() {
+                    ui.monospace(&self.config.address);
                 }
-            }
-            if let Some(fp) = &self.config.fingerprint {
-                ui.label("已登记的完整身份指纹");
-                ui.monospace(fp);
-            }
-            ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
-        });
+                self.connection_actions(ui);
+                if ui
+                    .add_enabled(
+                        self.idle_writable(),
+                        egui::Button::new("手动设置地址与核验…"),
+                    )
+                    .clicked()
+                {
+                    self.open_advanced_setup();
+                }
+                if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
+                {
+                    self.dialog = Some(Dialog::Revoke);
+                }
+                let own = self.local_fingerprint();
+                let publishing =
+                    self.child.is_some() && self.stopping.is_none() && self.config.listen;
+                let idle = self.child.is_none();
+                let writable = self.writable();
+                if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
+                    let result = self.use_discovery_address(address);
+                    self.feedback(result, "仅选择了地址，尚未登记或授权。");
+                    if self.notice.starts_with("仅选择") {
+                        self.open_setup();
+                        self.wizard = Some(SetupStep::Verify);
+                    }
+                }
+                if let Some(fp) = &self.config.fingerprint {
+                    ui.label("已登记的完整身份指纹");
+                    ui.monospace(fp);
+                }
+                ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
+            });
         }
     }
     pub(super) fn device_permissions(&mut self, ui: &mut egui::Ui) {
@@ -535,106 +538,114 @@ impl App {
         }
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.settings_section, SettingsSection::General, "常规");
-            ui.selectable_value(&mut self.settings_section, SettingsSection::Permissions, "系统权限");
-            ui.selectable_value(&mut self.settings_section, SettingsSection::Advanced, "诊断与资料");
+            ui.selectable_value(
+                &mut self.settings_section,
+                SettingsSection::Permissions,
+                "系统权限",
+            );
+            ui.selectable_value(
+                &mut self.settings_section,
+                SettingsSection::Advanced,
+                "诊断与资料",
+            );
         });
         ui.add_space(18.0);
         match self.settings_section {
             SettingsSection::General => {
-        desktop_style::card(ui).show(ui, |ui| {
-            ui.strong("外观与连接");
-            ui.add_enabled_ui(self.writable(), |ui| {
-                if ui.checkbox(&mut self.config.dark, "深色外观").changed() {
-                    self.theme(ctx);
-                    self.save();
-                }
-            });
-            ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
-                if ui
-                    .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
-                    .changed()
-                {
-                    self.save();
-                }
-            });
-            ui.weak("重连会回到本机控制，不恢复上次的按键或控制状态。");
-        });
-        ui.add_space(14.0);
-        desktop_style::card(ui).show(ui, |ui| {
-            ui.strong(if cfg!(target_os = "macos") {
-                "菜单栏与关闭窗口"
-            } else {
-                "托盘与关闭窗口"
-            });
-            let supported = cfg!(any(windows, target_os = "macos"));
-            let editable =
-                self.instance_lock.is_some() && self.desktop_store.is_some() && supported;
-            ui.add_enabled_ui(editable, |ui| {
-                let mut preferences = self.desktop_preferences;
-                if ui
-                    .checkbox(&mut preferences.tray_enabled, "显示屏跃的菜单栏／托盘入口")
-                    .changed()
-                {
-                    if !preferences.tray_enabled {
-                        preferences.close_to_tray = false;
-                    }
-                    let result = self.set_desktop_preferences(ctx, preferences);
-                    if let Err(error) = result {
-                        self.notice = format!("桌面选项未保存：{error:#}");
-                    }
-                }
-                let mut close_to_tray = self.desktop_preferences.close_to_tray;
-                if ui
-                    .add_enabled(
-                        self.tray.as_ref().is_some_and(|tray| tray.is_available()),
-                        egui::Checkbox::new(&mut close_to_tray, "关闭窗口后继续在后台协同"),
-                    )
-                    .changed()
-                {
-                    let preferences = DesktopPreferences {
-                        close_to_tray,
-                        ..self.desktop_preferences
-                    };
-                    let result = self.set_desktop_preferences(ctx, preferences);
-                    if let Err(error) = result {
-                        self.notice = format!("关闭方式未保存：{error:#}");
-                    }
-                }
-            });
-            if self.tray.as_ref().is_some_and(|tray| tray.is_available()) {
-                ui.label("入口已显示：可打开窗口、停止协同或退出屏跃。");
-                ui.weak(if self.desktop_preferences.close_to_tray {
+                desktop_style::card(ui).show(ui, |ui| {
+                    ui.strong("外观与连接");
+                    ui.add_enabled_ui(self.writable(), |ui| {
+                        if ui.checkbox(&mut self.config.dark, "深色外观").changed() {
+                            self.theme(ctx);
+                            self.save();
+                        }
+                    });
+                    ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
+                        if ui
+                            .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
+                            .changed()
+                        {
+                            self.save();
+                        }
+                    });
+                    ui.weak("重连会回到本机控制，不恢复上次的按键或控制状态。");
+                });
+                ui.add_space(14.0);
+                desktop_style::card(ui).show(ui, |ui| {
+                    ui.strong(if cfg!(target_os = "macos") {
+                        "菜单栏与关闭窗口"
+                    } else {
+                        "托盘与关闭窗口"
+                    });
+                    let supported = cfg!(any(windows, target_os = "macos"));
+                    let editable =
+                        self.instance_lock.is_some() && self.desktop_store.is_some() && supported;
+                    ui.add_enabled_ui(editable, |ui| {
+                        let mut preferences = self.desktop_preferences;
+                        if ui
+                            .checkbox(&mut preferences.tray_enabled, "显示屏跃的菜单栏／托盘入口")
+                            .changed()
+                        {
+                            if !preferences.tray_enabled {
+                                preferences.close_to_tray = false;
+                            }
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            if let Err(error) = result {
+                                self.notice = format!("桌面选项未保存：{error:#}");
+                            }
+                        }
+                        let mut close_to_tray = self.desktop_preferences.close_to_tray;
+                        if ui
+                            .add_enabled(
+                                self.tray.as_ref().is_some_and(|tray| tray.is_available()),
+                                egui::Checkbox::new(&mut close_to_tray, "关闭窗口后继续在后台协同"),
+                            )
+                            .changed()
+                        {
+                            let preferences = DesktopPreferences {
+                                close_to_tray,
+                                ..self.desktop_preferences
+                            };
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            if let Err(error) = result {
+                                self.notice = format!("关闭方式未保存：{error:#}");
+                            }
+                        }
+                    });
+                    if self.tray.as_ref().is_some_and(|tray| tray.is_available()) {
+                        ui.label("入口已显示：可打开窗口、停止协同或退出屏跃。");
+                        ui.weak(if self.desktop_preferences.close_to_tray {
                     "关闭窗口不会停止协同。停止或退出请使用菜单栏／托盘；退出仍等待输入清理。"
                 } else {
                     "关闭窗口会停止协同、清理输入，然后退出。"
                 });
-            } else {
-                ui.label("关闭窗口会停止协同、清理输入，然后退出。");
-                if !supported {
-                    ui.weak("此平台的托盘适配尚未提供。");
-                } else if self.desktop_preferences.tray_enabled
-                    && editable
-                    && ui.button("重试显示入口").clicked()
-                {
-                    self.sync_tray(ctx);
-                }
-            }
-            if self.desktop_store.is_none() {
-                ui.weak("桌面选项只读，原文件已保留；不会启用后台保留。");
-            }
-            ui.weak("默认不启用后台保留；不会注册开机启动。");
-        });
-        ui.add_space(16.0);
+                    } else {
+                        ui.label("关闭窗口会停止协同、清理输入，然后退出。");
+                        if !supported {
+                            ui.weak("此平台的托盘适配尚未提供。");
+                        } else if self.desktop_preferences.tray_enabled
+                            && editable
+                            && ui.button("重试显示入口").clicked()
+                        {
+                            self.sync_tray(ctx);
+                        }
+                    }
+                    if self.desktop_store.is_none() {
+                        ui.weak("桌面选项只读，原文件已保留；不会启用后台保留。");
+                    }
+                    ui.weak("默认不启用后台保留；不会注册开机启动。");
+                });
+                ui.add_space(16.0);
             }
             SettingsSection::Permissions => {
-        desktop_style::card(ui).show(ui, |ui| {
-            let idle = self.child.is_none() && self.stopping.is_none();
-            self.worker_permissions.ui(ui, idle);
-        });
-        ui.add_space(14.0);
+                desktop_style::card(ui).show(ui, |ui| {
+                    let idle = self.child.is_none() && self.stopping.is_none();
+                    self.worker_permissions.ui(ui, idle);
+                });
+                ui.add_space(14.0);
             }
             SettingsSection::Advanced => {
-        egui::CollapsingHeader::new("高级诊断").show(ui, |ui| {
+                egui::CollapsingHeader::new("高级诊断").show(ui, |ui| {
         ui.strong("本GUI进程的系统权限");
         ui.weak("只在点击时读取，不申请或修改权限。实际输入进程会独立复查。");
         if ui.button("检查当前系统权限").clicked() {
@@ -1028,13 +1039,17 @@ impl App {
                     let selected = self.page == page
                         || (page == Page::Devices && self.page == Page::Displays)
                         || (page == Page::GestureLab && self.page == Page::GestureRules);
-                    if ui
-                        .add_sized([ui.available_width(), 36.0], egui::Button::new(RichText::new(label).size(14.0)).selected(selected))
-                        .clicked()
-                    {
+                    if desktop_style::navigation(ui, label, selected).clicked() {
                         self.page = page;
+                        self.screen_drag = None;
+                        self.native_confirmation = false;
+                        if self.dialog == Some(Dialog::NativeStart) {
+                            self.dialog = None;
+                        }
                     }
-                    if page == Page::Devices && selected { self.device_roster(ui); }
+                    if page == Page::Devices && selected {
+                        self.device_roster(ui);
+                    }
                     ui.add_space(6.0);
                 }
                 ui.add_space(18.0);
@@ -1072,9 +1087,13 @@ impl App {
                 if !self.notice.is_empty() {
                     ui.separator();
                     let mut summary: String = self.notice.chars().take(64).collect();
-                    if self.notice.chars().count() > 64 { summary.push('…'); }
+                    if self.notice.chars().count() > 64 {
+                        summary.push('…');
+                    }
                     ui.small(summary).on_hover_text(&self.notice);
-                    if ui.small_button("详情").clicked() { self.notice_details = true; }
+                    if ui.small_button("详情").clicked() {
+                        self.notice_details = true;
+                    }
                 }
             });
         });
@@ -1105,7 +1124,12 @@ impl App {
                 });
             });
         if self.notice_details {
-            egui::Window::new("操作详情").open(&mut self.notice_details).default_width(480.0).show(&ctx, |ui| { ui.label(&self.notice); });
+            egui::Window::new("操作详情")
+                .open(&mut self.notice_details)
+                .default_width(480.0)
+                .show(&ctx, |ui| {
+                    ui.label(&self.notice);
+                });
         }
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
