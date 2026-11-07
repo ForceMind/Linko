@@ -2,6 +2,7 @@
 """Run under xvfb-run on the Linux CI runner; never touches a user desktop."""
 import os
 import json
+import math
 import pathlib
 import subprocess
 import tempfile
@@ -23,15 +24,15 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
     def capture(arguments, name):
         log = pathlib.Path(temporary) / f"{name}.log"
         with log.open("w") as output:
-            geometry = pathlib.Path(temporary) / "widget-geometry.json"
-            if name == "gesture-lab":
+            geometry = pathlib.Path(temporary) / f"{name}-widget-geometry.json"
+            if name in {"home", "gesture-lab"}:
                 arguments = [*arguments, "--ui-layout-report", str(geometry)]
             gui = subprocess.Popen([str(root / "target/release/peerglide-gui"), "--data-dir", str(profile), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
             try:
                 for _ in range(100):
                     if gui.poll() is not None:
                         raise RuntimeError(log.read_text())
-                    found = run_external(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid), "--name", "PeerGlide"], capture_output=True, text=True)
+                    found = run_external(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid), "--name", "Linko"], capture_output=True, text=True)
                     if found.returncode == 0 and found.stdout.strip():
                         window = found.stdout.splitlines()[0]
                         break
@@ -42,9 +43,7 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                 assert not (fallback / "peerglide").exists(), "explicit directory must not touch the default profile"
                 time.sleep(1)
                 run_external(["xdotool", "windowfocus", "--sync", window], check=True)
-                if name == "gesture-lab":
-                    # Fixed-size, scale-1 virtual window. This is synthetic GUI
-                    # input on our isolated X server, never a user desktop.
+                if name in {"home", "gesture-lab"}:
                     for _ in range(30):
                         if geometry.exists():
                             layout = json.loads(geometry.read_text())
@@ -53,6 +52,10 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     else:
                         raise TimeoutError("real widget geometry was not reported")
                     assert layout["scope"] == "isolated_gui_widget_geometry"
+                if name == "gesture-lab":
+                    # Fixed-size, scale-1 virtual window. This is synthetic GUI
+                    # input on our isolated X server, never a user desktop.
+                    assert layout["version"] == 1
                     cx, cy, cw, ch = layout["canvas"]
                     sx, sy, sw, sh = layout["save"]
                     start_x, start_y = int(cx + 45), int(cy + ch / 2)
@@ -104,12 +107,20 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                 if name == "home":
                     # Scale-1 fresh unpaired workspace, owned Xvfb window only.
                     # Read these screenshots before claiming page/modal proof.
-                    run_external(["xdotool", "mousemove", "--window", window, "110", "506", "click", "1"], check=True)
+                    assert layout["version"] == 2
+                    def click_control(key):
+                        rect = layout["controls"][key]
+                        assert (len(rect) == 4 and all(type(n) in {int, float} and math.isfinite(n) for n in rect)
+                                and rect[0] >= 0 and rect[1] >= 0 and rect[2] > 0 and rect[3] > 0), key
+                        x, y, width, height = rect
+                        run_external(["xdotool", "mousemove", "--window", window,
+                                      str(round(x + width / 2)), str(round(y + height / 2)), "click", "1"], check=True)
+                    click_control("nav_settings")
                     time.sleep(0.4)
                     run_external(["import", "-window", "root", str(dest / "peerglide-settings.png")], check=True)
-                    run_external(["xdotool", "mousemove", "--window", window, "110", "168", "click", "1"], check=True)
+                    click_control("nav_layout")
                     time.sleep(0.3)
-                    run_external(["xdotool", "mousemove", "--window", window, "688", "366", "click", "1"], check=True)
+                    click_control("add_device")
                     time.sleep(0.4)
                     assert not (profile / "identity").exists(), "opening add must not create identity or click through"
                     run_external(["import", "-window", "root", str(dest / "peerglide-add-device.png")], check=True)

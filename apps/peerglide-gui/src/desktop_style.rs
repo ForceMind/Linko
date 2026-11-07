@@ -25,25 +25,25 @@ struct Palette {
 fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
-            canvas: Color32::from_rgb(24, 22, 28),
-            surface: Color32::from_rgb(35, 32, 40),
-            soft: Color32::from_rgb(46, 42, 52),
-            hover: Color32::from_rgb(58, 50, 63),
-            text: Color32::from_rgb(241, 236, 244),
-            muted: Color32::from_rgb(182, 172, 190),
-            line: Color32::from_rgb(67, 58, 73),
-            accent: Color32::from_rgb(255, 145, 177),
+            canvas: Color32::from_rgb(23, 27, 34),
+            surface: Color32::from_rgb(31, 37, 46),
+            soft: Color32::from_rgb(39, 47, 59),
+            hover: Color32::from_rgb(48, 60, 83),
+            text: Color32::from_rgb(237, 241, 247),
+            muted: Color32::from_rgb(170, 184, 204),
+            line: Color32::from_rgb(65, 77, 96),
+            accent: Color32::from_rgb(154, 179, 255),
         }
     } else {
         Palette {
-            canvas: Color32::from_rgb(247, 246, 249),
+            canvas: Color32::from_rgb(247, 248, 250),
             surface: Color32::WHITE,
-            soft: Color32::from_rgb(242, 239, 245),
-            hover: Color32::from_rgb(239, 230, 239),
-            text: Color32::from_rgb(43, 37, 49),
-            muted: Color32::from_rgb(116, 105, 126),
-            line: Color32::from_rgb(225, 218, 231),
-            accent: Color32::from_rgb(192, 54, 94),
+            soft: Color32::from_rgb(241, 244, 249),
+            hover: Color32::from_rgb(232, 238, 255),
+            text: Color32::from_rgb(32, 37, 45),
+            muted: Color32::from_rgb(95, 111, 133),
+            line: Color32::from_rgb(226, 231, 239),
+            accent: Color32::from_rgb(66, 99, 235),
         }
     }
 }
@@ -54,12 +54,12 @@ fn tone_colors(dark: bool, tone: Tone) -> (Color32, Color32) {
         (false, Tone::Good) => ((226, 244, 237), (30, 103, 78)),
         (false, Tone::Warning) => ((255, 243, 213), (128, 82, 8)),
         (false, Tone::Danger) => ((253, 233, 235), (160, 44, 60)),
-        (false, Tone::Accent) => ((253, 234, 241), (158, 42, 78)),
+        (false, Tone::Accent) => ((232, 238, 255), (54, 81, 204)),
         (true, Tone::Neutral) => ((48, 57, 71), (205, 215, 230)),
         (true, Tone::Good) => ((29, 63, 53), (145, 222, 186)),
         (true, Tone::Warning) => ((74, 56, 26), (244, 204, 127)),
         (true, Tone::Danger) => ((76, 36, 43), (255, 173, 183)),
-        (true, Tone::Accent) => ((74, 41, 58), (255, 177, 201)),
+        (true, Tone::Accent) => ((44, 58, 91), (177, 197, 255)),
     };
     (
         Color32::from_rgb(fill.0, fill.1, fill.2),
@@ -94,8 +94,15 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     visuals.hyperlink_color = colors.accent;
     visuals.warn_fg_color = tone_colors(dark, Tone::Warning).1;
     visuals.error_fg_color = tone_colors(dark, Tone::Danger).1;
-    visuals.selection.bg_fill = Color32::from_rgb(192, 54, 94);
-    visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.selection.bg_fill = colors.accent;
+    visuals.selection.stroke = Stroke::new(
+        1.0,
+        if dark {
+            Color32::from_rgb(32, 37, 45)
+        } else {
+            Color32::WHITE
+        },
+    );
 
     for widget in [
         &mut visuals.widgets.noninteractive,
@@ -146,6 +153,28 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     ctx.set_theme(theme);
 }
 
+/// Small original dual-screen mark, painted locally without assets or timers.
+pub(super) fn brand_mark(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 10.0, Color32::from_rgb(66, 99, 235));
+    for (position, size) in [
+        (egui::vec2(7.5, 10.0), egui::vec2(17.0, 13.0)),
+        (egui::vec2(18.0, 19.0), egui::vec2(15.0, 13.0)),
+    ] {
+        painter.rect_stroke(
+            egui::Rect::from_min_size(rect.min + position, size),
+            3.0,
+            Stroke::new(2.0, Color32::WHITE),
+            egui::StrokeKind::Inside,
+        );
+    }
+    painter.line_segment(
+        [rect.min + egui::vec2(16.0, 25.0), rect.min + egui::vec2(26.0, 16.0)],
+        Stroke::new(2.0, Color32::WHITE),
+    );
+}
+
 pub(super) fn card(ui: &egui::Ui) -> egui::Frame {
     let colors = palette(ui.visuals().dark_mode);
     egui::Frame::group(ui.style())
@@ -174,8 +203,8 @@ pub(super) fn primary(label: &str) -> egui::Button<'static> {
             .strong()
             .color(Color32::WHITE),
     )
-    .fill(Color32::from_rgb(192, 54, 94))
-    .stroke(Stroke::new(1.0, Color32::from_rgb(158, 42, 78)))
+    .fill(Color32::from_rgb(66, 99, 235))
+    .stroke(Stroke::new(1.0, Color32::from_rgb(54, 81, 204)))
     .corner_radius(egui::CornerRadius::same(9))
     .min_size(egui::vec2(112.0, 36.0))
 }
@@ -197,7 +226,18 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
     if selected {
         button = button.fill(fill).stroke(Stroke::NONE);
     }
-    ui.add_sized([ui.available_width(), 36.0], button)
+    let response = ui.add_sized([ui.available_width(), 36.0], button);
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                response.rect.min + egui::vec2(0.0, 8.0),
+                egui::vec2(3.0, 20.0),
+            ),
+            1.5,
+            palette(ui.visuals().dark_mode).accent,
+        );
+    }
+    response
 }
 
 /// Draw one illustrative main monitor inside `rect`, including its stand.
@@ -215,8 +255,8 @@ pub(super) fn monitor(
         .all(|v| v.is_finite())
         || !rect.width().is_finite()
         || !rect.height().is_finite()
-        || rect.width() < 64.0
-        || rect.height() < 64.0
+        || rect.width() < 48.0
+        || rect.height() < 36.0
     {
         return;
     }
@@ -239,7 +279,7 @@ pub(super) fn monitor(
     );
     let glass = screen.shrink(5.0);
     let glass_color = match (dark, local) {
-        (false, true) => Color32::from_rgb(235, 242, 252),
+        (false, true) => Color32::from_rgb(232, 238, 255),
         (false, false) => Color32::from_rgb(244, 246, 249),
         (true, true) => Color32::from_rgb(33, 45, 64),
         (true, false) => Color32::from_rgb(38, 42, 50),
