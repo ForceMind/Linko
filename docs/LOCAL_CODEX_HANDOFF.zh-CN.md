@@ -119,7 +119,7 @@ cargo run -p peerglide-gestures --example evaluate --locked -- SAMPLE_FOLDER
 
 ## 8. 可直接交给本机 Codex 的指令
 
-> 继续 ForceMind/PeerGlide，先读取 AGENTS.md、本交接文档、最新 main/PR/CI 和
+> 继续 ForceMind/Linko，先读取 AGENTS.md、本交接文档、最新 main/PR/CI 和
 > docs/VALIDATION.md。保留现有实现及 MIT。先运行 tools/local_preflight.py，修复
 > 实际失败，再完成 Windows/macOS C06 双机验收；记录未运行项，不伪造通过。
 > 在同一个原生捕获生命周期内实现 G03 同步归属/有界队列，提供真实焦点上下文，
@@ -1433,3 +1433,5 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 用户明确要求项目/仓库改名，并给出Linko参考图。现有ForceMind/PeerGlide通过rename成为ForceMind/Linko；回读ID仍为R_kgDOVTEo2w，PUBLIC/main、PR70与0079fe7分支保持，origin已更新。未新建仓库、改可见性、强推或合并主线。已有检出目录和旧App路径保留，避免影响TCC与已冻结包；设备身份、数据目录、crate/worker、bundle identifier和v5保持兼容。
 
 新分支linko-reference-branding从0079fe7继续，负责参考图排版与新包Linko.app/Linko.exe/linko入口。原图只作布局参考，不提交第三方壁纸或示例指标。PR69独立分支已继续到9b5b3b5，未并入本批、不覆盖其工作。本机预检preflight-20261107T105817407949Z-41918仍缺Rust/Cargo，不安装，候选以新CI为准。
+
+58节实现候选：版本0.3.15-dev，GUI仅两文件调整主屏画法/下方实际设备卡/快捷操作层级；新包标签及入口统一Linko，严格签名与篡改拒绝保留。Python打包7项过，Rust和新实际PNG/包仍待CI。后续gh与PR/API使用ForceMind/Linko；源检出目录、旧冻结包与设备数据不搬迁。

@@ -1,4 +1,5 @@
 """Staging/signature contract tests; no codesign, GUI, TCC or real artifacts."""
+import hashlib
 import importlib.util
 from pathlib import Path
 import plistlib
@@ -10,6 +11,7 @@ from unittest.mock import patch
 import zipfile
 
 import package
+import verify_macos_package
 
 
 MAIN_METADATA = ("Identifier=com.peerglide.PeerGlide\nSignature=adhoc\n"
@@ -93,6 +95,7 @@ class Packaging(unittest.TestCase):
             fixture(root)
             run = FakeCodesign()
             archive = package.build_package(root, "Darwin", "arm64", run)
+            self.assertEqual(archive.name, "Linko-0.2.3-dev-darwin-arm64.zip")
             codesign = [call[0] for call in run.calls if call[0][0] == "codesign"]
             self.assertEqual(["--sign" in command for command in codesign[:3]], [True, True, False])
             self.assertEqual(codesign[0][codesign[0].index("--identifier") + 1], package.WORKER_IDENTIFIER)
@@ -110,8 +113,10 @@ class Packaging(unittest.TestCase):
             self.assertEqual((root / "target/release/peerglide-gui").read_bytes(), b"fixture-peerglide-gui")
             with zipfile.ZipFile(archive) as zipped:
                 label = archive.stem
-                app = label + "/PeerGlide.app/Contents/"
+                app = label + "/Linko.app/Contents/"
                 info = plistlib.loads(zipped.read(app + "Info.plist"))
+                self.assertEqual(info["CFBundleName"], "Linko")
+                self.assertEqual(info["CFBundleDisplayName"], "Linko · 屏跃")
                 self.assertEqual(info["CFBundleIdentifier"], package.APP_IDENTIFIER)
                 self.assertEqual(info["CFBundleVersion"], "0.2.3")
                 self.assertEqual(info["CFBundleExecutable"], "peerglide-gui")
@@ -122,7 +127,20 @@ class Packaging(unittest.TestCase):
                 self.assertIn("local ad-hoc integrity signatures only", warning)
                 self.assertIn("no Developer ID publisher identity or notarization", warning)
                 self.assertIn("Do not disable OS security protections", warning)
-            self.assertTrue(archive.with_suffix(".zip.sha256").is_file())
+                self.assertIn("Open Linko.app", warning)
+                for name in ("README.md", "LICENSE", "SECURITY.md", "docs/contract.md", "third-party/notice.txt"):
+                    self.assertIn(label + "/" + name, zipped.namelist())
+                self.assertFalse(any("/PeerGlide.app/" in name for name in zipped.namelist()))
+                extracted = root / "roundtrip"
+                zipped.extractall(extracted)
+            before = len(run.calls)
+            with patch.object(verify_macos_package.subprocess, "run", new=run):
+                verify_macos_package.verify(extracted / label / "Linko.app")
+            verification = [command for command, _options in run.calls[before:]]
+            self.assertEqual(verification[0][1:4], ["--verify", "--deep", "--strict"])
+            self.assertTrue(all("--sign" not in command for command in verification))
+            self.assertEqual(archive.with_suffix(".zip.sha256").read_text(),
+                             f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
             self.assertFalse(Path(codesign[1][-1]).exists(), "only our temporary staging was signed and removed")
 
     def test_non_macos_packages_never_call_codesign(self):
@@ -132,10 +150,24 @@ class Packaging(unittest.TestCase):
                 fixture(root)
                 run = FakeCodesign()
                 archive = package.build_package(root, system, "x86_64", run)
+                self.assertEqual(archive.name, f"Linko-0.2.3-dev-{system.lower()}-x86_64.zip")
                 self.assertFalse(any(command[0] == "codesign" for command, _ in run.calls))
                 with zipfile.ZipFile(archive) as zipped:
                     name = "peerglide.exe" if system == "Windows" else "peerglide"
                     self.assertIn(archive.stem + "/" + name, zipped.namelist())
+                    gui = "Linko.exe" if system == "Windows" else "linko"
+                    suffix = ".exe" if system == "Windows" else ""
+                    source = root / "target/release" / ("peerglide-gui" + suffix)
+                    self.assertEqual(zipped.read(archive.stem + "/" + gui), source.read_bytes())
+                    self.assertEqual(source.read_bytes(), b"fixture-peerglide-gui" + suffix.encode())
+                    self.assertNotIn(archive.stem + "/peerglide-gui" + suffix, zipped.namelist())
+                    for entry in ("README.md", "LICENSE", "SECURITY.md", "docs/contract.md", "third-party/notice.txt"):
+                        self.assertIn(archive.stem + "/" + entry, zipped.namelist())
+                    warning = zipped.read(archive.stem + "/PROTOTYPE.txt").decode()
+                    self.assertIn("Launch " + (gui if system == "Windows" else "./" + gui), warning)
+                    self.assertIn("not migrated or replaced", warning)
+                    if system == "Linux":
+                        self.assertIn("not native input", warning)
                     self.assertFalse(any("CodeResources" in name for name in zipped.namelist()))
 
     def test_sign_verify_or_display_failure_blocks_both_archive_and_checksum(self):
@@ -145,6 +177,17 @@ class Packaging(unittest.TestCase):
                 fixture(root)
                 with self.assertRaises(subprocess.CalledProcessError):
                     package.build_package(root, "Darwin", "arm64", FakeCodesign(fail=operation))
+                self.assertEqual(list((root / "dist").iterdir()), [])
+
+        for key in ("CFBundleName", "CFBundleDisplayName"):
+            with self.subTest(plist_key=key), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                fixture(root)
+                info = package.bundle_info("0.2.3-dev")
+                info[key] = "unexpected-brand"
+                with patch.object(package, "bundle_info", return_value=info):
+                    with self.assertRaises(RuntimeError):
+                        package.build_package(root, "Darwin", "arm64", FakeCodesign())
                 self.assertEqual(list((root / "dist").iterdir()), [])
 
     def test_unbound_wrong_identity_or_missing_nested_seal_blocks_archive(self):
@@ -171,7 +214,7 @@ class Packaging(unittest.TestCase):
                 root = Path(folder)
                 fixture(root)
                 (root / "dist").mkdir()
-                existing = root / "dist" / ("PeerGlide-0.2.3-dev-darwin-arm64" + suffix)
+                existing = root / "dist" / ("Linko-0.2.3-dev-darwin-arm64" + suffix)
                 existing.write_bytes(b"existing-user-artifact")
                 run = FakeCodesign()
                 with self.assertRaises(FileExistsError):
@@ -179,6 +222,16 @@ class Packaging(unittest.TestCase):
                 self.assertEqual(existing.read_bytes(), b"existing-user-artifact")
                 self.assertEqual(run.calls, [])
                 self.assertEqual(len(list((root / "dist").iterdir())), 1)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            (root / "dist").mkdir()
+            legacy = root / "dist/PeerGlide-0.2.3-dev-darwin-arm64.zip"
+            legacy.write_bytes(b"existing-user-artifact")
+            archive = package.build_package(root, "Darwin", "arm64", FakeCodesign())
+            self.assertEqual(legacy.read_bytes(), b"existing-user-artifact")
+            self.assertEqual(archive.name, "Linko-0.2.3-dev-darwin-arm64.zip")
 
     def test_partial_new_archive_is_removed_on_write_failure(self):
         with tempfile.TemporaryDirectory() as folder:

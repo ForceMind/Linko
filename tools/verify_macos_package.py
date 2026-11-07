@@ -8,7 +8,7 @@ import sys
 import tempfile
 import zipfile
 
-from package import verify_macos_bundle_metadata
+from package import APP_BUNDLE_NAME, PRODUCT_NAME, verify_macos_bundle_metadata
 
 
 def verify(app):
@@ -19,7 +19,7 @@ def verify(app):
 def main():
     if sys.platform != "darwin":
         raise RuntimeError("this verification requires macOS codesign")
-    archives = list(pathlib.Path("dist").glob("PeerGlide-*-darwin-*.zip"))
+    archives = list(pathlib.Path("dist").glob(f"{PRODUCT_NAME}-*-darwin-*.zip"))
     if len(archives) != 1:
         raise RuntimeError("expected one new macOS package")
     with zipfile.ZipFile(archives[0]) as zipped:
@@ -31,12 +31,12 @@ def main():
         root = pathlib.Path(directory)
         extracted = root / "extracted"
         subprocess.run(["ditto", "-x", "-k", str(archives[0].resolve()), str(extracted)], check=True)
-        apps = list(extracted.glob("*/PeerGlide.app"))
+        apps = list(extracted.glob(f"*/{APP_BUNDLE_NAME}"))
         if len(apps) != 1:
             raise RuntimeError("expected one app bundle")
         verify(apps[0])
         for kind in ("plist", "helper"):
-            altered = root / kind / "PeerGlide.app"
+            altered = root / kind / APP_BUNDLE_NAME
             shutil.copytree(apps[0], altered)
             if kind == "plist":
                 path = altered / "Contents/Info.plist"

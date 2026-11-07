@@ -1952,3 +1952,10 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 两端包绑定同一run/head，外层digest、内层checksum、ZIP路径/CRC、MIT/notice、版本及PE或Mac完整性seal通过。Mac内层ZIP SHA256为52e0403cc69bf82b0c5e1d971cf9fb94cd820bf556be5e1d2dac35a9a88af194，Windows为fb9e49cd74376176bd13e73a213f2ca3b89eac3eec860dbc4f63e06999438fdd。Windows LICENSE的CRLF归一后与仓库精确一致，原包未改；首次换行敏感检查失败保留。记录在ignored target/local-validation/linko-74e442b-packages/verification-final.json；Mac App已解压，未启动。
 
 两项GUI布局P2已修复并复核；新几何报告路径未发现阻塞项。该静态复核仅覆盖本批，不是全项目独立安全审计。主线未合并，宿主App/身份/TCC保持。Windows/macOS人工界面、输入C06仍未验收；文件/系统剪贴板/全局G1、多屏、远程工作空间与窗口桥未接通。本机Rust缺失、浏览器未验证、6.83GB/#10根因未知的结论不变。
+
+
+## Linko参考图与对外改名 0.3.15-dev候选（2026-11-07）
+
+现有GitHub仓库rename为ForceMind/Linko，ID、PUBLIC/main、已有PR与0079fe7候选保持，本地origin已回读新URL。b071f78提交canonical引用及artifact名称；当前实现原创主屏示意、真实设备卡与快捷操作层级，新包使用Linko.app/Linko.exe/linko。内部worker、身份/数据目录、bundle identifier和v5兼容保留。
+
+Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆盖及严格seal/篡改拒绝代码路径。它不是真实平台签名或启动验收。本机预检仍缺Rust/Cargo，未安装；新Rust检查、进程/重连、实际原生PNG和新包验证待CI，不能复用0.3.14结果称0.3.15已过。参考原图未提交，示例延迟/传输/第三台设备未接入。宿主App/TCC/身份保持，浏览器和物理C06未运行。

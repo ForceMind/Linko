@@ -232,3 +232,9 @@ Force Quit、SIGKILL及注销完整保证不在此能力内；系统注销被取
 只在显式隔离参数下，--ui-layout-report可导出可用控件的真实矩形；普通页要求全新空--data-dir，schema2不含身份/内容，输出独占不覆盖。手势schema1保留。CI原生Xvfb点击从实际矩形取坐标，不沿用旧导航硬编码；普通启动不写报告。本机Rust未安装；本批最终CI/实际PNG结果见VALIDATION与PR，未通过前不得宣称验收。
 
 0.3.14代码候选74e442b已通过完整五项CI与两平台资源/实际GUI专项，6张原生PNG已核对；见VALIDATION与PR70。Mac/Win包均已校验且未启动。该结果不替代真实双机输入或新Mac权限验收。
+
+## 0.3.15-dev：参考图排版与Linko运行入口
+
+拓扑下新增真实设备选择卡，与画布和右侧所选设备联动；主屏使用原创蓝灰几何示意，不读真实屏幕、不推测机型/对端OS。右侧将快捷操作和所选设备分开，已有进程时“停止并断开”仍请求原有清理。紧凑窗口收紧画布与间距，原主操作、停止/恢复、权限和存储门保留。参考图的延迟、三设备、传输记录与开启开关不作为运行数据。
+
+GitHub仓库改为ForceMind/Linko；新包使用Linko.app（Mac）、Linko.exe（Windows）和linko（Linux，仅GUI/通信）。源编译bin、同级peerglide worker、bundle identifier、数据目录与v5不迁移。旧包/用户文件不覆盖；新入口的真实签名、平台启动及C06与Python打包单元测试分别记录。
