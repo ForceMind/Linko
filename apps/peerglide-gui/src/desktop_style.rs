@@ -357,10 +357,8 @@ pub(super) fn monitor(
     let labels = painter.with_clip_rect(text_clip);
     let label_offset = if glass.height() >= 62.0 { 9.0 } else { 0.0 };
     let title = labels.layout_no_wrap(title, FontId::proportional(font_size), colors.text);
-    let title_rect = egui::Align2::CENTER_CENTER.anchor_size(
-        glass.center() - egui::vec2(0.0, label_offset),
-        title.size(),
-    );
+    let title_rect = egui::Align2::CENTER_CENTER
+        .anchor_size(glass.center() - egui::vec2(0.0, label_offset), title.size());
     // Measure the real font line before painting: small topology zoom levels
     // keep the monitor and device card, never a clipped strip of screen text.
     if text_clip.contains_rect(title_rect) {
@@ -372,11 +370,8 @@ pub(super) fn monitor(
             } else {
                 "对端 · 主屏示意"
             };
-            let subtitle = labels.layout_no_wrap(
-                subtitle.into(),
-                FontId::proportional(11.0),
-                colors.muted,
-            );
+            let subtitle =
+                labels.layout_no_wrap(subtitle.into(), FontId::proportional(11.0), colors.muted);
             let subtitle_rect = egui::Align2::CENTER_CENTER
                 .anchor_size(glass.center() + egui::vec2(0.0, 14.0), subtitle.size());
             if text_clip.contains_rect(subtitle_rect) {

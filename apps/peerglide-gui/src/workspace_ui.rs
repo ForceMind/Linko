@@ -621,7 +621,8 @@ mod tests {
                     },
                     |root| app.desktop(root),
                 );
-                for label in ["快捷操作", "所选设备", "内容共享", "连接与身份详情"] {
+                for label in ["快捷操作", "所选设备", "内容共享", "连接与身份详情"]
+                {
                     let (clip, rect) = output
                         .shapes
                         .iter()
@@ -678,8 +679,8 @@ mod tests {
         }
     }
     #[test]
-    fn topology_device_cards_change_selection_without_writing_trust_layout_or_grants(
-    ) -> Result<()> {
+    fn topology_device_cards_change_selection_without_writing_trust_layout_or_grants() -> Result<()>
+    {
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         app.config.fingerprint = Some("device-card-presentation-only".into());
