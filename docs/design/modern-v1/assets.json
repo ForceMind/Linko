@@ -1,0 +1,175 @@
+{
+  "design_version": "modern-v1",
+  "status": "visual_proposal_not_runtime",
+  "generator": "mixed; see asset origin",
+  "date": "2026-11-07",
+  "assets": [
+    {
+      "path": "brand/app-icon-concept.png",
+      "sha256": "d74c5f47bb7bbb8fa82bae8255d8d9ee3759674381d7856ec069df33348d337d",
+      "width": 1254,
+      "height": 1254,
+      "png_color_type": 6,
+      "origin": "built-in image_gen"
+    },
+    {
+      "path": "brand/app-icon.svg",
+      "sha256": "b36005b0e8cc81bee2e6d5f4e155f93b9eecbfe2cbcd9bd16cdf2be30b905ec2",
+      "view_box": "0 0 1024 1024",
+      "origin": "repo-native editable SVG"
+    },
+    {
+      "path": "brand/previews/app-icon.svg.png",
+      "sha256": "2b2e381118fa2ac3361352637fc02dffbf51415ce981dc77a6bc104f831b6e97",
+      "width": 512,
+      "height": 512,
+      "png_color_type": 6,
+      "origin": "Quick Look static SVG rendering"
+    },
+    {
+      "path": "brand/tray-mark.svg",
+      "sha256": "a48be12789dcdbbd89a78f61703a9749ca9299ffac61ad2d9c205742bb51065a",
+      "view_box": "0 0 1024 1024",
+      "origin": "repo-native editable SVG"
+    },
+    {
+      "path": "effects/add-computer.png",
+      "sha256": "96a2ef311d4dd648f4bc462288a1d76855399a8ca6159f444a8ac37021c14ff0",
+      "width": 1585,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen"
+    },
+    {
+      "path": "effects/device-hub.png",
+      "sha256": "4d809e95e65407546efbac03fb8d15ff6c44e6fe76573dced47801059bbf06f3",
+      "width": 1586,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen"
+    },
+    {
+      "path": "wireframes/01-device-hub.svg",
+      "sha256": "3af339749536efcb04beedc1bd9da1feaf5b9fca5b09e98321232c466e2127a2",
+      "view_box": "0 0 1440 960",
+      "origin": "repo-native editable SVG"
+    },
+    {
+      "path": "wireframes/02-screen-layout.svg",
+      "sha256": "23c26a0098d65d7f3a65b03bcc4f91213217318ea6352a14126874a966740810",
+      "view_box": "0 0 1440 960",
+      "origin": "repo-native editable SVG"
+    },
+    {
+      "path": "wireframes/03-add-computer.svg",
+      "sha256": "259505ecaa7c3d04bcc9a8c2e37e0e9c470369770e5c07248b75fe535e8fe7a8",
+      "view_box": "0 0 1440 960",
+      "origin": "repo-native editable SVG"
+    },
+    {
+      "path": "wireframes/previews/01-device-hub.svg.png",
+      "sha256": "dd285f069b0a44e37c54129b9a0c3607e0d8f3544a6139e155beffb23fc1e217",
+      "width": 1440,
+      "height": 960,
+      "png_color_type": 6,
+      "origin": "AppKit static SVG rendering"
+    },
+    {
+      "path": "wireframes/previews/02-screen-layout.svg.png",
+      "sha256": "dae6631837112864dc6713b1b984e89032b0cbff7a217248d88e75106e90608b",
+      "width": 1440,
+      "height": 960,
+      "png_color_type": 6,
+      "origin": "AppKit static SVG rendering"
+    },
+    {
+      "path": "wireframes/previews/03-add-computer.svg.png",
+      "sha256": "be7bada5b676225db474830f8b56a7689353102972a27f81301abda030dbd443",
+      "width": 1440,
+      "height": 960,
+      "png_color_type": 6,
+      "origin": "AppKit static SVG rendering"
+    },
+    {
+      "path": "effects/device-hub-forest-rejected.png",
+      "sha256": "fed74e718d917ebc5978aeed3b41385f622285a782967c03f83423155372ec63",
+      "width": 1585,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen",
+      "status": "rejected_by_user"
+    },
+    {
+      "path": "effects/device-hub-graphite-rejected.png",
+      "sha256": "13b4b9fdae6238866a09d84d3dd2c92c88f6d8b151269841d1aecf2423a07d01",
+      "width": 1586,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen",
+      "status": "rejected_by_user"
+    },
+    {
+      "path": "effects/device-hub-sakura.png",
+      "sha256": "8e5e422923f9aa80bc828c9f8285690c609936001baf8a4a8a9ed63cfe549b86",
+      "status": "awaiting_user_review",
+      "width": 1585,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen"
+    },
+    {
+      "path": "brand/app-icon-sakura.svg",
+      "sha256": "4cf525edcc0c521e6e13f8dd49d466322f1d9bf9ce57b88fc69cb01e8398e1f6",
+      "status": "awaiting_user_review",
+      "view_box": "0 0 1024 1024",
+      "origin": "repo-native editable SVG"
+    },
+    {
+      "path": "brand/previews/app-icon-sakura.svg.png",
+      "sha256": "9f2613def19220cdb7b46b21e3e93b76fed10f78706e7936be014675d6c9f08b",
+      "status": "awaiting_user_review",
+      "width": 512,
+      "height": 512,
+      "png_color_type": 6,
+      "origin": "Quick Look static SVG rendering"
+    }
+  ],
+  "validation": {
+    "svg_xml_and_external_reference_check": "passed",
+    "wireframe_previews": "1440x960; AppKit static offscreen rendering; visually inspected",
+    "brand_svg_preview": "512x512; Quick Look static offscreen rendering; visually inspected",
+    "browser": "not run",
+    "actual_gui": "not run; design assets only",
+    "sakura_spec_text_contrast_min": 4.99,
+    "sakura_spec_text_contrast_scope": "six normative text/background pairs only; generated bitmap not pixel-certified"
+  },
+  "visual_proposals": [
+    {
+      "id": 1,
+      "palette": "blue-white",
+      "status": "rejected_by_user"
+    },
+    {
+      "id": 2,
+      "palette": "forest-sage-lime",
+      "status": "rejected_by_user"
+    },
+    {
+      "id": 3,
+      "palette": "graphite-fog-warm-copper",
+      "status": "rejected_by_user"
+    },
+    {
+      "id": 4,
+      "palette": "anime-sakura-pink-misty-lilac",
+      "status": "pending_review"
+    },
+    {
+      "id": 4,
+      "name": "樱花汽水",
+      "palette": "sakura-pink / lavender / icy-blue details",
+      "status": "awaiting_user_review"
+    }
+  ],
+  "current_visual_proposal": 4
+}

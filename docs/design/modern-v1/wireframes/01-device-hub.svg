@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+<title id="title">01 设备主视图</title>
+<desc id="desc">屏跃设备页的低保真结构线稿。设计线稿 · 非运行界面；两张设备卡、单一主操作条、屏幕位置预览与能力入口。文字可编辑。</desc>
+<style>text{font-family:sans-serif;fill:#303741} .muted{fill:#68717e} .small{font-size:14px} .label{font-size:16px} .body{font-size:18px} .title{font-size:30px;font-weight:600} .strong{font-weight:600}</style>
+<rect x="0" y="0" width="1440" height="960" fill="#fafbfc" stroke="#d1d5db"/>
+<rect x="0" y="0" width="190" height="960" fill="#f0f2f4" stroke="#d1d5db"/>
+<rect x="24" y="30" width="38" height="38" rx="8" fill="#e1e5ea" stroke="#8d98a5"/>
+<rect x="31" y="38" width="20" height="13" rx="2" fill="none" stroke="#66717f"/>
+<rect x="39" y="46" width="16" height="12" rx="2" fill="none" stroke="#66717f"/>
+<text x="76" y="48" class="body strong">屏跃</text>
+<text x="76" y="68" class="small muted">PeerGlide</text>
+<text x="28" y="190" class="label">总览</text>
+<rect x="14" y="224" width="162" height="48" rx="6" fill="#e0e4e9" stroke="#c8ced6"/>
+<text x="28" y="254" class="label strong">设备与屏幕</text>
+<text x="28" y="326" class="label">本机鼠标</text>
+<text x="28" y="350" class="small muted">窗口内预览</text>
+<text x="28" y="398" class="label">剪贴板与文件</text>
+<text x="28" y="422" class="small muted">开发中</text>
+<line x1="20" y1="858" x2="170" y2="858" stroke="#bbc2cc"/>
+<text x="28" y="900" class="label">设置</text>
+<text x="222" y="60" class="title">设备与屏幕</text>
+<text x="222" y="98" class="body muted">一套键鼠，自在穿梭。</text>
+<g aria-disabled="true" aria-label="停止协同，当前无协同">
+<rect x="1122" y="34" width="126" height="42" rx="6" fill="#e5e7eb" stroke="#c7cdd5"/>
+<text x="1185" y="61" text-anchor="middle" style="font-size:16px;fill:#88919d">停止协同</text>
+</g>
+<text x="1185" y="98" text-anchor="middle" class="small muted">当前无协同</text>
+<rect x="1260" y="34" width="126" height="42" rx="6" fill="#fff" stroke="#8994a2"/>
+<text x="1323" y="61" text-anchor="middle" class="label">恢复本机</text>
+<text x="222" y="153" class="body strong">设备</text>
+<text x="316" y="153" class="body muted">屏幕布局</text>
+<rect x="1258" y="128" width="132" height="36" rx="6" fill="#fff" stroke="#8994a2"/>
+<text x="1324" y="152" text-anchor="middle" class="label">添加电脑</text>
+<line x1="222" y1="173" x2="1390" y2="173" stroke="#bbc2cc"/>
+<line x1="222" y1="173" x2="274" y2="173" stroke="#374151"/>
+<rect x="222" y="212" width="572" height="224" rx="8" fill="#fff" stroke="#bbc2cc"/>
+<rect x="250" y="266" width="100" height="64" rx="4" fill="#f1f3f5" stroke="#8994a2"/>
+<line x1="300" y1="330" x2="300" y2="348" stroke="#8994a2"/>
+<line x1="275" y1="348" x2="325" y2="348" stroke="#8994a2"/>
+<text x="390" y="274" class="body strong">这台电脑</text>
+<text x="390" y="303" class="small muted">本机</text>
+<text x="390" y="347" class="label strong">键鼠权限待检查</text>
+<text x="390" y="382" class="label muted">输入：未开启</text>
+<rect x="818" y="212" width="572" height="224" rx="8" fill="#fff" stroke="#bbc2cc"/>
+<rect x="846" y="266" width="100" height="64" rx="4" fill="#f1f3f5" stroke="#8994a2"/>
+<line x1="896" y1="330" x2="896" y2="348" stroke="#8994a2"/>
+<line x1="871" y1="348" x2="921" y2="348" stroke="#8994a2"/>
+<text x="986" y="274" class="body strong">另一台电脑</text>
+<text x="986" y="303" class="small muted">已登记</text>
+<g aria-label="查看设备详情">
+<text x="1348" y="246" text-anchor="middle" style="font-size:22px">⋯</text>
+</g>
+<text x="986" y="347" class="label strong">已连接 · 仅通信</text>
+<text x="986" y="382" class="label">键鼠未开启</text>
+<text x="986" y="412" class="small muted">接收控制由对方设置</text>
+<rect x="222" y="460" width="1168" height="106" rx="8" fill="#eef0f3" stroke="#b9c1cb"/>
+<text x="250" y="500" class="body strong">已连接，键鼠尚未开启</text>
+<text x="250" y="532" class="label muted">先检查本机权限，再由双方分别确认。</text>
+<rect x="1114" y="491" width="252" height="44" rx="6" fill="#334155" stroke="#8994a2"/>
+<text x="1240" y="519" text-anchor="middle" style="font-size:16px;fill:#fff">检查本机键鼠权限</text>
+<text x="222" y="614" class="body strong">屏幕位置</text>
+<text x="1390" y="614" text-anchor="end" class="label">调整布局 →</text>
+<rect x="222" y="636" width="1168" height="166" rx="8" fill="#f4f5f6" stroke="#bbc2cc"/>
+<rect x="600" y="662" width="180" height="98" rx="5" fill="#fff" stroke="#8994a2"/>
+<text x="690" y="703" text-anchor="middle" class="body strong">本机</text>
+<text x="690" y="734" text-anchor="middle" class="small muted">主屏 · 尺寸未知</text>
+<line x1="780" y1="711" x2="844" y2="711" stroke="#8994a2"/>
+<rect x="844" y="662" width="180" height="98" rx="5" fill="#e6e9ed" stroke="#8994a2"/>
+<text x="934" y="703" text-anchor="middle" class="body strong">另一台电脑</text>
+<text x="934" y="734" text-anchor="middle" class="small muted">主屏 · 尺寸未知</text>
+<text x="812" y="784" text-anchor="middle" class="small muted">相对位置示意</text>
+<rect x="222" y="824" width="572" height="68" rx="8" fill="#fff" stroke="#bbc2cc"/>
+<rect x="246" y="842" width="22" height="32" rx="11" fill="none" stroke="#8994a2"/>
+<line x1="257" y1="843" x2="257" y2="852" stroke="#8994a2"/>
+<text x="288" y="851" class="body strong">本机鼠标</text>
+<text x="288" y="875" class="small muted">窗口内预览 · 全局能力开发中</text>
+<text x="758" y="866" class="body muted">›</text>
+<rect x="818" y="824" width="572" height="68" rx="8" fill="#fff" stroke="#bbc2cc"/>
+<rect x="842" y="847" width="30" height="25" rx="3" fill="none" stroke="#8994a2"/>
+<rect x="844" y="843" width="13" height="5" rx="1" fill="#fff" stroke="#8994a2"/>
+<text x="892" y="851" class="body strong">剪贴板与文件</text>
+<text x="892" y="875" class="small muted">开发中</text>
+<text x="1354" y="866" class="body muted">›</text>
+<line x1="222" y1="916" x2="1390" y2="916" stroke="#d1d5db"/>
+<text x="222" y="942" class="small muted">设计线稿 · 非运行界面</text>
+<text x="1390" y="942" text-anchor="end" class="small muted">设备与状态为设计示例</text>
+</svg>
