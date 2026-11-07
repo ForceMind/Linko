@@ -101,6 +101,18 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                 path = dest / f"peerglide-{name}.png"
                 run_external(["import", "-window", "root", str(path)], check=True)
                 assert path.stat().st_size > 1000
+                if name == "home":
+                    # Scale-1 fresh unpaired workspace, owned Xvfb window only.
+                    # Read these screenshots before claiming page/modal proof.
+                    run_external(["xdotool", "mousemove", "--window", window, "110", "506", "click", "1"], check=True)
+                    time.sleep(0.4)
+                    run_external(["import", "-window", "root", str(dest / "peerglide-settings.png")], check=True)
+                    run_external(["xdotool", "mousemove", "--window", window, "110", "168", "click", "1"], check=True)
+                    time.sleep(0.3)
+                    run_external(["xdotool", "mousemove", "--window", window, "688", "366", "click", "1"], check=True)
+                    time.sleep(0.4)
+                    assert not (profile / "identity").exists(), "opening add must not create identity or click through"
+                    run_external(["import", "-window", "root", str(dest / "peerglide-add-device.png")], check=True)
                 run_external(["xdotool", "windowclose", window], check=True)
                 try:
                     gui.wait(timeout=3)
