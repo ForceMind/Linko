@@ -76,7 +76,8 @@ fn install_fonts(ctx: &egui::Context) {
         ("linko-semibold", 550.0),
         ("linko-heading", 650.0),
     ] {
-        let mut data = egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
+        let mut data =
+            egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
         // Reuse the same licensed variable font bytes with real weight axes;
         // RichText::strong only changes color in egui, not the font weight.
         data.tweak.coords.push(b"wght", weight);
@@ -84,7 +85,9 @@ fn install_fonts(ctx: &egui::Context) {
         if name != "noto-sans-sc" {
             let mut family = vec![name.to_owned()];
             family.extend(fallback.iter().cloned());
-            fonts.families.insert(egui::FontFamily::Name(name.into()), family);
+            fonts
+                .families
+                .insert(egui::FontFamily::Name(name.into()), family);
         }
     }
     fonts
@@ -98,13 +101,14 @@ fn install_fonts(ctx: &egui::Context) {
         .or_default()
         .push("noto-sans-sc".into());
     ctx.set_fonts(fonts);
-    ctx.data_mut(|memory| memory.insert_temp(egui::Id::new("linko-fonts-installed"), true));
+    let marker = egui::Id::unique("linko-fonts-installed");
+    ctx.data_mut(|memory| memory.insert_temp(marker, true));
 }
 
 fn ensure_fonts(ctx: &egui::Context) {
     if !ctx.data(|memory| {
         memory
-            .get_temp::<bool>(egui::Id::new("linko-fonts-installed"))
+            .get_temp::<bool>(egui::Id::unique("linko-fonts-installed"))
             .unwrap_or(false)
     }) {
         install_fonts(ctx);
@@ -1632,7 +1636,6 @@ mod tests {
         ctx
     }
 
-
     #[test]
     fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants() -> Result<()>
     {
@@ -2625,7 +2628,7 @@ mod lifecycle_tests {
         app.active_mode = Some(SessionMode::Communication);
         app.desktop_preferences.tray_enabled = true;
         app.desktop_preferences.close_to_tray = true;
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
             app.process_window_close(ctx, true);
         });
@@ -2654,7 +2657,7 @@ mod lifecycle_tests {
             .post(peerglide_platform::tray::Command::Show);
         app.tray_mailbox
             .post(peerglide_platform::tray::Command::Quit);
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         logic_frames(&mut app, &ctx, true);
         assert!(app.close_requested && !app.window_hidden);
         assert!(app.pending_start.is_none());
@@ -2681,7 +2684,7 @@ mod lifecycle_tests {
                 .post(peerglide_platform::tray::Command::Stop);
             app.tray_mailbox
                 .post(peerglide_platform::tray::Command::Quit);
-            let ctx = ui_context();
+            let ctx = egui::Context::default();
             let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_tray(ctx));
             assert!(app.close_requested && app.pending_start.is_none());
             assert!(app.stopping.is_some());
@@ -2695,7 +2698,7 @@ mod lifecycle_tests {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let handle = app.tray_mailbox.clone();
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         app.desktop_preferences.tray_enabled = false;
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.sync_tray(ctx));
         assert!(Arc::ptr_eq(&handle, &app.tray_mailbox));
@@ -2725,7 +2728,7 @@ mod lifecycle_tests {
         app.pending_start = Some(SessionMode::Native);
         app.native_confirmation = true;
         app.window_hidden = true;
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
             app.exit_protection_lost(ctx)
         });
@@ -2799,7 +2802,7 @@ mod lifecycle_tests {
         let original = app.config.edge.clone();
         app.native_confirmation = true;
         app.screen_drag = Some((Vec2::ZERO, egui::pos2(10.0, 10.0), egui::Rect::EVERYTHING));
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         logic_frames(&mut app, &ctx, true);
         assert!(app.screen_drag.is_none());
         assert!(!app.native_confirmation);
@@ -2891,7 +2894,7 @@ mod lifecycle_tests {
     fn communication_sleeps_but_native_eof_and_stop_keep_ticking() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         let ticks = count_activity_ticks(&ctx);
         logic_frames(&mut app, &ctx, false);
         assert_eq!(
@@ -2948,7 +2951,7 @@ mod lifecycle_tests {
         let mut app = App::load(fixture.path.clone());
         app.child = Some(managed_child()?);
         app.active_mode = Some(SessionMode::Communication);
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         let mut input = egui::RawInput::default();
         let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
         viewport.occluded = Some(true);
@@ -2988,7 +2991,7 @@ mod lifecycle_tests {
         let mut app = App::load(fixture.path.clone());
         app.recovery_blocked = true;
         app.input_state = Some(WorkerInputState::RecoveryUnconfirmed);
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         let mut input = egui::RawInput::default();
         let viewport = input.viewports.entry(egui::ViewportId::ROOT).or_default();
         viewport.occluded = Some(true);
@@ -3024,7 +3027,7 @@ mod lifecycle_tests {
         );
         app.worker_state = Some(snapshot);
         app.events = Some(rx);
-        let ctx = ui_context();
+        let ctx = egui::Context::default();
         let ticks = count_activity_ticks(&ctx);
         logic_frames(&mut app, &ctx, true);
         assert!(app.child.is_some() && ticks.load(Ordering::SeqCst) > 0);

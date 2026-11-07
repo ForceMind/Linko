@@ -1203,7 +1203,11 @@ impl App {
                         self.dialog = Some(Dialog::Recovery);
                     }
                     let view = self.workspace_view();
-                    ui.label(desktop_style::status_text(view.title, self.config.dark, view.tone));
+                    ui.label(desktop_style::status_text(
+                        view.title,
+                        self.config.dark,
+                        view.tone,
+                    ));
                 }
             });
             ui.add_space(4.0);

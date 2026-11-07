@@ -134,12 +134,10 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     style.spacing.interact_size = egui::vec2(36.0, 36.0);
     style.spacing.window_margin = egui::Margin::same(18);
     style.spacing.menu_margin = egui::Margin::same(8);
-    style
-        .text_styles
-        .insert(
-            TextStyle::Heading,
-            FontId::new(28.0, egui::FontFamily::Name("linko-heading".into())),
-        );
+    style.text_styles.insert(
+        TextStyle::Heading,
+        FontId::new(28.0, egui::FontFamily::Name("linko-heading".into())),
+    );
     style
         .text_styles
         .insert(TextStyle::Body, FontId::proportional(15.0));
@@ -171,7 +169,9 @@ pub(super) fn semibold(text: impl Into<String>, size: f32) -> RichText {
 }
 
 pub(super) fn status_text(text: &str, dark: bool, tone: Tone) -> RichText {
-    RichText::new(text).size(14.0).color(tone_colors(dark, tone).1)
+    RichText::new(text)
+        .size(14.0)
+        .color(tone_colors(dark, tone).1)
 }
 
 /// Small original dual-screen mark, painted locally without assets or timers.
@@ -228,10 +228,10 @@ pub(super) fn pill(ui: &mut egui::Ui, label: &str, tone: Tone) {
 
 pub(super) fn primary(label: &str) -> egui::Button<'static> {
     egui::Button::new(semibold(label, 15.0).color(Color32::WHITE))
-    .fill(Color32::from_rgb(66, 99, 235))
-    .stroke(Stroke::new(1.0, Color32::from_rgb(54, 81, 204)))
-    .corner_radius(egui::CornerRadius::same(9))
-    .min_size(egui::vec2(120.0, 38.0))
+        .fill(Color32::from_rgb(66, 99, 235))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(54, 81, 204)))
+        .corner_radius(egui::CornerRadius::same(9))
+        .min_size(egui::vec2(120.0, 38.0))
 }
 
 pub(super) fn selection_colors(ui: &egui::Ui) -> (Color32, Color32) {
@@ -267,20 +267,34 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
     match label {
         "设备" | "屏幕布局" => {
             painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
-            painter.line_segment([
-                icon.center_bottom(),
-                icon.center_bottom() + egui::vec2(0.0, 3.0),
-            ], stroke);
+            painter.line_segment(
+                [
+                    icon.center_bottom(),
+                    icon.center_bottom() + egui::vec2(0.0, 3.0),
+                ],
+                stroke,
+            );
             if label == "屏幕布局" {
-                painter.line_segment([
-                    icon.center_top() + egui::vec2(3.0, 2.0),
-                    icon.center_bottom() + egui::vec2(3.0, -2.0),
-                ], stroke);
+                painter.line_segment(
+                    [
+                        icon.center_top() + egui::vec2(3.0, 2.0),
+                        icon.center_bottom() + egui::vec2(3.0, -2.0),
+                    ],
+                    stroke,
+                );
             }
         }
         "文件传输" => {
-            painter.arrow(icon.center() - egui::vec2(5.0, 5.0), egui::vec2(0.0, 11.0), stroke);
-            painter.arrow(icon.center() + egui::vec2(5.0, 5.0), egui::vec2(0.0, -11.0), stroke);
+            painter.arrow(
+                icon.center() - egui::vec2(5.0, 5.0),
+                egui::vec2(0.0, 11.0),
+                stroke,
+            );
+            painter.arrow(
+                icon.center() + egui::vec2(5.0, 5.0),
+                egui::vec2(0.0, -11.0),
+                stroke,
+            );
         }
         "设置" => {
             painter.circle_stroke(icon.center(), 7.0, stroke);
@@ -289,16 +303,22 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
         _ => {
             painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
             for offset in [-4.0, 0.0, 4.0] {
-                painter.line_segment([
-                    icon.center() + egui::vec2(-5.0, offset),
-                    icon.center() + egui::vec2(5.0, offset),
-                ], stroke);
+                painter.line_segment(
+                    [
+                        icon.center() + egui::vec2(-5.0, offset),
+                        icon.center() + egui::vec2(5.0, offset),
+                    ],
+                    stroke,
+                );
             }
         }
     }
     if selected {
         painter.rect_filled(
-            egui::Rect::from_min_size(response.rect.min + egui::vec2(0.0, 9.0), egui::vec2(3.0, 26.0)),
+            egui::Rect::from_min_size(
+                response.rect.min + egui::vec2(0.0, 9.0),
+                egui::vec2(3.0, 26.0),
+            ),
             1.5,
             palette(ui.visuals().dark_mode).accent,
         );

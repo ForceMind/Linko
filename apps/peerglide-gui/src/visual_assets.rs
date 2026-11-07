@@ -40,11 +40,20 @@ fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
         return None;
     }
     let uv = Rect::from_min_max(
-        egui::pos2(minimum[0] as f32 / width as f32, minimum[1] as f32 / height as f32),
-        egui::pos2(maximum[0] as f32 / width as f32, maximum[1] as f32 / height as f32),
+        egui::pos2(
+            minimum[0] as f32 / width as f32,
+            minimum[1] as f32 / height as f32,
+        ),
+        egui::pos2(
+            maximum[0] as f32 / width as f32,
+            maximum[1] as f32 / height as f32,
+        ),
     );
     Some(DecodedDevice {
-        image: Arc::new(ColorImage::from_rgba_unmultiplied([width, height], &icon.rgba)),
+        image: Arc::new(ColorImage::from_rgba_unmultiplied(
+            [width, height],
+            &icon.rgba,
+        )),
         uv,
         aspect: (maximum[0] - minimum[0]) as f32 / (maximum[1] - minimum[1]) as f32,
     })
@@ -52,8 +61,12 @@ fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
 
 fn decoded(kind: DeviceKind) -> Option<&'static DecodedDevice> {
     match kind {
-        DeviceKind::Local => LAPTOP.get_or_init(|| decode(include_bytes!("../assets/devices/local-laptop.png"))),
-        DeviceKind::Peer => MONITOR.get_or_init(|| decode(include_bytes!("../assets/devices/desktop-monitor.png"))),
+        DeviceKind::Local => {
+            LAPTOP.get_or_init(|| decode(include_bytes!("../assets/devices/local-laptop.png")))
+        }
+        DeviceKind::Peer => {
+            MONITOR.get_or_init(|| decode(include_bytes!("../assets/devices/desktop-monitor.png")))
+        }
     }
     .as_ref()
 }
@@ -63,7 +76,7 @@ pub(super) fn device_texture(ctx: &egui::Context, kind: DeviceKind) -> Option<Te
         DeviceKind::Local => "linko-local-device-art",
         DeviceKind::Peer => "linko-peer-device-art",
     };
-    let key = egui::Id::new(name);
+    let key = egui::Id::unique(name);
     if let Some(texture) = ctx.data(|memory| memory.get_temp::<TextureHandle>(key)) {
         return Some(texture);
     }
@@ -76,7 +89,10 @@ pub(super) fn device_texture(ctx: &egui::Context, kind: DeviceKind) -> Option<Te
 }
 
 pub(super) fn device_uv(kind: DeviceKind) -> Rect {
-    decoded(kind).map_or(Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), |source| source.uv)
+    decoded(kind).map_or(
+        Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        |source| source.uv,
+    )
 }
 
 pub(super) fn device_aspect(kind: DeviceKind) -> f32 {
@@ -95,7 +111,9 @@ mod tests {
             assert!(source.image.pixels.iter().any(|pixel| pixel.a() == 0));
             assert!(source.aspect.is_finite() && source.aspect > 0.5 && source.aspect < 3.0);
             assert!(source.uv.is_positive());
-            assert!(Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)).contains_rect(source.uv));
+            assert!(
+                Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)).contains_rect(source.uv)
+            );
         }
     }
 

@@ -411,9 +411,11 @@ impl App {
             } else {
                 Tone::Neutral
             };
-            ui.label(desktop_style::status_text(connection, self.config.dark, tone).font(
-                egui::FontId::new(18.0, egui::FontFamily::Name("linko-semibold".into())),
-            ));
+            ui.label(
+                desktop_style::status_text(connection, self.config.dark, tone).font(
+                    egui::FontId::new(18.0, egui::FontFamily::Name("linko-semibold".into())),
+                ),
+            );
             let view = self.workspace_view();
             let needs_attention = matches!(view.tone, Tone::Warning | Tone::Danger)
                 || (!self.connected && view.action == desktop_state::Action::None)
@@ -422,7 +424,11 @@ impl App {
                 || self.pairing_pending();
             if needs_attention {
                 ui.separator();
-                ui.label(desktop_style::status_text(view.title, self.config.dark, view.tone));
+                ui.label(desktop_style::status_text(
+                    view.title,
+                    self.config.dark,
+                    view.tone,
+                ));
                 ui.label(view.detail);
             }
         });
@@ -562,10 +568,8 @@ fn draw_workspace_device(
     } else {
         0.0
     };
-    let image_area = egui::Rect::from_min_max(
-        node.min,
-        egui::pos2(node.max.x, node.max.y - label_height),
-    );
+    let image_area =
+        egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
     let aspect = visual_assets::device_aspect(kind);
     let width = image_area.width().min(image_area.height() * aspect);
     let image_rect =
@@ -803,10 +807,7 @@ mod tests {
         app.theme(&ctx);
         for (label, selected) in [
             ("已登记电脑 · 对端".to_owned(), true),
-            (
-                format!("{} · 本机", desktop_ui::local_device_name()),
-                false,
-            ),
+            (format!("{} · 本机", desktop_ui::local_device_name()), false),
         ] {
             let output = frame(&mut app, &ctx, vec![]);
             let at = output
