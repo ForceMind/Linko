@@ -76,7 +76,7 @@ impl App {
         } else {
             "拖动设备调整相对方向，让鼠标顺着桌面跨过屏幕边缘。"
         });
-        ui.add_space(16.0);
+        ui.add_space(8.0);
         if self.device_tab == DeviceTab::Permissions {
             if ui.button("‹ 返回屏幕布局").clicked() {
                 self.device_tab = DeviceTab::Device;
@@ -182,9 +182,8 @@ impl App {
                 });
             });
         });
-        ui.add_space(if compact { 12.0 } else { 16.0 });
+        ui.add_space(8.0);
         ui.label(desktop_style::semibold("设备详情", 17.0));
-        ui.add_space(4.0);
         self.workspace_device_cards(ui);
         ui.add_space(6.0);
         ui.small(if self.child.is_some() {
@@ -213,7 +212,7 @@ impl App {
                 let title = format!("{} · {}", name, if peer { "对端" } else { "本机" });
                 let (fill, _) = desktop_style::selection_colors(column);
                 let frame = card(column)
-                    .inner_margin(if compact { 10.0 } else { 16.0 })
+                    .inner_margin(if compact { 10.0 } else { 14.0 })
                     .fill(if selected {
                         fill
                     } else {
@@ -229,7 +228,7 @@ impl App {
                     ));
                 let response = frame.show(column, |ui| {
                     ui.set_min_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = if compact { 3.0 } else { 8.0 };
+                    ui.spacing_mut().item_spacing.y = if compact { 3.0 } else { 6.0 };
                     ui.set_min_height(if compact { 70.0 } else { 96.0 });
                     ui.add(
                         egui::Label::new(desktop_style::semibold(
@@ -294,7 +293,7 @@ impl App {
         let height = if ui.available_width() < 440.0 {
             180.0
         } else {
-            270.0
+            260.0
         };
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
@@ -400,10 +399,11 @@ impl App {
 
     fn workspace_device_detail(&mut self, ui: &mut egui::Ui) {
         let compact = ui.available_width() < 270.0;
-        let margin = if compact { 12.0 } else { 18.0 };
-        let gap = if compact { 10.0 } else { 16.0 };
+        let margin = if compact { 12.0 } else { 16.0 };
+        let gap = if compact { 8.0 } else { 12.0 };
         card(ui).inner_margin(margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
+            ui.spacing_mut().item_spacing.x = 8.0;
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.label(desktop_style::semibold("连接状态", 16.0));
             ui.add_space(4.0);
@@ -413,11 +413,26 @@ impl App {
             } else {
                 Tone::Neutral
             };
-            ui.label(
-                desktop_style::status_text(connection, self.config.dark, tone).font(
-                    egui::FontId::new(18.0, egui::FontFamily::Name("linko-semibold".into())),
-                ),
-            );
+            let connection_text = desktop_style::status_text(connection, self.config.dark, tone)
+                .font(egui::FontId::new(
+                    18.0,
+                    egui::FontFamily::Name("linko-semibold".into()),
+                ));
+            if self.child.is_some() {
+                ui.horizontal(|ui| {
+                    let width = (ui.available_width() - 120.0).max(1.0);
+                    ui.add_sized([width, 38.0], egui::Label::new(connection_text).truncate())
+                        .on_hover_text(connection);
+                    if ui
+                        .add_sized([112.0, 38.0], egui::Button::new("停止并断开"))
+                        .clicked()
+                    {
+                        self.stop();
+                    }
+                });
+            } else {
+                ui.label(connection_text);
+            }
             let view = self.workspace_view();
             let needs_attention = matches!(view.tone, Tone::Warning | Tone::Danger)
                 || (!self.connected && view.action == desktop_state::Action::None)
@@ -437,9 +452,10 @@ impl App {
         ui.add_space(gap);
         card(ui).inner_margin(margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.spacing_mut().item_spacing.y = if compact { 5.0 } else { 8.0 };
+            ui.spacing_mut().item_spacing.x = 8.0;
+            ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 6.0 };
             ui.label(desktop_style::semibold("快捷操作", 17.0));
-            ui.horizontal(|ui| {
+            read_only_row(ui, |ui| {
                 ui.small("所选设备");
                 let name = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
                     self.config.peer_name.as_str()
@@ -513,16 +529,14 @@ impl App {
                 ui.small("对端的接收许可由对方单独设置。");
             }
             ui.small("开启键鼠仍需本次明确确认。");
-            if self.child.is_some() && ui.button("停止并断开").clicked() {
-                self.stop();
-            }
         });
         ui.add_space(gap);
         card(ui).inner_margin(margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
+            ui.spacing_mut().item_spacing.x = 8.0;
             ui.spacing_mut().item_spacing.y = 4.0;
-            ui.label(desktop_style::semibold("协作能力", 16.0));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(desktop_style::semibold("协作能力", 16.0));
                 ui.small("内容共享");
                 if ui.small_button("说明").clicked() {
                     self.navigate_to(Page::Transfers);
@@ -545,8 +559,16 @@ fn local_system_name() -> &'static str {
     }
 }
 
+fn read_only_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), 24.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        add_contents,
+    );
+}
+
 fn text_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
+    read_only_row(ui, |ui| {
         ui.add_sized(
             [60.0, 20.0],
             egui::Label::new(RichText::new(label).size(13.0).weak()),
@@ -980,14 +1002,20 @@ mod tests {
             let safety_controls: Vec<_> = ["停止协同", "紧急恢复本机"]
                 .into_iter()
                 .map(|safety_label| {
-                    output.shapes.iter().find_map(|s| text_center(&s.shape, safety_label))
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|s| text_center(&s.shape, safety_label))
                 })
                 .collect();
             output.drop_without_applying_deltas();
             let at = at.context("navigation entry absent")?;
             for control in safety_controls {
                 let center = control.context("fixed safety control absent")?;
-                assert!(center.y <= 52.0, "safety toolbar grew beyond its bounded row");
+                assert!(
+                    center.y <= 52.0,
+                    "safety toolbar grew beyond its bounded row"
+                );
             }
             app.native_confirmation = true;
             click(&mut app, &ctx, at);

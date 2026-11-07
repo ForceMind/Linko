@@ -48,7 +48,7 @@ impl App {
             };
         }
         match self.input_state {
-            Some(WorkerInputState::Disabled) => "原生输入关闭 · 仅通信",
+            Some(WorkerInputState::Disabled) => "键鼠未开启",
             Some(WorkerInputState::Local) => "本机控制（进程报告）",
             Some(WorkerInputState::ControllingRemote) => "正在控制对端",
             Some(WorkerInputState::ReceivingRemote) => "对端正在控制本机",
@@ -1130,57 +1130,6 @@ impl App {
             self.stop();
             self.gesture_lab.cancel();
         }
-        egui::Panel::left("navigation")
-            .exact_size(196.0)
-            .show(root, |ui| {
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    desktop_style::brand_mark(ui);
-                    ui.vertical(|ui| {
-                        ui.heading(desktop_style::heading_text("Linko"));
-                        ui.small("屏跃");
-                    });
-                });
-                ui.add_space(28.0);
-                for (page, label) in [
-                    (Page::Devices, "设备"),
-                    (Page::Displays, "屏幕布局"),
-                    (Page::Transfers, "文件传输"),
-                    (Page::Clipboard, "剪贴板"),
-                    (Page::Shortcuts, "快捷键"),
-                    (Page::Settings, "设置"),
-                ] {
-                    if page == Page::Settings {
-                        ui.add_space((ui.available_height() - 130.0).max(12.0));
-                    }
-                    let selected = self.page == page
-                        || (page == Page::Shortcuts
-                            && matches!(
-                                self.page,
-                                Page::Home | Page::GestureLab | Page::GestureRules
-                            ));
-                    let response = desktop_style::navigation(ui, label, selected);
-                    let key = match page {
-                        Page::Devices => "nav_devices",
-                        Page::Displays => "nav_layout",
-                        Page::Shortcuts => "nav_shortcuts",
-                        Page::Settings => "nav_settings",
-                        Page::Transfers => "nav_files",
-                        Page::Clipboard => "nav_clipboard",
-                        _ => unreachable!("only product navigation entries are rendered here"),
-                    };
-                    self.record_layout_control(key, &response, ui.clip_rect());
-                    if response.clicked() {
-                        self.navigate_to(page);
-                        self.device_tab = DeviceTab::Device;
-                    }
-                    ui.add_space(8.0);
-                }
-                ui.add_space(18.0);
-                ui.separator();
-                ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
-                ui.small("简体中文 · 主屏协作");
-            });
         egui::Panel::top("global-actions")
             .exact_size(52.0)
             .resizable(false)
@@ -1220,6 +1169,63 @@ impl App {
                 );
                 ui.add_space(4.0);
             });
+        egui::Panel::left("navigation")
+            .exact_size(196.0)
+            .show(root, |ui| {
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    desktop_style::brand_mark(ui);
+                    ui.vertical(|ui| {
+                        ui.heading(desktop_style::heading_text("Linko"));
+                        ui.small("屏跃");
+                    });
+                });
+                ui.add_space(28.0);
+                for (page, label) in [
+                    (Page::Devices, "设备"),
+                    (Page::Displays, "屏幕布局"),
+                    (Page::Transfers, "文件传输"),
+                    (Page::Clipboard, "剪贴板"),
+                    (Page::Shortcuts, "快捷键"),
+                    (Page::Settings, "设置"),
+                ] {
+                    if page == Page::Settings {
+                        ui.separator();
+                        ui.add_space(12.0);
+                    }
+                    let selected = self.page == page
+                        || (page == Page::Shortcuts
+                            && matches!(
+                                self.page,
+                                Page::Home | Page::GestureLab | Page::GestureRules
+                            ));
+                    let response = desktop_style::navigation(ui, label, selected);
+                    let key = match page {
+                        Page::Devices => "nav_devices",
+                        Page::Displays => "nav_layout",
+                        Page::Shortcuts => "nav_shortcuts",
+                        Page::Settings => "nav_settings",
+                        Page::Transfers => "nav_files",
+                        Page::Clipboard => "nav_clipboard",
+                        _ => unreachable!("only product navigation entries are rendered here"),
+                    };
+                    self.record_layout_control(key, &response, ui.clip_rect());
+                    if response.clicked() {
+                        self.navigate_to(page);
+                        self.device_tab = DeviceTab::Device;
+                    }
+                    ui.add_space(2.0);
+                }
+                ui.allocate_ui_with_layout(
+                    ui.available_size(),
+                    egui::Layout::bottom_up(egui::Align::LEFT),
+                    |ui| {
+                        ui.small("简体中文 · 主屏协作");
+                        ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
+                        ui.separator();
+                    },
+                );
+            });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.small("Linko / 屏跃");
@@ -1245,11 +1251,10 @@ impl App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .inner_margin(24.0)
+                    .inner_margin(egui::Margin::symmetric(24, 16))
                     .fill(root.visuals().panel_fill),
             )
             .show(root, |ui| {
-                ui.add_space(4.0);
                 egui::ScrollArea::vertical().show(ui, |ui| match self.page {
                     Page::Home => self.home(ui),
                     Page::Devices => self.devices(ui),

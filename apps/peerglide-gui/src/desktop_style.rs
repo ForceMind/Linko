@@ -254,7 +254,7 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
                 .frame(true)
                 .fill(if selected { fill } else { Color32::TRANSPARENT })
                 .stroke(Stroke::NONE);
-            ui.add_sized([ui.available_width(), 44.0], button)
+            ui.add_sized([ui.available_width(), 40.0], button)
         })
         .inner;
     let painter = ui.painter_at(response.rect);
@@ -330,7 +330,7 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
     if selected {
         painter.rect_filled(
             egui::Rect::from_min_size(
-                response.rect.min + egui::vec2(0.0, 9.0),
+                response.rect.min + egui::vec2(0.0, 7.0),
                 egui::vec2(3.0, 26.0),
             ),
             1.5,
