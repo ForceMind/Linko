@@ -99,7 +99,48 @@ impl App {
             card(ui).show(ui, |ui| self.displays(ui));
             return;
         }
+        let width = ui.available_width();
+        if width >= 600.0 {
+            let details = if width < 780.0 { 248.0 } else { 280.0 };
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                ui.vertical(|ui| {
+                    ui.set_width(width - details - 16.0);
+                    self.workspace_screen_card(ui);
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(details);
+                    self.workspace_device_detail(ui);
+                });
+            });
+        } else {
+            self.workspace_screen_card(ui);
+            ui.add_space(12.0);
+            self.workspace_device_detail(ui);
+        }
+        ui.add_space(12.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.small(if self.child.is_some() {
+                "会话中布局已锁定，停止后可以调整。"
+            } else {
+                "拖动屏幕可保存相对方向；另一端需设置相反方向。"
+            });
+            if ui
+                .small_button(if self.connection_details_open {
+                    "收起连接详情"
+                } else {
+                    "连接与身份详情"
+                })
+                .clicked()
+            {
+                self.connection_details_open = !self.connection_details_open;
+            }
+        });
+    }
+
+    fn workspace_screen_card(&mut self, ui: &mut egui::Ui) {
         card(ui).inner_margin(12.0).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.strong("屏幕布局");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -129,26 +170,6 @@ impl App {
                 });
             } else {
                 ui.weak("添加电脑后，把它拖到这台电脑的左、右、上或下方。");
-            }
-        });
-        ui.add_space(14.0);
-        self.workspace_device_detail(ui);
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.small(if self.child.is_some() {
-                "会话中布局已锁定，停止后可以调整。"
-            } else {
-                "拖动屏幕可保存相对方向；另一端需设置相反方向。"
-            });
-            if ui
-                .small_button(if self.connection_details_open {
-                    "收起连接详情"
-                } else {
-                    "连接与身份详情"
-                })
-                .clicked()
-            {
-                self.connection_details_open = !self.connection_details_open;
             }
         });
     }
@@ -273,6 +294,7 @@ impl App {
     fn workspace_device_detail(&mut self, ui: &mut egui::Ui) {
         let peer = self.workspace_peer_selected && self.config.fingerprint.is_some();
         card(ui).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
                 ui.strong(if peer {
                     &self.config.peer_name
@@ -286,31 +308,18 @@ impl App {
                     } else if peer {
                         "已记住"
                     } else {
-                        "这台电脑"
+                        "本机"
                     },
                     Tone::Neutral,
                 );
             });
             ui.add_space(10.0);
             ui.horizontal_wrapped(|ui| {
-                ui.label("键盘与鼠标");
+                ui.label("键鼠");
                 if self.child.is_some() || self.stopping.is_some() || self.recovery_blocked {
                     pill(ui, self.input_label(), Tone::Neutral);
                 } else {
                     pill(ui, "尚未开启", Tone::Neutral);
-                }
-                if !peer
-                    && ui
-                        .add_enabled(
-                            (self.child.is_none()
-                                || self.active_mode == Some(SessionMode::Communication))
-                                && self.stopping.is_none(),
-                            egui::Button::new("检查本机权限"),
-                        )
-                        .clicked()
-                {
-                    self.native_confirmation = false;
-                    self.worker_permissions.start();
                 }
             });
             ui.add_space(8.0);
@@ -328,11 +337,31 @@ impl App {
                     };
                     pill(ui, label, tone);
                 });
-                ui.small(readiness.detail());
+                if matches!(readiness, worker_permissions::Readiness::Unchecked | worker_permissions::Readiness::Checking | worker_permissions::Readiness::Ready) {
+                    ui.small("仅检查，不会开启键鼠").on_hover_text(readiness.detail());
+                } else {
+                    ui.small(readiness.detail());
+                }
+                if ui
+                        .add_enabled(
+                            (self.child.is_none()
+                                || self.active_mode == Some(SessionMode::Communication))
+                                && self.stopping.is_none() && !self.worker_permissions.needs_poll(),
+                            egui::Button::new("检查权限"),
+                        )
+                        .clicked()
+                {
+                    self.native_confirmation = false;
+                    self.worker_permissions.start();
+                }
                 ui.add_space(8.0);
             }
             ui.horizontal_wrapped(|ui| {
-                ui.label(if peer { "对方 → 本机" } else { "接收键鼠控制" });
+                ui.label(if peer {
+                    "对方 → 本机"
+                } else {
+                    "接收控制"
+                });
                 pill(
                     ui,
                     if self.config.allow {
@@ -346,13 +375,19 @@ impl App {
                         Tone::Neutral
                     },
                 );
-                if ui.add_enabled(self.config.fingerprint.is_some(), egui::Button::new("接收设置").small()).clicked() {
+                if ui
+                    .add_enabled(
+                        self.config.fingerprint.is_some(),
+                        egui::Button::new("设置").small(),
+                    )
+                    .clicked()
+                {
                     self.device_tab = DeviceTab::Permissions;
                 }
             });
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
-                ui.weak("剪贴板与文件");
+                ui.weak("内容共享");
                 pill(ui, "尚未接通", Tone::Neutral);
                 if ui.small_button("查看说明").clicked() {
                     self.page = Page::Transfers;
@@ -362,7 +397,7 @@ impl App {
             ui.small(if peer {
                 "对方是否允许接收控制，由它独立设置；连接成功不会自动授予权限。"
             } else {
-                "系统权限由本机检查；开启键鼠前仍需你明确确认。"
+                "开启键鼠仍需明确确认。"
             });
         });
     }
