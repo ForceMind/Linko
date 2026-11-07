@@ -89,6 +89,15 @@
       "height": 960,
       "png_color_type": 6,
       "origin": "AppKit static SVG rendering"
+    },
+    {
+      "path": "effects/device-hub-forest-rejected.png",
+      "sha256": "fed74e718d917ebc5978aeed3b41385f622285a782967c03f83423155372ec63",
+      "width": 1585,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen",
+      "status": "rejected_by_user"
     }
   ],
   "validation": {
@@ -97,5 +106,17 @@
     "brand_svg_preview": "512x512; Quick Look static offscreen rendering; visually inspected",
     "browser": "not run",
     "actual_gui": "not run; design assets only"
-  }
+  },
+  "visual_proposals": [
+    {
+      "id": 1,
+      "palette": "blue-white",
+      "status": "rejected_by_user"
+    },
+    {
+      "id": 2,
+      "palette": "forest-sage-lime",
+      "status": "rejected_by_user"
+    }
+  ]
 }
