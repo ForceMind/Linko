@@ -556,17 +556,23 @@ impl App {
         match self.settings_section {
             SettingsSection::General => {
                 desktop_style::card(ui).show(ui, |ui| {
-            ui.set_min_width(ui.available_width().min(680.0));
+                    ui.set_min_width(ui.available_width().min(680.0));
                     ui.strong("外观与连接");
                     ui.add_enabled_ui(self.writable(), |ui| {
-                let previous = self.config.dark;
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("外观");
-                    ui.selectable_value(&mut self.config.dark, false, "浅色");
-                    ui.selectable_value(&mut self.config.dark, true, "深色");
-                });
-                if previous != self.config.dark { self.theme(ctx); self.save(); }
-                ui.horizontal_wrapped(|ui| { ui.label("界面语言"); ui.weak("简体中文"); });
+                        let previous = self.config.dark;
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("外观");
+                            ui.selectable_value(&mut self.config.dark, false, "浅色");
+                            ui.selectable_value(&mut self.config.dark, true, "深色");
+                        });
+                        if previous != self.config.dark {
+                            self.theme(ctx);
+                            self.save();
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("界面语言");
+                            ui.weak("简体中文");
+                        });
                     });
                     ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                         if ui
@@ -580,7 +586,7 @@ impl App {
                 });
                 ui.add_space(14.0);
                 desktop_style::card(ui).show(ui, |ui| {
-            ui.set_min_width(ui.available_width().min(680.0));
+                    ui.set_min_width(ui.available_width().min(680.0));
                     ui.strong(if cfg!(target_os = "macos") {
                         "菜单栏与关闭窗口"
                     } else {
@@ -648,7 +654,7 @@ impl App {
             }
             SettingsSection::Permissions => {
                 desktop_style::card(ui).show(ui, |ui| {
-            ui.set_min_width(ui.available_width().min(680.0));
+                    ui.set_min_width(ui.available_width().min(680.0));
                     let idle = self.child.is_none() && self.stopping.is_none();
                     self.worker_permissions.ui(ui, idle);
                 });
