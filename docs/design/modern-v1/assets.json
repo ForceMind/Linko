@@ -107,6 +107,31 @@
       "png_color_type": 2,
       "origin": "built-in image_gen",
       "status": "rejected_by_user"
+    },
+    {
+      "path": "effects/device-hub-sakura.png",
+      "sha256": "8e5e422923f9aa80bc828c9f8285690c609936001baf8a4a8a9ed63cfe549b86",
+      "status": "awaiting_user_review",
+      "width": 1585,
+      "height": 992,
+      "png_color_type": 2,
+      "origin": "built-in image_gen"
+    },
+    {
+      "path": "brand/app-icon-sakura.svg",
+      "sha256": "4cf525edcc0c521e6e13f8dd49d466322f1d9bf9ce57b88fc69cb01e8398e1f6",
+      "status": "awaiting_user_review",
+      "view_box": "0 0 1024 1024",
+      "origin": "repo-native editable SVG"
+    },
+    {
+      "path": "brand/previews/app-icon-sakura.svg.png",
+      "sha256": "9f2613def19220cdb7b46b21e3e93b76fed10f78706e7936be014675d6c9f08b",
+      "status": "awaiting_user_review",
+      "width": 512,
+      "height": 512,
+      "png_color_type": 6,
+      "origin": "Quick Look static SVG rendering"
     }
   ],
   "validation": {
@@ -114,7 +139,9 @@
     "wireframe_previews": "1440x960; AppKit static offscreen rendering; visually inspected",
     "brand_svg_preview": "512x512; Quick Look static offscreen rendering; visually inspected",
     "browser": "not run",
-    "actual_gui": "not run; design assets only"
+    "actual_gui": "not run; design assets only",
+    "sakura_spec_text_contrast_min": 4.99,
+    "sakura_spec_text_contrast_scope": "six normative text/background pairs only; generated bitmap not pixel-certified"
   },
   "visual_proposals": [
     {
@@ -136,6 +163,13 @@
       "id": 4,
       "palette": "anime-sakura-pink-misty-lilac",
       "status": "pending_review"
+    },
+    {
+      "id": 4,
+      "name": "樱花汽水",
+      "palette": "sakura-pink / lavender / icy-blue details",
+      "status": "awaiting_user_review"
     }
-  ]
+  ],
+  "current_visual_proposal": 4
 }
