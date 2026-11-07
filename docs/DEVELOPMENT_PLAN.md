@@ -271,9 +271,11 @@ A+B合计约8–13个有效工作日交付易连接的基础日常候选；A通�
 2. A2：对发现的问题修复、完整CI/对应物理回归；建立GUI可见/隐藏及worker分账的
    RSS/可获得physical footprint/CPU曲线，采样缺失不算通过。验证至少8h基础会话与
    现有C06次数目标；没有资料不能宣布6.83GB修复。
-   现有隔离驻留诊断补累计CPU及区间占用率曲线，按单逻辑CPU=100%记录，缺测不填零；
-   schema2的CPU采样完整性与RSS/可选physical footprint分开说明。此切片只测自有GUI，
-   GUI隐藏/真实worker分账和8h/24h耐久仍单独补验，不将短时CI当资源根因结论。
+   已补累计CPU/区间曲线与真实GUI启动的NoNative worker、peer helper分账（PR64），
+   按单逻辑CPU=100%记录，缺测不填零；RSS/可选physical footprint口径独立。分账发现
+   稳定通信10Hz重绘，现已接输出唤醒，保留Native健康/EOF/停止计时；首轮Mac约30秒
+   CPU由39.659049%降到0.764002%，最终候选/平台结果见PR64及VALIDATION。
+   GUI隐藏/分账physical footprint、8h/24h耐久仍单独补验，短时CI不定位6.83GB根因。
 3. A3：日常使用前沿用既有平台存储机制，展示工作资料目录、迁移预览和冲突处理。
    现有私有tmp试跑profile不能当持久日常资料；若迁移须单独确认源/目标、保护已存
    身份且保留原副本，不重生成密钥或覆盖现有profile。

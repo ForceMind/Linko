@@ -1824,3 +1824,16 @@ worker7.613MiB、helper7.508MiB（整秒CPU计数未跨刻度，不能解释为�
 新增真实共用reader的队列满/terminal/EOF/读取错误唤醒及idle/Native/EOF/Stop时钟
 回归。当前改动待新候选CI与同场景分账比较，不沿用05绿灯声明修复通过。本机
 预检再次因缺Rust停止，不安装；现用App/配对/TCC和输入协议/原生捕获均不变。
+
+130cd8e的Mac资源run42317164367成功，artifact13551786895摘要
+3e15febbefa7aa5ba38b2de4e40aaa162c7a054c2a7efb2549c51d351a967bb9核对一致。
+同约30.105秒GUI平均单核CPU0.764002%、峰RSS119.078MiB；worker0.166091%/
+11.906MiB，helper0.199311%/11.813MiB，均正常停止回收。与05b6748的39.659049%
+相比，短窗结果支持通信周期重绘修复有效；不同CI任务数据，不作耐久/资源预算声明。
+
+504a57e已应用fmt，但旧late_diagnostics回归只装诊断channel、没有真实EOF快照，
+仍期待任意活动通信定时重绘而失败。0acdc9f改为经过实际共用reader的空stdout EOF，
+stderr sender仍存活；完整保留“晚到诊断读完才回收”与“结束后时钟静止”断言。
+0acdc9f最低1.95/依赖审计及三平台工作区测试已过，平台Release/进程/GUI专项继续。
+本记录批次只改文档，最终精确HEAD五项/资源/上游结果集中回读PR64及Issue5；不能
+把130cd8e的资源成功说成其当时全CI成功。现用冻结App/TCC/身份不变，C06未验收。
