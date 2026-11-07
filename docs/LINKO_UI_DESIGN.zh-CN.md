@@ -37,3 +37,15 @@ The previously generated render is **concept art**, not a screenshot from the re
 
 ## Codex execution
 Read AGENTS.md, README, DEVELOPMENT_PLAN, VALIDATION and LOCAL_CODEX_HANDOFF before changes. Preserve eframe and current Rust runtime. Start by inventorying existing GUI screens/widgets and state. Implement semantic tokens and topology pure model (snapping, scale, edge ordering, hit testing, overlap, keyboard), deterministic tests and state bindings incrementally. Do not silently enable unimplemented features. Keep physical Windows/macOS acceptance separate from CI, and use small PRs. See WINDOW_BRIDGE_RESEARCH.zh-CN.md.
+
+## Future extension — remote workspace and mobile controllers
+
+See [Linko 长期工作空间愿景](LINKO_WORKSPACE_VISION.zh-CN.md), confirmed as a future direction on 2026-11-07. This section does not expand the current implementation or release commitment.
+
+- Keep **Screen Layout** for physical/virtual display topology and edge switching. A future **Workspace / 工作空间** is a separate view for arranging live remote desktops or individual application surfaces from multiple devices. Dragging a workspace panel must not silently reconfigure OS display geometry.
+- Remote surfaces need visible source device labels, viewing/control permission state, a clear active-input outline, disconnect/revoke actions and stale-frame indicators. Selecting a panel does not itself grant control.
+- An “infinite canvas” means pan/zoom/layout, not an infinitely large video stream. Design selected, background-preview, paused/offscreen and resource-limit states. Keyboard input goes to one selected, authorized target by default; broadcast control is separate and out of the initial scope.
+- Future phone/tablet controllers should prioritize one focused remote view, touch/trackpad modes, explicit canvas-navigation mode and an overview switcher rather than shrinking the desktop dashboard. Mobile controller and mobile host support are separate capability claims.
+- Save layout and device references, not control credentials or screen content. Loading a workspace must not silently start capture, remote control or microphone forwarding.
+
+Retain the approved porcelain-white/graphite/blue direction. Do not add visible fake remote-session features, replace the current GUI framework, or postpone current two-machine acceptance to build this future UI.
