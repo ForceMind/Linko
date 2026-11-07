@@ -116,3 +116,12 @@ runs. Deep start/native/save/enroll/revoke/reset and pairing guards keep this
 mode readonly and incapable of input. Normal application startup is unchanged.
 The private stdin command can only stop. Metadata receipts/PIDs are for process
 accounting, not authentication. No report stores keys, content or profile paths.
+
+The optional CI tray-hidden resource scenario is macOS-only. It enables tray and
+close-to-tray only in the fresh diagnostic's memory, never persisted preferences.
+It requests close on this app's unique exact-title NSWindow and reads AppKit
+visibility; only retained local NSMenu Show/Stop selectors reach the same mailbox.
+The CI stdin remains stop-only, with no input permissions or arbitrary commands.
+Metadata schema2 distinguishes requested/OS-visible/OS-hidden and GUI-observed
+menu intent. These observations are neither authentication nor physical input
+acceptance. Missing tray/window evidence fails instead of declaring hidden success.

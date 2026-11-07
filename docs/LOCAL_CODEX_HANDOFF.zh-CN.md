@@ -1324,3 +1324,38 @@ stderr sender仍存活；完整保留“晚到诊断读完才回收”与“结�
 自身仍单独5分钟，不跳过/放宽测试或自动重试掩盖错误。两平台资源42317591239成功。
 该修正只改CI/记录，App代码仍0acdc9f；最终精确HEAD结果继续集中在PR64。旧#10
 根因仍未知，本次apt下载超时不用于解释该历史故障或6.83GB。
+
+## 54. A2真实菜单栏隐藏驻留（2026-11-07，开发中）
+
+tray-hidden-resources/0.3.11基于PR64最终8c9e22f（五项42318814759、资源42318814760、
+上游42318814990全部成功）。本批在同一显式CI-only、新目录/回环/NoNative资源模式
+增加macOS tray_hidden场景；其他平台明确拒绝，不以内部window_hidden充当OS证明。
+只在该隔离新profile内存启用tray/close_to_tray，不保存偏好；普通默认不变。
+实际NSWindow performClose→原GUI close分支→AppKit isVisible=false后才开始采样；
+结束走真实NSMenu显示/停止selector，须同Mailbox命令到GUI、AppKit恢复可见及原
+stop/terminal/EOF/reap。连接20秒、隐藏/显示各5秒；过渡50ms仅用于等待SDK状态，
+采样保持事件唤醒；stdin仍只stop，不提供命令执行/授权。报告与父采样schema2记录
+有限窗口状态/命令观察；请求/未测不等于成功。队列字段非认证，输入v5/原生捕获不改。
+
+6项Python收据/序列/不支持平台拒绝回归本机通过，Rust新代码待CI编译/fmt/Clippy/
+工作区/真实AppKit与NoNative会话资源专项。已有窗口场景保留，新增30秒Mac隐藏曲线；
+非物理点击/像素无遮挡/Windows托盘/Native/8h/24h/C06或6.83GB根因证据。本机仍
+缺Rust不安装，实际App/TCC/身份/配对不变，宿主GUI受锁屏阻碍，浏览器未验证。
+
+15af2a1的两平台资源42321103689成功，含真实Mac隐藏正例；其三平台CI因fmt失败，
+不能把资源成功说成完整通过。a99ef06按runner应用格式，89cf251只补有界阶段收据。
+原AppKit代码实际编译/链接成功，最低1.95/审计及三平台工作区测试已过，Release/
+进程/GUI及最终精确候选继续回读PR65；本机仍缺Rust不安装。旧App/TCC不替换。
+
+首轮隐藏artifact13552499695的SHA256
+579e98dfce5a07d1ec378355d7b77f18f909013b67c60f7b43d443e88b76d690已核对一致，
+schema2明确appkit_visible→appkit_hidden→appkit_visible，GUI收到真实菜单Show/Stop，
+GUI/helper退出0、worker_reaped=true。约30.158秒GUI平均单核CPU0.364750%、峰RSS
+122.375MiB；worker0.165868%/11.906MiB，helper0.199078%/11.813MiB。三类各28样本，
+原始JSON保留在ignored target/local-validation/tray-hidden-15af2a1。不是无UI标志模拟。
+
+[AppKit isVisible](https://developer.apple.com/documentation/appkit/nswindow/isvisible)
+回读表示SDK窗口可见状态，不能证明像素未被遮挡；显示/停止通过
+[NSMenu action](https://developer.apple.com/documentation/appkit/nsmenu/performactionforitem(at:))
+执行本应用保留的selector，不是物理菜单点击。此记录后仅补文档，最终精确HEAD五项/
+资源/上游状态集中在PR65/Issue5，不把早期短窗当最终数值或8h/24h/Native/C06通过。

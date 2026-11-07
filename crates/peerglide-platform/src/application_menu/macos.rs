@@ -176,6 +176,32 @@ pub struct Owner {
     _main: MainThreadMarker,
 }
 impl Owner {
+    fn window_for_check(&self, title: &str) -> Result<Retained<objc2_app_kit::NSWindow>> {
+        anyhow::ensure!(self.is_available(), "应用退出保护不可用");
+        let windows = self.app.windows();
+        let mut found = None;
+        for index in 0..windows.count() {
+            let window = windows.objectAtIndex(index);
+            if window.title().to_string() == title {
+                anyhow::ensure!(found.is_none(), "检查窗口不唯一");
+                found = Some(window);
+            }
+        }
+        found.context("未找到本应用的检查窗口")
+    }
+    /// Read only this application's exact-title NSWindow, not other apps.
+    /// AppKit visibility does not prove pixels are unobscured or physical input.
+    pub fn window_visible_for_check(&self, title: &str) -> Result<bool> {
+        Ok(self.window_for_check(title)?.isVisible())
+    }
+    /// Send the real AppKit close request; the GUI still decides hide vs stop.
+    /// Only use in an isolated NoNative diagnostic, never a user KVM session.
+    pub fn request_window_close_for_check(&self, title: &str) -> Result<()> {
+        let window = self.window_for_check(title)?;
+        anyhow::ensure!(window.isVisible(), "检查窗口尚不可见");
+        window.performClose(None);
+        Ok(())
+    }
     /// Checks the real menu/delegate/bridge; never evidence of input permission.
     pub fn is_available(&self) -> bool {
         let current_menu = self.app.mainMenu();

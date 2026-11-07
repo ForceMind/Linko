@@ -24,13 +24,30 @@ def records(path, final=False):
     result = []
     for line in complete.splitlines():
         item = json.loads(line)
-        if (set(item) != {"schema_version", "scope", "state", "worker_pid", "worker_reaped", "elapsed_sec", "native"}
-                or item["schema_version"] != 1 or item["scope"] != "ci_owned_gui_communication_resources"
+        if (set(item) != {"schema_version", "scope", "state", "worker_pid", "worker_reaped", "elapsed_sec", "native",
+                          "window_state", "tray_show_received", "tray_stop_received"}
+                or item["schema_version"] != 2 or item["scope"] != "ci_owned_gui_communication_resources"
                 or item["native"] is not False or not math.isfinite(item["elapsed_sec"])
-                or item["elapsed_sec"] < 0 or item["state"] not in {"prepared", "connected", "stopping", "completed", "failed"}):
+                or item["elapsed_sec"] < 0 or item["state"] not in {"prepared", "visible", "connected", "shown", "stopping", "completed", "failed"}
+                or item["window_state"] not in {"normal_window_requested", "appkit_visible", "appkit_hidden"}
+                or type(item["tray_show_received"]) is not bool or type(item["tray_stop_received"]) is not bool):
             raise ValueError("resource receipt invalid")
         result.append(item)
     return result
+
+
+def hidden_visibility_proof(receipts):
+    states = [r["state"] for r in receipts]
+    if states != ["prepared", "visible", "connected", "shown", "stopping", "completed"]:
+        raise ValueError("hidden lifecycle incomplete")
+    before, sampled, after, completed = receipts[1], receipts[2], receipts[3], receipts[-1]
+    if (before["window_state"] != "appkit_visible" or sampled["window_state"] != "appkit_hidden"
+            or after["window_state"] != "appkit_visible" or not after["tray_show_received"]
+            or completed["window_state"] != "appkit_visible" or not completed["tray_show_received"]
+            or not completed["tray_stop_received"] or not completed["worker_reaped"]):
+        raise ValueError("hidden lifecycle unverified")
+    return {"before": "appkit_visible", "sampling": "appkit_hidden", "after": "appkit_visible",
+            "tray_show_received": True, "tray_stop_received": True}
 
 
 def parent_pid(pid):
@@ -54,14 +71,16 @@ def wait_for(test, child, timeout, stop):
     raise TimeoutError("resource check timeout")
 
 
-def run(binary_dir, seconds, stop):
-    result = {"schema_version": 1, "scope": "ci_gui_owned_worker_resources", "passed": False,
-              "reason": "start_failed", "native": False, "visibility": "normal_window_requested",
+def run(binary_dir, seconds, stop, tray_hidden=False):
+    result = {"schema_version": 2, "scope": "ci_gui_owned_worker_resources", "passed": False,
+              "reason": "start_failed", "native": False, "visibility": "hidden_unverified" if tray_hidden else "normal_window_requested",
+              "window_visibility_proof": None,
+              "lifecycle": None,
               "processes": {}, "gui_exit": None, "helper_exit": None, "worker_reaped": False,
               "limitations": ["no_native_input", "not_physical_acceptance", "visibility_not_os_verified",
                               "ps_cpu_time_platform_precision", "rss_is_not_total_memory", "physical_footprint_not_sampled",
                               "not_eight_hour_endurance"]}
-    gui = helper = None
+    gui = helper = receipt = None
     stage = "identity_init"
     with tempfile.TemporaryDirectory(prefix="peerglide-owned-resources-") as temporary:
         root = Path(temporary)
@@ -82,12 +101,15 @@ def run(binary_dir, seconds, stop):
             address = wait_for(lambda: re.search(r"Listening on (127\.0\.0\.1:\d+)", log.read_text()), helper, 10, stop)[1]
             receipt, spec = root / "receipt.jsonl", root / "spec.json"
             spec.write_text(json.dumps({"schema_version": 1, "address": address,
-                "peer_certificate": str(remote / "node.crt.der"), "report": str(receipt), "seconds": seconds}))
+                "peer_certificate": str(remote / "node.crt.der"), "report": str(receipt), "seconds": seconds,
+                "tray_hidden": tray_hidden}))
             gui = subprocess.Popen([str(binary_dir / ("peerglide-gui.exe" if sys.platform == "win32" else "peerglide-gui")),
                 "--data-dir", str(profile), "--ci-resource-spec", str(spec)], stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
             stage = "gui_connect"
-            connected = wait_for(lambda: next((r for r in records(receipt) if r["state"] == "connected"), None), gui, 20, stop)
+            connected = wait_for(lambda: next((r for r in records(receipt) if r["state"] == "connected"), None), gui, 25 if tray_hidden else 20, stop)
+            if tray_hidden and connected["window_state"] != "appkit_hidden":
+                raise ValueError("hidden window not verified")
             owned_worker = connected["worker_pid"]
             if type(owned_worker) is not int or owned_worker <= 0 or parent_pid(owned_worker) != gui.pid:
                 raise ValueError("owned worker not established")
@@ -143,6 +165,11 @@ def run(binary_dir, seconds, stop):
             result["worker_reaped"] = bool(final and final[-1]["state"] == "completed" and final[-1]["worker_reaped"])
             if result["gui_exit"] != 0 or not result["worker_reaped"]:
                 raise ValueError("GUI did not cooperatively reap worker")
+            if tray_hidden:
+                result["window_visibility_proof"] = hidden_visibility_proof(final)
+                result["visibility"] = "appkit_hidden_verified"
+                result["limitations"].remove("visibility_not_os_verified")
+                result["limitations"].extend(["appkit_visibility_not_unobscured_pixels", "not_physical_menu_click"])
             stage = "helper_stop"
             if helper.poll() is None:
                 helper.stdin.write(b"stop\n"); helper.stdin.flush()
@@ -161,6 +188,13 @@ def run(binary_dir, seconds, stop):
                         except (OSError, subprocess.TimeoutExpired):
                             pass
                     metrics.stop_child(child, 2)  # Only our NoNative Popen handles.
+            if receipt is not None:
+                try:
+                    # Keep only the bounded, allowlisted stage metadata when
+                    # a new native transition fails. Never preserve GUI logs.
+                    result["lifecycle"] = records(receipt, final=True)
+                except (ValueError, OSError, TypeError):
+                    pass
     return result
 
 
@@ -169,6 +203,7 @@ def main(argv=None):
     parser.add_argument("binary_dir", type=Path)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--duration", type=int, default=30)
+    parser.add_argument("--tray-hidden", action="store_true", help="macOS only: verify real close/hide/menu show/stop")
     args = parser.parse_args(argv)
     if not 17 <= args.duration <= 180:
         parser.error("duration must be between 17 and 180 seconds")
@@ -178,11 +213,13 @@ def main(argv=None):
         return 1
     with os.fdopen(fd, "w") as output:
         if os.environ.get("CI", "").lower() not in ("true", "1") or sys.platform not in ("darwin", "linux"):
-            value = {"schema_version": 1, "passed": False, "reason": "isolated_ci_required"}
+            value = {"schema_version": 2, "passed": False, "reason": "isolated_ci_required"}
+        elif args.tray_hidden and sys.platform != "darwin":
+            value = {"schema_version": 2, "passed": False, "reason": "hidden_check_macos_required"}
         else:
             stop = metrics.StopFlag()
             with metrics.signal_handlers(stop):
-                value = run(args.binary_dir.resolve(), args.duration, stop)
+                value = run(args.binary_dir.resolve(), args.duration, stop, args.tray_hidden)
         metrics.write_report(output, value)
     print("PASS: actual GUI and owned NoNative worker accounted and reaped" if value["passed"] else "FAIL: owned resource accounting")
     return 0 if value["passed"] else 1

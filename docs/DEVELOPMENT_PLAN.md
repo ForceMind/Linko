@@ -274,8 +274,10 @@ A+B合计约8–13个有效工作日交付易连接的基础日常候选；A通�
    已补累计CPU/区间曲线与真实GUI启动的NoNative worker、peer helper分账（PR64），
    按单逻辑CPU=100%记录，缺测不填零；RSS/可选physical footprint口径独立。分账发现
    稳定通信10Hz重绘，现已接输出唤醒，保留Native健康/EOF/停止计时；首轮Mac约30秒
-   CPU由39.659049%降到0.764002%，最终候选/平台结果见PR64及VALIDATION。
-   GUI隐藏/分账physical footprint、8h/24h耐久仍单独补验，短时CI不定位6.83GB根因。
+   CPU由39.659049%降到最终1.427281%，精确候选/平台结果见PR64及VALIDATION。
+   PR65首轮Mac NoNative已通过实际AppKit隐藏→菜单显示/停止→worker回收及30秒分账；
+   该程序化SDK结果不代表物理点击/Native或Windows托盘。分账physical footprint、
+   8h/24h耐久仍单独补验，短时CI不定位6.83GB根因。
 3. A3：日常使用前沿用既有平台存储机制，展示工作资料目录、迁移预览和冲突处理。
    现有私有tmp试跑profile不能当持久日常资料；若迁移须单独确认源/目标、保护已存
    身份且保留原副本，不重生成密钥或覆盖现有profile。

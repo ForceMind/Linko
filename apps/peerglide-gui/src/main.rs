@@ -1275,6 +1275,9 @@ impl App {
     }
     fn process_tray_commands(&mut self, ctx: &egui::Context) {
         let pending = self.tray_mailbox.take();
+        if let Some(check) = self.resource_check.as_mut() {
+            check.observe_tray(pending);
+        }
         if pending.quit {
             if let Some(check) = self.quit_check.as_mut() {
                 check.received_quit();
@@ -1505,6 +1508,7 @@ fn main() -> eframe::Result<()> {
                     eprintln!("资源检查无法初始化：{error:#}");
                     std::process::exit(2);
                 }
+                app.sync_tray(&cc.egui_ctx);
                 check.listen_stdin(app.wake_ui.clone());
                 app.resource_check = Some(check);
             }

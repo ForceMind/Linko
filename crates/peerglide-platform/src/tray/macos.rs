@@ -53,13 +53,41 @@ pub struct Tray {
     item: Retained<NSStatusItem>,
     menu: Retained<NSMenu>,
     items: [Retained<NSMenuItem>; 3],
-    _target: Retained<PeerGlideTrayTarget>,
+    target: Retained<PeerGlideTrayTarget>,
     _main: MainThreadMarker,
 }
 impl Tray {
     /// Local recovery-UI availability, never input authority or an OS grant.
     pub fn is_available(&self) -> bool {
         self.item.isVisible()
+    }
+    /// Exercise our real NSMenu target/selector in an isolated NoNative check.
+    /// This is not a physical menu click or an input permission grant.
+    pub fn request_command_for_check(&self, command: Command) -> Result<()> {
+        anyhow::ensure!(self.is_available(), "菜单栏恢复入口不可用");
+        let index = match command {
+            Command::Show => 0,
+            Command::Stop => 1,
+            Command::Quit => 2,
+        };
+        let expected: &AnyObject = &self.target;
+        let action = [
+            sel!(showMainWindow:),
+            sel!(stopCollaboration:),
+            sel!(quitPeerGlide:),
+        ][index];
+        anyhow::ensure!(
+            self.menu.numberOfItems() == 3
+                && self.items[index].isEnabled()
+                && self.items[index].action() == Some(action)
+                && self.items[index]
+                    .target()
+                    .as_deref()
+                    .is_some_and(|target| std::ptr::eq(target, expected)),
+            "菜单栏检查目标已变化"
+        );
+        self.menu.performActionForItemAtIndex(index as isize);
+        Ok(())
     }
 }
 
@@ -102,7 +130,7 @@ pub(super) fn create(mailbox: Arc<Mailbox>) -> Result<Tray> {
             item,
             menu,
             items,
-            _target: target,
+            target,
             _main: main,
         };
         let button = tray.item.button(main).context("无法创建屏跃菜单栏按钮")?;
