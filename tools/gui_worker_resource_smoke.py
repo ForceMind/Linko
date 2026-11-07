@@ -71,7 +71,31 @@ def wait_for(test, child, timeout, stop):
     raise TimeoutError("resource check timeout")
 
 
-def run(binary_dir, seconds, stop, tray_hidden=False):
+def capture_workspace(gui, path):
+    """Explicit CI-only virtual display capture; never a normal app behavior."""
+    def save(destination):
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as output:
+            subprocess.run(["import", "-window", "root", "png:-"], stdout=output,
+                           stderr=subprocess.DEVNULL, check=True, timeout=10)
+        if not 1000 < destination.stat().st_size <= 16 * 1024 * 1024:
+            raise ValueError("isolated screenshot invalid")
+    time.sleep(1)
+    save(path)
+    windows = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid)],
+                                     stderr=subprocess.DEVNULL, timeout=2).split()
+    if len(windows) != 1 or not windows[0].isdigit():
+        raise ValueError("isolated GUI window unavailable")
+    window = windows[0].decode("ascii")
+    subprocess.run(["xdotool", "windowsize", "--sync", window, "920", "700"],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    time.sleep(1)
+    save(path.with_name(path.stem + "-compact.png"))
+    subprocess.run(["xdotool", "windowsize", "--sync", window, "1180", "820"],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+
+
+def run(binary_dir, seconds, stop, tray_hidden=False, screenshot=None):
     result = {"schema_version": 2, "scope": "ci_gui_owned_worker_resources", "passed": False,
               "reason": "start_failed", "native": False, "visibility": "hidden_unverified" if tray_hidden else "normal_window_requested",
               "window_visibility_proof": None,
@@ -113,6 +137,13 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
             owned_worker = connected["worker_pid"]
             if type(owned_worker) is not int or owned_worker <= 0 or parent_pid(owned_worker) != gui.pid:
                 raise ValueError("owned worker not established")
+            if screenshot is not None:
+                stage = "screenshot"
+                if sys.platform != "linux" or tray_hidden or not os.environ.get("DISPLAY"):
+                    raise ValueError("isolated screenshot unavailable")
+                # CI invokes us under its own fresh Xvfb. This has only the
+                # new fixture GUI, never a user's desktop or real device data.
+                capture_workspace(gui, screenshot)
             roles = {"gui": gui.pid, "owned_worker": owned_worker, "peer_helper": helper.pid}
             previous = {}
             stage = "sampling"
@@ -204,6 +235,7 @@ def main(argv=None):
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--duration", type=int, default=30)
     parser.add_argument("--tray-hidden", action="store_true", help="macOS only: verify real close/hide/menu show/stop")
+    parser.add_argument("--screenshot", type=Path, help="CI-owned Linux Xvfb only, exclusive new PNG")
     args = parser.parse_args(argv)
     if not 17 <= args.duration <= 180:
         parser.error("duration must be between 17 and 180 seconds")
@@ -219,7 +251,7 @@ def main(argv=None):
         else:
             stop = metrics.StopFlag()
             with metrics.signal_handlers(stop):
-                value = run(args.binary_dir.resolve(), args.duration, stop, args.tray_hidden)
+                value = run(args.binary_dir.resolve(), args.duration, stop, args.tray_hidden, args.screenshot)
         metrics.write_report(output, value)
     print("PASS: actual GUI and owned NoNative worker accounted and reaped" if value["passed"] else "FAIL: owned resource accounting")
     return 0 if value["passed"] else 1

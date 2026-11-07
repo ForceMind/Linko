@@ -10,6 +10,17 @@ import gui_worker_resource_smoke as check
 
 
 class ResourceCheck(unittest.TestCase):
+    def test_existing_screenshot_is_preserved_before_any_external_capture(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "existing.png"
+            path.write_bytes(b"preserve existing bytes")
+            with patch.object(check.time, "sleep"), patch.object(check.subprocess, "run") as capture, \
+                    patch.object(check.subprocess, "check_output") as query:
+                with self.assertRaises(FileExistsError):
+                    check.capture_workspace(None, path)
+                capture.assert_not_called(); query.assert_not_called()
+            self.assertEqual(path.read_bytes(), b"preserve existing bytes")
+
     def record(self):
         return {"schema_version": 2, "scope": "ci_owned_gui_communication_resources", "state": "connected",
                 "worker_pid": 123, "worker_reaped": False, "elapsed_sec": 1.0, "native": False,

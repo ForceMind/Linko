@@ -82,6 +82,7 @@ impl Origin {
 #[derive(Default)]
 pub(super) struct Panel {
     pub(super) open: bool,
+    join_entry: bool,
     supervisor: Supervisor,
     origin: Option<Origin>,
     name: String,
@@ -105,6 +106,7 @@ impl Panel {
             self.origin = None;
         }
         self.open = true;
+        self.join_entry = false;
         self.name = name.into();
         self.address = address
             .parse::<SocketAddr>()
@@ -114,6 +116,14 @@ impl Panel {
             })
             .unwrap_or_default();
         self.message.clear();
+    }
+    fn select_entry(&mut self, join: bool) {
+        if self.join_entry != join {
+            self.discovery.stop();
+            peerglide_protocol::pairing_worker::clear_code(&mut self.code);
+            self.message.clear();
+            self.join_entry = join;
+        }
     }
     pub(super) fn needs_poll(&self) -> bool {
         self.supervisor.needs_poll() || self.discovery.needs_poll()
@@ -332,27 +342,44 @@ impl Panel {
             return;
         }
         let mut open = true;
-        egui::Window::new("用短码添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).default_height(600.0).vscroll(true).show(ctx,|ui|{
-            ui.heading("记住设备，再单独开启键鼠");
-            ui.label("两台电脑连接同一局域网。短码只核验本次身份，不会开启键鼠、剪贴板或文件传输。");
+        let height = if app.local_fingerprint().is_none() {
+            340.0
+        } else if self.join_entry {
+            560.0
+        } else {
+            460.0
+        };
+        egui::Window::new("添加电脑").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).fixed_size(egui::vec2(510.0,height)).vscroll(true).show(ctx,|ui|{
+            ui.heading("把另一台电脑加入工作区");
+            ui.label("两台电脑连到同一 Wi-Fi 或局域网。任选一台显示配对码，另一台输入；双方确认后会记住彼此。键鼠与数据权限仍单独选择。");
             ui.add_space(12.0);
             if !self.supervisor.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(!self.join_entry,"我来显示配对码").clicked(){self.select_entry(false);}
+                    if ui.selectable_label(self.join_entry,"我来输入配对码").clicked(){self.select_entry(true);}
+                });
+                ui.add_space(10.0);
                 if app.local_fingerprint().is_none() {
-                    if ui.add_enabled(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked&&!app.quit_check_mode&&!app.recording_mode,egui::Button::new("创建本机身份")).clicked(){
+                    ui.label("首次使用，先为这台电脑准备独立安全身份。不会因此开始协同。");
+                    if ui.add_enabled(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked&&!app.quit_check_mode&&!app.recording_mode,egui::Button::new("准备这台电脑")).clicked(){
                         let result=Identity::create(&app.identity_dir());
                         self.message=match result{Ok(_)=>"本机身份已创建。".into(),Err(error)=>format!("身份未创建，原文件保留：{error:#}")};
                     }
                 }else{
-                    ui.label("给另一台电脑起个名字");ui.text_edit_singleline(&mut self.name);
-                    if ui.button("在这台显示配对码").clicked(){
+                    ui.label("如何称呼另一台电脑");ui.text_edit_singleline(&mut self.name);
+                    ui.add_space(10.0);
+                    if !self.join_entry {
+                    ui.label("点击显示后，在另一台屏跃中选择“我来输入配对码”。");
+                    if ui.add(super::desktop_style::primary("显示我的配对码")).clicked(){
                         let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))),None,&worker));
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
-                    ui.separator();ui.label("或输入另一台显示的信息");
+                    }else{
+                    ui.strong("找到另一台电脑，输入它显示的短码");
                     if let Some(address)=self.discovery.ui(ui,app.local_fingerprint(),None,true){self.select_address(address);}
                     ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IPv4 或 IPv4:24871"));
                     ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("八位数字配对码"));
-                    if ui.button("核验另一台电脑").clicked(){
+                    if ui.add(super::desktop_style::primary("开始核验这台电脑")).clicked(){
                         let result=(||->Result<()>{
                             let address=parse_address(&self.address)?;
                             let mode=Mode::connect(address,std::mem::take(&mut self.code))?;
@@ -360,6 +387,8 @@ impl Panel {
                         })();
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
+                    }
+                    ui.add_space(12.0);
                     if ui.button("高级：独立核对公开连接信息…").clicked(){self.open=false;app.open_advanced_setup();}
                 }
             }
@@ -413,6 +442,14 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn changing_entry_clears_old_short_code_without_starting_pairing_or_network() {
+        let mut panel = Panel::default();
+        panel.code = "12345678".into(); // Only discarded input, never a credential accepted by a worker.
+        panel.select_entry(true);
+        assert!(panel.join_entry && panel.code.is_empty() && panel.origin.is_none());
+        assert!(matches!(panel.supervisor.phase(), Phase::Idle) && !panel.needs_poll());
+    }
     use std::time::{Duration, Instant};
     #[test]
     fn selecting_a_pairing_hint_only_fills_address_and_invalidates_old_code() -> Result<()> {

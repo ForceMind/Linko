@@ -15,6 +15,7 @@ pub mod pairing_supervisor;
 mod quit_check;
 mod resource_check;
 mod worker_permissions;
+mod workspace_ui;
 use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, RichText, Vec2};
@@ -171,6 +172,12 @@ enum Page {
     GestureLab,
     GestureRules,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    General,
+    Permissions,
+    Advanced,
+}
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
 struct WorkerSnapshot(AtomicU16, AtomicU16, AtomicBool, AtomicBool, AtomicU16);
@@ -317,6 +324,10 @@ fn read_worker_output(
 }
 
 struct App {
+    workspace_peer_selected: bool,
+    notice_details: bool,
+    connection_details_open: bool,
+    settings_section: SettingsSection,
     recording_mode: bool,
     layout_report: Option<PathBuf>,
     device_tab: DeviceTab,
@@ -441,6 +452,10 @@ impl App {
         let mut app = Self {
             recording_mode: false,
             layout_report: None,
+            workspace_peer_selected: false,
+            notice_details: false,
+            connection_details_open: false,
+            settings_section: SettingsSection::General,
             device_tab: DeviceTab::Device,
             mouse_tab: MouseTab::Rules,
             collaboration_tab: CollaborationTab::Clipboard,
@@ -482,7 +497,7 @@ impl App {
             config_store,
             enrollment_blocked,
             instance_lock,
-            page: Page::Home,
+            page: Page::Devices,
             import_path: String::new(),
             use_connection_info: false,
             connection_text: String::new(),

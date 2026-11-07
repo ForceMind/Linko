@@ -34,9 +34,9 @@ pub(super) enum Readiness {
 impl Readiness {
     pub(super) fn detail(self) -> &'static str {
         match self {
-            Self::Unchecked => "先检查实际输入程序的本机权限；不会联网、捕获输入或更改系统设置。",
-            Self::Checking => "正在读取实际输入程序的权限，检查不会开启键鼠。",
-            Self::Ready => "本机权限刚刚检查通过；仍需明确确认，且另一台电脑必须独立允许接收。",
+            Self::Unchecked => "先检查屏跃所需的系统权限；这一步不会开启键鼠或更改系统设置。",
+            Self::Checking => "正在检查这台电脑的系统权限，不会开启键鼠。",
+            Self::Ready => "本机权限已就绪。开启键鼠仍需你确认，并由另一台电脑单独允许接收。",
             Self::Accessibility => {
                 "请在macOS系统设置的辅助功能中允许本次运行的屏跃，再返回重新检查。"
             }
@@ -49,9 +49,9 @@ impl Readiness {
             Self::SecureInput => {
                 "系统正在保护输入。请结束当前受保护的输入后重新检查，屏跃不会关闭Secure Input。"
             }
-            Self::Unknown => "实际输入程序未能确认权限，请重新检查；未知状态不能视为已允许。",
+            Self::Unknown => "本次权限检查结果不明确，请重新检查；未知状态不能视为已允许。",
             Self::Unsupported => "当前环境未提供所需的输入权限检查，暂不能从这个窗口开启键鼠。",
-            Self::Failed => "实际输入程序的权限检查未完成，请重新检查；可在设置查看原因。",
+            Self::Failed => "权限检查未完成，请重试或到设置查看原因。",
         }
     }
 }

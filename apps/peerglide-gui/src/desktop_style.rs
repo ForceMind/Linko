@@ -25,25 +25,25 @@ struct Palette {
 fn palette(dark: bool) -> Palette {
     if dark {
         Palette {
-            canvas: Color32::from_rgb(20, 24, 31),
-            surface: Color32::from_rgb(29, 34, 43),
-            soft: Color32::from_rgb(39, 47, 60),
-            hover: Color32::from_rgb(49, 61, 78),
-            text: Color32::from_rgb(233, 237, 244),
-            muted: Color32::from_rgb(165, 177, 194),
-            line: Color32::from_rgb(68, 80, 97),
-            accent: Color32::from_rgb(147, 189, 255),
+            canvas: Color32::from_rgb(24, 22, 28),
+            surface: Color32::from_rgb(35, 32, 40),
+            soft: Color32::from_rgb(46, 42, 52),
+            hover: Color32::from_rgb(58, 50, 63),
+            text: Color32::from_rgb(241, 236, 244),
+            muted: Color32::from_rgb(182, 172, 190),
+            line: Color32::from_rgb(67, 58, 73),
+            accent: Color32::from_rgb(255, 145, 177),
         }
     } else {
         Palette {
-            canvas: Color32::from_rgb(244, 246, 250),
+            canvas: Color32::from_rgb(247, 246, 249),
             surface: Color32::WHITE,
-            soft: Color32::from_rgb(235, 239, 246),
-            hover: Color32::from_rgb(225, 232, 244),
-            text: Color32::from_rgb(32, 41, 55),
-            muted: Color32::from_rgb(89, 103, 121),
-            line: Color32::from_rgb(214, 222, 233),
-            accent: Color32::from_rgb(43, 91, 190),
+            soft: Color32::from_rgb(242, 239, 245),
+            hover: Color32::from_rgb(239, 230, 239),
+            text: Color32::from_rgb(43, 37, 49),
+            muted: Color32::from_rgb(116, 105, 126),
+            line: Color32::from_rgb(225, 218, 231),
+            accent: Color32::from_rgb(192, 54, 94),
         }
     }
 }
@@ -54,12 +54,12 @@ fn tone_colors(dark: bool, tone: Tone) -> (Color32, Color32) {
         (false, Tone::Good) => ((226, 244, 237), (30, 103, 78)),
         (false, Tone::Warning) => ((255, 243, 213), (128, 82, 8)),
         (false, Tone::Danger) => ((253, 233, 235), (160, 44, 60)),
-        (false, Tone::Accent) => ((230, 239, 255), (38, 81, 168)),
+        (false, Tone::Accent) => ((253, 234, 241), (158, 42, 78)),
         (true, Tone::Neutral) => ((48, 57, 71), (205, 215, 230)),
         (true, Tone::Good) => ((29, 63, 53), (145, 222, 186)),
         (true, Tone::Warning) => ((74, 56, 26), (244, 204, 127)),
         (true, Tone::Danger) => ((76, 36, 43), (255, 173, 183)),
-        (true, Tone::Accent) => ((32, 53, 88), (174, 206, 255)),
+        (true, Tone::Accent) => ((74, 41, 58), (255, 177, 201)),
     };
     (
         Color32::from_rgb(fill.0, fill.1, fill.2),
@@ -94,7 +94,7 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     visuals.hyperlink_color = colors.accent;
     visuals.warn_fg_color = tone_colors(dark, Tone::Warning).1;
     visuals.error_fg_color = tone_colors(dark, Tone::Danger).1;
-    visuals.selection.bg_fill = Color32::from_rgb(45, 94, 196);
+    visuals.selection.bg_fill = Color32::from_rgb(192, 54, 94);
     visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
 
     for widget in [
@@ -174,10 +174,30 @@ pub(super) fn primary(label: &str) -> egui::Button<'static> {
             .strong()
             .color(Color32::WHITE),
     )
-    .fill(Color32::from_rgb(45, 94, 196))
-    .stroke(Stroke::new(1.0, Color32::from_rgb(38, 80, 170)))
+    .fill(Color32::from_rgb(192, 54, 94))
+    .stroke(Stroke::new(1.0, Color32::from_rgb(158, 42, 78)))
     .corner_radius(egui::CornerRadius::same(9))
     .min_size(egui::vec2(112.0, 36.0))
+}
+
+pub(super) fn selection_colors(ui: &egui::Ui) -> (Color32, Color32) {
+    tone_colors(ui.visuals().dark_mode, Tone::Accent)
+}
+
+pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let (fill, text) = selection_colors(ui);
+    let color = if selected {
+        text
+    } else {
+        ui.visuals().text_color()
+    };
+    let mut button = egui::Button::new(RichText::new(label).size(14.0).color(color))
+        .selected(selected)
+        .frame(selected);
+    if selected {
+        button = button.fill(fill).stroke(Stroke::NONE);
+    }
+    ui.add_sized([ui.available_width(), 36.0], button)
 }
 
 /// Draw one illustrative main monitor inside `rect`, including its stand.

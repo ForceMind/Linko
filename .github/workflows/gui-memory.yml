@@ -35,9 +35,20 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libxkbcommon-x11-0 libegl1 libgl1-mesa-dri
+          sudo apt-get install -y xvfb imagemagick xdotool libxkbcommon-x11-0 libegl1 libgl1-mesa-dri
       - name: Prepare report directory
         run: mkdir -p dist
+      - name: GUI and owned NoNative worker accounting under isolated display
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python tools/gui_worker_resource_smoke.py target/release --report dist/gui-owned-resources-linux.json --duration 30 --screenshot dist/peerglide-workspace-connected.png
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux'
+        with:
+          name: workspace-gui-connected
+          path: dist/peerglide-workspace-connected*.png
+          if-no-files-found: error
       - name: Idle GUI memory under isolated display
         if: runner.os == 'Linux'
         env:
@@ -49,11 +60,6 @@ jobs:
       - name: Idle GUI memory on macOS runner
         if: runner.os == 'macOS'
         run: python tools/gui_memory_smoke.py target/release --report dist/gui-memory-macos.json --duration 180 --rss-limit-mib 512 --growth-limit-mib 64
-      - name: GUI and owned NoNative worker accounting under isolated display
-        if: runner.os == 'Linux'
-        env:
-          LIBGL_ALWAYS_SOFTWARE: '1'
-        run: xvfb-run -a python tools/gui_worker_resource_smoke.py target/release --report dist/gui-owned-resources-linux.json --duration 30
       - name: GUI and owned NoNative worker accounting on macOS runner
         if: runner.os == 'macOS'
         run: python tools/gui_worker_resource_smoke.py target/release --report dist/gui-owned-resources-macos.json --duration 30
