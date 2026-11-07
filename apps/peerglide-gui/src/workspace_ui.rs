@@ -337,19 +337,26 @@ impl App {
                     };
                     pill(ui, label, tone);
                 });
-                if matches!(readiness, worker_permissions::Readiness::Unchecked | worker_permissions::Readiness::Checking | worker_permissions::Readiness::Ready) {
-                    ui.small("仅检查，不会开启键鼠").on_hover_text(readiness.detail());
+                if matches!(
+                    readiness,
+                    worker_permissions::Readiness::Unchecked
+                        | worker_permissions::Readiness::Checking
+                        | worker_permissions::Readiness::Ready
+                ) {
+                    ui.small("仅检查，不会开启键鼠")
+                        .on_hover_text(readiness.detail());
                 } else {
                     ui.small(readiness.detail());
                 }
                 if ui
-                        .add_enabled(
-                            (self.child.is_none()
-                                || self.active_mode == Some(SessionMode::Communication))
-                                && self.stopping.is_none() && !self.worker_permissions.needs_poll(),
-                            egui::Button::new("检查权限"),
-                        )
-                        .clicked()
+                    .add_enabled(
+                        (self.child.is_none()
+                            || self.active_mode == Some(SessionMode::Communication))
+                            && self.stopping.is_none()
+                            && !self.worker_permissions.needs_poll(),
+                        egui::Button::new("检查权限"),
+                    )
+                    .clicked()
                 {
                     self.native_confirmation = false;
                     self.worker_permissions.start();
