@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+<title id="title">03 添加电脑</title>
+<desc id="desc">Linko / 屏跃的可编辑中文设计线稿，非运行界面。未声明真实配对、输入控制、文件或剪贴板验收。</desc>
+<style>text{font-family:sans-serif;fill:#20252D;font-size:16px} .muted{fill:#5F6F85} .small{font-size:14px} .body{font-size:18px} .heading{font-size:22px;font-weight:600} .title{font-size:30px;font-weight:600} .strong{font-weight:600} .brand{fill:#4263EB}</style>
+<rect x="0" y="0" width="1440" height="960" rx="0" fill="#F7F8FA" stroke="#E2E7EF" stroke-width="1"/>
+<rect x="0" y="0" width="190" height="960" rx="0" fill="#FFFFFF" stroke="#E2E7EF" stroke-width="1"/>
+<rect x="24" y="30" width="38" height="38" rx="10" fill="#4263EB" stroke="#4263EB" stroke-width="1"/>
+<rect x="30" y="37" width="21" height="14" rx="3" fill="none" stroke="#FFFFFF" stroke-width="1"/>
+<rect x="39" y="46" width="17" height="14" rx="3" fill="none" stroke="#FFFFFF" stroke-width="1"/>
+<text x="74" y="48" class="body strong">Linko</text>
+<text x="74" y="71" class="small muted">屏跃</text>
+<text x="30" y="192">设备</text>
+<rect x="14" y="240" width="162" height="50" rx="10" fill="#E8EEFF" stroke="none" stroke-width="1"/>
+<rect x="14" y="252" width="3" height="26" rx="1" fill="#4263EB" stroke="#4263EB" stroke-width="1"/>
+<text x="30" y="270" class="strong brand">屏幕布局</text>
+<text x="30" y="348">文件传输</text>
+<text x="30" y="373" class="small muted">尚未接通</text>
+<text x="30" y="426">剪贴板</text>
+<text x="30" y="451" class="small muted">尚未接通</text>
+<text x="30" y="504">快捷键</text>
+<text x="30" y="529" class="small muted">含本机鼠标入口</text>
+<text x="30" y="878">设置</text>
+<line x1="24" y1="826" x2="166" y2="826" stroke="#E2E7EF" stroke-width="1"/>
+<text x="222" y="60" class="title">屏幕布局</text>
+<text x="222" y="97" class="body muted">连接你的另一台电脑。</text>
+<g aria-disabled="true">
+<rect x="1130" y="34" width="126" height="42" rx="8" fill="#EFF1F5" stroke="#E2E7EF" stroke-width="1"/>
+<text x="1193.0" y="61.0" text-anchor="middle" style="fill:#5F6F85;font-size:16px">停止协同</text>
+</g>
+<rect x="1268" y="34" width="140" height="42" rx="8" fill="#FFFFFF" stroke="#5F6F85" stroke-width="1"/>
+<text x="1338.0" y="61.0" text-anchor="middle" style="fill:#20252D;font-size:16px">恢复本机</text>
+<text x="1193" y="98" class="small muted" text-anchor="middle">当前未开启键鼠</text>
+<line x1="222" y1="912" x2="1408" y2="912" stroke="#E2E7EF" stroke-width="1"/>
+<text x="222" y="942" class="small muted">设计线稿 · 非运行界面</text>
+<text x="1408" y="942" class="small muted" text-anchor="end">未登记：仅本机与添加空位 · 配对码运行时生成</text>
+<g aria-hidden="true">
+<rect x="222" y="160" width="828" height="676" rx="16" fill="#F7F8FA" stroke="#E2E7EF" stroke-width="1"/>
+<rect x="1074" y="160" width="334" height="676" rx="16" fill="#FFFFFF" stroke="#E2E7EF" stroke-width="1"/>
+<rect x="246" y="386" width="248" height="174" rx="12" fill="#FFFFFF" stroke="#4263EB" stroke-width="2"/>
+<text x="266" y="420" class="body strong">这台电脑</text>
+<text x="266" y="449" class="small muted">本机</text>
+<text x="266" y="492" class="muted">系统：未知</text>
+<text x="266" y="523" class="small muted">主屏 · 尺寸未知</text>
+<rect x="616" y="386" width="248" height="174" rx="12" fill="#FFFFFF" stroke="#5F6F85" stroke-width="1" stroke-dasharray="7 5"/>
+<text x="740" y="452" class="title" text-anchor="middle">＋</text>
+<text x="740" y="490" text-anchor="middle">添加另一台电脑</text>
+</g>
+<rect x="206" y="120" width="1218" height="762" rx="0" fill="#F7F8FA" stroke="none" stroke-width="1" opacity="0.82"/>
+<rect x="372" y="180" width="850" height="674" rx="16" fill="#FFFFFF" stroke="#5F6F85" stroke-width="1"/>
+<text x="404" y="226" class="title">添加电脑</text>
+<text x="1190" y="223" class="heading" text-anchor="end">×</text>
+<text x="404" y="271" class="strong brand">1  连接方式</text>
+<line x1="548" y1="265" x2="616" y2="265" stroke="#E2E7EF" stroke-width="1"/>
+<text x="642" y="271" class="muted">2  核验设备</text>
+<line x1="786" y1="265" x2="854" y2="265" stroke="#E2E7EF" stroke-width="1"/>
+<text x="880" y="271" class="muted">3  完成</text>
+<rect x="404" y="300" width="786" height="46" rx="10" fill="#F7F8FA" stroke="#E2E7EF" stroke-width="1"/>
+<rect x="404" y="300" width="393" height="46" rx="10" fill="#E8EEFF" stroke="#4263EB" stroke-width="1"/>
+<text x="600.5" y="330" class="strong brand" text-anchor="middle">显示配对码</text>
+<text x="993.5" y="330" class="muted" text-anchor="middle">输入配对码</text>
+<text x="404" y="394" class="heading">首次使用，准备安全配对</text>
+<text x="404" y="424" class="muted">先创建这台电脑的配对身份。</text>
+<rect x="404" y="450" width="786" height="92" rx="12" fill="#F7F8FA" stroke="#E2E7EF" stroke-width="1"/>
+<text x="426" y="487" class="body strong">配对码将在此显示</text>
+<text x="426" y="518" class="small muted">准备身份后，由你发起显示配对码。</text>
+<g aria-disabled="true">
+<rect x="1038" y="474" width="128" height="42" rx="8" fill="#EFF1F5" stroke="#E2E7EF" stroke-width="1"/>
+<text x="1102.0" y="501.0" text-anchor="middle" style="fill:#5F6F85;font-size:16px">复制配对码</text>
+</g>
+<rect x="404" y="564" width="786" height="66" rx="12" fill="#FFFFFF" stroke="#E2E7EF" stroke-width="1"/>
+<text x="426" y="591" class="strong">允许附近电脑发现本次配对</text>
+<text x="426" y="616" class="small muted">默认关闭</text>
+<rect x="1116" y="585" width="50" height="26" rx="13" fill="#EFF1F5" stroke="#5F6F85" stroke-width="1"/>
+<circle cx="1129" cy="598" r="10" fill="#FFFFFF" stroke="#5F6F85"/>
+<text x="404" y="673">双方核验并确认后才记住设备。</text>
+<text x="404" y="704" class="small muted">配对不会开启键鼠或内容共享。</text>
+<rect x="404" y="760" width="108" height="42" rx="8" fill="#FFFFFF" stroke="#5F6F85" stroke-width="1"/>
+<text x="458.0" y="787.0" text-anchor="middle" style="fill:#20252D;font-size:16px">取消</text>
+<rect x="990" y="760" width="200" height="42" rx="8" fill="#4263EB" stroke="#4263EB" stroke-width="1"/>
+<text x="1090.0" y="787.0" text-anchor="middle" style="fill:#FFFFFF;font-size:16px">准备这台电脑</text>
+</svg>

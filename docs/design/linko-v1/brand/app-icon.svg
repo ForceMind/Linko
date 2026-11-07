@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Linko / 屏跃：双屏连接图标</title>
+  <desc id="desc">克制蓝圆角底座，两个白色屏幕轮廓由滑移曲线连接。设计资产，尚未替换应用图标。</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#3651CC"/>
+      <stop offset="0.58" stop-color="#4263EB"/>
+      <stop offset="1" stop-color="#718AF4"/>
+    </linearGradient>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="218" fill="url(#tile)"/>
+  <g transform="translate(0 -24)" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M576 450V356Q576 292 512 292H254Q190 292 190 356V536Q190 600 254 600H340C430 600 465 462 610 462"/>
+    <path d="M468 560V716Q468 780 532 780H770Q834 780 834 716V526Q834 462 770 462H610"/>
+  </g>
+</svg>
