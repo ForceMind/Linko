@@ -342,7 +342,9 @@ impl Panel {
             return;
         }
         let mut open = true;
-        egui::Window::new("添加电脑").open(&mut open).collapsible(false).resizable(false).default_width(510.0).default_height(600.0).vscroll(true).show(ctx,|ui|{
+        let height = if app.local_fingerprint().is_none() { 340.0 }
+            else if self.join_entry { 560.0 } else { 460.0 };
+        egui::Window::new("添加电脑").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).fixed_size(egui::vec2(510.0,height)).vscroll(true).show(ctx,|ui|{
             ui.heading("把另一台电脑加入工作区");
             ui.label("两台电脑连到同一 Wi-Fi 或局域网。任选一台显示配对码，另一台输入；双方确认后会记住彼此。键鼠与数据权限仍单独选择。");
             ui.add_space(12.0);
