@@ -19,7 +19,8 @@ for (const origin of origins) {
   }]);
   const files = [];
   for (const [name, info] of assets) {
-    const path = name === 'index.html' ? '/' : `/${name}`;
+    // Pages serves HTML at extensionless URLs and redirects *.html with 308.
+    const path = name === 'index.html' ? '/' : `/${name.replace(/\.html$/, '')}`;
     const response = await fetch(new URL(path, base), {
       redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(15000),
     });

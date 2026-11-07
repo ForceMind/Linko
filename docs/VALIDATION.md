@@ -1975,6 +1975,18 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 
 两端Linko包已核验同run/head、外层digest/内层checksum、CRC/路径、0.3.16版本、MIT及394项notice、Win PE和worker入口。Mac原包及未改复制件strict seal退出0，复制件plist/helper篡改均被拒绝且原包不变。Mac ZIP SHA256 d49a41aa00a79a7cf9303f2fa665928525a8698448e2a0b7bf1dceab604edc5b，Windows 759e298fd66a5f39f1b0df43a6033d92c1b609a9d89d468c9cb7b6817145a7b1；记录在ignored target/local-validation/linko-cb27bce-packages/verification-final.json。未启动程序/迁移TCC或身份。
 
+## 中文官网0.1.0 / Cloudflare Pages（2026-11-08）
+
+用户授权新建官网并发布到其Cloudflare Pages。分支linko-official-site / [PR73](https://github.com/ForceMind/Linko/pull/73)仅新增website静态资源、专用CI及说明，App仍0.3.16-dev；没有改Rust、原生输入、协议、身份或系统权限。上线地址：https://linko-63e.pages.dev/ 。
+
+- 代码6440ec2178404e79cb8e0bea00c6688fdc40beb3已提交推送、工作区干净后重建并发布，首次部署https://2353e877.linko-63e.pages.dev 。构建白名单10文件合计272360字节；不上传仓库根目录、target、profile、依赖或凭据。公开清单asset-manifest.json记录源提交、App/站点版本和资源SHA-256。
+- npm run build / npm run check及三个JS语法检查退出0。独立只读静态审查覆盖HTML/ARIA/锚点/图片、无JS回退、键盘焦点、窄屏和reduced-motion源码、公开敏感内容扫描；无阻塞发现。这不是浏览器视觉验收。
+- 实际HTTP回读正式域名及首次部署域名：两端各10个公开文件SHA-256与本地构建逐一一致，MIME、CSP、nosniff和中文404均通过，退出0。首个回读脚本曾因Pages把404.html以308转向/404而失败；已按实际扩展名规则修正脚本并通过，保留失败事实。后续最终发布沿用同一回读命令，公开manifest与PR73记录最终源提交。
+- 下载元数据经GitHub API实时回读：run42382394527、head cb27bce、macOS artifact13578905150与Windows13577989202均未过期，外层ZIP摘要匹配。下载需GitHub登录；包超过Pages单文件限制，未搬入官网或新建稳定Release。
+- 本机预检preflight-20261107T160305697531Z-85069因无rustc/cargo在fmt入口失败，其余Rust/进程专项未运行；按用户要求未安装。原生运行代码沿用cb27bce完整五项CI记录。本批网站候选CI及最后状态见PR73，不将网站检查视为原生双机、安全或长期内存验收。
+
+浏览器未验证；C06、6.83GB历史内存根因、Issue10根因、数据/G1等未完成项保持原状态。网站无账号、分析追踪或远程字体；访问者仅需普通HTTPS。源码与部署说明见website/README.md，本地HTTP证据在ignored website/deployment.local.json。
+
 过程失败保留：测试模块上下文引用/弃用API已修；实图发现顶栏过高、导航重叠、列宽和首屏截断，均按原生图修复；严格Clippy唯一RGBA迭代告警用稳定API修正，未allow。Windows新增截图测试误把POSIX权限位当跨平台保证，现全平台仍断言O_EXCL/mode参数，POSIX才断言实际权限位；生产Linux门与所有权/原字节断言不变。字体引入的初始配对弹窗挤压经实际图和新模型修复，原流程/同意/取消不改。
 
 保留差异：真实两台/未知系统/未接通能力，未照搬参考的第三台、假延迟、传输或已开开关；Linux/X11与macOS参考的窗口Chrome不同。宿主人工Win/Mac界面与物理C06、生产数据/G1、多屏和窗口桥仍未完成。本机Rust缺失、浏览器未验、#10/6.83GB根因未知，MIT与内部身份/v5兼容保持。主线未合并，未发布稳定版。
