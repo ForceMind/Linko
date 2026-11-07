@@ -1809,3 +1809,18 @@ terminal后worker被回收、GUI/helper正常退出；失败/中断仍回收自�
 4项Python收据/部分写入/父PID/入口拒绝本机已过，不启动GUI；Rust增加新目录/
 未来文件/独占报告/loopback/Native防线回归，尚待CI编译/格式/Clippy/工作区与真实
 GUI会话检查。本机预检仍缺Rust不安装，无真实资料/TCC/现用App修改，浏览器未验。
+
+05b6748五项42314931276、资源42314931401、上游42314931493已全部成功。原始分账
+artifact经摘要/结构核对保留在ignored target/local-validation/owned-resources-05b6748。
+约30秒Mac GUI峰RSS115.312MiB、平均单核CPU39.659049%，worker11.875MiB/
+0.133361%，helper11.844MiB/0.166799%；Linux GUI132.941MiB/26.668246%，
+worker7.613MiB、helper7.508MiB（整秒CPU计数未跨刻度，不能解释为完全不耗CPU）。
+三类均正常停止并回收，普通窗口仅requested；不是宿主6.83GB或Native验收。
+
+新分账暴露稳定Communication仍被child/events存在条件每100ms唤起全窗重绘。
+本批改实际stdout/stderr读线程在状态/诊断/EOF后唤醒GUI；EOF后的child/events回收
+继续100ms，Native健康轮询、停止期限及其他异步工作计时保持。CI资源控制输入也
+直接唤醒，连接/采样上限使用一次性deadline，避免诊断模式自行恢复周期重绘。
+新增真实共用reader的队列满/terminal/EOF/读取错误唤醒及idle/Native/EOF/Stop时钟
+回归。当前改动待新候选CI与同场景分账比较，不沿用05绿灯声明修复通过。本机
+预检再次因缺Rust停止，不安装；现用App/配对/TCC和输入协议/原生捕获均不变。

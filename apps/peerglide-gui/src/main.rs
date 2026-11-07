@@ -285,6 +285,37 @@ impl WorkerSnapshot {
         (state, value & 0x100 != 0)
     }
 }
+fn read_worker_output(
+    reader: impl BufRead,
+    snapshot: Arc<WorkerSnapshot>,
+    diagnostics: mpsc::SyncSender<String>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    for result in reader.lines() {
+        let line = match result {
+            Ok(line) => line,
+            Err(_) => {
+                snapshot.3.store(true, Ordering::Release);
+                break;
+            }
+        };
+        if let Some(event) = WorkerEvent::parse(&line) {
+            snapshot.publish(event.state);
+        } else if let Some(event) = WorkerInputEvent::parse(&line) {
+            snapshot.publish_input(event.state, event.terminal);
+        } else if let Some(event) = WorkerSwitchEvent::parse(&line) {
+            snapshot.publish_switch(event.state);
+        } else {
+            let _ = diagnostics.try_send(line.chars().take(600).collect());
+        }
+        wake();
+    }
+    snapshot.publish_switch(WorkerSwitchState::Idle);
+    snapshot.2.store(true, Ordering::Release);
+    drop(diagnostics);
+    wake();
+}
+
 struct App {
     recording_mode: bool,
     layout_report: Option<PathBuf>,
@@ -318,6 +349,7 @@ struct App {
     quit_check_mode: bool,
     resource_check_mode: bool,
     resource_check: Option<resource_check::Check>,
+    wake_ui: Arc<dyn Fn() + Send + Sync>,
     window_hidden: bool,
     screen_drag: Option<(egui::Vec2, egui::Pos2, egui::Rect)>,
     discovery: discovery_panel::Panel,
@@ -356,9 +388,10 @@ impl App {
         app.theme(&cc.egui_ctx);
         let mut app = app;
         let wake_context = cc.egui_ctx.clone();
-        app.tray_mailbox = peerglide_platform::tray::Mailbox::new(Arc::new(move || {
+        app.wake_ui = Arc::new(move || {
             wake_context.request_repaint();
-        }));
+        });
+        app.tray_mailbox = peerglide_platform::tray::Mailbox::new(app.wake_ui.clone());
         match peerglide_platform::application_menu::install(app.tray_mailbox.clone()) {
             Ok(owner) => app.application_menu = Some(owner),
             Err(error) => {
@@ -438,6 +471,7 @@ impl App {
             quit_check_mode: false,
             resource_check_mode: false,
             resource_check: None,
+            wake_ui: Arc::new(|| {}),
             window_hidden: false,
             screen_drag: None,
             discovery: discovery_panel::Panel::default(),
@@ -737,32 +771,17 @@ impl App {
         let output_tx = tx.clone();
         let snapshot = Arc::new(WorkerSnapshot::default());
         let output_state = snapshot.clone();
+        let output_wake = self.wake_ui.clone();
         std::thread::spawn(move || {
-            for result in BufReader::new(stdout).lines() {
-                let line = match result {
-                    Ok(line) => line,
-                    Err(_) => {
-                        output_state.3.store(true, Ordering::Release);
-                        break;
-                    }
-                };
-                if let Some(event) = WorkerEvent::parse(&line) {
-                    output_state.publish(event.state);
-                } else if let Some(event) = WorkerInputEvent::parse(&line) {
-                    output_state.publish_input(event.state, event.terminal);
-                } else if let Some(event) = WorkerSwitchEvent::parse(&line) {
-                    output_state.publish_switch(event.state);
-                } else {
-                    let _ = output_tx.try_send(line.chars().take(600).collect());
-                }
-            }
-            output_state.publish_switch(WorkerSwitchState::Idle);
-            output_state.2.store(true, Ordering::Release);
+            read_worker_output(BufReader::new(stdout), output_state, output_tx, output_wake);
         });
+        let error_wake = self.wake_ui.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = tx.try_send(line.chars().take(600).collect());
+                if tx.try_send(line.chars().take(600).collect()).is_ok() { error_wake(); }
             }
+            drop(tx);
+            error_wake();
         });
         self.child = Some(child);
         self.active_mode = Some(mode);
@@ -1185,10 +1204,11 @@ impl App {
         self.notice = "退出恢复入口发生变化，已请求停止键鼠。请确认恢复状态并重新打开屏跃。".into();
     }
     fn request_activity_tick(&self, ctx: &egui::Context) {
-        // Native capture/watchdogs stay in the worker. GUI polling is needed
-        // only while local asynchronous work or canvas deadlines are pending.
-        if self.child.is_some()
-            || self.events.is_some()
+        // Stable communication is woken by stdout/stderr instead of painting
+        // at 10Hz. Keep Native health polling and EOF/stop reaping unchanged.
+        if (self.child.is_some() && self.active_mode == Some(SessionMode::Native))
+            || (self.worker_state.as_ref().is_some_and(|snapshot| snapshot.2.load(Ordering::Acquire))
+                && (self.child.is_some() || self.events.is_some()))
             || self.stopping.is_some()
             || self.pending_start.is_some()
             || self.discovery.needs_poll()
@@ -1356,6 +1376,7 @@ impl App {
         }
         if let Some(mut check) = self.resource_check.take() {
             check.tick(self);
+            if let Some(delay) = check.next_tick() { ctx.request_repaint_after(delay); }
             self.resource_check = Some(check);
         }
         if self.close_requested
@@ -1477,7 +1498,7 @@ fn main() -> eframe::Result<()> {
                     eprintln!("资源检查无法初始化：{error:#}");
                     std::process::exit(2);
                 }
-                check.listen_stdin();
+                check.listen_stdin(app.wake_ui.clone());
                 app.resource_check = Some(check);
             }
             if options.gesture_lab {
@@ -2675,7 +2696,46 @@ mod lifecycle_tests {
         Ok(())
     }
     #[test]
-    fn idle_logic_stops_periodic_paints_but_hidden_worker_and_stop_keep_ticking() -> Result<()> {
+    fn output_wakes_ui_despite_full_diagnostics_and_eof_preserves_terminal_state() -> Result<()> {
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send("already queued".into())?;
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = wakes.clone();
+        let text = format!("{}\n{}\nignored diagnostic\n",
+            serde_json::to_string(&WorkerEvent::new(WorkerState::Authenticated))?,
+            WorkerInputEvent::new_terminal(WorkerInputState::Disabled).unwrap().line());
+        read_worker_output(std::io::Cursor::new(text), snapshot.clone(), tx,
+            Arc::new(move || { observed.fetch_add(1, Ordering::SeqCst); }));
+        assert_eq!(wakes.load(Ordering::SeqCst), 4, "output or EOF failed to wake GUI");
+        assert!(snapshot.2.load(Ordering::Acquire));
+        assert!(!snapshot.3.load(Ordering::Acquire));
+        assert_eq!(snapshot.take(), (Some(WorkerState::Authenticated), false));
+        assert_eq!(snapshot.take_input(), Some((WorkerInputState::Disabled, true)));
+        assert_eq!(rx.try_recv()?, "already queued");
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+        Ok(())
+    }
+    #[test]
+    fn output_read_error_still_finishes_and_wakes_reaping() {
+        struct ReadFailure;
+        impl std::io::Read for ReadFailure {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("synthetic read failure"))
+            }
+        }
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let (tx, rx) = mpsc::sync_channel(1);
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = wakes.clone();
+        read_worker_output(BufReader::new(ReadFailure), snapshot.clone(), tx,
+            Arc::new(move || { observed.fetch_add(1, Ordering::SeqCst); }));
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert!(snapshot.2.load(Ordering::Acquire) && snapshot.3.load(Ordering::Acquire));
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+    }
+    #[test]
+    fn communication_sleeps_but_native_eof_and_stop_keep_ticking() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let ctx = egui::Context::default();
@@ -2689,10 +2749,20 @@ mod lifecycle_tests {
         app.child = Some(managed_child()?);
         app.active_mode = Some(SessionMode::Communication);
         logic_frames(&mut app, &ctx, true);
+        assert_eq!(ticks.load(Ordering::SeqCst), 0, "communication retained its 10Hz clock");
+        app.active_mode = Some(SessionMode::Native);
+        logic_frames(&mut app, &ctx, true);
         assert!(
             ticks.load(Ordering::SeqCst) > 0,
-            "hidden worker status polling stopped"
+            "native health polling stopped"
         );
+        app.active_mode = Some(SessionMode::Communication);
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        snapshot.2.store(true, Ordering::Release);
+        app.worker_state = Some(snapshot);
+        let before_eof = ticks.load(Ordering::SeqCst);
+        logic_frames(&mut app, &ctx, true);
+        assert!(ticks.load(Ordering::SeqCst) > before_eof, "EOF reaping was starved");
         app.stop();
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.child.is_some() && Instant::now() < deadline {

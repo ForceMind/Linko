@@ -154,7 +154,7 @@ impl Check {
         app.notice = "CI隔离资源检查 · 仅回环通信，不开启键鼠".into();
         self.record("prepared", false)
     }
-    pub(super) fn listen_stdin(&self) {
+    pub(super) fn listen_stdin(&self, wake: Arc<dyn Fn() + Send + Sync>) {
         let control = self.control.clone();
         std::thread::spawn(move || {
             let mut line = Vec::new();
@@ -165,6 +165,7 @@ impl Check {
                 .is_ok()
                 && line == b"stop\n";
             control.store(if valid { 1 } else { 2 }, Ordering::Release);
+            wake();
         });
     }
     fn record(&mut self, state: &'static str, worker_reaped: bool) -> Result<()> {
@@ -286,6 +287,14 @@ impl Check {
     pub(super) fn finished(&self) -> bool {
         self.phase == Phase::Done
     }
+    pub(super) fn next_tick(&self) -> Option<Duration> {
+        let remaining = match self.phase {
+            Phase::Prepared | Phase::Connecting => Duration::from_secs(20).saturating_sub(self.started.elapsed()),
+            Phase::Sampling => (self.seconds + Duration::from_secs(15)).saturating_sub(self.connected?.elapsed()),
+            _ => return None,
+        };
+        Some(remaining.max(Duration::from_millis(1)))
+    }
 }
 
 #[cfg(test)]
@@ -307,6 +316,25 @@ mod tests {
             )?,
         )?;
         Ok((dir, spec, report))
+    }
+    #[test]
+    fn resource_deadlines_do_not_require_a_periodic_paint_clock() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let (dir, spec, _) = self::fixture(&fixture.path)?;
+        let mut check = Check::prepare(&dir, &spec, true)?;
+        assert!(check.next_tick().is_some_and(|delay| delay > Duration::from_secs(10)
+            && delay <= Duration::from_secs(20)));
+        check.phase = Phase::Sampling;
+        check.connected = Some(Instant::now());
+        assert!(check.next_tick().is_some_and(|delay| delay > Duration::from_secs(20)
+            && delay <= Duration::from_secs(32)));
+        check.connected = Some(Instant::now() - Duration::from_secs(33));
+        assert_eq!(check.next_tick(), Some(Duration::from_millis(1)));
+        check.phase = Phase::Stopping;
+        assert_eq!(check.next_tick(), None);
+        drop(check);
+        fixture.close()?;
+        Ok(())
     }
     #[test]
     fn resource_setup_is_fresh_loopback_and_never_opens_native_or_mutates_existing_data(
