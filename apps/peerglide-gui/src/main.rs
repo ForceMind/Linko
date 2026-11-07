@@ -47,7 +47,12 @@ struct Options {
     #[arg(long)]
     gesture_lab: bool,
     /// Isolated GUI smoke geometry only; create a new report, never overwrite.
-    #[arg(long, hide = true, requires = "gesture_lab")]
+    #[arg(
+        long,
+        hide = true,
+        requires = "data_dir",
+        conflicts_with = "macos_quit_check_report"
+    )]
     ui_layout_report: Option<PathBuf>,
     /// Isolated AppKit terminate integration check, never native input.
     #[arg(
@@ -168,6 +173,8 @@ enum Page {
     Devices,
     Displays,
     Transfers,
+    Clipboard,
+    Shortcuts,
     Settings,
     GestureLab,
     GestureRules,
@@ -325,11 +332,13 @@ fn read_worker_output(
 
 struct App {
     workspace_peer_selected: bool,
+    workspace_zoom: f32,
     notice_details: bool,
     connection_details_open: bool,
     settings_section: SettingsSection,
     recording_mode: bool,
     layout_report: Option<PathBuf>,
+    layout_geometry: std::collections::BTreeMap<String, [f32; 4]>,
     device_tab: DeviceTab,
     mouse_tab: MouseTab,
     collaboration_tab: CollaborationTab,
@@ -452,7 +461,9 @@ impl App {
         let mut app = Self {
             recording_mode: false,
             layout_report: None,
+            layout_geometry: std::collections::BTreeMap::new(),
             workspace_peer_selected: false,
+            workspace_zoom: 1.0,
             notice_details: false,
             connection_details_open: false,
             settings_section: SettingsSection::General,
@@ -497,7 +508,7 @@ impl App {
             config_store,
             enrollment_blocked,
             instance_lock,
-            page: Page::Devices,
+            page: Page::Displays,
             import_path: String::new(),
             use_connection_info: false,
             connection_text: String::new(),
@@ -1467,8 +1478,29 @@ impl Drop for App {
         }
     }
 }
+fn validate_layout_report_profile(options: &Options) -> Result<()> {
+    if options.ui_layout_report.is_none() || options.gesture_lab {
+        return Ok(());
+    }
+    let directory = options
+        .data_dir
+        .as_deref()
+        .context("UI几何检查需要显式隔离目录")?;
+    match std::fs::read_dir(directory) {
+        Ok(mut entries) => {
+            anyhow::ensure!(entries.next().is_none(), "普通UI几何检查需要全新空目录");
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error).context("无法检查UI几何隔离目录"),
+    }
+    Ok(())
+}
 fn main() -> eframe::Result<()> {
     let options = Options::parse();
+    if let Err(error) = validate_layout_report_profile(&options) {
+        eprintln!("UI几何检查无法开始：{error:#}");
+        std::process::exit(2);
+    }
     let resource_check = options
         .ci_resource_spec
         .as_ref()
@@ -1512,7 +1544,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "屏跃 · PeerGlide",
+        "Linko / 屏跃",
         native_options,
         Box::new(move |cc| {
             let mut app = App::new(cc, dir);
@@ -1808,7 +1840,7 @@ mod tests {
             app.config.dark = dark;
             app.theme(&ctx);
             for size in [Vec2::new(920.0, 700.0), Vec2::new(1180.0, 820.0)] {
-                for page in [Page::Home, Page::Devices] {
+                for page in [Page::Home, Page::Devices, Page::Displays] {
                     app.page = page;
                     let output = ctx.run_ui(
                         egui::RawInput {
@@ -1997,6 +2029,9 @@ mod tests {
             Page::Devices,
             Page::GestureLab,
             Page::Transfers,
+            Page::Clipboard,
+            Page::Shortcuts,
+            Page::Displays,
             Page::Settings,
         ] {
             app.page = page;
@@ -2079,6 +2114,29 @@ mod tests {
         let options = Options::try_parse_from(["peerglide-gui"]).unwrap();
         assert!(options.data_dir.is_none());
         assert!(!options.gesture_lab);
+    }
+    #[test]
+    fn ordinary_geometry_option_requires_an_explicit_fresh_profile() -> Result<()> {
+        assert!(
+            Options::try_parse_from(["peerglide-gui", "--ui-layout-report", "report.json"])
+                .is_err()
+        );
+        let fixture = Fixture::new()?;
+        let options = Options::try_parse_from([
+            "peerglide-gui",
+            "--data-dir",
+            fixture.path.to_str().unwrap(),
+            "--ui-layout-report",
+            "report.json",
+        ])?;
+        validate_layout_report_profile(&options)?;
+        std::fs::write(fixture.path.join("existing-data"), b"preserve")?;
+        assert!(validate_layout_report_profile(&options).is_err());
+        assert!(
+            !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
+        );
+        fixture.close()?;
+        Ok(())
     }
     pub(super) struct Fixture {
         pub(super) path: PathBuf,

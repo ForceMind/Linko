@@ -11,6 +11,31 @@ impl App {
     pub(super) fn idle_writable(&self) -> bool {
         self.writable() && self.child.is_none() && self.stopping.is_none() && !self.pairing_open
     }
+    pub(super) fn layout_editable(&self) -> bool {
+        self.idle_writable()
+            && self.config.fingerprint.is_some()
+            && !self.recovery_blocked
+            && !self.pairing_pending()
+            && self.wizard.is_none()
+            && self.dialog.is_none()
+    }
+    pub(super) fn try_set_edge(&mut self, edge: &str) -> bool {
+        if !self.layout_editable() || !matches!(edge, "left" | "right" | "top" | "bottom") {
+            self.screen_drag = None;
+            return false;
+        }
+        if self.config.edge == edge {
+            return true;
+        }
+        let previous = self.config.edge.clone();
+        self.config.edge = edge.into();
+        if let Err(error) = self.save_config() {
+            self.config.edge = previous;
+            self.notice = format!("屏幕位置未保存：{error:#}");
+            return false;
+        }
+        true
+    }
     pub(super) fn input_label(&self) -> &'static str {
         if self.recovery_blocked {
             return "输入恢复未确认";
@@ -46,7 +71,7 @@ impl App {
                 ui.strong(title);
                 ui.add_space(7.0);
                 ui.label(description);
-                ui.add_enabled(false, egui::Button::new("尚未提供"));
+                ui.weak("功能准备好后，会在这里提供独立的授权与操作入口。");
             });
     }
     pub(super) fn open_setup(&mut self) {
@@ -198,7 +223,7 @@ impl App {
             ui.add_space(10.0);
             self.work_controls(ui);
             if ui.button("打开设备工作区 →").clicked() {
-                self.page = Page::Devices;
+                self.navigate_to(Page::Devices);
             }
         });
         ui.add_space(20.0);
@@ -311,8 +336,7 @@ impl App {
         ui.strong("屏幕的位置");
         ui.weak("拖动另一台电脑的屏幕，或直接选择方向。位置用于下一次会话。");
         let registered = self.config.fingerprint.is_some();
-        let editable =
-            self.idle_writable() && registered && self.wizard.is_none() && self.dialog.is_none();
+        let editable = self.layout_editable();
         let width = ui.available_width().max(1.0);
         let height = if matches!(self.config.edge.as_str(), "top" | "bottom") {
             230.0
@@ -363,8 +387,7 @@ impl App {
             down,
         );
         if let Some(edge) = edge {
-            self.config.edge = edge.into();
-            self.save();
+            self.try_set_edge(edge);
             ui.ctx().request_repaint();
         }
         let displayed = self.screen_drag.map_or(peer, |(_, center, _)| {
@@ -406,10 +429,10 @@ impl App {
                 ui.label("另一台电脑在我的");
                 for side in ["left", "right", "top", "bottom"] {
                     if ui
-                        .selectable_value(&mut self.config.edge, side.into(), edge_label(side))
-                        .changed()
+                        .selectable_label(self.config.edge == side, edge_label(side))
+                        .clicked()
                     {
-                        self.save();
+                        self.try_set_edge(side);
                     }
                 }
             });
@@ -428,6 +451,9 @@ impl App {
                 .preview_ui(ui, self.gesture_lab.matched_id());
             self.use_recorded_gesture(ui);
             return;
+        }
+        if ui.button("‹ 返回快捷键").clicked() {
+            self.navigate_to(Page::Shortcuts);
         }
         Self::heading(
             ui,
@@ -479,35 +505,69 @@ impl App {
             }
         }
     }
+    fn shortcuts(&mut self, ui: &mut egui::Ui) {
+        Self::heading(ui, "快捷键", "随时切回本机，也可以离线配置本机鼠标。");
+        desktop_style::card(ui).show(ui, |ui| {
+            ui.strong("键鼠协同");
+            ui.add_space(10.0);
+            ui.label("Ctrl + Alt + Right    切换控制目标");
+            ui.label("Ctrl + Alt + Esc       紧急恢复本机");
+            ui.weak("仅在已明确开启的键鼠会话中生效。切回后先松开物理按键与鼠标按钮。");
+        });
+        ui.add_space(14.0);
+        desktop_style::card(ui).show(ui, |ui| {
+            ui.strong("本机鼠标");
+            ui.label("录制轨迹、预览识别结果、管理应用规则。");
+            ui.weak("全局手势尚未接通；离线配置不会捕获全局鼠标或执行系统动作。");
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("手势实验室").clicked() {
+                    self.navigate_to(Page::GestureLab);
+                    self.mouse_tab = MouseTab::Practice;
+                }
+                if ui.button("规则与应用").clicked() {
+                    self.navigate_to(Page::GestureRules);
+                    self.mouse_tab = MouseTab::Rules;
+                }
+            });
+        });
+        ui.add_space(14.0);
+        if ui.button("查看协作总览").clicked() {
+            self.navigate_to(Page::Home);
+        }
+    }
     fn collaboration(&mut self, ui: &mut egui::Ui) {
+        self.collaboration_tab = if self.page == Page::Clipboard {
+            CollaborationTab::Clipboard
+        } else {
+            CollaborationTab::Files
+        };
         Self::heading(
             ui,
-            "剪贴板与文件",
-            "协作权限与键鼠控制独立。未接通的功能不会显示模拟设备、进度或成功状态。",
+            if self.page == Page::Clipboard {
+                "剪贴板"
+            } else {
+                "文件传输"
+            },
+            "内容共享与键鼠控制分别授权。",
         );
-        ui.horizontal(|ui| {
-            ui.selectable_value(
-                &mut self.collaboration_tab,
-                CollaborationTab::Clipboard,
-                "文字剪贴板",
-            );
-            ui.selectable_value(
-                &mut self.collaboration_tab,
-                CollaborationTab::Files,
-                "文件收发",
-            );
+        desktop_style::card(ui).show(ui, |ui| {
+            desktop_style::pill(ui, "尚未接通", desktop_style::Tone::Neutral);
+            ui.add_space(12.0);
+            match self.collaboration_tab {
+                CollaborationTab::Clipboard => Self::unavailable(
+                    ui,
+                    "系统剪贴板尚未接通",
+                    "目前不会读取、写入或共享系统剪贴板。后续按设备、方向和手动／自动方式分别授权。",
+                ),
+                CollaborationTab::Files => Self::unavailable(
+                    ui,
+                    "文件发送与接收尚未接通",
+                    "当前不会读取或传送文件，也未提供原生跨屏拖拽。不会展示模拟传输进度。",
+                ),
+            }
         });
         ui.add_space(18.0);
-        match self.collaboration_tab {
-            CollaborationTab::Clipboard => {
-                Self::unavailable(ui,"文字同步尚未提供","目前不会读取、写入或共享系统剪贴板。后续按设备、方向和手动／自动方式分别授权。");
-            }
-            CollaborationTab::Files => {
-                Self::unavailable(ui,"文件收发尚未提供","当前没有生产文件发送和接收界面。不会读取示例文件或保存到下载目录；原生跨屏拖拽也未实现。");
-            }
-        }
-        ui.add_space(18.0);
-        ui.weak("连接成功不包含上述权限。离线数据模块和设计原型都不是已可用的数据共享功能。");
+        ui.weak("连接成功不包含内容共享许可。离线数据模块不是已可用的系统共享功能。");
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         Self::heading(ui, "设置", "让屏跃按你的习惯工作。");
@@ -1030,8 +1090,40 @@ impl App {
             self.dialog = None;
         }
     }
+    pub(super) fn record_layout_control(
+        &mut self,
+        key: &str,
+        response: &egui::Response,
+        clip: egui::Rect,
+    ) {
+        let rect = response.rect;
+        if self.layout_report.is_some()
+            && response.enabled()
+            && clip.contains_rect(rect)
+            && rect.is_positive()
+            && [rect.min.x, rect.min.y, rect.max.x, rect.max.y]
+                .iter()
+                .all(|v| v.is_finite())
+        {
+            self.layout_geometry.insert(
+                key.into(),
+                [rect.min.x, rect.min.y, rect.width(), rect.height()],
+            );
+        }
+    }
+    pub(super) fn navigate_to(&mut self, page: Page) {
+        self.page = page;
+        self.screen_drag = None;
+        self.native_confirmation = false;
+        if self.dialog == Some(Dialog::NativeStart) {
+            self.dialog = None;
+        }
+    }
     pub(super) fn desktop(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
+        if self.layout_report.is_some() {
+            self.layout_geometry.clear();
+        }
         if ctx.input(|input| {
             input.key_pressed(egui::Key::Escape) && input.modifiers.ctrl && input.modifiers.alt
         }) {
@@ -1039,32 +1131,49 @@ impl App {
             self.gesture_lab.cancel();
         }
         egui::Panel::left("navigation")
-            .exact_size(224.0)
+            .exact_size(190.0)
             .show(root, |ui| {
                 ui.add_space(14.0);
-                ui.heading(RichText::new("屏跃").size(26.0));
-                ui.weak("多台电脑，顺手协作");
+                ui.horizontal(|ui| {
+                    desktop_style::brand_mark(ui);
+                    ui.vertical(|ui| {
+                        ui.heading(RichText::new("Linko").size(25.0));
+                        ui.small("屏跃");
+                    });
+                });
+                ui.weak("让协作顺手发生");
                 ui.add_space(22.0);
                 for (page, label) in [
-                    (Page::Home, "总览"),
-                    (Page::Devices, "设备与屏幕"),
-                    (Page::GestureLab, "本机鼠标"),
-                    (Page::Transfers, "剪贴板与文件"),
+                    (Page::Devices, "设备"),
+                    (Page::Displays, "屏幕布局"),
+                    (Page::Transfers, "文件传输"),
+                    (Page::Clipboard, "剪贴板"),
+                    (Page::Shortcuts, "快捷键"),
                     (Page::Settings, "设置"),
                 ] {
-                    let selected = self.page == page
-                        || (page == Page::Devices && self.page == Page::Displays)
-                        || (page == Page::GestureLab && self.page == Page::GestureRules);
-                    if desktop_style::navigation(ui, label, selected).clicked() {
-                        self.page = page;
-                        self.screen_drag = None;
-                        self.native_confirmation = false;
-                        if self.dialog == Some(Dialog::NativeStart) {
-                            self.dialog = None;
-                        }
+                    if page == Page::Settings {
+                        ui.add_space((ui.available_height() - 130.0).max(12.0));
                     }
-                    if page == Page::Devices && selected {
-                        self.device_roster(ui);
+                    let selected = self.page == page
+                        || (page == Page::Shortcuts
+                            && matches!(
+                                self.page,
+                                Page::Home | Page::GestureLab | Page::GestureRules
+                            ));
+                    let response = desktop_style::navigation(ui, label, selected);
+                    let key = match page {
+                        Page::Devices => "nav_devices",
+                        Page::Displays => "nav_layout",
+                        Page::Shortcuts => "nav_shortcuts",
+                        Page::Settings => "nav_settings",
+                        Page::Transfers => "nav_files",
+                        Page::Clipboard => "nav_clipboard",
+                        _ => unreachable!("only product navigation entries are rendered here"),
+                    };
+                    self.record_layout_control(key, &response, ui.clip_rect());
+                    if response.clicked() {
+                        self.navigate_to(page);
+                        self.device_tab = DeviceTab::Device;
                     }
                     ui.add_space(6.0);
                 }
@@ -1078,7 +1187,10 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 let view = self.workspace_view();
                 desktop_style::pill(ui, view.title, view.tone);
-                if self.child.is_some() && ui.button("停止协同").clicked() {
+                if ui
+                    .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
+                    .clicked()
+                {
                     self.stop();
                 }
                 if (self.stopping.is_some() || self.recovery_blocked)
@@ -1099,7 +1211,7 @@ impl App {
         });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.small("屏跃");
+                ui.small("Linko / 屏跃");
                 if !self.notice.is_empty() {
                     ui.separator();
                     let mut summary: String = self.notice.chars().take(64).collect();
@@ -1130,13 +1242,11 @@ impl App {
                 egui::ScrollArea::vertical().show(ui, |ui| match self.page {
                     Page::Home => self.home(ui),
                     Page::Devices => self.devices(ui),
-                    Page::Displays => {
-                        self.device_tab = DeviceTab::Layout;
-                        self.devices(ui);
-                    }
+                    Page::Displays => self.devices(ui),
                     Page::Settings => self.settings(ui, &ctx),
                     Page::GestureLab | Page::GestureRules => self.mouse(ui),
-                    Page::Transfers => self.collaboration(ui),
+                    Page::Transfers | Page::Clipboard => self.collaboration(ui),
+                    Page::Shortcuts => self.shortcuts(ui),
                 });
             });
         if self.notice_details {
@@ -1153,10 +1263,25 @@ impl App {
         pairing.ui(self, &ctx);
         self.pairing_open = pairing.blocks_actions();
         self.pairing_panel = pairing;
-        if let Some((canvas, save)) = self.gesture_lab.inspection() {
-            if let Some(path) = self.layout_report.take() {
+        let report = if self.layout_report.is_none() {
+            None
+        } else if self.recording_mode {
+            self.gesture_lab.inspection().map(|(canvas, save)| {
                 let rect = |r: egui::Rect| [r.min.x, r.min.y, r.width(), r.height()];
-                let report = serde_json::json!({"version":1,"canvas":rect(canvas),"save":rect(save),"scope":"isolated_gui_widget_geometry"});
+                serde_json::json!({"version":1,"canvas":rect(canvas),"save":rect(save),"scope":"isolated_gui_widget_geometry"})
+            })
+        } else if self.layout_geometry.contains_key("nav_layout")
+            && self.layout_geometry.contains_key("add_device")
+            && self.layout_geometry.contains_key("primary_action")
+        {
+            Some(
+                serde_json::json!({"version":2,"controls":self.layout_geometry,"scope":"isolated_gui_widget_geometry"}),
+            )
+        } else {
+            None
+        };
+        if let Some(report) = report {
+            if let Some(path) = self.layout_report.take() {
                 let result = (|| -> Result<()> {
                     let mut file = std::fs::OpenOptions::new()
                         .write(true)
@@ -1168,6 +1293,7 @@ impl App {
                 if let Err(error) = result {
                     self.notice = format!("UI几何报告未写入：{error:#}");
                 }
+                self.layout_geometry.clear();
             }
         }
     }

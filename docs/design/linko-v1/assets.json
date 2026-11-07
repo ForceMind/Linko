@@ -1,0 +1,66 @@
+{
+  "design": "linko-v1",
+  "source_commit": "bfd739c9a06f11965a9720ff67b6a6fd4b12a625",
+  "status": "approved_direction_design_artifacts_not_runtime",
+  "assets": [
+    {
+      "path": "brand/app-icon.svg",
+      "sha256": "33ce4032ac3233acb0b629c03244d61b80a3ff98af230bfbf3020071a81b15eb",
+      "view_box": "0 0 1024 1024",
+      "origin": "repo-native SVG"
+    },
+    {
+      "path": "brand/previews/app-icon.svg.png",
+      "sha256": "6862e978b563955cd2c2508242b18d70d8641c86105e18899d0c886b402c98aa",
+      "width": 512,
+      "height": 512,
+      "origin": "static SVG rendering"
+    },
+    {
+      "path": "effects/screen-layout.png",
+      "sha256": "f4f6d20a49add9411a2446d197db702dab41d5f26f868fbb5a2ecdff096ddf1c",
+      "width": 1487,
+      "height": 1058,
+      "origin": "built-in image_gen"
+    },
+    {
+      "path": "wireframes/01-screen-layout.svg",
+      "sha256": "09f6361432584a8fda911d8428858ea65813190f7c73988618f0ec7b281a2b4c",
+      "view_box": "0 0 1440 960",
+      "origin": "repo-native SVG"
+    },
+    {
+      "path": "wireframes/02-devices.svg",
+      "sha256": "2aad62d66346fbb6cdff9066906310f14260f34e86a63f952428d361383a3c9a",
+      "view_box": "0 0 1440 960",
+      "origin": "repo-native SVG"
+    },
+    {
+      "path": "wireframes/03-add-computer.svg",
+      "sha256": "1e02c449213b0ee1aa68997b3dcb1945c3d408ca40bced2638e3c29f87051c9a",
+      "view_box": "0 0 1440 960",
+      "origin": "repo-native SVG"
+    },
+    {
+      "path": "wireframes/previews/01-screen-layout.svg.png",
+      "sha256": "4f8d8dc17f3a2a6da9bfe01c30dad2388a6405907a65d84c638efdc1565e9c2e",
+      "width": 1440,
+      "height": 960,
+      "origin": "static SVG rendering"
+    },
+    {
+      "path": "wireframes/previews/02-devices.svg.png",
+      "sha256": "a08cfd9ed9b532677508c3ef98ebf55255aca98876ac29b817715d4c5beab973",
+      "width": 1440,
+      "height": 960,
+      "origin": "static SVG rendering"
+    },
+    {
+      "path": "wireframes/previews/03-add-computer.svg.png",
+      "sha256": "e1f83765fdef404b334a9afa83b9b6c46b8b2ca95428ad6b0eeda5555b9c53be",
+      "width": 1440,
+      "height": 960,
+      "origin": "static SVG rendering"
+    }
+  ]
+}

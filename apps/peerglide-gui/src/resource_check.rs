@@ -229,7 +229,7 @@ impl Check {
             app.application_menu
                 .as_ref()
                 .context("缺少退出保护")?
-                .window_visible_for_check("屏跃 · PeerGlide")
+                .window_visible_for_check("Linko / 屏跃")
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -243,7 +243,7 @@ impl Check {
             app.application_menu
                 .as_ref()
                 .context("缺少退出保护")?
-                .request_window_close_for_check("屏跃 · PeerGlide")
+                .request_window_close_for_check("Linko / 屏跃")
         }
         #[cfg(not(target_os = "macos"))]
         {

@@ -8,7 +8,7 @@ with their original computer; operating system input is forwarded over LAN.
 
 ## Status
 
-Experimental **0.3.13-dev**, not a stable release. CLI, authenticated QUIC transport,
+Experimental **0.3.14-dev**, not a stable release. CLI, authenticated QUIC transport,
 bounded protocol and recovery state machine are runnable. Windows/macOS native
 adapters are implemented; real Windows ↔ macOS dual-machine acceptance is
 **pending**. Linux currently supports transport/protocol diagnostics only.
@@ -44,12 +44,12 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 Use stable Rust (GUI requires at least 1.95). Run `cargo build --workspace --release --locked` to build both
-executables. Launch `peerglide-gui` with `peerglide` beside it. The Chinese GUI has
-five pages: 总览、设备与屏幕、本机鼠标、剪贴板与文件、设置. 设备与屏幕 provides
+executables. Launch `peerglide-gui` with `peerglide` beside it. The GUI displays **Linko / 屏跃** while repository, crate, identity and protocol identifiers remain PeerGlide.
+It defaults to 屏幕布局, with six Chinese navigation entries: 设备、屏幕布局、文件传输、剪贴板、快捷键、设置. 快捷键 retains access to 协作总览 and 本机鼠标 / gesture rules. 设备 provides
 identity/enrollment, independent receiving permission, harmless communication/probes
 and primary-display direction. Starting a keyboard/mouse session requires a recent
 read-only worker permission check and fresh explicit confirmation; saved preferences never enable native input on a normal
-connection. 本机鼠标 edits offline rules and tests window-local gestures; its global
+connection. 屏幕布局 offers two-primary-display direction and view-only zoom; it does not implement multi-monitor geometry or remote video. 本机鼠标 edits offline rules and tests window-local gestures; its global
 G1 switch remains unavailable. See [actual GUI interactions](docs/GUI_INTERACTIONS.zh-CN.md).
 No config file editing is required.
 
