@@ -778,7 +778,9 @@ impl App {
         let error_wake = self.wake_ui.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if tx.try_send(line.chars().take(600).collect()).is_ok() { error_wake(); }
+                if tx.try_send(line.chars().take(600).collect()).is_ok() {
+                    error_wake();
+                }
             }
             drop(tx);
             error_wake();
@@ -1207,7 +1209,10 @@ impl App {
         // Stable communication is woken by stdout/stderr instead of painting
         // at 10Hz. Keep Native health polling and EOF/stop reaping unchanged.
         if (self.child.is_some() && self.active_mode == Some(SessionMode::Native))
-            || (self.worker_state.as_ref().is_some_and(|snapshot| snapshot.2.load(Ordering::Acquire))
+            || (self
+                .worker_state
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.2.load(Ordering::Acquire))
                 && (self.child.is_some() || self.events.is_some()))
             || self.stopping.is_some()
             || self.pending_start.is_some()
@@ -1376,7 +1381,9 @@ impl App {
         }
         if let Some(mut check) = self.resource_check.take() {
             check.tick(self);
-            if let Some(delay) = check.next_tick() { ctx.request_repaint_after(delay); }
+            if let Some(delay) = check.next_tick() {
+                ctx.request_repaint_after(delay);
+            }
             self.resource_check = Some(check);
         }
         if self.close_requested
@@ -2702,18 +2709,38 @@ mod lifecycle_tests {
         tx.send("already queued".into())?;
         let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = wakes.clone();
-        let text = format!("{}\n{}\nignored diagnostic\n",
+        let text = format!(
+            "{}\n{}\nignored diagnostic\n",
             serde_json::to_string(&WorkerEvent::new(WorkerState::Authenticated))?,
-            WorkerInputEvent::new_terminal(WorkerInputState::Disabled).unwrap().line());
-        read_worker_output(std::io::Cursor::new(text), snapshot.clone(), tx,
-            Arc::new(move || { observed.fetch_add(1, Ordering::SeqCst); }));
-        assert_eq!(wakes.load(Ordering::SeqCst), 4, "output or EOF failed to wake GUI");
+            WorkerInputEvent::new_terminal(WorkerInputState::Disabled)
+                .unwrap()
+                .line()
+        );
+        read_worker_output(
+            std::io::Cursor::new(text),
+            snapshot.clone(),
+            tx,
+            Arc::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            4,
+            "output or EOF failed to wake GUI"
+        );
         assert!(snapshot.2.load(Ordering::Acquire));
         assert!(!snapshot.3.load(Ordering::Acquire));
         assert_eq!(snapshot.take(), (Some(WorkerState::Authenticated), false));
-        assert_eq!(snapshot.take_input(), Some((WorkerInputState::Disabled, true)));
+        assert_eq!(
+            snapshot.take_input(),
+            Some((WorkerInputState::Disabled, true))
+        );
         assert_eq!(rx.try_recv()?, "already queued");
-        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
         Ok(())
     }
     #[test]
@@ -2728,11 +2755,20 @@ mod lifecycle_tests {
         let (tx, rx) = mpsc::sync_channel(1);
         let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed = wakes.clone();
-        read_worker_output(BufReader::new(ReadFailure), snapshot.clone(), tx,
-            Arc::new(move || { observed.fetch_add(1, Ordering::SeqCst); }));
+        read_worker_output(
+            BufReader::new(ReadFailure),
+            snapshot.clone(),
+            tx,
+            Arc::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
         assert!(snapshot.2.load(Ordering::Acquire) && snapshot.3.load(Ordering::Acquire));
-        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
     }
     #[test]
     fn communication_sleeps_but_native_eof_and_stop_keep_ticking() -> Result<()> {
@@ -2749,7 +2785,11 @@ mod lifecycle_tests {
         app.child = Some(managed_child()?);
         app.active_mode = Some(SessionMode::Communication);
         logic_frames(&mut app, &ctx, true);
-        assert_eq!(ticks.load(Ordering::SeqCst), 0, "communication retained its 10Hz clock");
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            0,
+            "communication retained its 10Hz clock"
+        );
         app.active_mode = Some(SessionMode::Native);
         logic_frames(&mut app, &ctx, true);
         assert!(
@@ -2762,7 +2802,10 @@ mod lifecycle_tests {
         app.worker_state = Some(snapshot);
         let before_eof = ticks.load(Ordering::SeqCst);
         logic_frames(&mut app, &ctx, true);
-        assert!(ticks.load(Ordering::SeqCst) > before_eof, "EOF reaping was starved");
+        assert!(
+            ticks.load(Ordering::SeqCst) > before_eof,
+            "EOF reaping was starved"
+        );
         app.stop();
         let deadline = Instant::now() + Duration::from_secs(5);
         while app.child.is_some() && Instant::now() < deadline {
