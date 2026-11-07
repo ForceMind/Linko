@@ -11,8 +11,9 @@ import gui_worker_resource_smoke as check
 
 class ResourceCheck(unittest.TestCase):
     def record(self):
-        return {"schema_version": 1, "scope": "ci_owned_gui_communication_resources", "state": "connected",
-                "worker_pid": 123, "worker_reaped": False, "elapsed_sec": 1.0, "native": False}
+        return {"schema_version": 2, "scope": "ci_owned_gui_communication_resources", "state": "connected",
+                "worker_pid": 123, "worker_reaped": False, "elapsed_sec": 1.0, "native": False,
+                "window_state": "normal_window_requested", "tray_show_received": False, "tray_stop_received": False}
 
     def test_partial_live_receipt_waits_and_final_truncation_does_not_pass(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -28,7 +29,8 @@ class ResourceCheck(unittest.TestCase):
     def test_no_future_native_or_private_extra_fields_in_receipt(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "receipt"
-            for key, value in [("schema_version", 2), ("native", True), ("state", "private marker"),
+            for key, value in [("schema_version", 3), ("native", True), ("state", "private marker"),
+                               ("window_state", "hidden_requested"), ("tray_stop_received", 1),
                                ("key", "private marker"), ("elapsed_sec", float("nan"))]:
                 item = self.record(); item[key] = value
                 path.write_text(json.dumps(item) + "\n")
@@ -48,6 +50,36 @@ class ResourceCheck(unittest.TestCase):
             with patch.object(check.subprocess, "check_output", return_value=value):
                 with self.assertRaises(ValueError):
                     check.parent_pid(123)
+
+    def test_hidden_requires_os_sequence_and_actual_show_stop_receipts(self):
+        receipts = []
+        for state, window in [("prepared", "normal_window_requested"), ("visible", "appkit_visible"),
+                              ("connected", "appkit_hidden"), ("shown", "appkit_visible"),
+                              ("stopping", "appkit_visible"), ("completed", "appkit_visible")]:
+            item = self.record(); item.update(state=state, window_state=window,
+                tray_show_received=state in {"shown", "stopping", "completed"},
+                tray_stop_received=state == "completed", worker_reaped=state == "completed")
+            receipts.append(item)
+        self.assertEqual(check.hidden_visibility_proof(receipts)["sampling"], "appkit_hidden")
+        for key in ["tray_show_received", "tray_stop_received", "worker_reaped"]:
+            changed = [dict(r) for r in receipts]; changed[-1][key] = False
+            with self.assertRaises(ValueError):
+                check.hidden_visibility_proof(changed)
+        for index in [1, 2, 3]:
+            changed = [dict(r) for r in receipts]; changed[index]["window_state"] = "normal_window_requested"
+            with self.assertRaises(ValueError):
+                check.hidden_visibility_proof(changed)
+        with self.assertRaises(ValueError):
+            check.hidden_visibility_proof(receipts[1:])
+
+    def test_linux_never_substitutes_a_requested_hidden_flag_for_os_proof(self):
+        with tempfile.TemporaryDirectory() as folder:
+            report = Path(folder) / "new.json"
+            with patch.dict(os.environ, {"CI": "true"}), patch.object(check.sys, "platform", "linux"), \
+                    patch.object(check, "run") as run, patch("builtins.print"):
+                self.assertEqual(check.main([folder, "--report", str(report), "--tray-hidden"]), 1)
+                run.assert_not_called()
+            self.assertEqual(json.loads(report.read_text())["reason"], "hidden_check_macos_required")
 
     def test_non_ci_and_existing_report_refuse_without_starting_gui(self):
         with tempfile.TemporaryDirectory() as folder:

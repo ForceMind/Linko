@@ -1324,3 +1324,20 @@ stderr sender仍存活；完整保留“晚到诊断读完才回收”与“结�
 自身仍单独5分钟，不跳过/放宽测试或自动重试掩盖错误。两平台资源42317591239成功。
 该修正只改CI/记录，App代码仍0acdc9f；最终精确HEAD结果继续集中在PR64。旧#10
 根因仍未知，本次apt下载超时不用于解释该历史故障或6.83GB。
+
+## 54. A2真实菜单栏隐藏驻留（2026-11-07，开发中）
+
+tray-hidden-resources/0.3.11基于PR64最终8c9e22f（五项42318814759、资源42318814760、
+上游42318814990全部成功）。本批在同一显式CI-only、新目录/回环/NoNative资源模式
+增加macOS tray_hidden场景；其他平台明确拒绝，不以内部window_hidden充当OS证明。
+只在该隔离新profile内存启用tray/close_to_tray，不保存偏好；普通默认不变。
+实际NSWindow performClose→原GUI close分支→AppKit isVisible=false后才开始采样；
+结束走真实NSMenu显示/停止selector，须同Mailbox命令到GUI、AppKit恢复可见及原
+stop/terminal/EOF/reap。连接20秒、隐藏/显示各5秒；过渡50ms仅用于等待SDK状态，
+采样保持事件唤醒；stdin仍只stop，不提供命令执行/授权。报告与父采样schema2记录
+有限窗口状态/命令观察；请求/未测不等于成功。队列字段非认证，输入v5/原生捕获不改。
+
+6项Python收据/序列/不支持平台拒绝回归本机通过，Rust新代码待CI编译/fmt/Clippy/
+工作区/真实AppKit与NoNative会话资源专项。已有窗口场景保留，新增30秒Mac隐藏曲线；
+非物理点击/像素无遮挡/Windows托盘/Native/8h/24h/C06或6.83GB根因证据。本机仍
+缺Rust不安装，实际App/TCC/身份/配对不变，宿主GUI受锁屏阻碍，浏览器未验证。

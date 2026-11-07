@@ -22,12 +22,16 @@ struct Spec {
     peer_certificate: PathBuf,
     report: PathBuf,
     seconds: u64,
+    #[serde(default)]
+    tray_hidden: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Prepared,
     Connecting,
+    Hiding,
     Sampling,
+    Restoring,
     Stopping,
     FailedStopping,
     Done,
@@ -41,6 +45,9 @@ struct Record {
     worker_reaped: bool,
     elapsed_sec: f64,
     native: bool,
+    window_state: &'static str,
+    tray_show_received: bool,
+    tray_stop_received: bool,
 }
 pub(super) struct Check {
     file: File,
@@ -53,6 +60,11 @@ pub(super) struct Check {
     worker: Option<u32>,
     control: Arc<AtomicU8>,
     phase: Phase,
+    tray_hidden: bool,
+    transition: Option<Instant>,
+    window_state: &'static str,
+    tray_show_received: bool,
+    tray_stop_received: bool,
 }
 fn regular(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)?;
@@ -70,6 +82,7 @@ impl Check {
         File::open(spec_path)?.take(8193).read_to_end(&mut bytes)?;
         anyhow::ensure!(bytes.len() <= 8192, "资源检查说明过大");
         let spec: Spec = serde_json::from_slice(&bytes).context("资源检查说明无效")?;
+        anyhow::ensure!(!spec.tray_hidden || cfg!(target_os = "macos"), "真实菜单栏隐藏检查仅支持macOS");
         anyhow::ensure!(
             spec.schema_version == 1
                 && spec.address.is_ipv4()
@@ -123,6 +136,11 @@ impl Check {
             worker: None,
             control: Arc::new(AtomicU8::new(0)),
             phase: Phase::Prepared,
+            tray_hidden: spec.tray_hidden,
+            transition: None,
+            window_state: "normal_window_requested",
+            tray_show_received: false,
+            tray_stop_received: false,
         })
     }
     pub(super) fn setup(&mut self, app: &mut App) -> Result<()> {
@@ -151,6 +169,12 @@ impl Check {
         enrollment_store::commit(app.config_store.as_mut().unwrap(), &next, Some(&self.peer))?;
         app.config = next;
         app.resource_check_mode = true;
+        if self.tray_hidden {
+            // This fresh diagnostic's in-memory choice only. Never save it to
+            // user preferences or assume the real status item was created.
+            app.desktop_preferences.tray_enabled = true;
+            app.desktop_preferences.close_to_tray = true;
+        }
         app.notice = "CI隔离资源检查 · 仅回环通信，不开启键鼠".into();
         self.record("prepared", false)
     }
@@ -170,13 +194,16 @@ impl Check {
     }
     fn record(&mut self, state: &'static str, worker_reaped: bool) -> Result<()> {
         let line = serde_json::to_vec(&Record {
-            schema_version: 1,
+            schema_version: 2,
             scope: "ci_owned_gui_communication_resources",
             state,
             worker_pid: self.worker,
             worker_reaped,
             elapsed_sec: self.started.elapsed().as_secs_f64(),
             native: false,
+            window_state: self.window_state,
+            tray_show_received: self.tray_show_received,
+            tray_stop_received: self.tray_stop_received,
         })?;
         self.file.write_all(&line)?;
         self.file.write_all(b"\n")?;
@@ -188,6 +215,39 @@ impl Check {
         self.phase = Phase::FailedStopping;
         app.close_requested = true;
         app.stop();
+    }
+    pub(super) fn observe_tray(&mut self, pending: peerglide_platform::tray::Pending) {
+        self.tray_show_received |= pending.show;
+        self.tray_stop_received |= pending.stop;
+    }
+    fn visible(&self, app: &App) -> Result<bool> {
+        #[cfg(target_os = "macos")]
+        {
+            app.application_menu.as_ref().context("缺少退出保护")?
+                .window_visible_for_check("屏跃 · PeerGlide")
+        }
+        #[cfg(not(target_os = "macos"))]
+        { let _ = app; anyhow::bail!("平台未实现本次窗口核验") }
+    }
+    fn request_close(&self, app: &App) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            app.application_menu.as_ref().context("缺少退出保护")?
+                .request_window_close_for_check("屏跃 · PeerGlide")
+        }
+        #[cfg(not(target_os = "macos"))]
+        { let _ = app; anyhow::bail!("平台未实现本次窗口核验") }
+    }
+    fn request_tray(&self, app: &App, command: peerglide_platform::tray::Command) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        { app.tray.as_ref().context("缺少菜单栏恢复入口")?.request_command_for_check(command) }
+        #[cfg(not(target_os = "macos"))]
+        { let _ = (app, command); anyhow::bail!("平台未实现本次菜单栏核验") }
+    }
+    fn begin_sampling(&mut self) -> Result<()> {
+        self.connected = Some(Instant::now());
+        self.phase = Phase::Sampling;
+        self.record("connected", false)
     }
     pub(super) fn tick(&mut self, app: &mut App) {
         if self.phase == Phase::Done {
@@ -212,6 +272,14 @@ impl Check {
             self.fail(app);
             return;
         }
+        if matches!(self.phase, Phase::Hiding | Phase::Sampling | Phase::Restoring)
+            && (app.close_requested || !app.connected || app.child.as_ref().map(|c| c.id()) != self.worker
+                || app.active_mode != Some(SessionMode::Communication)
+                || app.input_state != Some(WorkerInputState::Disabled) || app.input_terminal)
+        { self.fail(app); return; }
+        if self.tray_hidden && !app.tray.as_ref().is_some_and(|tray| tray.is_available()) {
+            self.fail(app); return;
+        }
         if self.phase == Phase::Prepared {
             if app.start_mode(SessionMode::Communication).is_err() {
                 self.fail(app);
@@ -233,15 +301,47 @@ impl Check {
                 && app.input_state == Some(WorkerInputState::Disabled)
                 && !app.input_terminal
             {
-                self.connected = Some(Instant::now());
-                self.phase = Phase::Sampling;
-                if self.record("connected", false).is_err() {
+                if self.tray_hidden {
+                    if !matches!(self.visible(app), Ok(true)) {
+                        // Window construction can finish after the first logic
+                        // callback; the same 20-second connection cap applies.
+                        return;
+                    }
+                    self.window_state = "appkit_visible";
+                    if self.record("visible", false).is_err() || self.request_close(app).is_err() {
+                        self.fail(app); return;
+                    }
+                    self.phase = Phase::Hiding;
+                    self.transition = Some(Instant::now());
+                } else if self.begin_sampling().is_err() {
                     self.fail(app);
                     return;
                 }
             }
         }
+        if matches!(self.phase, Phase::Hiding | Phase::Restoring) {
+            if self.transition.is_none_or(|at| at.elapsed() > Duration::from_secs(5)) {
+                self.fail(app); return;
+            }
+            if self.phase == Phase::Hiding {
+                if app.window_hidden && matches!(self.visible(app), Ok(false)) {
+                    self.window_state = "appkit_hidden";
+                    if self.begin_sampling().is_err() { self.fail(app); return; }
+                }
+            } else if !app.window_hidden && self.tray_show_received && matches!(self.visible(app), Ok(true)) {
+                self.window_state = "appkit_visible";
+                if self.record("shown", false).is_err() || self.request_tray(app, peerglide_platform::tray::Command::Stop).is_err() {
+                    self.fail(app); return;
+                }
+                self.phase = Phase::Stopping;
+                if self.record("stopping", false).is_err() { self.fail(app); return; }
+                app.close_requested = true;
+            }
+        }
         if self.phase == Phase::Sampling {
+            if self.tray_hidden && (!app.window_hidden || !matches!(self.visible(app), Ok(false))) {
+                self.fail(app); return;
+            }
             if app.close_requested
                 || !app.connected
                 || app.child.as_ref().map(|child| child.id()) != self.worker
@@ -262,17 +362,23 @@ impl Check {
                     self.fail(app);
                     return;
                 }
-                self.phase = Phase::Stopping;
-                if self.record("stopping", false).is_err() {
-                    self.fail(app);
-                    return;
+                if self.tray_hidden {
+                    if self.request_tray(app, peerglide_platform::tray::Command::Show).is_err() {
+                        self.fail(app); return;
+                    }
+                    self.phase = Phase::Restoring;
+                    self.transition = Some(Instant::now());
+                } else {
+                    self.phase = Phase::Stopping;
+                    if self.record("stopping", false).is_err() { self.fail(app); return; }
+                    app.close_requested = true;
+                    app.stop();
                 }
-                app.close_requested = true;
-                app.stop();
             }
         }
         if self.phase == Phase::Stopping && app.child.is_none() {
             let clean = !app.recovery_blocked
+                && (!self.tray_hidden || (self.tray_show_received && self.tray_stop_received && self.window_state == "appkit_visible"))
                 && app.stopping.is_none()
                 && app.events.is_none()
                 && app.input_terminal
@@ -288,6 +394,9 @@ impl Check {
         self.phase == Phase::Done
     }
     pub(super) fn next_tick(&self) -> Option<Duration> {
+        if self.tray_hidden && self.phase == Phase::Connecting {
+            return Some(Duration::from_millis(50));
+        }
         let remaining = match self.phase {
             Phase::Prepared | Phase::Connecting => {
                 Duration::from_secs(20).saturating_sub(self.started.elapsed())
@@ -295,6 +404,7 @@ impl Check {
             Phase::Sampling => {
                 (self.seconds + Duration::from_secs(15)).saturating_sub(self.connected?.elapsed())
             }
+            Phase::Hiding | Phase::Restoring => return Some(Duration::from_millis(50)),
             _ => return None,
         };
         Some(remaining.max(Duration::from_millis(1)))
@@ -352,6 +462,11 @@ mod tests {
         let mut check = Check::prepare(&dir, &spec, true)?;
         let mut app = App::load(dir.clone());
         check.setup(&mut app)?;
+        let receipt: serde_json::Value = serde_json::from_slice(&fs::read(&report)?)?;
+        assert_eq!(receipt["schema_version"], 2);
+        assert_eq!(receipt["window_state"], "normal_window_requested");
+        assert_eq!(receipt["tray_show_received"], false);
+        assert_eq!(receipt["tray_stop_received"], false);
         let settings = fs::read(dir.join("settings.json"))?;
         assert!(
             app.resource_check_mode
@@ -391,6 +506,12 @@ mod tests {
         let fixture = crate::tests::Fixture::new()?;
         let (dir, spec, report) = self::fixture(&fixture.path)?;
         let original: serde_json::Value = serde_json::from_slice(&fs::read(&spec)?)?;
+        if !cfg!(target_os = "macos") {
+            let mut hidden = original.clone();
+            hidden["tray_hidden"] = serde_json::json!(true);
+            fs::write(&spec, serde_json::to_vec(&hidden)?)?;
+            assert!(Check::prepare(&dir, &spec, true).is_err() && !report.exists());
+        }
         for (field, value) in [
             ("address", serde_json::json!("192.168.1.2:24870")),
             ("address", serde_json::json!("127.0.0.1:0")),

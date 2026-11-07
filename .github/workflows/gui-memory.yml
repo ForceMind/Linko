@@ -9,6 +9,9 @@ on:
       - 'tools/gui_worker_resource_smoke.py'
       - 'tools/test_gui_worker_resource_smoke.py'
       - 'apps/peerglide-gui/**'
+      - 'crates/peerglide-platform/src/tray/**'
+      - 'crates/peerglide-platform/src/application_menu/**'
+      - 'crates/peerglide-platform/Cargo.toml'
 permissions:
   contents: read
 jobs:
@@ -54,11 +57,20 @@ jobs:
       - name: GUI and owned NoNative worker accounting on macOS runner
         if: runner.os == 'macOS'
         run: python tools/gui_worker_resource_smoke.py target/release --report dist/gui-owned-resources-macos.json --duration 30
+      - name: Real AppKit hide, menu restore and stop resource accounting
+        if: runner.os == 'macOS'
+        run: python tools/gui_worker_resource_smoke.py target/release --report dist/gui-hidden-resources-macos.json --duration 30 --tray-hidden
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: gui-memory-${{ matrix.os }}
           path: dist/gui-memory-*.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'macOS'
+        with:
+          name: gui-hidden-resources-macos
+          path: dist/gui-hidden-resources-macos.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
