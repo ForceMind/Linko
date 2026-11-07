@@ -1,6 +1,6 @@
-//! Deterministic admission planning, not a hardware encoder or a frame-rate claim.
+//! Deterministic admission planning, not a hardware encoder or frame-rate claim.
 //! Duplicate views of one surface share one decode allocation. The consumer must
-//! negotiate the requested profile; actual encoded bitrate requires runtime control.
+//! negotiate the requested profile; encoded bitrate needs runtime feedback.
 use std::collections::BTreeMap;
 
 use crate::geometry::{PixelSize, Rect};
@@ -41,10 +41,9 @@ impl Profile {
         let edge = source.width.max(source.height);
         let target = edge.min(self.max_edge);
         let size = PixelSize {
-            width: ((u64::from(source.width) * u64::from(target)) / u64::from(edge))
-                .max(1) as u32,
-            height: ((u64::from(source.height) * u64::from(target)) / u64::from(edge))
-                .max(1) as u32,
+            width: ((u64::from(source.width) * u64::from(target)) / u64::from(edge)).max(1) as u32,
+            height: ((u64::from(source.height) * u64::from(target)) / u64::from(edge)).max(1)
+                as u32,
         };
         Allocation {
             size,
@@ -57,8 +56,8 @@ impl Profile {
 #[derive(Clone, Copy, Debug)]
 pub struct Budget {
     pub decoders: usize,
-    /// Reference allowance for three RGBA output buffers per stream, not total
-    /// driver/codec GPU memory. Native adapters must account for their overhead.
+    /// Reference allowance for three RGBA buffers per stream, not total driver
+    /// or codec GPU memory. Native adapters must account for their overhead.
     pub decoded_bytes: u64,
     pub pixels_per_second: u64,
     pub bitrate: u64,
@@ -105,7 +104,7 @@ pub struct Usage {
 impl Usage {
     fn adding(self, allocation: Allocation) -> Self {
         let pixels = u64::from(allocation.size.width) * u64::from(allocation.size.height);
-        // Inputs are bounded to 256 views, 16K dimensions, 120fps, and 1Gbps.
+        // Bounded to 256 views, 16K dimensions, 120fps, and 1Gbps per profile.
         Self {
             decoders: self.decoders + 1,
             decoded_bytes: self.decoded_bytes + pixels * 4 * 3,
@@ -150,14 +149,20 @@ struct Candidate {
     key: SurfaceKey,
     pixels: PixelSize,
     revision: u64,
+    view_epoch: u64,
     allowed: bool,
     visible: bool,
     focused: bool,
 }
 
-/// Recompute on viewport, consent, session, or resource changes. A plan is only
-/// a bounded preference snapshot; recheck authorization before every capture.
-pub fn plan(views: &[ViewDemand<'_>], viewport: Rect, budget: Budget, now: u64) -> Result<Plan, Error> {
+/// Recompute after viewport, consent, session or budget changes. A plan is a
+/// preference snapshot; recheck authorization before each capture/submission.
+pub fn plan(
+    views: &[ViewDemand<'_>],
+    viewport: Rect,
+    budget: Budget,
+    now: u64,
+) -> Result<Plan, Error> {
     viewport.validate()?;
     budget.focused.validate()?;
     budget.preview.validate()?;
@@ -172,10 +177,12 @@ pub fn plan(views: &[ViewDemand<'_>], viewport: Rect, budget: Budget, now: u64) 
         let visible = viewport.intersects(view.canvas_rect);
         let allowed = view.gate.can_view(now).is_ok();
         if let Some(existing) = candidates.get_mut(&key) {
-            if existing.pixels != view.pixels || existing.revision != view.gate.revision() {
+            if existing.pixels != view.pixels
+                || existing.revision != view.gate.revision()
+                || existing.view_epoch != view.gate.view_epoch()
+            {
                 return Err(Error::StaleTarget);
             }
-            // Conflicting policy snapshots must not widen access.
             existing.allowed &= allowed;
             existing.visible |= visible;
             existing.focused |= visible && view.focused;
@@ -186,6 +193,7 @@ pub fn plan(views: &[ViewDemand<'_>], viewport: Rect, budget: Budget, now: u64) 
                     key,
                     pixels: view.pixels,
                     revision: view.gate.revision(),
+                    view_epoch: view.gate.view_epoch(),
                     allowed,
                     visible,
                     focused: visible && view.focused,
@@ -296,10 +304,16 @@ mod tests {
         hidden.canvas_rect.x = 2000.0;
         let result = plan(&[hidden], rect(), Budget::default(), 1).unwrap();
         assert_eq!(result.usage, Usage::default());
-        assert_eq!(result.surfaces[0].decision, Decision::Pause(PauseReason::Offscreen));
+        assert_eq!(
+            result.surfaces[0].decision,
+            Decision::Pause(PauseReason::Offscreen)
+        );
         let result = plan(&[demand(&a, true)], rect(), Budget::default(), 100).unwrap();
         assert_eq!(result.usage, Usage::default());
-        assert_eq!(result.surfaces[0].decision, Decision::Pause(PauseReason::Unauthorized));
+        assert_eq!(
+            result.surfaces[0].decision,
+            Decision::Pause(PauseReason::Unauthorized)
+        );
     }
 
     #[test]
@@ -313,7 +327,10 @@ mod tests {
         let result = plan(&[demand(&a, true)], rect(), budget, 1).unwrap();
         assert_eq!(result.usage.bitrate, 1_000_000);
         assert!(result.usage.decoded_bytes <= budget.decoded_bytes);
-        let budget = Budget { decoders: 0, ..budget };
+        let budget = Budget {
+            decoders: 0,
+            ..budget
+        };
         let result = plan(&[demand(&a, true)], rect(), budget, 1).unwrap();
         assert_eq!(result.usage, Usage::default());
     }
@@ -333,8 +350,18 @@ mod tests {
     fn changing_input_order_does_not_change_admission() {
         let a = gate(1);
         let b = gate(2);
-        let forward = plan(&[demand(&a, false), demand(&b, false)], rect(), Budget::default(), 1);
-        let backward = plan(&[demand(&b, false), demand(&a, false)], rect(), Budget::default(), 1);
+        let forward = plan(
+            &[demand(&a, false), demand(&b, false)],
+            rect(),
+            Budget::default(),
+            1,
+        );
+        let backward = plan(
+            &[demand(&b, false), demand(&a, false)],
+            rect(),
+            Budget::default(),
+            1,
+        );
         assert_eq!(forward.unwrap().surfaces, backward.unwrap().surfaces);
     }
 }

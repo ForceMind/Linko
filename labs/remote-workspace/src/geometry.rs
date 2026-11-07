@@ -128,7 +128,8 @@ impl Camera {
     }
 }
 
-/// Native source geometry, supplied by a platform adapter, never a window handle.
+/// Native geometry supplied by a trusted platform registry, never a window handle.
+/// Any geometry change MUST increment revision; UI or peer input cannot choose it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SourceGeometry {
     pub pixels: PixelSize,
@@ -179,8 +180,7 @@ pub fn map_pointer(
     source.validate()?;
     let p = camera.to_canvas(viewport_point)?;
     let size = source.display_size();
-    let scale = (panel.width / f64::from(size.width))
-        .min(panel.height / f64::from(size.height));
+    let scale = (panel.width / f64::from(size.width)).min(panel.height / f64::from(size.height));
     let content = Rect {
         x: panel.x + (panel.width - f64::from(size.width) * scale) / 2.0,
         y: panel.y + (panel.height - f64::from(size.height) * scale) / 2.0,
@@ -198,8 +198,8 @@ pub fn map_pointer(
         Rotation::HalfTurn => (1.0 - u, 1.0 - v),
         Rotation::Clockwise270 => (1.0 - v, u),
     };
-    // Rotation can put an inclusive zero edge at normalized one. Clamp to the
-    // final addressable pixel, never to a coordinate outside the native surface.
+    // An inclusive zero edge may rotate to normalized one. Clamp to the final
+    // addressable pixel, never a point outside the source's native surface.
     let x = x.clamp(0.0, 1.0 - 1.0 / f64::from(source.pixels.width));
     let y = y.clamp(0.0, 1.0 - 1.0 / f64::from(source.pixels.height));
     Ok(MappedPoint {

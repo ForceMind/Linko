@@ -24,6 +24,14 @@ impl Placement {
     }
 }
 
+/// Current mapping supplied at submission, not a snapshot from the old ticket.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerSample {
+    pub placement: Placement,
+    pub geometry: SourceGeometry,
+    pub position: Point,
+}
+
 /// Process-local routing ticket, not a serialized network authorization token.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InputTicket {
@@ -74,24 +82,30 @@ impl InputRouter {
         now: u64,
     ) -> Result<InputTicket, Error> {
         advance(&mut self.last_now, now)?;
-        placement.validate()?;
-        gate.can_control(now)?;
         if self.pending.is_some() {
             return Err(Error::ReleasePending);
         }
         if let Some(active) = &self.active {
-            let t = active.ticket;
-            if t.key == gate.key()
-                && t.policy_epoch == gate.policy_epoch()
-                && t.source_revision == gate.revision()
-                && t.placement == placement
+            let ticket = active.ticket;
+            if ticket.key != gate.key()
+                || ticket.policy_epoch != gate.policy_epoch()
+                || ticket.source_revision != gate.revision()
+                || ticket.placement != placement
             {
-                // Repeated focus must NOT reset the input replay watermark.
-                return Ok(t);
+                // Selecting another panel stops the old target even if the new
+                // target will subsequently fail its own permission check.
+                self.stop();
+                return Err(Error::ReleasePending);
             }
-            self.stop();
-            return Err(Error::ReleasePending);
+            if let Err(error) = gate.can_control(now) {
+                self.stop();
+                return Err(error);
+            }
+            // Repeated focus must NOT reset the replay watermark.
+            return Ok(ticket);
         }
+        placement.validate()?;
+        gate.can_control(now)?;
         self.epoch = self.epoch.checked_add(1).ok_or(Error::Capacity)?;
         let ticket = InputTicket {
             key: gate.key(),
@@ -107,8 +121,9 @@ impl InputRouter {
         Ok(ticket)
     }
 
-    /// Emergency stop/blur immediately closes routing. The cleanup request is
-    /// retained until the owner confirms its real native releases completed.
+    /// Stop/blur closes routing immediately. Retain the cleanup request until the
+    /// input owner confirms actual releases or verifies receiver lease cleanup.
+    /// An arbitrary network timeout is NOT proof of receiver cleanup.
     pub fn stop(&mut self) -> Option<ReleaseRequest> {
         if let Some(active) = self.active.take() {
             self.pending = Some(ReleaseRequest {
@@ -123,8 +138,8 @@ impl InputRouter {
         self.pending
     }
 
-    /// LOCAL backend acknowledgement only. A timeout, network receipt, or
-    /// untrusted peer-supplied boolean must never call this on the backend's behalf.
+    /// LOCAL backend acknowledgement only. An untrusted peer boolean must not
+    /// call this on the backend's behalf. Native cleanup remains outside this lab.
     pub fn acknowledge_release(&mut self, request: ReleaseRequest) -> Result<(), Error> {
         if self.pending != Some(request) {
             return Err(Error::WrongAcknowledgement);
@@ -133,8 +148,8 @@ impl InputRouter {
         Ok(())
     }
 
-    /// Must also run from the runtime watchdog while input is idle. Otherwise a
-    /// library cannot discover revoked OS permission or release held native keys.
+    /// Run from a runtime watchdog while input is idle too. A library cannot
+    /// independently discover revoked OS permission or release held native keys.
     pub fn poll(&mut self, gate: &SessionGate, now: u64) -> Result<(), Error> {
         advance(&mut self.last_now, now)?;
         let Some(active) = &self.active else {
@@ -156,8 +171,8 @@ impl InputRouter {
         check
     }
 
-    /// Authorize one event immediately before submission to the existing input
-    /// runtime. Success means policy accepted, NOT that an OS/application acted.
+    /// Preflight immediately before submission to the existing runtime. Success
+    /// means policy accepted, NOT that an OS or application acted on the input.
     pub fn authorize(
         &mut self,
         ticket: InputTicket,
@@ -166,17 +181,7 @@ impl InputRouter {
         sequence: u64,
         now: u64,
     ) -> Result<SurfaceKey, Error> {
-        advance(&mut self.last_now, now)?;
-        let active = self.active.as_ref().ok_or(Error::StaleTarget)?;
-        if active.ticket != ticket || ticket.key != gate.key() {
-            // Late events must not tear down the new, unrelated active target.
-            return Err(Error::StaleTarget);
-        }
-        if ticket.placement != placement {
-            self.stop();
-            return Err(Error::StaleTarget);
-        }
-        self.poll(gate, now)?;
+        self.check_mapping(ticket, gate, placement, now)?;
         let active = self.active.as_mut().ok_or(Error::StaleTarget)?;
         if sequence == 0 || sequence <= active.sequence {
             return Err(Error::InvalidSequence);
@@ -185,25 +190,46 @@ impl InputRouter {
         Ok(ticket.key)
     }
 
+    fn check_mapping(
+        &mut self,
+        ticket: InputTicket,
+        gate: &SessionGate,
+        placement: Placement,
+        now: u64,
+    ) -> Result<(), Error> {
+        advance(&mut self.last_now, now)?;
+        let active = self.active.as_ref().ok_or(Error::StaleTarget)?;
+        if active.ticket != ticket || ticket.key != gate.key() {
+            // Late events must not tear down a new, unrelated active target.
+            return Err(Error::StaleTarget);
+        }
+        if ticket.placement != placement {
+            self.stop();
+            return Err(Error::StaleTarget);
+        }
+        self.poll(gate, now)
+    }
+
     pub fn pointer(
         &mut self,
         ticket: InputTicket,
         gate: &SessionGate,
-        geometry: SourceGeometry,
-        viewport_point: Point,
+        sample: PointerSample,
         sequence: u64,
         now: u64,
     ) -> Result<MappedPoint, Error> {
-        if geometry.revision != ticket.source_revision {
+        self.check_mapping(ticket, gate, sample.placement, now)?;
+        if sample.geometry.revision != ticket.source_revision {
+            self.stop();
             return Err(Error::StaleTarget);
         }
         let point = map_pointer(
-            ticket.placement.camera,
-            ticket.placement.panel,
-            geometry,
-            viewport_point,
+            sample.placement.camera,
+            sample.placement.panel,
+            sample.geometry,
+            sample.position,
         )?;
-        self.authorize(ticket, gate, ticket.placement, sequence, now)?;
+        self.authorize(ticket, gate, sample.placement, sequence, now)?;
         Ok(point)
     }
 }
@@ -212,13 +238,15 @@ impl InputRouter {
 mod tests {
     use super::*;
     use crate::fixture_key;
+    use crate::geometry::{PixelSize, Rotation};
     use crate::session::{ControlScope, SurfaceKind};
 
     fn gate(seed: u8) -> SessionGate {
         let mut g = SessionGate::new(fixture_key(seed), SurfaceKind::Display, 1, false).unwrap();
         g.grant_view(0, 10_000).unwrap();
-        g.grant_control(ControlScope::WholeDesktop, 0, 10_000).unwrap();
-        g.presented(1, 1, 0).unwrap();
+        g.grant_control(ControlScope::WholeDesktop, 0, 10_000)
+            .unwrap();
+        g.presented(g.frame_stamp(1), 0).unwrap();
         g
     }
 
@@ -236,6 +264,22 @@ mod tests {
                 width: 100.0,
                 height: 100.0,
             },
+        }
+    }
+
+    fn sample() -> PointerSample {
+        PointerSample {
+            placement: placement(),
+            geometry: SourceGeometry {
+                pixels: PixelSize {
+                    width: 100,
+                    height: 100,
+                },
+                logical: placement().panel,
+                rotation: Rotation::None,
+                revision: 1,
+            },
+            position: Point { x: 50.0, y: 50.0 },
         }
     }
 
@@ -269,10 +313,16 @@ mod tests {
             epoch: release.epoch + 1,
             ..release
         };
-        assert_eq!(r.acknowledge_release(wrong), Err(Error::WrongAcknowledgement));
+        assert_eq!(
+            r.acknowledge_release(wrong),
+            Err(Error::WrongAcknowledgement)
+        );
         assert_eq!(r.pending_release(), Some(release));
         r.acknowledge_release(release).unwrap();
-        assert_eq!(r.acknowledge_release(release), Err(Error::WrongAcknowledgement));
+        assert_eq!(
+            r.acknowledge_release(release),
+            Err(Error::WrongAcknowledgement)
+        );
     }
 
     #[test]
@@ -318,10 +368,7 @@ mod tests {
         let mut changed = placement();
         changed.camera.zoom = 2.0;
         changed.revision = 2;
-        assert_eq!(
-            r.authorize(t, &a, changed, 1, 1),
-            Err(Error::StaleTarget)
-        );
+        assert_eq!(r.authorize(t, &a, changed, 1, 1), Err(Error::StaleTarget));
         assert!(r.pending_release().is_some());
     }
 
@@ -334,5 +381,52 @@ mod tests {
             r.authorize(t, &a, placement(), 1, 4),
             Err(Error::InvalidTime)
         );
+    }
+
+    #[test]
+    fn pointer_checks_current_mapping_not_the_tickets_old_snapshot() {
+        let a = gate(1);
+        let mut r = InputRouter::default();
+        let t = r.focus(&a, placement(), 0).unwrap();
+        let mut changed = sample();
+        changed.placement.camera.zoom = 2.0;
+        assert_eq!(r.pointer(t, &a, changed, 1, 1), Err(Error::StaleTarget));
+        assert!(r.pending_release().is_some());
+    }
+
+    #[test]
+    fn invalid_pointer_does_not_consume_event_sequence() {
+        let a = gate(1);
+        let mut r = InputRouter::default();
+        let t = r.focus(&a, placement(), 0).unwrap();
+        let mut invalid = sample();
+        invalid.position.x = f64::NAN;
+        assert_eq!(r.pointer(t, &a, invalid, 1, 1), Err(Error::InvalidGeometry));
+        let point = r.pointer(t, &a, sample(), 1, 2).unwrap();
+        assert_eq!((point.pixel_x, point.pixel_y), (50, 50));
+    }
+
+    #[test]
+    fn selecting_unauthorized_panel_still_stops_previous_target() {
+        let a = gate(1);
+        let b = SessionGate::new(fixture_key(2), SurfaceKind::Display, 1, false).unwrap();
+        let mut r = InputRouter::default();
+        let old = r.focus(&a, placement(), 0).unwrap();
+        assert_eq!(r.focus(&b, placement(), 1), Err(Error::ReleasePending));
+        assert_eq!(
+            r.authorize(old, &a, placement(), 1, 2),
+            Err(Error::StaleTarget)
+        );
+        r.acknowledge_release(r.pending_release().unwrap()).unwrap();
+        assert_eq!(r.focus(&b, placement(), 3), Err(Error::PermissionDenied));
+    }
+
+    #[test]
+    fn repeated_focus_on_stale_video_stops_control() {
+        let a = gate(1);
+        let mut r = InputRouter::default();
+        r.focus(&a, placement(), 0).unwrap();
+        assert_eq!(r.focus(&a, placement(), 2000), Err(Error::StaleFrame));
+        assert!(r.pending_release().is_some());
     }
 }

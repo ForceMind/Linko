@@ -26,6 +26,7 @@ pub struct Handoff {
     state: State,
     deadline: u64,
     last_now: u64,
+    accepted_context: Option<(u64, u64)>,
 }
 
 impl Handoff {
@@ -49,6 +50,7 @@ impl Handoff {
             state: State::Preparing,
             deadline,
             last_now: now,
+            accepted_context: None,
         })
     }
 
@@ -56,6 +58,9 @@ impl Handoff {
         self.state
     }
 
+    /// Pending intent, not authorization to execute an OS action. The adapter
+    /// MUST call revalidate immediately before hiding and from its watchdog.
+    /// Restore remains available even when all remote authorization is revoked.
     pub fn command(&self) -> Option<Command> {
         match self.state {
             State::HideRequested => Some(Command::HideSource),
@@ -64,9 +69,8 @@ impl Handoff {
         }
     }
 
-    /// Only after the destination really presented a fresh frame and the policy
-    /// gate independently authorizes input. Remote ACK authenticity is the
-    /// transport adapter's responsibility, not this transaction counter.
+    /// Only after real destination presentation and independent control consent.
+    /// Authenticity of the destination ACK belongs to the transport adapter.
     pub fn destination_ready(
         &mut self,
         gate: &SessionGate,
@@ -78,12 +82,18 @@ impl Handoff {
             return Err(Error::StaleTarget);
         }
         gate.can_control(now)?;
+        self.accepted_context = Some((gate.policy_epoch(), gate.revision()));
         self.state = State::HideRequested;
         Ok(())
     }
 
-    pub fn acknowledge_hidden(&mut self, attempt: u64, now: u64) -> Result<(), Error> {
-        self.tick(now)?;
+    pub fn acknowledge_hidden(
+        &mut self,
+        gate: &SessionGate,
+        attempt: u64,
+        now: u64,
+    ) -> Result<(), Error> {
+        self.revalidate(gate, now)?;
         if attempt != self.attempt || self.state != State::HideRequested {
             return Err(Error::WrongAcknowledgement);
         }
@@ -91,8 +101,7 @@ impl Handoff {
         Ok(())
     }
 
-    /// Idempotent cancellation. If hiding may have happened, never claim that
-    /// the window is local again without a native restoration acknowledgement.
+    /// If hiding may have happened, do not claim local recovery without an OS ACK.
     pub fn cancel(&mut self) {
         self.state = match self.state {
             State::Preparing | State::Local => State::Local,
@@ -116,10 +125,18 @@ impl Handoff {
         Ok(())
     }
 
-    /// Run from the independent watchdog, not only on UI or network events.
+    /// Poll while idle, and immediately before native effects. Permission or
+    /// geometry replacement cannot re-authorize an already pending transaction.
     pub fn revalidate(&mut self, gate: &SessionGate, now: u64) -> Result<(), Error> {
         self.tick(now)?;
         if gate.key() != self.key {
+            return Err(Error::StaleTarget);
+        }
+        if self
+            .accepted_context
+            .is_some_and(|context| context != (gate.policy_epoch(), gate.revision()))
+        {
+            self.cancel();
             return Err(Error::StaleTarget);
         }
         if let Err(error) = gate.can_control(now) {
@@ -139,8 +156,9 @@ mod tests {
     fn gate() -> SessionGate {
         let mut g = SessionGate::new(fixture_key(1), SurfaceKind::Window, 1, false).unwrap();
         g.grant_view(0, 10_000).unwrap();
-        g.grant_control(ControlScope::WholeDesktop, 0, 10_000).unwrap();
-        g.presented(1, 1, 0).unwrap();
+        g.grant_control(ControlScope::WholeDesktop, 0, 10_000)
+            .unwrap();
+        g.presented(g.frame_stamp(1), 0).unwrap();
         g
     }
 
@@ -162,11 +180,12 @@ mod tests {
 
     #[test]
     fn never_hide_before_destination_is_ready() {
+        let g = gate();
         let mut h = handoff();
         assert_eq!(h.command(), None);
-        h.destination_ready(&gate(), 7, 1).unwrap();
+        h.destination_ready(&g, 7, 1).unwrap();
         assert_eq!(h.command(), Some(Command::HideSource));
-        h.acknowledge_hidden(7, 2).unwrap();
+        h.acknowledge_hidden(&g, 7, 2).unwrap();
         assert_eq!(h.state(), State::Remote);
     }
 
@@ -191,14 +210,21 @@ mod tests {
         h.tick(1000).unwrap();
         assert_eq!(h.state(), State::Local);
         assert_eq!(h.command(), None);
-        assert_eq!(h.destination_ready(&gate(), 7, 1000), Err(Error::StaleTarget));
+        assert_eq!(
+            h.destination_ready(&gate(), 7, 1000),
+            Err(Error::StaleTarget)
+        );
     }
 
     #[test]
     fn timeout_after_request_cannot_accept_late_hide_ack() {
+        let g = gate();
         let mut h = handoff();
-        h.destination_ready(&gate(), 7, 1).unwrap();
-        assert_eq!(h.acknowledge_hidden(7, 1000), Err(Error::WrongAcknowledgement));
+        h.destination_ready(&g, 7, 1).unwrap();
+        assert_eq!(
+            h.acknowledge_hidden(&g, 7, 1000),
+            Err(Error::WrongAcknowledgement)
+        );
         assert_eq!(h.state(), State::RestoreRequested);
     }
 
@@ -207,9 +233,9 @@ mod tests {
         let mut g = gate();
         let mut h = handoff();
         h.destination_ready(&g, 7, 1).unwrap();
-        h.acknowledge_hidden(7, 2).unwrap();
+        h.acknowledge_hidden(&g, 7, 2).unwrap();
         g.disconnect(3).unwrap();
-        assert_eq!(h.revalidate(&g, 3), Err(Error::Disconnected));
+        assert_eq!(h.revalidate(&g, 3), Err(Error::StaleTarget));
         assert_eq!(h.state(), State::RestoreRequested);
     }
 
@@ -218,5 +244,26 @@ mod tests {
         let mut h = handoff();
         assert_eq!(h.destination_ready(&gate(), 8, 1), Err(Error::StaleTarget));
         assert_eq!(h.state(), State::Preparing);
+    }
+
+    #[test]
+    fn revoked_then_regranted_control_cannot_resurrect_handoff() {
+        let mut g = gate();
+        let mut h = handoff();
+        h.destination_ready(&g, 7, 1).unwrap();
+        g.revoke_control(2).unwrap();
+        g.grant_control(ControlScope::WholeDesktop, 3, 100).unwrap();
+        assert_eq!(h.acknowledge_hidden(&g, 7, 4), Err(Error::StaleTarget));
+        assert_eq!(h.state(), State::RestoreRequested);
+    }
+
+    #[test]
+    fn geometry_change_before_hide_ack_requires_restoration() {
+        let mut g = gate();
+        let mut h = handoff();
+        h.destination_ready(&g, 7, 1).unwrap();
+        g.revise_geometry(2, 2).unwrap();
+        assert_eq!(h.acknowledge_hidden(&g, 7, 3), Err(Error::StaleTarget));
+        assert!(matches!(h.command(), Some(Command::RestoreSource(_))));
     }
 }
