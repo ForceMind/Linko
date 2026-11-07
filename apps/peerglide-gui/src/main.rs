@@ -1496,7 +1496,8 @@ fn main() -> eframe::Result<()> {
             .with_min_inner_size([920.0, 700.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let resource_diagnostic = resource_check.is_some();
+    let result = eframe::run_native(
         "屏跃 · PeerGlide",
         native_options,
         Box::new(move |cc| {
@@ -1521,7 +1522,11 @@ fn main() -> eframe::Result<()> {
             app.layout_report = options.ui_layout_report;
             Ok(Box::new(app))
         }),
-    )
+    );
+    if let (true, Err(error)) = (resource_diagnostic, &result) {
+        eprintln!("PG-CI-GUI-STARTUP:{}", resource_check::startup_failure(error));
+    }
+    result
 }
 
 fn default_data_dir() -> PathBuf {

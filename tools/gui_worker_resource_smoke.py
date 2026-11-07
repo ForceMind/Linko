@@ -9,9 +9,29 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import gui_memory_smoke as metrics
+
+
+def drain_startup_class(pipe, observed):
+    """Discard stderr; retain only our exact finite startup marker, never logs."""
+    marker = re.compile(rb"PG-CI-GUI-STARTUP:(renderer_failed|event_loop_failed|startup_failed)\r?\n")
+    tail = b""
+    try:
+        while True:
+            block = pipe.read(4096)
+            if not block:
+                break
+            window = tail + block
+            for match in marker.finditer(window):
+                observed[0] = match[1].decode("ascii")
+            tail = window[-64:]
+    except OSError:
+        pass
+    finally:
+        pipe.close()
 
 
 def records(path, final=False):
@@ -84,6 +104,7 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
               "window_visibility_proof": None,
               "lifecycle": None,
               "environment": None,
+              "gui_startup_failure": None,
               "memory_measurement": "win32_working_set_kib_ceil" if sys.platform == "win32" else "ps_rss_kib",
               "cpu_measurement": "win32_process_times_100ns" if sys.platform == "win32" else "ps_cpu_time_platform_precision",
               "processes": {}, "gui_exit": None, "helper_exit": None, "worker_reaped": False,
@@ -91,6 +112,8 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
                               "ps_cpu_time_platform_precision", "rss_is_not_total_memory", "physical_footprint_not_sampled",
                               "not_eight_hour_endurance"]}
     gui = helper = receipt = None
+    startup_thread = None
+    startup_class = [None]
     stage = "identity_init"
     with tempfile.TemporaryDirectory(prefix="peerglide-owned-resources-") as temporary:
         root = Path(temporary)
@@ -126,7 +149,9 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
                 "tray_hidden": tray_hidden}))
             gui = subprocess.Popen([str(binary_dir / ("peerglide-gui.exe" if sys.platform == "win32" else "peerglide-gui")),
                 "--data-dir", str(profile), "--ci-resource-spec", str(spec)], stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
+            startup_thread = threading.Thread(target=drain_startup_class, args=(gui.stderr, startup_class), daemon=True)
+            startup_thread.start()
             stage = "gui_connect"
             connected = wait_for(lambda: next((r for r in records(receipt) if r["state"] == "connected"), None), gui, 25 if tray_hidden else 20, stop)
             expected_hidden = "win32_hidden" if sys.platform == "win32" else "appkit_hidden"
@@ -212,6 +237,9 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
                     metrics.stop_child(child, 2)  # Only our NoNative Popen handles.
             if gui is not None and result["gui_exit"] is None:
                 result["gui_exit"] = gui.poll()
+            if startup_thread is not None:
+                startup_thread.join(timeout=2)
+                result["gui_startup_failure"] = startup_class[0]
             if receipt is not None:
                 try:
                     # Keep only the bounded, allowlisted stage metadata when

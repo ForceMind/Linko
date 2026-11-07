@@ -74,6 +74,17 @@ fn regular(path: &Path) -> Result<()> {
     );
     Ok(())
 }
+/// Only a finite error class reaches the CI resource report. Never format the
+/// SDK error payload: it can contain host paths or driver diagnostic text.
+pub(super) fn startup_failure(error: &eframe::Error) -> &'static str {
+    match error {
+        eframe::Error::Glutin(_)
+        | eframe::Error::NoGlutinConfigs(..)
+        | eframe::Error::OpenGL(_) => "renderer_failed",
+        eframe::Error::Winit(_) | eframe::Error::WinitEventLoop(_) => "event_loop_failed",
+        _ => "startup_failed",
+    }
+}
 impl Check {
     pub(super) fn prepare(dir: &Path, spec_path: &Path, ci: bool) -> Result<Self> {
         anyhow::ensure!(ci, "隔离资源检查仅供CI使用");
@@ -488,6 +499,13 @@ impl Check {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_failure_class_never_formats_private_sdk_payload() {
+        let error = eframe::Error::AppCreation(
+            std::io::Error::other("private host path marker").into(),
+        );
+        assert_eq!(startup_failure(&error), "startup_failed");
+    }
     fn fixture(root: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {
         let dir = root.join("profile");
         fs::create_dir(&dir)?;

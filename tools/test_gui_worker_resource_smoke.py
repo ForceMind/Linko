@@ -1,5 +1,6 @@
 """Receipt/entry/parent bounds; never launches a GUI or device session."""
 import json
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -10,6 +11,24 @@ import gui_worker_resource_smoke as check
 
 
 class ResourceCheck(unittest.TestCase):
+    def test_startup_stderr_keeps_only_exact_finite_marker_across_chunks(self):
+        class Chunks:
+            def __init__(self):
+                self.parts = iter([b"private/path diagnostic\nPG-CI-GUI-STA", b"RTUP:renderer_failed\r\nprivate log", b""])
+                self.closed = False
+            def read(self, size):
+                self.asserted_size = size
+                return next(self.parts)
+            def close(self):
+                self.closed = True
+        pipe = Chunks(); observed = [None]
+        check.drain_startup_class(pipe, observed)
+        self.assertEqual(observed, ["renderer_failed"])
+        self.assertTrue(pipe.closed)
+        self.assertEqual(pipe.asserted_size, 4096)
+        observed = [None]
+        check.drain_startup_class(io.BytesIO(b"PG-CI-GUI-STARTUP:private/path\n" * 10000), observed)
+        self.assertEqual(observed, [None])
     def record(self):
         return {"schema_version": 2, "scope": "ci_owned_gui_communication_resources", "state": "connected",
                 "worker_pid": 123, "worker_reaped": False, "elapsed_sec": 1.0, "native": False,

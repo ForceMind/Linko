@@ -1903,3 +1903,15 @@ GUI普通/隐藏各30秒资源job，交互station与Shell元数据如实记录�
 环境则失败，不以内部标志或跳过制造通过。当前待fmt/Clippy/工作区/Release/专项与
 真实SDK资源CI，本机缺Rust不安装，宿主App/TCC/身份/配对未改、Native未启动。
 Windows真实键鼠/物理菜单/C06和8h/24h未验收，6.83GB/#10根因未知，浏览器未验证。
+
+首轮d3e8c2b资源run42325442142：Windows实际7项进程API/句柄测试与8项收据测试通过，
+Release原生编译/链接也通过；普通GUI流程失败，后续隐藏未执行。artifact13554967601
+摘要3f687d958dc01ab079facad64d3309b1302b205db313324f86f7ba1085ba0f5e已下载核对。
+其交互station与Shell均true，lifecycle为空、gui_exit=1、reason=gui_connect_failed，
+因此不能归因缺交互桌面，也不能把编译成功当窗口/托盘验收。a349584仅应用fmt。
+
+新增显式CI资源启动的有限错误分类（renderer/event_loop/startup），不格式化SDK
+payload进入报告；父线程4096字节分块排空stderr、最多64字节跨块尾，仅识别准确
+白名单marker，原始stderr不保存到文件或报告。GUI失败仍失败，不新增授权或降低
+断言。9项本机收据/跨块/私有文本丢弃回归过，Rust新分类待CI；根因尚待该证据。
+原有五项/平台专项与Mac/Linux资源继续，不自动启用另一渲染器或修改宿主环境。
