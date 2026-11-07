@@ -363,7 +363,7 @@ impl Panel {
                     ui.add_space(10.0);
                     if !self.join_entry {
                     ui.label("点击显示后，在另一台屏跃中选择“我来输入配对码”。");
-                    if ui.add(desktop_style::primary("显示我的配对码")).clicked(){
+                    if ui.add(super::desktop_style::primary("显示我的配对码")).clicked(){
                         let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))),None,&worker));
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
@@ -372,7 +372,7 @@ impl Panel {
                     if let Some(address)=self.discovery.ui(ui,app.local_fingerprint(),None,true){self.select_address(address);}
                     ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IPv4 或 IPv4:24871"));
                     ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("八位数字配对码"));
-                    if ui.add(desktop_style::primary("开始核验这台电脑")).clicked(){
+                    if ui.add(super::desktop_style::primary("开始核验这台电脑")).clicked(){
                         let result=(||->Result<()>{
                             let address=parse_address(&self.address)?;
                             let mode=Mode::connect(address,std::mem::take(&mut self.code))?;
