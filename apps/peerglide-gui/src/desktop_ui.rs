@@ -225,6 +225,7 @@ impl App {
         });
     }
     pub(super) fn devices(&mut self, ui: &mut egui::Ui) {
+        self.recovery_panel(ui);
         self.device_workspace(ui);
         ui.add_space(10.0);
         if self.connection_details_open {
