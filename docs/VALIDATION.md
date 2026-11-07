@@ -1789,3 +1789,58 @@ Linux artifact13548645117各约180.01秒，峰RSS132.176/133.719MiB，CPU区间1
 Linux ps整秒计数未跨刻度，曲线算0，仅是其量化分辨率内的结果，不证明完全不耗CPU。
 这些是隔离CI/no-session GUI短窗数据，不解释用户6.83GB，也不证明隐藏/worker/
 Native或8h/24h耐久。App源码/版本和冻结包不变，最终纯记录HEAD结果集中回读PR63。
+
+## A2真实GUI/自有worker分账（0.3.10-dev，开发中）
+
+resource-session-accounting基于PR63最终ff9cf52（五项42310065470、驻留42310065392
+成功）。新增显式CI隔离spec入口：仅接受只有可用身份的独立新目录、新报告、不同
+有效peer公钥、IPv4回环及17..600秒。复用原本地登记事务生成关闭全部授权的CI
+fixture，再由真实GUI正常start_mode启动同包通信worker，实际固定证书TLS/Hello，
+绝无Native/allow/reconnect。既有/未来设置、额外文件/符号链接与非回环拒绝，不
+从CI/PID/时间制造认证；普通启动不变。深层Native/保存/登记/撤销/重置/配对受限。
+
+JSONL只报告有限阶段、worker PID/回收、相对时间和native=false。父采样器只查
+自有GUI、其实际直接child及自有NoNative peer helper，分开RSS/累计CPU/区间CPU；
+每role512MiB为诊断中止线，不是产品预算。成功要求达到窗口、原GUI stop/EOF/
+terminal后worker被回收、GUI/helper正常退出；失败/中断仍回收自有Popen，不按PID
+杀其他进程。只请求普通窗口，未以内部标志冒充OS可见/隐藏或托盘验收，物理内存
+分账本批未测。目标CI为30秒短窗，非8h/24h/Native或双机验收。
+
+4项Python收据/部分写入/父PID/入口拒绝本机已过，不启动GUI；Rust增加新目录/
+未来文件/独占报告/loopback/Native防线回归，尚待CI编译/格式/Clippy/工作区与真实
+GUI会话检查。本机预检仍缺Rust不安装，无真实资料/TCC/现用App修改，浏览器未验。
+
+05b6748五项42314931276、资源42314931401、上游42314931493已全部成功。原始分账
+artifact经摘要/结构核对保留在ignored target/local-validation/owned-resources-05b6748。
+约30秒Mac GUI峰RSS115.312MiB、平均单核CPU39.659049%，worker11.875MiB/
+0.133361%，helper11.844MiB/0.166799%；Linux GUI132.941MiB/26.668246%，
+worker7.613MiB、helper7.508MiB（整秒CPU计数未跨刻度，不能解释为完全不耗CPU）。
+三类均正常停止并回收，普通窗口仅requested；不是宿主6.83GB或Native验收。
+
+新分账暴露稳定Communication仍被child/events存在条件每100ms唤起全窗重绘。
+本批改实际stdout/stderr读线程在状态/诊断/EOF后唤醒GUI；EOF后的child/events回收
+继续100ms，Native健康轮询、停止期限及其他异步工作计时保持。CI资源控制输入也
+直接唤醒，连接/采样上限使用一次性deadline，避免诊断模式自行恢复周期重绘。
+新增真实共用reader的队列满/terminal/EOF/读取错误唤醒及idle/Native/EOF/Stop时钟
+回归。当前改动待新候选CI与同场景分账比较，不沿用05绿灯声明修复通过。本机
+预检再次因缺Rust停止，不安装；现用App/配对/TCC和输入协议/原生捕获均不变。
+
+130cd8e的Mac资源run42317164367成功，artifact13551786895摘要
+3e15febbefa7aa5ba38b2de4e40aaa162c7a054c2a7efb2549c51d351a967bb9核对一致。
+同约30.105秒GUI平均单核CPU0.764002%、峰RSS119.078MiB；worker0.166091%/
+11.906MiB，helper0.199311%/11.813MiB，均正常停止回收。与05b6748的39.659049%
+相比，短窗结果支持通信周期重绘修复有效；不同CI任务数据，不作耐久/资源预算声明。
+
+504a57e已应用fmt，但旧late_diagnostics回归只装诊断channel、没有真实EOF快照，
+仍期待任意活动通信定时重绘而失败。0acdc9f改为经过实际共用reader的空stdout EOF，
+stderr sender仍存活；完整保留“晚到诊断读完才回收”与“结束后时钟静止”断言。
+0acdc9f最低1.95/依赖审计及三平台工作区测试已过，平台Release/进程/GUI专项继续。
+本记录批次只改文档，最终精确HEAD五项/资源/上游结果集中回读PR64及Issue5；不能
+把130cd8e的资源成功说成其当时全CI成功。现用冻结App/TCC/身份不变，C06未验收。
+
+0acdc9f的42317591163 Windows/macOS完整成功，最低1.95/审计成功；Linux在GUI专项
+之前的apt依赖下载耗尽整步5分钟（日志00:25:05至00:30:18仍在下载imagemagick），
+没有启动gui_smoke.py，不能算GUI失败或通过。已将依赖准备独立为10分钟步骤，GUI
+自身仍单独5分钟，不跳过/放宽测试或自动重试掩盖错误。两平台资源42317591239成功。
+该修正只改CI/记录，App代码仍0acdc9f；最终精确HEAD结果继续集中在PR64。旧#10
+根因仍未知，本次apt下载超时不用于解释该历史故障或6.83GB。

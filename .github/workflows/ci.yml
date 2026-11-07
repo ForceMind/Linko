@@ -57,14 +57,18 @@ jobs:
         run: python tools/macos_exit_smoke.py target/release
       - run: python -m unittest discover -s tools -p test_third_party.py
       - run: python -m unittest discover -s tools -p test_package.py
+      - run: python -m unittest discover -s tools -p test_gui_worker_resource_smoke.py
       - run: python tools/third_party.py
-      - name: GUI runtime smoke on isolated Linux display
+      - name: Prepare isolated Linux GUI dependencies
         if: runner.os == 'Linux'
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb xdotool imagemagick libxkbcommon-x11-0 libegl1 libgl1-mesa-dri
-          xvfb-run -a python tools/gui_smoke.py
+      - name: GUI runtime smoke on isolated Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: xvfb-run -a python tools/gui_smoke.py
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Linux'
         with:

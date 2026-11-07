@@ -13,6 +13,7 @@ mod pairing_panel;
 mod pairing_receipt;
 pub mod pairing_supervisor;
 mod quit_check;
+mod resource_check;
 mod worker_permissions;
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -55,6 +56,9 @@ struct Options {
         conflicts_with = "gesture_lab"
     )]
     macos_quit_check_report: Option<PathBuf>,
+    /// CI-only owned-worker resource check; loopback communication, no input.
+    #[arg(long, hide = true, requires = "data_dir", conflicts_with_all = ["gesture_lab", "ui_layout_report", "macos_quit_check_report"])]
+    ci_resource_spec: Option<PathBuf>,
 }
 
 fn install_fonts(ctx: &egui::Context) {
@@ -281,6 +285,37 @@ impl WorkerSnapshot {
         (state, value & 0x100 != 0)
     }
 }
+fn read_worker_output(
+    reader: impl BufRead,
+    snapshot: Arc<WorkerSnapshot>,
+    diagnostics: mpsc::SyncSender<String>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    for result in reader.lines() {
+        let line = match result {
+            Ok(line) => line,
+            Err(_) => {
+                snapshot.3.store(true, Ordering::Release);
+                break;
+            }
+        };
+        if let Some(event) = WorkerEvent::parse(&line) {
+            snapshot.publish(event.state);
+        } else if let Some(event) = WorkerInputEvent::parse(&line) {
+            snapshot.publish_input(event.state, event.terminal);
+        } else if let Some(event) = WorkerSwitchEvent::parse(&line) {
+            snapshot.publish_switch(event.state);
+        } else {
+            let _ = diagnostics.try_send(line.chars().take(600).collect());
+        }
+        wake();
+    }
+    snapshot.publish_switch(WorkerSwitchState::Idle);
+    snapshot.2.store(true, Ordering::Release);
+    drop(diagnostics);
+    wake();
+}
+
 struct App {
     recording_mode: bool,
     layout_report: Option<PathBuf>,
@@ -312,6 +347,9 @@ struct App {
     application_menu_error: Option<String>,
     quit_check: Option<quit_check::Check>,
     quit_check_mode: bool,
+    resource_check_mode: bool,
+    resource_check: Option<resource_check::Check>,
+    wake_ui: Arc<dyn Fn() + Send + Sync>,
     window_hidden: bool,
     screen_drag: Option<(egui::Vec2, egui::Pos2, egui::Rect)>,
     discovery: discovery_panel::Panel,
@@ -350,9 +388,10 @@ impl App {
         app.theme(&cc.egui_ctx);
         let mut app = app;
         let wake_context = cc.egui_ctx.clone();
-        app.tray_mailbox = peerglide_platform::tray::Mailbox::new(Arc::new(move || {
+        app.wake_ui = Arc::new(move || {
             wake_context.request_repaint();
-        }));
+        });
+        app.tray_mailbox = peerglide_platform::tray::Mailbox::new(app.wake_ui.clone());
         match peerglide_platform::application_menu::install(app.tray_mailbox.clone()) {
             Ok(owner) => app.application_menu = Some(owner),
             Err(error) => {
@@ -430,6 +469,9 @@ impl App {
             application_menu_error: None,
             quit_check: None,
             quit_check_mode: false,
+            resource_check_mode: false,
+            resource_check: None,
+            wake_ui: Arc::new(|| {}),
             window_hidden: false,
             screen_drag: None,
             discovery: discovery_panel::Panel::default(),
@@ -479,6 +521,7 @@ impl App {
         }
     }
     fn save_config(&mut self) -> Result<()> {
+        anyhow::ensure!(!self.resource_check_mode, "隔离资源检查不修改既定设置");
         anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会保存设备设置");
         anyhow::ensure!(!self.pairing_open, "请先结束当前配对再修改设备设置");
         self.validate_pairing_receipt()?;
@@ -609,6 +652,7 @@ impl App {
         connection_info::encode(&identity.certificate, &addresses)
     }
     fn enroll(&mut self) -> Result<()> {
+        anyhow::ensure!(!self.resource_check_mode, "隔离资源检查不更换登记");
         anyhow::ensure!(
             self.instance_lock.is_some() && self.config_store.is_some(),
             "登记设备前需要可写入的设置"
@@ -652,6 +696,22 @@ impl App {
         })
     }
     fn start_mode(&mut self, mode: SessionMode) -> Result<()> {
+        if self.resource_check_mode {
+            anyhow::ensure!(
+                mode == SessionMode::Communication
+                    && !self.config.native
+                    && !self.config.allow
+                    && !self.config.reconnect
+                    && !self.config.listen
+                    && self
+                        .config
+                        .address
+                        .parse::<std::net::SocketAddr>()?
+                        .ip()
+                        .is_loopback(),
+                "资源检查仅允许回环无输入通信"
+            );
+        }
         self.ensure_pairing_ready()?;
         anyhow::ensure!(!self.quit_check_mode, "隔离退出检查不会启动设备会话");
         let probe = mode == SessionMode::Probe;
@@ -683,7 +743,9 @@ impl App {
                 .parse::<std::net::SocketAddr>()
                 .context("请输入对端 IP 地址和端口")?;
         }
-        self.save_config()?;
+        if !self.resource_check_mode {
+            self.save_config()?;
+        }
         let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
             "peerglide.exe"
         } else {
@@ -709,32 +771,19 @@ impl App {
         let output_tx = tx.clone();
         let snapshot = Arc::new(WorkerSnapshot::default());
         let output_state = snapshot.clone();
+        let output_wake = self.wake_ui.clone();
         std::thread::spawn(move || {
-            for result in BufReader::new(stdout).lines() {
-                let line = match result {
-                    Ok(line) => line,
-                    Err(_) => {
-                        output_state.3.store(true, Ordering::Release);
-                        break;
-                    }
-                };
-                if let Some(event) = WorkerEvent::parse(&line) {
-                    output_state.publish(event.state);
-                } else if let Some(event) = WorkerInputEvent::parse(&line) {
-                    output_state.publish_input(event.state, event.terminal);
-                } else if let Some(event) = WorkerSwitchEvent::parse(&line) {
-                    output_state.publish_switch(event.state);
-                } else {
-                    let _ = output_tx.try_send(line.chars().take(600).collect());
-                }
-            }
-            output_state.publish_switch(WorkerSwitchState::Idle);
-            output_state.2.store(true, Ordering::Release);
+            read_worker_output(BufReader::new(stdout), output_state, output_tx, output_wake);
         });
+        let error_wake = self.wake_ui.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                let _ = tx.try_send(line.chars().take(600).collect());
+                if tx.try_send(line.chars().take(600).collect()).is_ok() {
+                    error_wake();
+                }
             }
+            drop(tx);
+            error_wake();
         });
         self.child = Some(child);
         self.active_mode = Some(mode);
@@ -772,9 +821,14 @@ impl App {
         if self.config.listen && !probe {
             cmd.arg("listen");
         } else {
-            cmd.arg("connect")
-                .arg(&self.config.address)
-                .args(["--bind", "0.0.0.0:0"]);
+            cmd.arg("connect").arg(&self.config.address).args([
+                "--bind",
+                if self.resource_check_mode {
+                    "127.0.0.1:0"
+                } else {
+                    "0.0.0.0:0"
+                },
+            ]);
         }
         cmd.arg("--identity")
             .arg(self.identity_dir())
@@ -857,6 +911,10 @@ impl App {
         }
     }
     fn request_native(&mut self) -> Result<()> {
+        if self.resource_check_mode {
+            self.native_confirmation = false;
+            anyhow::bail!("隔离资源检查绝不允许键鼠");
+        }
         anyhow::ensure!(
             std::mem::take(&mut self.native_confirmation),
             "请明确确认启动真实键鼠"
@@ -890,6 +948,7 @@ impl App {
         }
     }
     fn revoke(&mut self) -> Result<()> {
+        anyhow::ensure!(!self.resource_check_mode, "隔离资源检查不撤销或修改信任");
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         self.stop();
         self.confirmed_fingerprint = None;
@@ -911,6 +970,7 @@ impl App {
         result.context("保存设备信任撤销结果；未确认持久完成，请重新打开屏跃检查")
     }
     fn reset_settings(&mut self) -> Result<()> {
+        anyhow::ensure!(!self.resource_check_mode, "隔离资源检查不重置设置");
         anyhow::ensure!(
             self.idle_writable() && !self.enrollment_blocked,
             "当前资料只读或仍有会话，原文件保留"
@@ -1146,10 +1206,14 @@ impl App {
         self.notice = "退出恢复入口发生变化，已请求停止键鼠。请确认恢复状态并重新打开屏跃。".into();
     }
     fn request_activity_tick(&self, ctx: &egui::Context) {
-        // Native capture/watchdogs stay in the worker. GUI polling is needed
-        // only while local asynchronous work or canvas deadlines are pending.
-        if self.child.is_some()
-            || self.events.is_some()
+        // Stable communication is woken by stdout/stderr instead of painting
+        // at 10Hz. Keep Native health polling and EOF/stop reaping unchanged.
+        if (self.child.is_some() && self.active_mode == Some(SessionMode::Native))
+            || (self
+                .worker_state
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.2.load(Ordering::Acquire))
+                && (self.child.is_some() || self.events.is_some()))
             || self.stopping.is_some()
             || self.pending_start.is_some()
             || self.discovery.needs_poll()
@@ -1315,6 +1379,13 @@ impl App {
                 self.tray.as_ref().is_some_and(|tray| tray.is_available()),
             );
         }
+        if let Some(mut check) = self.resource_check.take() {
+            check.tick(self);
+            if let Some(delay) = check.next_tick() {
+                ctx.request_repaint_after(delay);
+            }
+            self.resource_check = Some(check);
+        }
         if self.close_requested
             && self.child.is_none()
             && !self.recovery_blocked
@@ -1324,6 +1395,14 @@ impl App {
                 .quit_check
                 .as_ref()
                 .is_some_and(|check| !check.ready_to_close())
+            {
+                ctx.request_repaint_after(Duration::from_millis(50));
+                return;
+            }
+            if self
+                .resource_check
+                .as_ref()
+                .is_some_and(|check| !check.finished())
             {
                 ctx.request_repaint_after(Duration::from_millis(50));
                 return;
@@ -1372,6 +1451,24 @@ impl Drop for App {
 }
 fn main() -> eframe::Result<()> {
     let options = Options::parse();
+    let resource_check = options
+        .ci_resource_spec
+        .as_ref()
+        .map(|spec| {
+            resource_check::Check::prepare(
+                options
+                    .data_dir
+                    .as_deref()
+                    .expect("clap requires an isolated directory"),
+                spec,
+                std::env::var("CI").is_ok_and(|value| value == "true" || value == "1"),
+            )
+        })
+        .transpose()
+        .unwrap_or_else(|error| {
+            eprintln!("资源检查无法开始：{error:#}");
+            std::process::exit(2);
+        });
     let quit_check = options
         .macos_quit_check_report
         .as_ref()
@@ -1403,6 +1500,14 @@ fn main() -> eframe::Result<()> {
             let mut app = App::new(cc, dir);
             app.quit_check_mode = quit_check.is_some();
             app.quit_check = quit_check;
+            if let Some(mut check) = resource_check {
+                if let Err(error) = check.setup(&mut app) {
+                    eprintln!("资源检查无法初始化：{error:#}");
+                    std::process::exit(2);
+                }
+                check.listen_stdin(app.wake_ui.clone());
+                app.resource_check = Some(check);
+            }
             if options.gesture_lab {
                 app.page = Page::GestureLab;
                 app.mouse_tab = MouseTab::Practice;
@@ -2598,7 +2703,75 @@ mod lifecycle_tests {
         Ok(())
     }
     #[test]
-    fn idle_logic_stops_periodic_paints_but_hidden_worker_and_stop_keep_ticking() -> Result<()> {
+    fn output_wakes_ui_despite_full_diagnostics_and_eof_preserves_terminal_state() -> Result<()> {
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send("already queued".into())?;
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = wakes.clone();
+        let text = format!(
+            "{}\n{}\nignored diagnostic\n",
+            serde_json::to_string(&WorkerEvent::new(WorkerState::Authenticated))?,
+            WorkerInputEvent::new_terminal(WorkerInputState::Disabled)
+                .unwrap()
+                .line()
+        );
+        read_worker_output(
+            std::io::Cursor::new(text),
+            snapshot.clone(),
+            tx,
+            Arc::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            4,
+            "output or EOF failed to wake GUI"
+        );
+        assert!(snapshot.2.load(Ordering::Acquire));
+        assert!(!snapshot.3.load(Ordering::Acquire));
+        assert_eq!(snapshot.take(), (Some(WorkerState::Authenticated), false));
+        assert_eq!(
+            snapshot.take_input(),
+            Some((WorkerInputState::Disabled, true))
+        );
+        assert_eq!(rx.try_recv()?, "already queued");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        Ok(())
+    }
+    #[test]
+    fn output_read_error_still_finishes_and_wakes_reaping() {
+        struct ReadFailure;
+        impl std::io::Read for ReadFailure {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("synthetic read failure"))
+            }
+        }
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let (tx, rx) = mpsc::sync_channel(1);
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = wakes.clone();
+        read_worker_output(
+            BufReader::new(ReadFailure),
+            snapshot.clone(),
+            tx,
+            Arc::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert!(snapshot.2.load(Ordering::Acquire) && snapshot.3.load(Ordering::Acquire));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
+    #[test]
+    fn communication_sleeps_but_native_eof_and_stop_keep_ticking() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let ctx = egui::Context::default();
@@ -2612,9 +2785,26 @@ mod lifecycle_tests {
         app.child = Some(managed_child()?);
         app.active_mode = Some(SessionMode::Communication);
         logic_frames(&mut app, &ctx, true);
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            0,
+            "communication retained its 10Hz clock"
+        );
+        app.active_mode = Some(SessionMode::Native);
+        logic_frames(&mut app, &ctx, true);
         assert!(
             ticks.load(Ordering::SeqCst) > 0,
-            "hidden worker status polling stopped"
+            "native health polling stopped"
+        );
+        app.active_mode = Some(SessionMode::Communication);
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        snapshot.2.store(true, Ordering::Release);
+        app.worker_state = Some(snapshot);
+        let before_eof = ticks.load(Ordering::SeqCst);
+        logic_frames(&mut app, &ctx, true);
+        assert!(
+            ticks.load(Ordering::SeqCst) > before_eof,
+            "EOF reaping was starved"
         );
         app.stop();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -2707,6 +2897,15 @@ mod lifecycle_tests {
         app.child = Some(child);
         app.active_mode = Some(SessionMode::Communication);
         let (tx, rx) = mpsc::sync_channel(2);
+        // Real stdout EOF can precede stderr's final diagnostic and disconnect.
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        read_worker_output(
+            std::io::Cursor::new(Vec::<u8>::new()),
+            snapshot.clone(),
+            tx.clone(),
+            Arc::new(|| {}),
+        );
+        app.worker_state = Some(snapshot);
         app.events = Some(rx);
         let ctx = egui::Context::default();
         let ticks = count_activity_ticks(&ctx);

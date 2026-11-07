@@ -1276,3 +1276,51 @@ f8e4f21五项42308474238与驻留42308474354成功，schema2原始JSON摘要/四
 整秒CPU未跨刻度算0，不说明无CPU使用。artifact13547252763/13548645117证据保留
 ignored target/local-validation/resource-cpu-f8e4f21。后续只补记录，App/版本不改，
 最终精确HEAD在PR63回读；隐藏/worker分账/8h/24h、C06与旧6.83GB根因仍未完成。
+
+## 53. A2真实GUI/自有worker分账（2026-11-07，开发中）
+
+resource-session-accounting/0.3.10基于PR63最终ff9cf52（五项42310065470、驻留
+42310065392全过）。显式CI资源spec只接受全新身份目录/回环/有效不同peer/新报告/
+有界窗口，复用登记事务关闭native/allow/reconnect；真实GUI正常启动同包worker
+完成实际mTLS/Hello。普通入口不变，CI模式深层拒Native/保存/更换登记/撤销/reset/
+配对，stdin只有stop；CI/PID/时间均非认证。有限JSONL阶段用于自有child分账，父
+脚本核对ppid并分GUI/owned worker/peer helper RSS/CPU，成功须真实GUI原stop→
+EOF/terminal/reap→正常退出。失败/信号仍清自有Popen，不按PID杀其他进程。普通
+窗口仅requested，未声称OS可见/隐藏；无footprint分账/8h/24h/Native/C06结论。
+Python4项收据/入口/父元数据回归本机过，Rust新安全边界/真实GUI会话待CI；本机
+缺Rust不安装，未启动宿主GUI/Native/设备会话或改App/配对/TCC，记录精确候选后交付。
+
+05b6748五项42314931276、资源42314931401、上游42314931493已全部成功。原始分账
+artifact经摘要/结构核对保留在ignored target/local-validation/owned-resources-05b6748。
+约30秒Mac GUI峰RSS115.312MiB、平均单核CPU39.659049%，worker11.875MiB/
+0.133361%，helper11.844MiB/0.166799%；Linux GUI132.941MiB/26.668246%，
+worker7.613MiB、helper7.508MiB（整秒CPU计数未跨刻度，不能解释为完全不耗CPU）。
+三类均正常停止并回收，普通窗口仅requested；不是宿主6.83GB或Native验收。
+
+新分账暴露稳定Communication仍被child/events存在条件每100ms唤起全窗重绘。
+本批改实际stdout/stderr读线程在状态/诊断/EOF后唤醒GUI；EOF后的child/events回收
+继续100ms，Native健康轮询、停止期限及其他异步工作计时保持。CI资源控制输入也
+直接唤醒，连接/采样上限使用一次性deadline，避免诊断模式自行恢复周期重绘。
+新增真实共用reader的队列满/terminal/EOF/读取错误唤醒及idle/Native/EOF/Stop时钟
+回归。当前改动待新候选CI与同场景分账比较，不沿用05绿灯声明修复通过。本机
+预检再次因缺Rust停止，不安装；现用App/配对/TCC和输入协议/原生捕获均不变。
+
+130cd8e的Mac资源run42317164367成功，artifact13551786895摘要
+3e15febbefa7aa5ba38b2de4e40aaa162c7a054c2a7efb2549c51d351a967bb9核对一致。
+同约30.105秒GUI平均单核CPU0.764002%、峰RSS119.078MiB；worker0.166091%/
+11.906MiB，helper0.199311%/11.813MiB，均正常停止回收。与05b6748的39.659049%
+相比，短窗结果支持通信周期重绘修复有效；不同CI任务数据，不作耐久/资源预算声明。
+
+504a57e已应用fmt，但旧late_diagnostics回归只装诊断channel、没有真实EOF快照，
+仍期待任意活动通信定时重绘而失败。0acdc9f改为经过实际共用reader的空stdout EOF，
+stderr sender仍存活；完整保留“晚到诊断读完才回收”与“结束后时钟静止”断言。
+0acdc9f最低1.95/依赖审计及三平台工作区测试已过，平台Release/进程/GUI专项继续。
+本记录批次只改文档，最终精确HEAD五项/资源/上游结果集中回读PR64及Issue5；不能
+把130cd8e的资源成功说成其当时全CI成功。现用冻结App/TCC/身份不变，C06未验收。
+
+0acdc9f的42317591163 Windows/macOS完整成功，最低1.95/审计成功；Linux在GUI专项
+之前的apt依赖下载耗尽整步5分钟（日志00:25:05至00:30:18仍在下载imagemagick），
+没有启动gui_smoke.py，不能算GUI失败或通过。已将依赖准备独立为10分钟步骤，GUI
+自身仍单独5分钟，不跳过/放宽测试或自动重试掩盖错误。两平台资源42317591239成功。
+该修正只改CI/记录，App代码仍0acdc9f；最终精确HEAD结果继续集中在PR64。旧#10
+根因仍未知，本次apt下载超时不用于解释该历史故障或6.83GB。

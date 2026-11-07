@@ -6,6 +6,8 @@ on:
       - '.github/workflows/gui-memory.yml'
       - 'tools/gui_memory_smoke.py'
       - 'tools/test_gui_memory_smoke.py'
+      - 'tools/gui_worker_resource_smoke.py'
+      - 'tools/test_gui_worker_resource_smoke.py'
       - 'apps/peerglide-gui/**'
 permissions:
   contents: read
@@ -21,7 +23,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Sampler boundary and cleanup tests
-        run: python -m unittest discover -s tools -p test_gui_memory_smoke.py
+        run: |
+          python -m unittest discover -s tools -p test_gui_memory_smoke.py
+          python -m unittest discover -s tools -p test_gui_worker_resource_smoke.py
       - name: Build the matching GUI and CLI
         run: cargo build --release --locked -p peerglide-gui -p peerglide-desktop
       - name: Install isolated Linux display dependencies
@@ -42,9 +46,23 @@ jobs:
       - name: Idle GUI memory on macOS runner
         if: runner.os == 'macOS'
         run: python tools/gui_memory_smoke.py target/release --report dist/gui-memory-macos.json --duration 180 --rss-limit-mib 512 --growth-limit-mib 64
+      - name: GUI and owned NoNative worker accounting under isolated display
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run -a python tools/gui_worker_resource_smoke.py target/release --report dist/gui-owned-resources-linux.json --duration 30
+      - name: GUI and owned NoNative worker accounting on macOS runner
+        if: runner.os == 'macOS'
+        run: python tools/gui_worker_resource_smoke.py target/release --report dist/gui-owned-resources-macos.json --duration 30
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: gui-memory-${{ matrix.os }}
           path: dist/gui-memory-*.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-owned-resources-${{ matrix.os }}
+          path: dist/gui-owned-resources-*.json
           if-no-files-found: error

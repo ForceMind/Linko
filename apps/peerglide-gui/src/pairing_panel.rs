@@ -156,7 +156,10 @@ impl Panel {
         );
         app.validate_pairing_receipt()?;
         anyhow::ensure!(
-            !app.quit_check_mode && !app.recording_mode && !app.close_requested,
+            !app.quit_check_mode
+                && !app.resource_check_mode
+                && !app.recording_mode
+                && !app.close_requested,
             "当前窗口不能开始配对"
         );
         anyhow::ensure!(
