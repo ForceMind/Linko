@@ -1,9 +1,9 @@
 # Linko / 屏跃：拓扑首页设计
 
-用户已确认按[PR69 / bfd739c](https://github.com/ForceMind/PeerGlide/blob/bfd739c9a06f11965a9720ff67b6a6fd4b12a625/docs/LINKO_UI_DESIGN.zh-CN.md)重新设计。当前采用瓷白、石墨与少量品牌蓝；modern-v1的01–04稿保留为历史，不再作为实施依据。
+用户已确认按[PR69 / bfd739c](https://github.com/ForceMind/Linko/blob/bfd739c9a06f11965a9720ff67b6a6fd4b12a625/docs/LINKO_UI_DESIGN.zh-CN.md)重新设计。当前采用瓷白、石墨与少量品牌蓝；modern-v1的01–04稿保留为历史，不再作为实施依据。
 
 - [拓扑首页效果图](effects/screen-layout.png)：AI视觉提案，设备和状态为示例，不是运行截图。
-- [应用图标SVG](brand/app-icon.svg) / [512px预览](brand/previews/app-icon.svg.png)：原创双屏连接标记，不迁移仓库、包名或协议标识。
+- [应用图标SVG](brand/app-icon.svg) / [512px预览](brand/previews/app-icon.svg.png)：原创双屏连接标记；仓库现为ForceMind/Linko，内部包名与协议标识保持兼容。
 - [拓扑首页线稿](wireframes/01-screen-layout.svg) / [完整预览](wireframes/previews/01-screen-layout.svg.png)。
 - [设备与详情线稿](wireframes/02-devices.svg) / [完整预览](wireframes/previews/02-devices.svg.png)。
 - [添加电脑线稿](wireframes/03-add-computer.svg) / [完整预览](wireframes/previews/03-add-computer.svg.png)。

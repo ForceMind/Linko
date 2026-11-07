@@ -20,7 +20,7 @@ GUI与CLI本批开发版本统一0.2.0-dev，package标签/Info.plist取workspac
 ## 本批验收（2026-11-05）
 
 运行源码候选c0a188277d9646c5889727f19490030ab684347b通过完整五项
-[CI 41883855509](https://github.com/ForceMind/PeerGlide/actions/runs/41883855509)：
+[CI 41883855509](https://github.com/ForceMind/Linko/actions/runs/41883855509)：
 三平台fmt/独立CLI/严格Clippy/工作区测试/Release、真实无原生输入probe与重连、
 只读上下文、最低Rust1.95与依赖审计；Linux隔离Xvfb实际启动、绘制与显式样本
 保存通过，实际总览/录制截图已读取核对。macOS多轮并行GUI回归通过。

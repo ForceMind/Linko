@@ -1,4 +1,4 @@
-# PeerGlide · 屏跃
+# Linko · 屏跃
 
 **Multiple Computers. One Seamless Experience.**
 
@@ -37,6 +37,10 @@ explicit and separate. Actual multicast/permission acceptance is pending; see
 
 ## Build
 
+The existing repository was renamed to **[ForceMind/Linko](https://github.com/ForceMind/Linko)** on 2026-11-07; history, branches and PRs are retained. New portable packages use `Linko-<version>-<platform>`: open `Linko.app` on macOS, `Linko.exe` on Windows, or `./linko` on Linux. Keep the `peerglide` worker beside the GUI (inside the app on macOS). Source build commands and binary targets below retain their compatibility names.
+
+Existing data directories, device identities, protocol v5 and the macOS bundle identifier remain compatible. New packages are separate from older PeerGlide packages; existing apps and system permissions are not moved or rewritten by packaging.
+
 ```sh
 cargo build --release --locked
 cargo test --workspace --locked
@@ -44,7 +48,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 Use stable Rust (GUI requires at least 1.95). Run `cargo build --workspace --release --locked` to build both
-executables. Launch `peerglide-gui` with `peerglide` beside it. The GUI displays **Linko / 屏跃** while repository, crate, identity and protocol identifiers remain PeerGlide.
+executables. Launch `peerglide-gui` with `peerglide` beside it. The GUI displays **Linko / 屏跃**. The GitHub repository is ForceMind/Linko; crate, worker, identity and protocol identifiers retain PeerGlide compatibility.
 It defaults to 屏幕布局, with six Chinese navigation entries: 设备、屏幕布局、文件传输、剪贴板、快捷键、设置. 快捷键 retains access to 协作总览 and 本机鼠标 / gesture rules. 设备 provides
 identity/enrollment, independent receiving permission, harmless communication/probes
 and primary-display direction. Starting a keyboard/mouse session requires a recent
@@ -93,7 +97,7 @@ These checks never request OS permissions or authorize control/actions. See
 ## Windows + macOS 双机操作（开发版）
 
 本版优先基础键鼠协同，范围为两台电脑的主显示器。真实双机验收仍见
-[验证记录](docs/VALIDATION.md)与[Issue #3](https://github.com/ForceMind/PeerGlide/issues/3)；
+[验证记录](docs/VALIDATION.md)与[Issue #3](https://github.com/ForceMind/Linko/issues/3)；
 自动测试通过不等于已能稳定日常工作。完整候选通过后，按以下顺序验收：
 
 1. 两端使用同一版、相同协议的完整开发包。Windows 解压后保留两个程序在一起；
