@@ -1444,3 +1444,9 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 本轮实际组件重做：正式原创透明设备图替代工程屏框，名字/状态在设备下方，正式详情卡、右三层模块，真实Noto变量字体400/550/650，标准1280×800；截图仅经PID核验的单个CI窗口，Xvfb1600×1000。Root负责main/fonts/visual_assets及版本，GUI代理3文件，截图代理tools；没有新全局hook/系统安装/权限迁移。当前等待新CI与实际图逐项对照，物理C06/数据/G1/6.83GB与#10边界不变。
 
 59节收尾：cb27bce代码通过完整五项42382394527、资源42382394470、上游42382394530，六张原生图和Linko两端0.3.16包已核验；见VALIDATION与PR72。先前实图中的顶栏/导航/列宽/首屏问题、弹窗挤压、跨平台权限测试假设均修复且失败留存。当前实际画面改善已对照，但不能宣称全像素还原或用户接受；不要再将功能CI等同视觉完成。图/包在ignored target/local-validation/linko-cb27bce-*，未启动宿主App/TCC；收尾仅文档，运行代码冻结于cb27bce。
+
+## 60. 用户授权建设并部署中文官网（2026-11-08）
+
+此前只有docs/design离线GUI原型，没有独立官网。本批分支linko-official-site从35d65bb继续，新增website/静态官网0.1.0，App仍为0.3.16-dev。用户明确要求部署到其Cloudflare Pages；现有账户创建Pages项目linko，域名https://linko-63e.pages.dev/。创建CLI曾错误委派Workers并失败，依照该版本CLI提示仅首次创建使用--force成功，后续Pages上传不得加--force。没有创建Worker或改自定义域名/DNS。
+
+官网保持中文，实际截图来自cb27bce自有原生GUI的隔离NoNative通信场景。下载链接固定同run的Win/macOS外层GitHub artifact ZIP，需GitHub登录；不把真实双机验收或未接通的数据/G1功能写成可用。仅发布白名单website/dist，凭据、身份、target与本地配置不得上传。静态构建/链接/摘要/隐私检查与网站CI独立于Rust；未改Rust代码，未装Rust，未开启原生键鼠或系统权限。浏览器未获本任务授权，不运行浏览器或用HTTP回读冒充视觉验收。最终部署与回读结果追加到VALIDATION。

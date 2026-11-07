@@ -1,0 +1,22 @@
+{
+  "version": "0.3.16-dev",
+  "sourceCommit": "cb27bce72ece205f138180fd1b6ef0c8cbf0764f",
+  "releaseStatus": "experimental",
+  "requiresGitHubLogin": true,
+  "downloads": [
+    {
+      "platform": "macos",
+      "url": "https://github.com/ForceMind/Linko/actions/runs/42382394527/artifacts/13578905150",
+      "sha256": "81cf0298e5824d9139793c5f32c31cbf09ff6a67ae0ed8c58180669b5118ca29",
+      "checksumScope": "GitHub artifact ZIP",
+      "artifactId": 13578905150
+    },
+    {
+      "platform": "windows",
+      "url": "https://github.com/ForceMind/Linko/actions/runs/42382394527/artifacts/13577989202",
+      "sha256": "ff9ab2f6b18c909e300382e2a593c6e6b29507e3a4306c4b479a32a0dc9275be",
+      "checksumScope": "GitHub artifact ZIP",
+      "artifactId": 13577989202
+    }
+  ]
+}
