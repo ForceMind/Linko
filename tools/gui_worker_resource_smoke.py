@@ -9,9 +9,29 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import gui_memory_smoke as metrics
+
+
+def drain_startup_class(pipe, observed):
+    """Discard stderr; retain only our exact finite startup marker, never logs."""
+    marker = re.compile(rb"PG-CI-GUI-STARTUP:(renderer_failed|event_loop_failed|startup_failed)\r?\n")
+    tail = b""
+    try:
+        while True:
+            block = pipe.read(4096)
+            if not block:
+                break
+            window = tail + block
+            for match in marker.finditer(window):
+                observed[0] = match[1].decode("ascii")
+            tail = window[-64:]
+    except OSError:
+        pass
+    finally:
+        pipe.close()
 
 
 def records(path, final=False):
@@ -29,7 +49,7 @@ def records(path, final=False):
                 or item["schema_version"] != 2 or item["scope"] != "ci_owned_gui_communication_resources"
                 or item["native"] is not False or not math.isfinite(item["elapsed_sec"])
                 or item["elapsed_sec"] < 0 or item["state"] not in {"prepared", "visible", "connected", "shown", "stopping", "completed", "failed"}
-                or item["window_state"] not in {"normal_window_requested", "appkit_visible", "appkit_hidden"}
+                or item["window_state"] not in {"normal_window_requested", "appkit_visible", "appkit_hidden", "win32_visible", "win32_hidden"}
                 or type(item["tray_show_received"]) is not bool or type(item["tray_stop_received"]) is not bool):
             raise ValueError("resource receipt invalid")
         result.append(item)
@@ -41,16 +61,23 @@ def hidden_visibility_proof(receipts):
     if states != ["prepared", "visible", "connected", "shown", "stopping", "completed"]:
         raise ValueError("hidden lifecycle incomplete")
     before, sampled, after, completed = receipts[1], receipts[2], receipts[3], receipts[-1]
-    if (before["window_state"] != "appkit_visible" or sampled["window_state"] != "appkit_hidden"
-            or after["window_state"] != "appkit_visible" or not after["tray_show_received"]
-            or completed["window_state"] != "appkit_visible" or not completed["tray_show_received"]
+    visible = before["window_state"]
+    if visible not in {"appkit_visible", "win32_visible"}:
+        raise ValueError("hidden lifecycle unverified")
+    hidden = visible.replace("visible", "hidden")
+    if (sampled["window_state"] != hidden
+            or after["window_state"] != visible or not after["tray_show_received"]
+            or completed["window_state"] != visible or not completed["tray_show_received"]
             or not completed["tray_stop_received"] or not completed["worker_reaped"]):
         raise ValueError("hidden lifecycle unverified")
-    return {"before": "appkit_visible", "sampling": "appkit_hidden", "after": "appkit_visible",
+    return {"before": visible, "sampling": hidden, "after": visible,
             "tray_show_received": True, "tray_stop_received": True}
 
 
 def parent_pid(pid):
+    if sys.platform == "win32":
+        import win_process_resources
+        return win_process_resources.native().parent_pid(pid)
     value = subprocess.check_output(["ps", "-o", "ppid=", "-p", str(pid)], stderr=subprocess.DEVNULL, timeout=2).strip()
     if not value.isdigit() or len(value) > 20:
         raise ValueError("worker parent unavailable")
@@ -76,11 +103,17 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
               "reason": "start_failed", "native": False, "visibility": "hidden_unverified" if tray_hidden else "normal_window_requested",
               "window_visibility_proof": None,
               "lifecycle": None,
+              "environment": None,
+              "gui_startup_failure": None,
+              "memory_measurement": "win32_working_set_kib_ceil" if sys.platform == "win32" else "ps_rss_kib",
+              "cpu_measurement": "win32_process_times_100ns" if sys.platform == "win32" else "ps_cpu_time_platform_precision",
               "processes": {}, "gui_exit": None, "helper_exit": None, "worker_reaped": False,
               "limitations": ["no_native_input", "not_physical_acceptance", "visibility_not_os_verified",
                               "ps_cpu_time_platform_precision", "rss_is_not_total_memory", "physical_footprint_not_sampled",
                               "not_eight_hour_endurance"]}
     gui = helper = receipt = None
+    startup_thread = None
+    startup_class = [None]
     stage = "identity_init"
     with tempfile.TemporaryDirectory(prefix="peerglide-owned-resources-") as temporary:
         root = Path(temporary)
@@ -89,6 +122,17 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
         env = {**os.environ, "XDG_DATA_HOME": str(root / "fallback"), "XDG_CACHE_HOME": str(root / "cache")}
         worker = binary_dir / ("peerglide.exe" if sys.platform == "win32" else "peerglide")
         try:
+            if sys.platform == "win32":
+                import win_process_resources
+                stage = "windows_environment"
+                result["environment"] = win_process_resources.environment()
+                result["limitations"].remove("ps_cpu_time_platform_precision")
+                result["limitations"].append("working_set_is_not_private_commit")
+                result["limitations"].append("windows_cpu_time_unit_not_resolution")
+                if (result["environment"]["interactive_station"] is not True
+                        or (tray_hidden and not result["environment"]["shell_tray_present"])):
+                    raise ValueError("Windows desktop unavailable")
+                stage = "identity_init"
             for identity in [profile / "identity", remote]:
                 subprocess.run([str(worker), "init", "--identity", str(identity)], check=True,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
@@ -105,10 +149,13 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
                 "tray_hidden": tray_hidden}))
             gui = subprocess.Popen([str(binary_dir / ("peerglide-gui.exe" if sys.platform == "win32" else "peerglide-gui")),
                 "--data-dir", str(profile), "--ci-resource-spec", str(spec)], stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=env)
+            startup_thread = threading.Thread(target=drain_startup_class, args=(gui.stderr, startup_class), daemon=True)
+            startup_thread.start()
             stage = "gui_connect"
             connected = wait_for(lambda: next((r for r in records(receipt) if r["state"] == "connected"), None), gui, 25 if tray_hidden else 20, stop)
-            if tray_hidden and connected["window_state"] != "appkit_hidden":
+            expected_hidden = "win32_hidden" if sys.platform == "win32" else "appkit_hidden"
+            if tray_hidden and connected["window_state"] != expected_hidden:
                 raise ValueError("hidden window not verified")
             owned_worker = connected["worker_pid"]
             if type(owned_worker) is not int or owned_worker <= 0 or parent_pid(owned_worker) != gui.pid:
@@ -167,9 +214,9 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
                 raise ValueError("GUI did not cooperatively reap worker")
             if tray_hidden:
                 result["window_visibility_proof"] = hidden_visibility_proof(final)
-                result["visibility"] = "appkit_hidden_verified"
+                result["visibility"] = "win32_hidden_verified" if sys.platform == "win32" else "appkit_hidden_verified"
                 result["limitations"].remove("visibility_not_os_verified")
-                result["limitations"].extend(["appkit_visibility_not_unobscured_pixels", "not_physical_menu_click"])
+                result["limitations"].extend(["sdk_visibility_not_unobscured_pixels", "not_physical_menu_click"])
             stage = "helper_stop"
             if helper.poll() is None:
                 helper.stdin.write(b"stop\n"); helper.stdin.flush()
@@ -188,6 +235,11 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
                         except (OSError, subprocess.TimeoutExpired):
                             pass
                     metrics.stop_child(child, 2)  # Only our NoNative Popen handles.
+            if gui is not None and result["gui_exit"] is None:
+                result["gui_exit"] = gui.poll()
+            if startup_thread is not None:
+                startup_thread.join(timeout=2)
+                result["gui_startup_failure"] = startup_class[0]
             if receipt is not None:
                 try:
                     # Keep only the bounded, allowlisted stage metadata when
@@ -203,7 +255,7 @@ def main(argv=None):
     parser.add_argument("binary_dir", type=Path)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--duration", type=int, default=30)
-    parser.add_argument("--tray-hidden", action="store_true", help="macOS only: verify real close/hide/menu show/stop")
+    parser.add_argument("--tray-hidden", action="store_true", help="Windows/macOS: verify real close/hide/menu show/stop")
     args = parser.parse_args(argv)
     if not 17 <= args.duration <= 180:
         parser.error("duration must be between 17 and 180 seconds")
@@ -212,10 +264,10 @@ def main(argv=None):
     except OSError:
         return 1
     with os.fdopen(fd, "w") as output:
-        if os.environ.get("CI", "").lower() not in ("true", "1") or sys.platform not in ("darwin", "linux"):
+        if os.environ.get("CI", "").lower() not in ("true", "1") or sys.platform not in ("darwin", "linux", "win32"):
             value = {"schema_version": 2, "passed": False, "reason": "isolated_ci_required"}
-        elif args.tray_hidden and sys.platform != "darwin":
-            value = {"schema_version": 2, "passed": False, "reason": "hidden_check_macos_required"}
+        elif args.tray_hidden and sys.platform not in ("darwin", "win32"):
+            value = {"schema_version": 2, "passed": False, "reason": "hidden_check_platform_unsupported"}
         else:
             stop = metrics.StopFlag()
             with metrics.signal_handlers(stop):

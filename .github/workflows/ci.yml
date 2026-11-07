@@ -58,6 +58,7 @@ jobs:
       - run: python -m unittest discover -s tools -p test_third_party.py
       - run: python -m unittest discover -s tools -p test_package.py
       - run: python -m unittest discover -s tools -p test_gui_worker_resource_smoke.py
+      - run: python -m unittest discover -s tools -p test_win_process_resources.py
       - run: python tools/third_party.py
       - name: Prepare isolated Linux GUI dependencies
         if: runner.os == 'Linux'

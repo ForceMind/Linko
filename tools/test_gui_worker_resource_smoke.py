@@ -1,5 +1,6 @@
 """Receipt/entry/parent bounds; never launches a GUI or device session."""
 import json
+import io
 import os
 from pathlib import Path
 import tempfile
@@ -10,6 +11,24 @@ import gui_worker_resource_smoke as check
 
 
 class ResourceCheck(unittest.TestCase):
+    def test_startup_stderr_keeps_only_exact_finite_marker_across_chunks(self):
+        class Chunks:
+            def __init__(self):
+                self.parts = iter([b"private/path diagnostic\nPG-CI-GUI-STA", b"RTUP:renderer_failed\r\nprivate log", b""])
+                self.closed = False
+            def read(self, size):
+                self.asserted_size = size
+                return next(self.parts)
+            def close(self):
+                self.closed = True
+        pipe = Chunks(); observed = [None]
+        check.drain_startup_class(pipe, observed)
+        self.assertEqual(observed, ["renderer_failed"])
+        self.assertTrue(pipe.closed)
+        self.assertEqual(pipe.asserted_size, 4096)
+        observed = [None]
+        check.drain_startup_class(io.BytesIO(b"PG-CI-GUI-STARTUP:private/path\n" * 10000), observed)
+        self.assertEqual(observed, [None])
     def record(self):
         return {"schema_version": 2, "scope": "ci_owned_gui_communication_resources", "state": "connected",
                 "worker_pid": 123, "worker_reaped": False, "elapsed_sec": 1.0, "native": False,
@@ -41,6 +60,7 @@ class ResourceCheck(unittest.TestCase):
             with self.assertRaises(ValueError):
                 check.records(path)
 
+    @patch.object(check.sys, "platform", "linux")
     def test_parent_query_is_single_bounded_pid_metadata(self):
         with patch.object(check.subprocess, "check_output", return_value=b" 456\n") as query:
             self.assertEqual(check.parent_pid(123), 456)
@@ -79,7 +99,32 @@ class ResourceCheck(unittest.TestCase):
                     patch.object(check, "run") as run, patch("builtins.print"):
                 self.assertEqual(check.main([folder, "--report", str(report), "--tray-hidden"]), 1)
                 run.assert_not_called()
-            self.assertEqual(json.loads(report.read_text())["reason"], "hidden_check_macos_required")
+            self.assertEqual(json.loads(report.read_text())["reason"], "hidden_check_platform_unsupported")
+
+    def test_windows_without_interactive_station_fails_before_identity_or_gui(self):
+        import win_process_resources
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(check.sys, "platform", "win32"), \
+                    patch.object(win_process_resources, "environment", return_value={"interactive_station": False, "shell_tray_present": False}), \
+                    patch.object(check.subprocess, "run") as init, patch.object(check.subprocess, "Popen") as spawn:
+                value = check.run(Path(folder), 17, check.metrics.StopFlag(), True)
+                self.assertFalse(value["passed"])
+                self.assertEqual(value["reason"], "windows_environment_failed")
+                init.assert_not_called(); spawn.assert_not_called()
+
+    def test_win32_visibility_sequence_is_distinct_from_appkit_or_requested(self):
+        values = []
+        for state, window in [("prepared", "normal_window_requested"), ("visible", "win32_visible"),
+                              ("connected", "win32_hidden"), ("shown", "win32_visible"),
+                              ("stopping", "win32_visible"), ("completed", "win32_visible")]:
+            item = self.record(); item.update(state=state, window_state=window,
+                tray_show_received=state in {"shown", "stopping", "completed"},
+                tray_stop_received=state == "completed", worker_reaped=state == "completed")
+            values.append(item)
+        self.assertEqual(check.hidden_visibility_proof(values)["sampling"], "win32_hidden")
+        values[2]["window_state"] = "appkit_hidden"
+        with self.assertRaises(ValueError):
+            check.hidden_visibility_proof(values)
 
     def test_non_ci_and_existing_report_refuse_without_starting_gui(self):
         with tempfile.TemporaryDirectory() as folder:
