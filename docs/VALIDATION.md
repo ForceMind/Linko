@@ -1942,3 +1942,13 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 设计阶段00db519已完成4个SVG/5个PNG的XML、尺寸、摘要和静态渲染核对；属于效果图/线稿，不是实际GUI。实现阶段改六导航、默认拓扑、右侧上下文、主题与缩放；恢复/待双端回执布局锁、外部配置冲突回滚与真实控件报告已有新增回归代码，待CI执行。
 
 本机预检report.json记录rustc/cargo unavailable；fmt未启动，Clippy/tests/build/probe/reconnect均not_run。未安装工具，未执行浏览器、Native或真实双机输入；现用App/TCC/身份保持。最终候选和实际原生PNG证据在本节后续及对应PR补录，不能以本条候选记录宣称验收完成。
+
+### 0.3.14最终代码候选：74e442b
+
+代码74e442b389b1165fa4df8f14377560d996e5e95e通过[完整五项CI 42362134479](https://github.com/ForceMind/PeerGlide/actions/runs/42362134479)：Windows/macOS/Linux fmt、严格Clippy、locked工作区test/build、Release、进程/重连/配对/worker专项、原生GUI模型、隔离Xvfb、最低Rust1.95和依赖审计均成功。[资源42362134407](https://github.com/ForceMind/PeerGlide/actions/runs/42362134407)两平台通过，含180秒驻留、真实NoNative会话和AppKit隐藏/显示/停止；[固定上游42362134421](https://github.com/ForceMind/PeerGlide/actions/runs/42362134421)成功。880a260首轮fmt失败保留，74e442b仅应用runner的9处格式差异，没有删除断言或放宽检查。
+
+同源6张实际Linux原生PNG已读：默认拓扑、设置、实际点击添加弹窗、手势实验室、已连接及920×700紧凑拓扑。新控件矩形驱动实际点击，打开添加未创建身份。摘要记录在ignored target/local-validation/linko-74e442b-native-images/review-manifest.json；默认页SHA256为4b9711d785889c25dc4ed51b13f633be4831c73c0e418e5a608567010619a45f，紧凑图为93634d45fa89fcbc6c5f60585358c7c336543ab59fb72005ca5345144795c6f1。这是隔离Xvfb/NoNative证据，不是AI图或物理双机验收。
+
+两端包绑定同一run/head，外层digest、内层checksum、ZIP路径/CRC、MIT/notice、版本及PE或Mac完整性seal通过。Mac内层ZIP SHA256为52e0403cc69bf82b0c5e1d971cf9fb94cd820bf556be5e1d2dac35a9a88af194，Windows为fb9e49cd74376176bd13e73a213f2ca3b89eac3eec860dbc4f63e06999438fdd。Windows LICENSE的CRLF归一后与仓库精确一致，原包未改；首次换行敏感检查失败保留。记录在ignored target/local-validation/linko-74e442b-packages/verification-final.json；Mac App已解压，未启动。
+
+两项GUI布局P2已修复并复核；新几何报告路径未发现阻塞项。该静态复核仅覆盖本批，不是全项目独立安全审计。主线未合并，宿主App/身份/TCC保持。Windows/macOS人工界面、输入C06仍未验收；文件/系统剪贴板/全局G1、多屏、远程工作空间与窗口桥未接通。本机Rust缺失、浏览器未验证、6.83GB/#10根因未知的结论不变。
