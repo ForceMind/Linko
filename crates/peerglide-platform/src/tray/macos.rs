@@ -71,11 +71,21 @@ impl Tray {
             Command::Quit => 2,
         };
         let expected: &AnyObject = &self.target;
-        let action = [sel!(showMainWindow:), sel!(stopCollaboration:), sel!(quitPeerGlide:)][index];
-        anyhow::ensure!(self.menu.numberOfItems() == 3 && self.items[index].isEnabled()
-            && self.items[index].action() == Some(action)
-            && self.items[index].target().as_deref().is_some_and(|target| std::ptr::eq(target, expected)),
-            "菜单栏检查目标已变化");
+        let action = [
+            sel!(showMainWindow:),
+            sel!(stopCollaboration:),
+            sel!(quitPeerGlide:),
+        ][index];
+        anyhow::ensure!(
+            self.menu.numberOfItems() == 3
+                && self.items[index].isEnabled()
+                && self.items[index].action() == Some(action)
+                && self.items[index]
+                    .target()
+                    .as_deref()
+                    .is_some_and(|target| std::ptr::eq(target, expected)),
+            "菜单栏检查目标已变化"
+        );
         self.menu.performActionForItemAtIndex(index as isize);
         Ok(())
     }

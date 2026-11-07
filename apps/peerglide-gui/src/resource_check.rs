@@ -82,7 +82,10 @@ impl Check {
         File::open(spec_path)?.take(8193).read_to_end(&mut bytes)?;
         anyhow::ensure!(bytes.len() <= 8192, "资源检查说明过大");
         let spec: Spec = serde_json::from_slice(&bytes).context("资源检查说明无效")?;
-        anyhow::ensure!(!spec.tray_hidden || cfg!(target_os = "macos"), "真实菜单栏隐藏检查仅支持macOS");
+        anyhow::ensure!(
+            !spec.tray_hidden || cfg!(target_os = "macos"),
+            "真实菜单栏隐藏检查仅支持macOS"
+        );
         anyhow::ensure!(
             spec.schema_version == 1
                 && spec.address.is_ipv4()
@@ -223,26 +226,44 @@ impl Check {
     fn visible(&self, app: &App) -> Result<bool> {
         #[cfg(target_os = "macos")]
         {
-            app.application_menu.as_ref().context("缺少退出保护")?
+            app.application_menu
+                .as_ref()
+                .context("缺少退出保护")?
                 .window_visible_for_check("屏跃 · PeerGlide")
         }
         #[cfg(not(target_os = "macos"))]
-        { let _ = app; anyhow::bail!("平台未实现本次窗口核验") }
+        {
+            let _ = app;
+            anyhow::bail!("平台未实现本次窗口核验")
+        }
     }
     fn request_close(&self, app: &App) -> Result<()> {
         #[cfg(target_os = "macos")]
         {
-            app.application_menu.as_ref().context("缺少退出保护")?
+            app.application_menu
+                .as_ref()
+                .context("缺少退出保护")?
                 .request_window_close_for_check("屏跃 · PeerGlide")
         }
         #[cfg(not(target_os = "macos"))]
-        { let _ = app; anyhow::bail!("平台未实现本次窗口核验") }
+        {
+            let _ = app;
+            anyhow::bail!("平台未实现本次窗口核验")
+        }
     }
     fn request_tray(&self, app: &App, command: peerglide_platform::tray::Command) -> Result<()> {
         #[cfg(target_os = "macos")]
-        { app.tray.as_ref().context("缺少菜单栏恢复入口")?.request_command_for_check(command) }
+        {
+            app.tray
+                .as_ref()
+                .context("缺少菜单栏恢复入口")?
+                .request_command_for_check(command)
+        }
         #[cfg(not(target_os = "macos"))]
-        { let _ = (app, command); anyhow::bail!("平台未实现本次菜单栏核验") }
+        {
+            let _ = (app, command);
+            anyhow::bail!("平台未实现本次菜单栏核验")
+        }
     }
     fn begin_sampling(&mut self) -> Result<()> {
         self.connected = Some(Instant::now());
@@ -272,13 +293,22 @@ impl Check {
             self.fail(app);
             return;
         }
-        if matches!(self.phase, Phase::Hiding | Phase::Sampling | Phase::Restoring)
-            && (app.close_requested || !app.connected || app.child.as_ref().map(|c| c.id()) != self.worker
-                || app.active_mode != Some(SessionMode::Communication)
-                || app.input_state != Some(WorkerInputState::Disabled) || app.input_terminal)
-        { self.fail(app); return; }
+        if matches!(
+            self.phase,
+            Phase::Hiding | Phase::Sampling | Phase::Restoring
+        ) && (app.close_requested
+            || !app.connected
+            || app.child.as_ref().map(|c| c.id()) != self.worker
+            || app.active_mode != Some(SessionMode::Communication)
+            || app.input_state != Some(WorkerInputState::Disabled)
+            || app.input_terminal)
+        {
+            self.fail(app);
+            return;
+        }
         if self.tray_hidden && !app.tray.as_ref().is_some_and(|tray| tray.is_available()) {
-            self.fail(app); return;
+            self.fail(app);
+            return;
         }
         if self.phase == Phase::Prepared {
             if app.start_mode(SessionMode::Communication).is_err() {
@@ -309,7 +339,8 @@ impl Check {
                     }
                     self.window_state = "appkit_visible";
                     if self.record("visible", false).is_err() || self.request_close(app).is_err() {
-                        self.fail(app); return;
+                        self.fail(app);
+                        return;
                     }
                     self.phase = Phase::Hiding;
                     self.transition = Some(Instant::now());
@@ -320,27 +351,46 @@ impl Check {
             }
         }
         if matches!(self.phase, Phase::Hiding | Phase::Restoring) {
-            if self.transition.is_none_or(|at| at.elapsed() > Duration::from_secs(5)) {
-                self.fail(app); return;
+            if self
+                .transition
+                .is_none_or(|at| at.elapsed() > Duration::from_secs(5))
+            {
+                self.fail(app);
+                return;
             }
             if self.phase == Phase::Hiding {
                 if app.window_hidden && matches!(self.visible(app), Ok(false)) {
                     self.window_state = "appkit_hidden";
-                    if self.begin_sampling().is_err() { self.fail(app); return; }
+                    if self.begin_sampling().is_err() {
+                        self.fail(app);
+                        return;
+                    }
                 }
-            } else if !app.window_hidden && self.tray_show_received && matches!(self.visible(app), Ok(true)) {
+            } else if !app.window_hidden
+                && self.tray_show_received
+                && matches!(self.visible(app), Ok(true))
+            {
                 self.window_state = "appkit_visible";
-                if self.record("shown", false).is_err() || self.request_tray(app, peerglide_platform::tray::Command::Stop).is_err() {
-                    self.fail(app); return;
+                if self.record("shown", false).is_err()
+                    || self
+                        .request_tray(app, peerglide_platform::tray::Command::Stop)
+                        .is_err()
+                {
+                    self.fail(app);
+                    return;
                 }
                 self.phase = Phase::Stopping;
-                if self.record("stopping", false).is_err() { self.fail(app); return; }
+                if self.record("stopping", false).is_err() {
+                    self.fail(app);
+                    return;
+                }
                 app.close_requested = true;
             }
         }
         if self.phase == Phase::Sampling {
             if self.tray_hidden && (!app.window_hidden || !matches!(self.visible(app), Ok(false))) {
-                self.fail(app); return;
+                self.fail(app);
+                return;
             }
             if app.close_requested
                 || !app.connected
@@ -363,14 +413,21 @@ impl Check {
                     return;
                 }
                 if self.tray_hidden {
-                    if self.request_tray(app, peerglide_platform::tray::Command::Show).is_err() {
-                        self.fail(app); return;
+                    if self
+                        .request_tray(app, peerglide_platform::tray::Command::Show)
+                        .is_err()
+                    {
+                        self.fail(app);
+                        return;
                     }
                     self.phase = Phase::Restoring;
                     self.transition = Some(Instant::now());
                 } else {
                     self.phase = Phase::Stopping;
-                    if self.record("stopping", false).is_err() { self.fail(app); return; }
+                    if self.record("stopping", false).is_err() {
+                        self.fail(app);
+                        return;
+                    }
                     app.close_requested = true;
                     app.stop();
                 }
@@ -378,7 +435,10 @@ impl Check {
         }
         if self.phase == Phase::Stopping && app.child.is_none() {
             let clean = !app.recovery_blocked
-                && (!self.tray_hidden || (self.tray_show_received && self.tray_stop_received && self.window_state == "appkit_visible"))
+                && (!self.tray_hidden
+                    || (self.tray_show_received
+                        && self.tray_stop_received
+                        && self.window_state == "appkit_visible"))
                 && app.stopping.is_none()
                 && app.events.is_none()
                 && app.input_terminal
