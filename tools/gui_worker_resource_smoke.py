@@ -75,11 +75,12 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
     result = {"schema_version": 2, "scope": "ci_gui_owned_worker_resources", "passed": False,
               "reason": "start_failed", "native": False, "visibility": "hidden_unverified" if tray_hidden else "normal_window_requested",
               "window_visibility_proof": None,
+              "lifecycle": None,
               "processes": {}, "gui_exit": None, "helper_exit": None, "worker_reaped": False,
               "limitations": ["no_native_input", "not_physical_acceptance", "visibility_not_os_verified",
                               "ps_cpu_time_platform_precision", "rss_is_not_total_memory", "physical_footprint_not_sampled",
                               "not_eight_hour_endurance"]}
-    gui = helper = None
+    gui = helper = receipt = None
     stage = "identity_init"
     with tempfile.TemporaryDirectory(prefix="peerglide-owned-resources-") as temporary:
         root = Path(temporary)
@@ -187,6 +188,13 @@ def run(binary_dir, seconds, stop, tray_hidden=False):
                         except (OSError, subprocess.TimeoutExpired):
                             pass
                     metrics.stop_child(child, 2)  # Only our NoNative Popen handles.
+            if receipt is not None:
+                try:
+                    # Keep only the bounded, allowlisted stage metadata when
+                    # a new native transition fails. Never preserve GUI logs.
+                    result["lifecycle"] = records(receipt, final=True)
+                except (ValueError, OSError, TypeError):
+                    pass
     return result
 
 
