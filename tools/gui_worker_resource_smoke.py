@@ -71,6 +71,30 @@ def wait_for(test, child, timeout, stop):
     raise TimeoutError("resource check timeout")
 
 
+def capture_workspace(gui, path):
+    """Explicit CI-only virtual display capture; never a normal app behavior."""
+    def save(destination):
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as output:
+            subprocess.run(["import", "-window", "root", "png:-"], stdout=output,
+                           stderr=subprocess.DEVNULL, check=True, timeout=10)
+        if not 1000 < destination.stat().st_size <= 16 * 1024 * 1024:
+            raise ValueError("isolated screenshot invalid")
+    time.sleep(1)
+    save(path)
+    windows = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid)],
+                                     stderr=subprocess.DEVNULL, timeout=2).split()
+    if len(windows) != 1 or not windows[0].isdigit():
+        raise ValueError("isolated GUI window unavailable")
+    window = windows[0].decode("ascii")
+    subprocess.run(["xdotool", "windowsize", "--sync", window, "920", "700"],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    time.sleep(1)
+    save(path.with_name(path.stem + "-compact.png"))
+    subprocess.run(["xdotool", "windowsize", "--sync", window, "1180", "820"],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+
+
 def run(binary_dir, seconds, stop, tray_hidden=False, screenshot=None):
     result = {"schema_version": 2, "scope": "ci_gui_owned_worker_resources", "passed": False,
               "reason": "start_failed", "native": False, "visibility": "hidden_unverified" if tray_hidden else "normal_window_requested",
@@ -119,13 +143,7 @@ def run(binary_dir, seconds, stop, tray_hidden=False, screenshot=None):
                     raise ValueError("isolated screenshot unavailable")
                 # CI invokes us under its own fresh Xvfb. This has only the
                 # new fixture GUI, never a user's desktop or real device data.
-                time.sleep(1)
-                fd = os.open(screenshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, "wb") as output:
-                    subprocess.run(["import", "-window", "root", "png:-"], stdout=output,
-                                   stderr=subprocess.DEVNULL, check=True, timeout=10)
-                if not 1000 < screenshot.stat().st_size <= 16 * 1024 * 1024:
-                    raise ValueError("isolated screenshot invalid")
+                capture_workspace(gui, screenshot)
             roles = {"gui": gui.pid, "owned_worker": owned_worker, "peer_helper": helper.pid}
             previous = {}
             stage = "sampling"
