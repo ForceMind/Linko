@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.build-history/
+.wrangler/
+.env*
+.dev.vars*
+deployment.local.json

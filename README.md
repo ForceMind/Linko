@@ -2,6 +2,10 @@
 
 **Multiple Computers. One Seamless Experience.**
 
+中文官网：**[Linko / 屏跃](https://linko-63e.pages.dev/)**。
+提供实际界面、开发范围与 GitHub 实验构建入口；真实双机验收尚未完成。
+官网源码与独立构建说明见 [website](website/README.md)。
+
 Rust software KVM for independent computers. Each peer can capture local input
 and receive authorized remote input. Bluetooth and USB devices stay paired
 with their original computer; operating system input is forwarded over LAN.

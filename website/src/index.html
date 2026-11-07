@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#F7F8FA">
+    <meta name="description" content="Linko / 屏跃，为 Windows 与 macOS 打造的局域网键鼠协同开发预览。连接两台电脑，摆好主屏方向，再分别确认权限。">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="Linko / 屏跃 — 一套键鼠，让两台电脑更顺手。">
+    <meta property="og:description" content="两台电脑，各自独立，顺手协作。了解 Linko 的实际界面、开发进度与实验构建。">
+    <link rel="canonical" href="__SITE_ORIGIN__/">
+    <meta property="og:url" content="__SITE_ORIGIN__/">
+    <meta property="og:image" content="__SITE_ORIGIN__/assets/app-preview.png">
+    <meta property="og:image:alt" content="Linko 开发版实际 GUI，隔离 NoNative 通信场景">
+    <title>Linko / 屏跃 — 一套键鼠，让两台电脑更顺手。</title>
+    <link rel="icon" href="./assets/linko-mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./main.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到正文</a>
+    <header class="site-header">
+      <div class="header-inner wrap">
+        <a class="brand" href="#product" aria-label="Linko 屏跃，回到首页">
+          <img src="./assets/linko-mark.svg" alt="" width="40" height="40">
+          <span class="brand-name">Linko<span class="brand-cn">屏跃</span></span>
+        </a>
+        <nav class="desktop-nav" aria-label="主导航">
+          <a href="#product">产品</a>
+          <a href="#interface">界面</a>
+          <a href="#progress">开发进度</a>
+          <a class="nav-preview" href="#preview">获取预览<span aria-hidden="true">↗</span></a>
+          <a href="https://github.com/ForceMind/Linko" target="_blank" rel="noopener noreferrer">GitHub<span class="external-arrow" aria-hidden="true">↗</span></a>
+        </nav>
+        <details class="mobile-menu">
+          <summary>菜单<span class="menu-lines" aria-hidden="true"></span></summary>
+          <nav aria-label="移动导航">
+            <a href="#product">产品</a>
+            <a href="#interface">界面</a>
+            <a href="#progress">开发进度</a>
+            <a href="#preview">获取开发预览</a>
+            <a href="https://github.com/ForceMind/Linko" target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+          </nav>
+        </details>
+      </div>
+    </header>
+
+    <main id="main" tabindex="-1">
+      <section class="hero wrap" id="product" aria-labelledby="hero-title">
+        <a class="release-badge" href="#progress"><span class="badge-dot" aria-hidden="true"></span>开发预览<span class="badge-version" data-release-version>0.3.16-dev</span><span aria-hidden="true">→</span></a>
+        <h1 id="hero-title"><span>一套键鼠，</span><span>让两台电脑<span class="keep-together">更顺手。</span></span></h1>
+        <p class="hero-lead">为 Windows 与 macOS 的局域网协同而做。<br class="desktop-break">连接彼此，摆好主屏，让工作在熟悉的两台电脑之间继续。</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#preview">查看开发版<span aria-hidden="true">↗</span></a>
+          <a class="button button-secondary" href="https://github.com/ForceMind/Linko" target="_blank" rel="noopener noreferrer">在 GitHub 了解项目<span aria-hidden="true">→</span></a>
+        </div>
+        <p class="hero-status">当前为开发预览，真实 Windows ↔ macOS 双机键鼠体验仍在验收中。</p>
+        <ul class="hero-points" aria-label="首版范围"><li>局域网连接</li><li>两台主显示器</li><li>权限分别同意</li></ul>
+      </section>
+
+      <section class="interface-section wrap" id="interface" aria-labelledby="interface-title">
+        <div class="interface-heading"><h2 id="interface-title">从桌面的位置开始。</h2><p>设备、方向、下一步，都在同一个工作区。</p></div>
+        <figure class="app-figure">
+          <a class="app-frame" href="./assets/app-preview.png" target="_blank" rel="noopener noreferrer" aria-label="在新标签页查看 Linko 开发版实际界面原图">
+            <img src="./assets/app-preview.png" width="1280" height="800" alt="Linko 开发版的屏幕布局界面，展示两台电脑及独立的连接、会话与本机接收控制设置。" fetchpriority="high" decoding="async">
+          </a>
+          <figcaption><span><span class="caption-mark" aria-hidden="true"></span>开发版实际界面 · 隔离 NoNative 通信（未启用原生键鼠）</span><a href="./assets/app-preview.png" target="_blank" rel="noopener noreferrer">查看原图<span aria-hidden="true">↗</span></a></figcaption>
+        </figure>
+      </section>
+
+      <section class="principles section-space wrap" aria-labelledby="principles-title">
+        <div class="section-heading split-heading"><div><p class="eyebrow">协作，讲清楚每一步</p><h2 id="principles-title">连接可以简单，<br>边界也要清楚。</h2></div><p class="section-intro">设备核验、屏幕方向和使用许可分别处理。以下流程已在开发版实现；真实双机兼容性仍在验证。</p></div>
+        <div class="principle-grid">
+          <article class="principle"><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 28 28" fill="none"><rect x="4.5" y="6.5" width="19" height="15" rx="3"/><path d="M9 11v6m5-6v6m5-6v6"/></svg></span><div><h3>用短码核验彼此</h3><p>一端显示配对码，另一端输入。双方分别确认记住设备，核验完成也不会自动开启键鼠。</p></div></article>
+          <article class="principle"><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 28 28" fill="none"><rect x="2.5" y="7" width="10" height="10" rx="1.5"/><rect x="16" y="10" width="9.5" height="10" rx="1.5"/><path d="M7.5 17v4m-3 0h6m10-1v3m-3 0h6M13 11h3"/></svg></span><div><h3>按桌面的方向摆好主屏</h3><p>左、右、上、下，选择另一台电脑所在的方向。当前范围是两台电脑、每台一个主显示器。</p></div></article>
+          <article class="principle"><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 28 28" fill="none"><path d="m14 3 9 4v7c0 5-4.5 8.4-9 11-4.5-2.6-9-6-9-11V7l9-4Z"/><path d="m10 14 3 3 5-6"/></svg></span><div><h3>连接与控制，分别同意</h3><p>本机是否接收控制，由本机独立设置。检查系统权限后，仍需明确确认本次键鼠协同。</p></div></article>
+          <article class="principle"><span class="feature-icon" aria-hidden="true"><svg viewBox="0 0 28 28" fill="none"><path d="M6 10a9 9 0 1 1-1 8M6 4v6h6"/><path d="M12 10h5v8h-5z"/></svg></span><div><h3>停止与恢复，始终有入口</h3><p>固定的停止、紧急恢复入口与快捷键。恢复未确认时保留提示，并阻止新的键鼠会话。</p></div></article>
+        </div>
+      </section>
+
+      <section class="setup-section section-space" aria-labelledby="setup-title">
+        <div class="wrap"><div class="section-heading"><p class="eyebrow">从两台电脑开始</p><h2 id="setup-title">三步，理清连接的顺序。</h2><p>先核验，再摆放，最后决定是否开启键鼠。</p></div>
+          <ol class="setup-steps">
+            <li><span class="step-number" aria-hidden="true">01</span><h3>打开两端，核验彼此</h3><p>连接同一 Wi-Fi 或局域网。任选一端显示配对码，另一端输入；两边分别确认记住设备。</p><span class="step-note">记住设备 ≠ 开启控制</span></li>
+            <li><span class="step-number" aria-hidden="true">02</span><h3>把主屏放在对应方向</h3><p>按桌面上的实际位置摆好方向。另一端设置相反方向；示意布局不代表真实屏幕尺寸。</p><span class="step-note">两台电脑 · 四个相对方向</span></li>
+            <li><span class="step-number" aria-hidden="true">03</span><h3>检查权限，明确开启</h3><p>确认两端的接收选择，检查实际使用程序的权限，再明确开启本次键鼠协同。</p><span class="step-note"><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Esc</kbd> 请求紧急恢复</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="progress-section section-space wrap" id="progress" aria-labelledby="progress-title">
+        <div class="section-heading split-heading"><div><p class="eyebrow">公开说明进度</p><h2 id="progress-title">已有的，和还在路上的。</h2></div><p class="section-intro">Linko 正在逐项验证协作能力。界面与流程已实现，不代表已完成真实双机验收。</p></div>
+        <div class="progress-grid">
+          <article class="progress-card progress-now"><span class="stage-label">现在<span>开发版已实现流程</span></span><h3>先让两台电脑<br>彼此认识。</h3><ul><li>短码核验与双方记住设备</li><li>主屏相对方向与中文工作区</li><li>独立权限检查、明确开启与停止恢复入口</li></ul><p class="progress-foot">真实双机键鼠、DPI 与兼容性仍在验收。</p></article>
+          <article class="progress-card"><span class="stage-label">接下来<span>继续验证与接通</span></span><h3>把基础验证做完整，<br>再扩展协作。</h3><ul><li>真实 Windows ↔ macOS 双机验证</li><li>系统剪贴板与文件收发尚未接通</li><li>全局鼠标手势尚未接通</li></ul><p class="progress-foot">内容共享与动作能力将分别授权。</p></article>
+          <article class="progress-card"><span class="stage-label">未来<span>研究与规划</span></span><h3>探索更广的<br>工作空间。</h3><ul><li>更完整的多屏与音频协作</li><li>远程窗口与工作空间</li><li>移动端控制方式</li></ul><p class="progress-foot">方向会随验证结果调整，没有发布时间承诺。</p></article>
+        </div>
+      </section>
+
+      <section class="preview-section section-space" id="preview" aria-labelledby="preview-title">
+        <div class="wrap"><div class="preview-heading"><div><p class="eyebrow">参与开发预览</p><h2 id="preview-title">从一次小范围试用开始。</h2><p>目前没有正式稳定版。开发包适合愿意参与验证的用户；真实双机验收尚未完成。</p></div><span class="version-label" data-release-version>0.3.16-dev</span></div>
+          <div class="download-grid">
+            <article class="download-card" data-platform="macos"><span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 44 36" fill="none"><rect x="8" y="3" width="28" height="22" rx="2"/><path d="m8 25-5 5h38l-5-5M17 30h10"/></svg></span><h3>macOS <span>Apple 芯片</span></h3><p>macOS 实验构建，保留完整应用包使用。</p><a class="button button-download" data-download-link aria-label="在 GitHub 查看 macOS Apple 芯片开发包，下载需登录" href="https://github.com/ForceMind/Linko/actions/runs/42382394527/artifacts/13578905150" target="_blank" rel="noopener noreferrer">GitHub 开发包<span aria-hidden="true">↗</span></a><details class="checksum" data-checksum-box hidden><summary>查看 GitHub 产物 ZIP 校验摘要</summary><span>SHA-256</span><code data-checksum></code></details></article>
+            <article class="download-card" data-platform="windows"><span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 44 36" fill="none"><rect x="4" y="3" width="36" height="23" rx="2"/><path d="M22 26v7m-8 0h16"/></svg></span><h3>Windows <span>x64</span></h3><p>Windows 便携开发包，解压后保留包内文件。</p><a class="button button-download" data-download-link aria-label="在 GitHub 查看 Windows x64 开发包，下载需登录" href="https://github.com/ForceMind/Linko/actions/runs/42382394527/artifacts/13577989202" target="_blank" rel="noopener noreferrer">GitHub 开发包<span aria-hidden="true">↗</span></a><details class="checksum" data-checksum-box hidden><summary>查看 GitHub 产物 ZIP 校验摘要</summary><span>SHA-256</span><code data-checksum></code></details></article>
+          </div>
+          <div class="download-notes"><p><strong>下载需要 GitHub 登录。</strong>本站提供开发包入口，不托管原生安装包。开发包尚未完成正式签名与 macOS 公证；请保留系统安全防护。</p><p class="linux-note" data-platform="linux">Linux 当前仅支持通信与界面诊断，尚无原生键鼠支持。<a data-download-link href="https://github.com/ForceMind/Linko/actions/runs/42382394527" target="_blank" rel="noopener noreferrer">查看 GitHub 诊断开发包 ↗</a></p></div>
+        </div>
+      </section>
+
+      <section class="faq-section section-space wrap" id="questions" aria-labelledby="faq-title">
+        <div class="faq-heading"><p class="eyebrow">开始之前</p><h2 id="faq-title">你可能想问。</h2><p>更具体的操作与限制，见 <a href="https://github.com/ForceMind/Linko/blob/cb27bce72ece205f138180fd1b6ef0c8cbf0764f/README.md" target="_blank" rel="noopener noreferrer">项目说明 ↗</a>。</p></div>
+        <div class="faq-list">
+          <details><summary>现在适合直接作为日常主力工具吗？<span aria-hidden="true">＋</span></summary><p>目前仍是开发预览。真实 Windows ↔ macOS 键鼠、不同 DPI、权限变化和恢复行为还在验收中。请先在可中断的场景验证，不把开发进度当作稳定可用的承诺。</p></details>
+          <details><summary>两台电脑需要使用同一种系统吗？<span aria-hidden="true">＋</span></summary><p>Linko 面向 Windows 与 macOS 的局域网协同。当前首版范围是两台电脑、每台一个主显示器；Linux 目前仅用于通信与界面诊断。真实跨系统键鼠体验仍在验证。</p></details>
+          <details><summary>记住设备后，对方就能控制我吗？<span aria-hidden="true">＋</span></summary><p>不会。设备登记与使用许可分别处理。本机是否接收对方控制，由本机单独选择；启动键鼠协同还需要权限检查与本次明确确认。连接成功也不会开放剪贴板或文件权限。</p></details>
+          <details><summary>剪贴板、文件和跨屏拖拽能用了吗？<span aria-hidden="true">＋</span></summary><p>系统剪贴板、生产文件收发与原生文件跨屏拖拽尚未接通。音频、多屏、远程窗口、工作空间与移动控制仍是后续研究或规划，不是当前开发包的能力。</p></details>
+          <details><summary>需要注册账号吗？为什么下载会打开 GitHub？<span aria-hidden="true">＋</span></summary><p>App 的局域网协作不需要应用账号。当前开发包通过 GitHub 构建产物提供，下载需要 GitHub 登录。构建产物可能受保留期限影响；入口不可用时，可查看项目构建记录或在项目问题页反馈。</p></details>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer"><div class="wrap footer-inner"><a class="brand footer-brand" href="#product" aria-label="Linko 屏跃，回到首页"><img src="./assets/linko-mark.svg" alt="" width="32" height="32"><span class="brand-name">Linko<span class="brand-cn">屏跃</span></span></a><p>两台电脑，各自独立，顺手协作。</p><nav aria-label="页脚导航"><a href="https://github.com/ForceMind/Linko" target="_blank" rel="noopener noreferrer">GitHub ↗</a><a href="https://github.com/ForceMind/Linko/issues" target="_blank" rel="noopener noreferrer">反馈与建议 ↗</a><a href="https://github.com/ForceMind/Linko/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT 许可证 ↗</a></nav><small>© 2026 Linko / 屏跃</small></div></footer>
+  </body>
+</html>

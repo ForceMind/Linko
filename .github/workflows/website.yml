@@ -1,0 +1,31 @@
+name: Official website checks
+on:
+  pull_request:
+    paths:
+      - website/**
+      - .github/workflows/website.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build public assets only
+        run: npm run build
+        env:
+          SITE_ORIGIN: https://linko-63e.pages.dev
+      - name: Check links, hashes, Chinese pages and publication boundary
+        run: npm run check
+      - run: node --check src/main.js
