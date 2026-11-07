@@ -413,11 +413,10 @@ impl App {
             } else {
                 Tone::Neutral
             };
-            let connection_text = desktop_style::status_text(connection, self.config.dark, tone)
-                .font(egui::FontId::new(
-                    18.0,
-                    egui::FontFamily::Name("linko-semibold".into()),
-                ));
+            let connection_text =
+                desktop_style::status_text(connection, self.config.dark, tone).font(
+                    egui::FontId::new(18.0, egui::FontFamily::Name("linko-semibold".into())),
+                );
             if self.child.is_some() {
                 ui.horizontal(|ui| {
                     let width = (ui.available_width() - 120.0).max(1.0);
