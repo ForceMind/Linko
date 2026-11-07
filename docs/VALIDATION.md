@@ -1966,3 +1966,15 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 0.3.15功能候选d45f7a1通过完整五项42369775070、资源42369775057及上游42369775059；Linko.app/Linko.exe与两端包均已核验，但用户明确指出实图离参考图很远，因此这些通过不能当作视觉还原完成。旧基线与包保留。
 
 新分支linko-visual-fidelity基于d45f7a1，候选0.3.16使用正式透明设备素材、真实400/550/650字重、1280×800布局、设备信息卡和右三层模块；主区输入/接收状态与真实数据绑定，未实现功能仍灰色说明。图像一次进程解码、每上下文缓存，不在每次绘制重新解码。模型测试使用实际字体/主题。截图改直接捕获CI拥有的唯一XID，不拍整张root桌面、不后期修饰；15项截图所有权与边界Python回归通过。新Rust/缓存回归、180秒资源及实际窗口截图仍待CI，不能先宣称视觉达标。
+
+### 0.3.16代码与实图记录：cb27bce
+
+代码cb27bce72ece205f138180fd1b6ef0c8cbf0764f通过[完整五项42382394527](https://github.com/ForceMind/Linko/actions/runs/42382394527)、[两平台资源42382394470](https://github.com/ForceMind/Linko/actions/runs/42382394470)及[固定上游42382394530](https://github.com/ForceMind/Linko/actions/runs/42382394530)。包括严格fmt/Clippy、locked工作区test/build、最低Rust1.95、审计、进程/重连/配对/实际worker、Mac并行GUI和退出/隐藏/停止，字体/纹理缓存及新弹窗可见性回归。180秒资源观察通过不证明8h/24h或6.83GB根因。
+
+六张同源原生窗口PNG已核对，标准1280×800、紧凑920×700完整显示布局页设备卡与协作能力；新添加弹窗的准备/关闭均可见，打开仍未创建身份。图像为自有XID原始像素，无桌面黑边或后期修饰；数据来自隔离NoNative配置。摘要见ignored target/local-validation/linko-cb27bce-native-images/review-manifest.json，标准图SHA256 ab7630f0eb3621672c8803607e56b3625a0c30ddab77582fcdd8ea7c33f89ca5，紧凑图eed1bd972731fd44266e5a4919d51b3c4cb0ebad0400ef439b3103f6c45cf256。已对照设备素材、字重、Shell、信息卡和完整性；不声称全部像素一致或用户已接受。
+
+两端Linko包已核验同run/head、外层digest/内层checksum、CRC/路径、0.3.16版本、MIT及394项notice、Win PE和worker入口。Mac原包及未改复制件strict seal退出0，复制件plist/helper篡改均被拒绝且原包不变。Mac ZIP SHA256 d49a41aa00a79a7cf9303f2fa665928525a8698448e2a0b7bf1dceab604edc5b，Windows 759e298fd66a5f39f1b0df43a6033d92c1b609a9d89d468c9cb7b6817145a7b1；记录在ignored target/local-validation/linko-cb27bce-packages/verification-final.json。未启动程序/迁移TCC或身份。
+
+过程失败保留：测试模块上下文引用/弃用API已修；实图发现顶栏过高、导航重叠、列宽和首屏截断，均按原生图修复；严格Clippy唯一RGBA迭代告警用稳定API修正，未allow。Windows新增截图测试误把POSIX权限位当跨平台保证，现全平台仍断言O_EXCL/mode参数，POSIX才断言实际权限位；生产Linux门与所有权/原字节断言不变。字体引入的初始配对弹窗挤压经实际图和新模型修复，原流程/同意/取消不改。
+
+保留差异：真实两台/未知系统/未接通能力，未照搬参考的第三台、假延迟、传输或已开开关；Linux/X11与macOS参考的窗口Chrome不同。宿主人工Win/Mac界面与物理C06、生产数据/G1、多屏和窗口桥仍未完成。本机Rust缺失、浏览器未验、#10/6.83GB根因未知，MIT与内部身份/v5兼容保持。主线未合并，未发布稳定版。
