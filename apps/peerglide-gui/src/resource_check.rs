@@ -501,9 +501,8 @@ mod tests {
     use super::*;
     #[test]
     fn startup_failure_class_never_formats_private_sdk_payload() {
-        let error = eframe::Error::AppCreation(
-            std::io::Error::other("private host path marker").into(),
-        );
+        let error =
+            eframe::Error::AppCreation(std::io::Error::other("private host path marker").into());
         assert_eq!(startup_failure(&error), "startup_failed");
     }
     fn fixture(root: &Path) -> Result<(PathBuf, PathBuf, PathBuf)> {

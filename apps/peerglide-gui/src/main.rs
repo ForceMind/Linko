@@ -1524,7 +1524,10 @@ fn main() -> eframe::Result<()> {
         }),
     );
     if let (true, Err(error)) = (resource_diagnostic, &result) {
-        eprintln!("PG-CI-GUI-STARTUP:{}", resource_check::startup_failure(error));
+        eprintln!(
+            "PG-CI-GUI-STARTUP:{}",
+            resource_check::startup_failure(error)
+        );
     }
     result
 }
