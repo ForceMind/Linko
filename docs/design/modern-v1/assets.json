@@ -1,0 +1,29 @@
+{
+  "design_version": "modern-v1",
+  "status": "visual_proposal_not_runtime",
+  "generator": "built-in image_gen",
+  "date": "2026-11-07",
+  "assets": [
+    {
+      "path": "brand/app-icon-concept.png",
+      "sha256": "d74c5f47bb7bbb8fa82bae8255d8d9ee3759674381d7856ec069df33348d337d",
+      "width": 1254,
+      "height": 1254,
+      "png_color_type": 6
+    },
+    {
+      "path": "effects/device-hub.png",
+      "sha256": "4d809e95e65407546efbac03fb8d15ff6c44e6fe76573dced47801059bbf06f3",
+      "width": 1586,
+      "height": 992,
+      "png_color_type": 2
+    },
+    {
+      "path": "effects/add-computer.png",
+      "sha256": "96a2ef311d4dd648f4bc462288a1d76855399a8ca6159f444a8ac37021c14ff0",
+      "width": 1585,
+      "height": 992,
+      "png_color_type": 2
+    }
+  ]
+}
