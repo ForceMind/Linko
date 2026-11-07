@@ -26,7 +26,7 @@ fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
     }
     let mut minimum = [width, height];
     let mut maximum = [0, 0];
-    for (index, pixel) in icon.rgba.chunks_exact(4).enumerate() {
+    for (index, pixel) in icon.rgba.as_chunks::<4>().0.iter().enumerate() {
         if pixel[3] >= 160 {
             let x = index % width;
             let y = index / width;
