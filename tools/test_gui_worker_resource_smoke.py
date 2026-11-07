@@ -65,11 +65,14 @@ class ResourceCheck(unittest.TestCase):
                 patch.dict(os.environ, {"CI": "true", "DISPLAY": ":99"}), \
                 patch.object(check.sys, "platform", "linux"), \
                 patch.object(check.subprocess, "check_output", side_effect=self.owner_query) as query, \
-                patch.object(check.subprocess, "run", side_effect=capture) as run:
+                patch.object(check.subprocess, "run", side_effect=capture) as run, \
+                patch.object(check.os, "open", wraps=os.open) as create:
             path = Path(folder) / "app.png"
             self.assertEqual(check.capture_owned_window(self.gui(), path), "12345")
+            create.assert_called_once_with(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             self.assertEqual(path.read_bytes(), data)
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            if os.name == "posix":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             self.assertEqual(query.call_count, 4, "ownership must be checked before and after capture")
             self.assertEqual(run.call_count, 1)
 
