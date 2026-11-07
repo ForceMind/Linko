@@ -3,10 +3,10 @@ resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.3.14-dev"
+version = "0.3.15-dev"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/ForceMind/PeerGlide"
+repository = "https://github.com/ForceMind/Linko"
 
 [workspace.dependencies]
 anyhow = "1"

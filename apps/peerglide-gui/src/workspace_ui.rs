@@ -54,14 +54,26 @@ impl App {
     }
 
     pub(super) fn device_workspace(&mut self, ui: &mut egui::Ui) {
-        ui.heading(
-            RichText::new(if self.page == Page::Devices {
-                "设备"
-            } else {
-                "屏幕布局"
-            })
-            .size(26.0),
-        );
+        ui.horizontal_wrapped(|ui| {
+            ui.heading(
+                RichText::new(if self.page == Page::Devices {
+                    "设备"
+                } else {
+                    "屏幕布局"
+                })
+                .size(26.0),
+            );
+            if ui
+                .small_button(if self.connection_details_open {
+                    "收起连接详情"
+                } else {
+                    "连接与身份详情"
+                })
+                .clicked()
+            {
+                self.connection_details_open = !self.connection_details_open;
+            }
+        });
         ui.weak(if self.page == Page::Devices {
             "管理已记住的电脑与独立协作许可。"
         } else {
@@ -114,26 +126,14 @@ impl App {
             ui.add_space(12.0);
             self.workspace_device_detail(ui);
         }
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
-            if self.page == Page::Displays {
-                ui.small(if self.child.is_some() {
-                    "会话中布局已锁定，停止后可以调整。"
-                } else {
-                    "两台主屏的相对方向；另一端需设置相反方向。"
-                });
-            }
-            if ui
-                .small_button(if self.connection_details_open {
-                    "收起连接详情"
-                } else {
-                    "连接与身份详情"
-                })
-                .clicked()
-            {
-                self.connection_details_open = !self.connection_details_open;
-            }
-        });
+        if self.page == Page::Displays {
+            ui.add_space(8.0);
+            ui.small(if self.child.is_some() {
+                "会话中布局已锁定，停止后可以调整。"
+            } else {
+                "两台主屏的相对方向；另一端需设置相反方向。"
+            });
+        }
     }
 
     fn workspace_screen_card(&mut self, ui: &mut egui::Ui) {
@@ -194,14 +194,57 @@ impl App {
                 ui.weak("添加电脑后，把它拖到这台电脑的左、右、上或下方。");
             }
         });
+        ui.add_space(10.0);
+        self.workspace_device_cards(ui);
+    }
+
+    fn workspace_device_cards(&mut self, ui: &mut egui::Ui) {
+        let registered = self.config.fingerprint.is_some();
+        ui.columns(if registered { 2 } else { 1 }, |columns| {
+            if roster_item(
+                &mut columns[0],
+                desktop_ui::local_device_name(),
+                "本机 · 主屏示意",
+                !self.workspace_peer_selected || !registered,
+                true,
+            )
+            .clicked()
+            {
+                self.workspace_peer_selected = false;
+                self.screen_drag = None;
+            }
+            if registered {
+                let status = if self.pairing_pending() {
+                    "核验尚未完成"
+                } else if self.stopping.is_some() {
+                    "正在断开"
+                } else if self.connected && self.child.is_some() {
+                    "已连接 · 主屏示意"
+                } else {
+                    "未连接 · 主屏示意"
+                };
+                if roster_item(
+                    &mut columns[1],
+                    &self.config.peer_name,
+                    status,
+                    self.workspace_peer_selected,
+                    false,
+                )
+                .clicked()
+                {
+                    self.workspace_peer_selected = true;
+                    self.screen_drag = None;
+                }
+            }
+        });
     }
 
     fn workspace_canvas(&mut self, ui: &mut egui::Ui) {
         let registered = self.config.fingerprint.is_some();
         let height = if ui.available_width() < 440.0 {
-            220.0
+            190.0
         } else {
-            285.0
+            265.0
         };
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
@@ -332,33 +375,17 @@ impl App {
 
     fn workspace_device_detail(&mut self, ui: &mut egui::Ui) {
         let peer = self.workspace_peer_selected && self.config.fingerprint.is_some();
-        card(ui).show(ui, |ui| {
+        card(ui).inner_margin(14.0).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
             ui.set_min_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                ui.strong(if peer {
-                    &self.config.peer_name
-                } else {
-                    desktop_ui::local_device_name()
-                });
-                pill(
-                    ui,
-                    if peer && self.pairing_pending() {
-                        "核验待完成"
-                    } else if peer {
-                        "已记住"
-                    } else {
-                        "本机"
-                    },
-                    Tone::Neutral,
-                );
-            });
-            ui.add_space(10.0);
+            ui.strong("快捷操作");
+            ui.add_space(6.0);
             let view = self.workspace_view();
             pill(ui, view.title, view.tone);
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             ui.add(egui::Label::new(RichText::new(view.detail).small()).truncate())
                 .on_hover_text(view.detail);
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             let allowed = match view.action {
                 desktop_state::Action::AddDevice | desktop_state::Action::Connect => {
                     self.idle_writable()
@@ -379,9 +406,31 @@ impl App {
                     self.workspace_action(view.action);
                 }
             }
-            ui.add_space(12.0);
+            if self.child.is_some() && ui.button("停止并断开").clicked() {
+                self.stop();
+            }
+            ui.add_space(6.0);
             ui.separator();
-            ui.add_space(10.0);
+            ui.small("所选设备");
+            ui.horizontal_wrapped(|ui| {
+                ui.strong(if peer {
+                    &self.config.peer_name
+                } else {
+                    desktop_ui::local_device_name()
+                });
+                pill(
+                    ui,
+                    if peer && self.pairing_pending() {
+                        "核验待完成"
+                    } else if peer {
+                        "已记住"
+                    } else {
+                        "本机"
+                    },
+                    Tone::Neutral,
+                );
+            });
+            ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label("键鼠");
                 if self.child.is_some() || self.stopping.is_some() || self.recovery_blocked {
@@ -390,7 +439,7 @@ impl App {
                     pill(ui, "尚未开启", Tone::Neutral);
                 }
             });
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             if !peer {
                 let readiness = self.worker_permissions.readiness();
                 ui.horizontal_wrapped(|ui| {
@@ -405,22 +454,23 @@ impl App {
                     };
                     pill(ui, label, tone);
                 });
-                if matches!(
+                if !matches!(
                     readiness,
                     worker_permissions::Readiness::Unchecked
                         | worker_permissions::Readiness::Checking
                         | worker_permissions::Readiness::Ready
                 ) {
-                    ui.small("仅检查，不会开启键鼠")
-                        .on_hover_text(readiness.detail());
-                } else {
                     ui.small(readiness.detail());
                 }
-                if ui.small_button("系统权限详情").clicked() {
-                    self.navigate_to(Page::Settings);
-                    self.settings_section = SettingsSection::Permissions;
-                }
-                ui.add_space(8.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.small("仅检查，不开启键鼠")
+                        .on_hover_text(readiness.detail());
+                    if ui.small_button("权限详情").clicked() {
+                        self.navigate_to(Page::Settings);
+                        self.settings_section = SettingsSection::Permissions;
+                    }
+                });
+                ui.add_space(6.0);
             }
             ui.horizontal_wrapped(|ui| {
                 ui.label(if peer {
@@ -451,15 +501,15 @@ impl App {
                     self.device_tab = DeviceTab::Permissions;
                 }
             });
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.weak("内容共享");
                 pill(ui, "尚未接通", Tone::Neutral);
-                if ui.small_button("查看说明").clicked() {
+                if ui.small_button("说明").clicked() {
                     self.navigate_to(Page::Transfers);
                 }
             });
-            ui.add_space(8.0);
+            ui.add_space(6.0);
             ui.small(if peer {
                 "对方是否允许接收控制，由它独立设置；连接成功不会自动授予权限。"
             } else {
@@ -494,7 +544,17 @@ fn roster_item(
         .color(color);
     let response = ui.add_sized(
         [ui.available_width(), 62.0],
-        egui::Button::new(label).selected(selected).fill(background),
+        egui::Button::new(label)
+            .selected(selected)
+            .fill(background)
+            .stroke(egui::Stroke::new(
+                1.0,
+                if selected {
+                    ui.visuals().selection.bg_fill
+                } else {
+                    ui.visuals().widgets.noninteractive.bg_stroke.color
+                },
+            )),
     );
     response.on_hover_text(name)
 }
@@ -550,6 +610,7 @@ mod tests {
         let mut app = App::load(fixture.path.clone());
         let ctx = egui::Context::default();
         install_fonts(&ctx);
+        app.theme(&ctx);
         for paired in [false, true] {
             app.config.fingerprint = paired.then(|| "view-only-not-authentication".into());
             for size in [Vec2::new(920.0, 700.0), Vec2::new(1180.0, 820.0)] {
@@ -560,15 +621,22 @@ mod tests {
                     },
                     |root| app.desktop(root),
                 );
-                for label in ["内容共享", "连接与身份详情"] {
-                    let (clip, rect) = output
-                        .shapes
-                        .iter()
-                        .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)))
-                        .context("essential workspace control absent")?;
+                let controls: Vec<_> = ["快捷操作", "所选设备", "内容共享", "连接与身份详情"]
+                    .into_iter()
+                    .map(|label| {
+                        let bounds = output
+                            .shapes
+                            .iter()
+                            .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)));
+                        (label, bounds)
+                    })
+                    .collect();
+                output.drop_without_applying_deltas();
+                for (label, bounds) in controls {
+                    let (clip, rect) = bounds
+                        .with_context(|| format!("{label} absent at {size:?}, paired={paired}"))?;
                     assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");
                 }
-                output.drop_without_applying_deltas();
                 assert!(app.child.is_none() && !app.config.native && !app.config.allow);
             }
         }
@@ -615,6 +683,49 @@ mod tests {
             )
             .drop_without_applying_deltas();
         }
+    }
+    #[test]
+    fn topology_device_cards_change_selection_without_writing_trust_layout_or_grants() -> Result<()>
+    {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.config.fingerprint = Some("device-card-presentation-only".into());
+        app.config.peer_name = "已登记电脑".into();
+        let original = app.config.clone();
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
+        app.theme(&ctx);
+        for (label, selected) in [
+            ("○  已登记电脑\n未连接 · 主屏示意".to_owned(), true),
+            (
+                format!(
+                    "●  {}\n本机 · 主屏示意",
+                    desktop_ui::local_device_name()
+                        .chars()
+                        .take(12)
+                        .collect::<String>()
+                ),
+                false,
+            ),
+        ] {
+            let output = frame(&mut app, &ctx, vec![]);
+            let at = output
+                .shapes
+                .iter()
+                .find_map(|s| text_center(&s.shape, &label))
+                .context("actual topology device card absent")?;
+            output.drop_without_applying_deltas();
+            click(&mut app, &ctx, at);
+            assert_eq!(app.workspace_peer_selected, selected);
+            assert!(app.config == original && app.child.is_none());
+            assert!(!app.worker_permissions.needs_poll() && !app.native_confirmation);
+        }
+        assert!(
+            !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
+        );
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
     #[test]
     fn recovery_and_pending_receipts_lock_layout_after_the_worker_exits() -> Result<()> {

@@ -17,12 +17,15 @@ import tempfile
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+PRODUCT_NAME = "Linko"
+APP_BUNDLE_NAME = PRODUCT_NAME + ".app"
+APP_DISPLAY_NAME = "Linko · 屏跃"
 APP_IDENTIFIER = "com.peerglide.PeerGlide"
 WORKER_IDENTIFIER = APP_IDENTIFIER + ".worker"
 
 
 def bundle_info(version):
-    return {"CFBundleName": "PeerGlide", "CFBundleDisplayName": "屏跃",
+    return {"CFBundleName": PRODUCT_NAME, "CFBundleDisplayName": APP_DISPLAY_NAME,
             "CFBundleIdentifier": APP_IDENTIFIER, "CFBundleVersion": version.split("-")[0],
             "CFBundleShortVersionString": version.split("-")[0], "CFBundlePackageType": "APPL",
             "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,
@@ -50,7 +53,9 @@ def verify_macos_bundle_metadata(app, run):
     """
     contents = app / "Contents"
     info = plistlib.loads((contents / "Info.plist").read_bytes())
-    if (info.get("CFBundleIdentifier") != APP_IDENTIFIER
+    if (info.get("CFBundleName") != PRODUCT_NAME
+            or info.get("CFBundleDisplayName") != APP_DISPLAY_NAME
+            or info.get("CFBundleIdentifier") != APP_IDENTIFIER
             or info.get("CFBundleExecutable") != "peerglide-gui"
             or info.get("CFBundlePackageType") != "APPL"):
         raise RuntimeError("staging app bundle identity metadata mismatch")
@@ -86,13 +91,16 @@ def _stage_bundle(root, bundle, system, version, run):
     bundle.mkdir()
     binary_dir = bundle
     if system == "Darwin":
-        contents = bundle / "PeerGlide.app" / "Contents"
+        contents = bundle / APP_BUNDLE_NAME / "Contents"
         binary_dir = contents / "MacOS"
         binary_dir.mkdir(parents=True)
         (contents / "Info.plist").write_bytes(plistlib.dumps(bundle_info(version)))
     suffix = ".exe" if system == "Windows" else ""
-    for name in ("peerglide", "peerglide-gui"):
-        shutil.copy2(root / "target" / "release" / (name + suffix), binary_dir)
+    gui_entry = "peerglide-gui" if system == "Darwin" else ("Linko.exe" if system == "Windows" else "linko")
+    # Rename only new staging output. The compiled bin and sibling worker names
+    # remain compatible with existing builds and current_exe().with_file_name().
+    shutil.copy2(root / "target" / "release" / ("peerglide" + suffix), binary_dir)
+    shutil.copy2(root / "target" / "release" / ("peerglide-gui" + suffix), binary_dir / gui_entry)
     for name in ("README.md", "LICENSE", "SECURITY.md"):
         shutil.copy2(root / name, bundle)
     shutil.copytree(root / "docs", bundle / "docs")
@@ -100,8 +108,15 @@ def _stage_bundle(root, bundle, system, version, run):
         cwd=root, check=True)
     signing = ("macOS bundle uses local ad-hoc integrity signatures only; no Developer ID publisher identity or notarization.\n"
                if system == "Darwin" else "Windows/Linux archive has no authenticated publisher signature or notarization.\n")
+    launch = ("Open Linko.app; keep its GUI and peerglide worker together inside Contents/MacOS.\n"
+              if system == "Darwin" else
+              "Launch Linko.exe; keep peerglide.exe in the same directory.\n"
+              if system == "Windows" else
+              "Launch ./linko; keep ./peerglide in the same directory. Linux supports GUI/communication diagnostics, not native input.\n")
     (bundle / "PROTOTYPE.txt").write_text(
-        "Experimental prototype with no authenticated publisher identity. Launch peerglide-gui with the CLI beside it.\n"
+        "Linko experimental prototype with no authenticated publisher identity.\n"
+        + launch
+        + "Existing configuration, device identities and protocol identifiers are not migrated or replaced by packaging.\n"
         "Physical Windows/macOS dual-machine acceptance remains pending.\n"
         + signing
         + "Windows archive is portable, not an installer.\n"
@@ -110,7 +125,7 @@ def _stage_bundle(root, bundle, system, version, run):
         encoding="utf-8")
     if system == "Darwin":
         # All app contents exist before signing. Never modify the app after this.
-        sign_macos_bundle(bundle / "PeerGlide.app", run)
+        sign_macos_bundle(bundle / APP_BUNDLE_NAME, run)
 
 
 def build_package(root=ROOT, system=None, machine=None, run=None):
@@ -123,7 +138,7 @@ def build_package(root=ROOT, system=None, machine=None, run=None):
     if match is None:
         raise ValueError("workspace version is missing")
     version = match.group(1)
-    label = f"PeerGlide-{version}-{system.lower()}-{machine.lower()}"
+    label = f"{PRODUCT_NAME}-{version}-{system.lower()}-{machine.lower()}"
     dist = root / "dist"
     archive = dist / (label + ".zip")
     checksum = archive.with_suffix(".zip.sha256")

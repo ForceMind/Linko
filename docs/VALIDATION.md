@@ -189,7 +189,7 @@ suppression state is resumed; no new pairing/discovery mechanism is claimed.
 
 
 P04 final candidate `3c5b82f8ead0a27b65cd5d5dc9b050ae466ba7e1` passed the complete
-Windows/macOS/Linux matrix in [run 41393650378](https://github.com/ForceMind/PeerGlide/actions/runs/41393650378),
+Windows/macOS/Linux matrix in [run 41393650378](https://github.com/ForceMind/Linko/actions/runs/41393650378),
 including reconnect/pin-replacement/stop smoke and platform package construction.
 Squash merge `f5c8505fe8f161a946e12f684e593037df525f3e` has the identical tested tree.
 This does not validate native physical input, interface changes or suspend.
@@ -235,7 +235,7 @@ C06 acceptance remain pending. See GESTURES.md for scope, limits and reproductio
 
 
 G02 final candidate `36ee7e8dcf8c02b4c07c3d14133a198406e4b82e` passed complete
-Windows/macOS/Linux CI [41578198350](https://github.com/ForceMind/PeerGlide/actions/runs/41578198350),
+Windows/macOS/Linux CI [41578198350](https://github.com/ForceMind/Linko/actions/runs/41578198350),
 including explicit synthetic metrics, macOS GUI stress, process smokes and packages.
 Squash merge `e3656fe7d01cd5e815fb518d9139577b7be9ab6f` has the identical tested tree.
 This does not change any human/physical acceptance gate.
@@ -265,7 +265,7 @@ hardening are still pending; see SECURITY.md. No hardware acceptance is claimed.
 
 
 P01 final candidate `c5b0fad08aa29fd00aa5ed72504544acf73dbaf0` passed complete
-Windows/macOS/Linux CI [41579175459](https://github.com/ForceMind/PeerGlide/actions/runs/41579175459).
+Windows/macOS/Linux CI [41579175459](https://github.com/ForceMind/Linko/actions/runs/41579175459).
 Squash merge `302cecee256696620844a2011d7ba21d7cb7695e` has the identical tested tree.
 This includes revoke invalidation of pending confirmation; OS keystore/ACL and
 physical acceptance remain separate.
@@ -463,7 +463,7 @@ local Rust installation; continue source development and hosted CI only.
 
 
 D03 durable-reservation code candidate `bc304939f06ba06920c0c7bdac739c8524752b98`
-passed all five jobs in run [41788814220](https://github.com/ForceMind/PeerGlide/actions/runs/41788814220):
+passed all five jobs in run [41788814220](https://github.com/ForceMind/Linko/actions/runs/41788814220):
 Windows/macOS/Linux fmt, strict Clippy, workspace tests, Release build, real process
 probe/reconnect, notice checks and packages; isolated Linux GUI smoke; macOS
 isolated/20-parallel GUI stress; Rust 1.95 all-target check and strict dependency
@@ -528,7 +528,7 @@ permission/isolation flaw was found by that review; execution CI remains require
 ### Joint candidate / real Mac isolated launch evidence
 
 Combined source candidate `c933ba2f32794223faff0fa2e912b97cbaeb1b4b` passed all
-five jobs in [41790024756](https://github.com/ForceMind/PeerGlide/actions/runs/41790024756),
+five jobs in [41790024756](https://github.com/ForceMind/Linko/actions/runs/41790024756),
 including strict workspace checks/tests, Release build/link, process smokes,
 Linux explicit-profile GUI/export smoke, macOS GUI stress, Rust 1.95 and strict
 audit. Storage-only final candidate `2d2bed5c42361f6c6ea940e2876a1fcad744648f`
@@ -582,7 +582,7 @@ are pending. No physical input acceptance or global G1 enablement is claimed.
 
 
 Chinese source candidate `d3891c6108590bc438dda9723abfa27944547342` passed all
-five jobs in [41798545549](https://github.com/ForceMind/PeerGlide/actions/runs/41798545549):
+five jobs in [41798545549](https://github.com/ForceMind/Linko/actions/runs/41798545549):
 three-platform fmt/strict Clippy/workspace tests/Release build/process smokes/
 packages, Linux actual Chinese GUI/export smoke, macOS isolated/parallel GUI
 stress, Rust 1.95 and strict audit. Downloaded and inspected Home/lab screenshots
@@ -644,7 +644,7 @@ results and retain native result codes only when a foreground exists. The output
 field allowlist was strengthened, not replaced with a fake success or skipped test.
 
 Final runtime/test candidate `31ae8be796fc32f5a3dd2f44974e525d88aa67b2` passed
-all five jobs in [41806308409](https://github.com/ForceMind/PeerGlide/actions/runs/41806308409):
+all five jobs in [41806308409](https://github.com/ForceMind/Linko/actions/runs/41806308409):
 Windows/macOS/Linux fmt/strict Clippy/workspace tests/Release/process probe/reconnect/
 read-only context smoke/packages; Linux GUI; macOS stress; Rust 1.95; strict audit.
 The focused static reviewer rechecked NSString bounds, FFI ownership/signature and
@@ -715,7 +715,7 @@ failing smoke outcome; constructor/pump cleanup failures preserve that result.
 ### Native observer/binding runtime candidate
 
 Candidate `70bba447302d12c4168c583c5e1c01ef5f28114b` passed all five jobs in
-[41818463792](https://github.com/ForceMind/PeerGlide/actions/runs/41818463792):
+[41818463792](https://github.com/ForceMind/Linko/actions/runs/41818463792):
 Windows/macOS/Linux format, standalone CLI feature check, strict Clippy, workspace
 regressions, Release build, probe/reconnect/explicit observer smoke, GUI/packages,
 minimum Rust 1.95 and strict audit. Initial strict lint on current stable rejected
@@ -782,7 +782,7 @@ prepared before the late guard, so no allocation/query is inserted after it.
 Initial dfa96a2 passed minimum Rust but failed formatting; applied the exact
 complete runner rustfmt patch including parent modules. Final runtime candidate
 `86b4e7175e02df293bc642e7b643a860113fda75` passed all five jobs in
-[41826266699](https://github.com/ForceMind/PeerGlide/actions/runs/41826266699):
+[41826266699](https://github.com/ForceMind/Linko/actions/runs/41826266699):
 Windows/macOS/Linux format, standalone CLI features, strict Clippy, workspace
 regressions, Release builds, probe/reconnect/readonly observer smoke, GUI/packages,
 minimum Rust 1.95 and strict audit. All declared native bindings compile/link.
@@ -837,7 +837,7 @@ is delivered here. Product G1 remains disabled; no host permissions or Rust were
 installed, no real window action/capture or protocol-v5 change was attempted.
 
 Candidate `feb3f7ac7371aef1265475e283f00f15ff9fcfd9` passed the complete five jobs
-in [41836066218](https://github.com/ForceMind/PeerGlide/actions/runs/41836066218):
+in [41836066218](https://github.com/ForceMind/Linko/actions/runs/41836066218):
 Windows/macOS/Linux format, standalone CLI features, strict workspace Clippy,
 workspace tests, Release builds, probe/reconnect/readonly-context smoke, package
 checks, Linux GUI runtime and macOS parallel GUI stress, minimum Rust 1.95 and
@@ -876,7 +876,7 @@ UI remain unfinished. G1 product entry stays closed, all C06 boxes stay unchecke
 and #10 historical root cause is still unknown. Green CI does not change these.
 
 Recovery runtime/test candidate `ceecaa96e9b87c7dcf088bd5cfa192a0b9ec0ff9` passed
-all five jobs in [41849905620](https://github.com/ForceMind/PeerGlide/actions/runs/41849905620):
+all five jobs in [41849905620](https://github.com/ForceMind/Linko/actions/runs/41849905620):
 three-platform format, standalone CLI features, strict workspace Clippy,
 workspace tests (Linux 208/macOS 221/Windows 243), Release builds, probe/reconnect/
 readonly context smoke, notices and packaging, Linux GUI runtime, macOS parallel
@@ -923,7 +923,7 @@ been run. Physical C06, native app semantics and #10 root cause remain unverifie
 
 
 The runtime candidate c0a188277d9646c5889727f19490030ab684347b passed all five
-jobs in [run 41883855509](https://github.com/ForceMind/PeerGlide/actions/runs/41883855509).
+jobs in [run 41883855509](https://github.com/ForceMind/Linko/actions/runs/41883855509).
 This includes strict checks/tests/Release/process smokes on all three platforms,
 macOS repeated parallel GUI regressions, Linux Xvfb actual drawing/explicit export,
 Rust 1.95 and the strict dependency audit. Early fmt/test API/Clippy failures were
@@ -956,12 +956,12 @@ main重新核对仍5d947637，以下增量未合并，不发布稳定版。本�
 按用户决定不安装；local_preflight失败于工具缺失，不能写成本机构建通过。
 
 PR43 / 49379f1c695777c97b7229b5cd4f437d2932dedd通过完整五项
-[CI41959403280](https://github.com/ForceMind/PeerGlide/actions/runs/41959403280)：
+[CI41959403280](https://github.com/ForceMind/Linko/actions/runs/41959403280)：
 正常Up在定位/注入成功前保留归属，未知Up不定位/注入；接管事件不立即反向Acquire，
 hand-over/恢复后先interior再跨边。key/button定位/Up失败和不重放回归通过。
 
 PR44源码5cedae946bb36e83300948224c4c698cd1232069通过完整五项
-[CI41964917548](https://github.com/ForceMind/PeerGlide/actions/runs/41964917548)：
+[CI41964917548](https://github.com/ForceMind/Linko/actions/runs/41964917548)：
 三平台fmt、独立CLI、严格Clippy、工作区测试、Release、真实无原生输入probe/重连/
 只读上下文、Linux实际GUI、Mac多轮GUI、最低Rust1.95与审计全部通过。
 新增捕获域/epoch、固定pair、满队列/禁用/stop归属、原thread等Up、异步drain及
@@ -981,7 +981,7 @@ Receiving首物理事件保护、独立Native loop串行接收/恢复仍在实�
 ### 基础接收闭环最终软件候选，0.2.1-dev（2026-11-05）
 
 PR45运行候选746b07e1022c2939627f09ff048cca89955e7dd6完整五项
-[CI41974906260](https://github.com/ForceMind/PeerGlide/actions/runs/41974906260)全部
+[CI41974906260](https://github.com/ForceMind/Linko/actions/runs/41974906260)全部
 通过。三平台除fmt/独立CLI/严格Clippy/workspace test/Release外，新增普通
 cargo build --workspace --locked（Debug）也通过；真实无原生输入probe/reconnect/
 只读context、Linux实际GUI与显式样本导出、Mac多轮GUI、最低Rust1.95和审计均通过。
@@ -1026,7 +1026,7 @@ apps/crates/tools/workflow/Cargo源码；精确最终head平台CI与PR就绪以P
 
 
 运行源码7d3e035be3784c4b1cedda1cec1c4ca1b9a5677d已通过完整五项
-[CI 41987328608](https://github.com/ForceMind/PeerGlide/actions/runs/41987328608)：
+[CI 41987328608](https://github.com/ForceMind/Linko/actions/runs/41987328608)：
 Windows/macOS/Linux fmt、严格Clippy、锁定Debug/Release构建与工作区测试、无原生输入
 probe/reconnect/context、GUI smoke/打包、最低Rust1.95和依赖审计。新增8条受限材料
 回归、3条GUI登记状态回归、1条长文本小窗口高度回归实际运行通过。输入协议仍v5，
@@ -1058,8 +1058,8 @@ macOS包artifact 13396158475外层/内层摘要与安全路径核对通过，无
 重启复现，不把新检查或历史CI当修复成功，不关闭C06或#10。
 
 
-首轮运行结果：b8d490f普通五项[CI42017317157](https://github.com/ForceMind/PeerGlide/actions/runs/42017317157)
-及隔离[驻留CI42017317320](https://github.com/ForceMind/PeerGlide/actions/runs/42017317320)通过。
+首轮运行结果：b8d490f普通五项[CI42017317157](https://github.com/ForceMind/Linko/actions/runs/42017317157)
+及隔离[驻留CI42017317320](https://github.com/ForceMind/Linko/actions/runs/42017317320)通过。
 两场景各180秒：Mac空身份/已有身份峰RSS116320/120512KiB、增长0/3904KiB；Linux
 峰134636/136360KiB、增长0/0。Mac CI系统26.6.2/25G83与宿主26.2/25C56不同；测试
 只限RSS，仍未解释用户6.83GB。12条初始脚本回归实际在CI通过，未运行宿主新GUI。
@@ -1130,8 +1130,8 @@ not bound且无资源seal。这些是明确差异，完整app签名是修复候�
 
 
 运行候选c9307aa44b79f21298d4eb48ad0afb9a7f263811通过完整五项
-[CI42039285409](https://github.com/ForceMind/PeerGlide/actions/runs/42039285409)及两平台
-[驻留诊断42039285155](https://github.com/ForceMind/PeerGlide/actions/runs/42039285155)。
+[CI42039285409](https://github.com/ForceMind/Linko/actions/runs/42039285409)及两平台
+[驻留诊断42039285155](https://github.com/ForceMind/Linko/actions/runs/42039285155)。
 新增worker诊断5条回归（Unix含真实子进程超时/关闭回收；Windows为3条纯/命令回归）
 与7条打包回归实际通过，Mac解压签名复验和plist/helper篡改拒绝通过。针对性复核发现
 的诊断线程退出孤儿风险已用cancel+join及PID消失回归修正；测试等待可解析PID而非
@@ -1173,10 +1173,10 @@ worker均Denied，Secure Input inactive；没有申请权限或启动Native。�
 #### 0.2.4运行候选结果（2026-11-06）
 
 fd8c071084afd19047df7354a6eb32b07b278dc6已通过完整五项
-[CI42058770247](https://github.com/ForceMind/PeerGlide/actions/runs/42058770247)：三平台fmt/
+[CI42058770247](https://github.com/ForceMind/Linko/actions/runs/42058770247)：三平台fmt/
 严格Clippy/locked测试和Debug+Release、进程probe/reconnect/context、GUI smoke/打包、
 最低Rust1.95、依赖审计、Mac解压签名与篡改拒绝。新增6条软件资源/生命周期回归通过。
-[驻留42058770207](https://github.com/ForceMind/PeerGlide/actions/runs/42058770207)的Mac任务
+[驻留42058770207](https://github.com/ForceMind/Linko/actions/runs/42058770207)的Mac任务
 排队中取消后仅重跑未执行项，最终两平台任务均success；这不是取消失败来制造绿色。
 
 Mac两场景各约181秒：RSS峰116368/116784KiB，预热后增长0/112KiB；所取physical
@@ -1211,8 +1211,8 @@ worker只读快照和GUI自身检查均报告辅助功能/输入监控未授予�
 真实Native与所有物理C06项目仍未验收，本机Rust继续不安装。
 
 另回读上一文档head f148116的自动CI：完整五项
-[42065590838](https://github.com/ForceMind/PeerGlide/actions/runs/42065590838)与两平台驻留
-[42065590740](https://github.com/ForceMind/PeerGlide/actions/runs/42065590740)均success。
+[42065590838](https://github.com/ForceMind/Linko/actions/runs/42065590838)与两平台驻留
+[42065590740](https://github.com/ForceMind/Linko/actions/runs/42065590740)均success。
 应用/工具/依赖/CI源码与fd8c071差异为空；仍保留同一运行包，不因本次记录更换代码身份。
 
 #### 移除旧条目并重新登记后的实际worker结果（2026-11-06）
@@ -1260,8 +1260,8 @@ Mac artifact13471755307下载后外层SHA256=fe51cb23fdab6d8a97438eec654026244a3
 #### 0.3.0 B1冻结候选与补充指针回归（2026-11-06）
 
 运行源码0eb687a65554470893c7a16befa6bfcca57ebe00通过完整五项
-[CI42152464452](https://github.com/ForceMind/PeerGlide/actions/runs/42152464452)及两平台
-[驻留42152464382](https://github.com/ForceMind/PeerGlide/actions/runs/42152464382)。包含三平台
+[CI42152464452](https://github.com/ForceMind/Linko/actions/runs/42152464452)及两平台
+[驻留42152464382](https://github.com/ForceMind/Linko/actions/runs/42152464382)。包含三平台
 fmt/严格Clippy/locked测试/Debug+Release、真实无原生输入进程probe/reconnect/context、
 GUI smoke、最低Rust1.95、审计、Mac完整签名/ZIP解压与篡改拒绝。首屏主按钮完整
 绘制回归覆盖浅深主题、920×700及1180×820、总览和设备页。
@@ -1285,8 +1285,8 @@ Mac驻留两场景各约181秒，RSS峰116944/116992KiB，预热后增长992/0Ki
 宿主CUA拖动未改变方向，抬前窗口及方向点击也未获得可确认结果；不归因于工具或
 产品中的任何一个，也不写成原生验收通过。针对该疑点追加连续指针按下/移动/抬起、
 实际方向按钮点击、保存/只读不写磁盘的GUI回归。补充提交516b1e1482ef1ee0f5e14db71b8e16c8e4e0f60f
-通过完整五项[CI42157340095](https://github.com/ForceMind/PeerGlide/actions/runs/42157340095)及两平台
-[驻留42157340100](https://github.com/ForceMind/PeerGlide/actions/runs/42157340100)。GUI Unix73项
+通过完整五项[CI42157340095](https://github.com/ForceMind/Linko/actions/runs/42157340095)及两平台
+[驻留42157340100](https://github.com/ForceMind/Linko/actions/runs/42157340100)。GUI Unix73项
 （Windows71项）及Mac20轮并行回归通过。连续GUI事件可以提交left、按钮回到right，
 只读时内存及落盘布局不改；此为软件事件证据，宿主真实鼠标与物理C06仍需另验。
 
@@ -1945,10 +1945,17 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 
 ### 0.3.14最终代码候选：74e442b
 
-代码74e442b389b1165fa4df8f14377560d996e5e95e通过[完整五项CI 42362134479](https://github.com/ForceMind/PeerGlide/actions/runs/42362134479)：Windows/macOS/Linux fmt、严格Clippy、locked工作区test/build、Release、进程/重连/配对/worker专项、原生GUI模型、隔离Xvfb、最低Rust1.95和依赖审计均成功。[资源42362134407](https://github.com/ForceMind/PeerGlide/actions/runs/42362134407)两平台通过，含180秒驻留、真实NoNative会话和AppKit隐藏/显示/停止；[固定上游42362134421](https://github.com/ForceMind/PeerGlide/actions/runs/42362134421)成功。880a260首轮fmt失败保留，74e442b仅应用runner的9处格式差异，没有删除断言或放宽检查。
+代码74e442b389b1165fa4df8f14377560d996e5e95e通过[完整五项CI 42362134479](https://github.com/ForceMind/Linko/actions/runs/42362134479)：Windows/macOS/Linux fmt、严格Clippy、locked工作区test/build、Release、进程/重连/配对/worker专项、原生GUI模型、隔离Xvfb、最低Rust1.95和依赖审计均成功。[资源42362134407](https://github.com/ForceMind/Linko/actions/runs/42362134407)两平台通过，含180秒驻留、真实NoNative会话和AppKit隐藏/显示/停止；[固定上游42362134421](https://github.com/ForceMind/Linko/actions/runs/42362134421)成功。880a260首轮fmt失败保留，74e442b仅应用runner的9处格式差异，没有删除断言或放宽检查。
 
 同源6张实际Linux原生PNG已读：默认拓扑、设置、实际点击添加弹窗、手势实验室、已连接及920×700紧凑拓扑。新控件矩形驱动实际点击，打开添加未创建身份。摘要记录在ignored target/local-validation/linko-74e442b-native-images/review-manifest.json；默认页SHA256为4b9711d785889c25dc4ed51b13f633be4831c73c0e418e5a608567010619a45f，紧凑图为93634d45fa89fcbc6c5f60585358c7c336543ab59fb72005ca5345144795c6f1。这是隔离Xvfb/NoNative证据，不是AI图或物理双机验收。
 
 两端包绑定同一run/head，外层digest、内层checksum、ZIP路径/CRC、MIT/notice、版本及PE或Mac完整性seal通过。Mac内层ZIP SHA256为52e0403cc69bf82b0c5e1d971cf9fb94cd820bf556be5e1d2dac35a9a88af194，Windows为fb9e49cd74376176bd13e73a213f2ca3b89eac3eec860dbc4f63e06999438fdd。Windows LICENSE的CRLF归一后与仓库精确一致，原包未改；首次换行敏感检查失败保留。记录在ignored target/local-validation/linko-74e442b-packages/verification-final.json；Mac App已解压，未启动。
 
 两项GUI布局P2已修复并复核；新几何报告路径未发现阻塞项。该静态复核仅覆盖本批，不是全项目独立安全审计。主线未合并，宿主App/身份/TCC保持。Windows/macOS人工界面、输入C06仍未验收；文件/系统剪贴板/全局G1、多屏、远程工作空间与窗口桥未接通。本机Rust缺失、浏览器未验证、6.83GB/#10根因未知的结论不变。
+
+
+## Linko参考图与对外改名 0.3.15-dev候选（2026-11-07）
+
+现有GitHub仓库rename为ForceMind/Linko，ID、PUBLIC/main、已有PR与0079fe7候选保持，本地origin已回读新URL。b071f78提交canonical引用及artifact名称；当前实现原创主屏示意、真实设备卡与快捷操作层级，新包使用Linko.app/Linko.exe/linko。内部worker、身份/数据目录、bundle identifier和v5兼容保留。
+
+Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆盖及严格seal/篡改拒绝代码路径。它不是真实平台签名或启动验收。本机预检仍缺Rust/Cargo，未安装；新Rust检查、进程/重连、实际原生PNG和新包验证待CI，不能复用0.3.14结果称0.3.15已过。参考原图未提交，示例延迟/传输/第三台设备未接入。宿主App/TCC/身份保持，浏览器和物理C06未运行。

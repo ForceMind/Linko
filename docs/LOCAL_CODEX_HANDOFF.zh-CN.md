@@ -1,6 +1,6 @@
 # 屏跃：本机 Codex 接手开发
 
-这是既有 Rust 工程的延续，不是重建项目。仓库 ForceMind/PeerGlide，main，MIT。
+这是既有 Rust 工程的延续，不是重建项目。仓库 ForceMind/Linko（原名PeerGlide），main，MIT。
 先重新读取 GitHub 当前 main/PR/Issues/CI，不把本文件中的历史 SHA 当作最新状态。
 PR #27 的云端基础候选 6ebeda55b22a3edba159c8f88f34f09784134fa8 已通过三平台
 run 41587053713，合并为 d8b6c54239da741e64a706fa087fa0f9a0fa7509，源码树相同。
@@ -119,7 +119,7 @@ cargo run -p peerglide-gestures --example evaluate --locked -- SAMPLE_FOLDER
 
 ## 8. 可直接交给本机 Codex 的指令
 
-> 继续 ForceMind/PeerGlide，先读取 AGENTS.md、本交接文档、最新 main/PR/CI 和
+> 继续 ForceMind/Linko，先读取 AGENTS.md、本交接文档、最新 main/PR/CI 和
 > docs/VALIDATION.md。保留现有实现及 MIT。先运行 tools/local_preflight.py，修复
 > 实际失败，再完成 Windows/macOS C06 双机验收；记录未运行项，不伪造通过。
 > 在同一个原生捕获生命周期内实现 G03 同步归属/有界队列，提供真实焦点上下文，
@@ -1426,3 +1426,12 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 本机preflight-20261107T082908299647Z-22509证实Rust/Cargo缺失，fmt无法启动，后续not_run；按用户决定不安装。GUI代码与相关版本/脚本需GitHub精确候选fmt/Clippy/test/build、原生进程/重连与实际PNG验证；当前不宣称已过。宿主现用App、身份/TCC不替换，浏览器未验证，C06及6.83GB/#10结论不变。
 
 57节后续：74e442b最终代码候选通过完整五项42362134479、两平台资源42362134407及上游42362134421；6张同源原生PNG已读，Mac/Win包摘要、版本、许可/notice及Mac完整性seal通过，详见VALIDATION与PR70。00db519设计→880a260实现→74e442b格式修正分别推送；收尾仅补记录，不改变代码。包与截图在ignored target/local-validation/linko-74e442b-*，Mac App未启动。GUI0.3.14-dev交付为拓扑/导航切片；物理C06、数据/G1等仍未完成，内部身份/MIT保持，主线未合并。
+
+
+## 58. 仓库与对外项目名统一Linko（2026-11-07）
+
+用户明确要求项目/仓库改名，并给出Linko参考图。现有ForceMind/PeerGlide通过rename成为ForceMind/Linko；回读ID仍为R_kgDOVTEo2w，PUBLIC/main、PR70与0079fe7分支保持，origin已更新。未新建仓库、改可见性、强推或合并主线。已有检出目录和旧App路径保留，避免影响TCC与已冻结包；设备身份、数据目录、crate/worker、bundle identifier和v5保持兼容。
+
+新分支linko-reference-branding从0079fe7继续，负责参考图排版与新包Linko.app/Linko.exe/linko入口。原图只作布局参考，不提交第三方壁纸或示例指标。PR69独立分支已继续到9b5b3b5，未并入本批、不覆盖其工作。本机预检preflight-20261107T105817407949Z-41918仍缺Rust/Cargo，不安装，候选以新CI为准。
+
+58节实现候选：版本0.3.15-dev，GUI仅两文件调整主屏画法/下方实际设备卡/快捷操作层级；新包标签及入口统一Linko，严格签名与篡改拒绝保留。Python打包7项过，Rust和新实际PNG/包仍待CI。后续gh与PR/API使用ForceMind/Linko；源检出目录、旧冻结包与设备数据不搬迁。

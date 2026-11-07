@@ -182,9 +182,9 @@ KVM测量使用同一时钟的发送→接收确认往返指标，显示端到�
 
 ## 10. 证据入口
 
-- 基线树/源码：https://github.com/ForceMind/PeerGlide/tree/56174387563ba6a087c7db35c9c5e1e1031e593c
-- 最新基线CI：https://github.com/ForceMind/PeerGlide/actions/runs/41226383167
-- macOS失败job：https://github.com/ForceMind/PeerGlide/actions/runs/41226383167/job/124611292201
+- 基线树/源码：https://github.com/ForceMind/Linko/tree/56174387563ba6a087c7db35c9c5e1e1031e593c
+- 最新基线CI：https://github.com/ForceMind/Linko/actions/runs/41226383167
+- macOS失败job：https://github.com/ForceMind/Linko/actions/runs/41226383167/job/124611292201
 - 原有验收与开发门槛：[VALIDATION](VALIDATION.md)、[DEVELOPMENT_PLAN](DEVELOPMENT_PLAN.md)、[ROADMAP](ROADMAP.md)
 - 竞品事实及来源：[RESEARCH_MOUSEINC_AITIY](RESEARCH_MOUSEINC_AITIY.zh-CN.md)
 - 架构增量：[ADR-0002](ADR/0002-unified-input-actions.md)

@@ -1,9 +1,9 @@
 # Linko / 屏跃：拓扑首页设计
 
-用户已确认按[PR69 / bfd739c](https://github.com/ForceMind/PeerGlide/blob/bfd739c9a06f11965a9720ff67b6a6fd4b12a625/docs/LINKO_UI_DESIGN.zh-CN.md)重新设计。当前采用瓷白、石墨与少量品牌蓝；modern-v1的01–04稿保留为历史，不再作为实施依据。
+用户已确认按[PR69 / bfd739c](https://github.com/ForceMind/Linko/blob/bfd739c9a06f11965a9720ff67b6a6fd4b12a625/docs/LINKO_UI_DESIGN.zh-CN.md)重新设计。当前采用瓷白、石墨与少量品牌蓝；modern-v1的01–04稿保留为历史，不再作为实施依据。
 
 - [拓扑首页效果图](effects/screen-layout.png)：AI视觉提案，设备和状态为示例，不是运行截图。
-- [应用图标SVG](brand/app-icon.svg) / [512px预览](brand/previews/app-icon.svg.png)：原创双屏连接标记，不迁移仓库、包名或协议标识。
+- [应用图标SVG](brand/app-icon.svg) / [512px预览](brand/previews/app-icon.svg.png)：原创双屏连接标记；仓库现为ForceMind/Linko，内部包名与协议标识保持兼容。
 - [拓扑首页线稿](wireframes/01-screen-layout.svg) / [完整预览](wireframes/previews/01-screen-layout.svg.png)。
 - [设备与详情线稿](wireframes/02-devices.svg) / [完整预览](wireframes/previews/02-devices.svg.png)。
 - [添加电脑线稿](wireframes/03-add-computer.svg) / [完整预览](wireframes/previews/03-add-computer.svg.png)。
@@ -31,3 +31,9 @@
 效果图使用内置image_gen，[原始提示词](prompts.json)与[资产尺寸/SHA256](assets.json)随稿保存。线稿与图标为可编辑SVG，已检查XML/外链，并分别通过AppKit/Quick Look离屏静态渲染查看。浏览器未验证。这些静态检查不代表实际GUI、系统权限或双机输入验收；实现与最终候选证据见项目验证记录。
 
 实际GUI落地：0.3.14-dev代码候选74e442b已接入拓扑/导航/主题，通过平台CI、实际Linux原生PNG与两端包核验；见项目VALIDATION及PR70。本目录效果图仍为设计提案，原生图与包保存在ignored target/local-validation/linko-74e442b-*，两类证据分开。
+
+## 用户参考图后的0.3.15调整
+
+用户随后提供了更完整的Linko参考图。本批吸收“左侧主屏拓扑、下方设备卡、右侧快捷操作”的比例和层级，并将主屏改成原创蓝灰硬件示意。下方只显示真实本机和已登记对端，点击卡片只选择设备；右侧的停止并断开走既有cooperative stop。
+
+参考图的第三台设备、系统版本、延迟、传输列表及已开启开关是示例，不迁入产品事实；原图含第三方壁纸，仅本机只读参考，不提交或作为运行资产。当前文件/系统剪贴板/G1能力仍未接通。新包与公开名称统一为Linko，内部worker、身份与协议兼容名保留。0.3.15实际界面与签名/打包证据待新候选CI后记录。

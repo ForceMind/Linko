@@ -1,4 +1,4 @@
-# PeerGlide development contract
+# Linko development contract (PeerGlide compatibility identifiers retained)
 
 Read README.md, docs/DEVELOPMENT_PLAN.md, docs/VALIDATION.md and
 docs/LOCAL_CODEX_HANDOFF.zh-CN.md before changing behavior. Continue existing
