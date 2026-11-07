@@ -8,9 +8,13 @@ on:
       - 'tools/test_gui_memory_smoke.py'
       - 'tools/gui_worker_resource_smoke.py'
       - 'tools/test_gui_worker_resource_smoke.py'
+      - 'tools/win_process_resources.py'
+      - 'tools/test_win_process_resources.py'
       - 'apps/peerglide-gui/**'
       - 'crates/peerglide-platform/src/tray/**'
+      - 'crates/peerglide-platform/src/tray.rs'
       - 'crates/peerglide-platform/src/application_menu/**'
+      - 'crates/peerglide-platform/src/application_menu.rs'
       - 'crates/peerglide-platform/Cargo.toml'
 permissions:
   contents: read
@@ -77,4 +81,28 @@ jobs:
         with:
           name: gui-owned-resources-${{ matrix.os }}
           path: dist/gui-owned-resources-*.json
+          if-no-files-found: error
+  windows-resources:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Actual Windows process counters and lifecycle boundaries
+        run: |
+          python -m unittest discover -s tools -p test_win_process_resources.py
+          python -m unittest discover -s tools -p test_gui_worker_resource_smoke.py
+      - name: Build matching Windows GUI and CLI
+        run: cargo build --release --locked -p peerglide-gui -p peerglide-desktop
+      - name: Prepare report directory
+        run: New-Item -ItemType Directory -Path dist -Force
+      - name: Windows GUI and owned NoNative worker accounting
+        run: python tools/gui_worker_resource_smoke.py target/release --report dist/gui-owned-resources-windows.json --duration 30
+      - name: Real Windows close hide and tray show stop accounting
+        run: python tools/gui_worker_resource_smoke.py target/release --report dist/gui-hidden-resources-windows.json --duration 30 --tray-hidden
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-windows-resources
+          path: dist/gui-*-resources-windows.json
           if-no-files-found: error

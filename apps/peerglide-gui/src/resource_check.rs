@@ -83,8 +83,8 @@ impl Check {
         anyhow::ensure!(bytes.len() <= 8192, "资源检查说明过大");
         let spec: Spec = serde_json::from_slice(&bytes).context("资源检查说明无效")?;
         anyhow::ensure!(
-            !spec.tray_hidden || cfg!(target_os = "macos"),
-            "真实菜单栏隐藏检查仅支持macOS"
+            !spec.tray_hidden || cfg!(any(target_os = "macos", windows)),
+            "真实托盘隐藏检查仅支持Windows/macOS"
         );
         anyhow::ensure!(
             spec.schema_version == 1
@@ -223,43 +223,49 @@ impl Check {
         self.tray_show_received |= pending.show;
         self.tray_stop_received |= pending.stop;
     }
+    fn visible_state() -> &'static str {
+        if cfg!(windows) { "win32_visible" } else { "appkit_visible" }
+    }
+    fn hidden_state() -> &'static str {
+        if cfg!(windows) { "win32_hidden" } else { "appkit_hidden" }
+    }
     fn visible(&self, app: &App) -> Result<bool> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             app.application_menu
                 .as_ref()
                 .context("缺少退出保护")?
                 .window_visible_for_check("屏跃 · PeerGlide")
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = app;
             anyhow::bail!("平台未实现本次窗口核验")
         }
     }
     fn request_close(&self, app: &App) -> Result<()> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             app.application_menu
                 .as_ref()
                 .context("缺少退出保护")?
                 .request_window_close_for_check("屏跃 · PeerGlide")
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = app;
             anyhow::bail!("平台未实现本次窗口核验")
         }
     }
     fn request_tray(&self, app: &App, command: peerglide_platform::tray::Command) -> Result<()> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             app.tray
                 .as_ref()
                 .context("缺少菜单栏恢复入口")?
                 .request_command_for_check(command)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = (app, command);
             anyhow::bail!("平台未实现本次菜单栏核验")
@@ -337,7 +343,7 @@ impl Check {
                         // callback; the same 20-second connection cap applies.
                         return;
                     }
-                    self.window_state = "appkit_visible";
+                    self.window_state = Self::visible_state();
                     if self.record("visible", false).is_err() || self.request_close(app).is_err() {
                         self.fail(app);
                         return;
@@ -360,7 +366,7 @@ impl Check {
             }
             if self.phase == Phase::Hiding {
                 if app.window_hidden && matches!(self.visible(app), Ok(false)) {
-                    self.window_state = "appkit_hidden";
+                    self.window_state = Self::hidden_state();
                     if self.begin_sampling().is_err() {
                         self.fail(app);
                         return;
@@ -370,7 +376,7 @@ impl Check {
                 && self.tray_show_received
                 && matches!(self.visible(app), Ok(true))
             {
-                self.window_state = "appkit_visible";
+                self.window_state = Self::visible_state();
                 if self.record("shown", false).is_err()
                     || self
                         .request_tray(app, peerglide_platform::tray::Command::Stop)
@@ -438,7 +444,7 @@ impl Check {
                 && (!self.tray_hidden
                     || (self.tray_show_received
                         && self.tray_stop_received
-                        && self.window_state == "appkit_visible"))
+                        && self.window_state == Self::visible_state()))
                 && app.stopping.is_none()
                 && app.events.is_none()
                 && app.input_terminal
@@ -566,7 +572,7 @@ mod tests {
         let fixture = crate::tests::Fixture::new()?;
         let (dir, spec, report) = self::fixture(&fixture.path)?;
         let original: serde_json::Value = serde_json::from_slice(&fs::read(&spec)?)?;
-        if !cfg!(target_os = "macos") {
+        if !cfg!(any(target_os = "macos", windows)) {
             let mut hidden = original.clone();
             hidden["tray_hidden"] = serde_json::json!(true);
             fs::write(&spec, serde_json::to_vec(&hidden)?)?;

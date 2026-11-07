@@ -52,11 +52,21 @@ impl TerminationCheck {
 mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::Owner;
+#[cfg(windows)]
+mod windows;
 
 #[cfg(not(target_os = "macos"))]
 pub struct Owner;
 #[cfg(not(target_os = "macos"))]
 impl Owner {
+    #[cfg(windows)]
+    pub fn window_visible_for_check(&self, title: &str) -> anyhow::Result<bool> {
+        windows::visible(title)
+    }
+    #[cfg(windows)]
+    pub fn request_window_close_for_check(&self, title: &str) -> anyhow::Result<()> {
+        windows::close(title)
+    }
     /// No macOS-specific termination bridge is required on this platform.
     pub fn is_available(&self) -> bool {
         true

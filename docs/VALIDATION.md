@@ -1879,3 +1879,27 @@ GUI/helper退出0、worker_reaped=true。约30.158秒GUI平均单核CPU0.364750%
 [NSMenu action](https://developer.apple.com/documentation/appkit/nsmenu/performactionforitem(at:))
 执行本应用保留的selector，不是物理菜单点击。此记录后仅补文档，最终精确HEAD五项/
 资源/上游状态集中在PR65/Issue5，不把早期短窗当最终数值或8h/24h/Native/C06通过。
+
+## 55. A2/B Windows原生托盘与资源接线（2026-11-07，开发中）
+
+windows-tray-resources/0.3.12基于PR65最终f4351e9（五项42322360204、资源42322360146、
+上游42322360136均成功）。本批接Windows SDK窗口close/可见回读与同托盘线程命令。
+生产popup改标准WM_COMMAND通知分派，取消项/未知ID/控件或加速键通知不变成恢复
+命令；沿用同一隐藏UI-message窗口、生命周期mutex与Mailbox，不新增全局输入hook。
+隔离检查通过受mutex保护的自有HWND SendMessageTimeout走同一WM_COMMAND，
+不是物理菜单点击。主窗只枚举本进程当前GUI线程的精确标题唯一窗口，再投WM_CLOSE，
+由既有GUI决定hide/stop；IsWindowVisible仅WS_VISIBLE状态，不代表像素无遮挡。
+
+原CI-only新profile/回环/NoNative模式允许Windows tray_hidden，win32状态与appkit
+区分；其他平台仍拒绝。stdin仍仅stop，菜单可见性/进程ID都不作认证或输入许可。
+Windows采样用QUERY_LIMITED_INFORMATION读取工作集与GetProcessTimes内核+用户
+100ns单位计数，父PID用Toolhelp元数据核对；不读进程内存内容、不启用调试权限。
+工作集向上取整KiB，不等同private commit/Activity Monitor总内存；100ns是单位而非
+保证计时分辨率。缺测/句柄失败仍失败、finally关闭自有查询句柄，缺失不填零。
+
+本机8项收据回归、5项Windows ABI/句柄/失败纯回归、原24项采样/回收回归已过；
+真实Windows自有子进程API用例在Mac明确skip，Windows CI必须实际执行。新增Windows
+GUI普通/隐藏各30秒资源job，交互station与Shell元数据如实记录；缺桌面/托盘/渲染
+环境则失败，不以内部标志或跳过制造通过。当前待fmt/Clippy/工作区/Release/专项与
+真实SDK资源CI，本机缺Rust不安装，宿主App/TCC/身份/配对未改、Native未启动。
+Windows真实键鼠/物理菜单/C06和8h/24h未验收，6.83GB/#10根因未知，浏览器未验证。

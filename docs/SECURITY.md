@@ -125,3 +125,13 @@ The CI stdin remains stop-only, with no input permissions or arbitrary commands.
 Metadata schema2 distinguishes requested/OS-visible/OS-hidden and GUI-observed
 menu intent. These observations are neither authentication nor physical input
 acceptance. Missing tray/window evidence fails instead of declaring hidden success.
+
+The Windows CI tray-hidden check uses only the current GUI thread's unique own
+window and the retained tray HWND under its existing lifetime mutex. WM_CLOSE
+still reaches normal GUI logic; menu and check use the same WM_COMMAND decoder.
+Only Show/Stop/Quit IDs with no control HWND or accelerator high word are accepted;
+none grants input. Normal native-input capture/cleanup are unchanged. Window/PID
+metadata is never authentication. Read-only Windows counters request limited
+query rights, never process-memory contents/debug privileges; all query handles
+close. Missing interactive desktop, tray or native evidence fails, not a hidden
+success. Working set and 100ns CPU units retain their explicit accounting limits.

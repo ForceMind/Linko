@@ -71,6 +71,9 @@ def signal_handlers(stop):
 
 def sample_rss_kib(pid):
     """ps RSS uses KiB on Darwin/Linux. This is exactly our own Popen child PID."""
+    if sys.platform == "win32":
+        import win_process_resources
+        return win_process_resources.native().rss_kib(pid)
     output = subprocess.check_output(
         ["ps", "-o", "rss=", "-p", str(pid)], stderr=subprocess.DEVNULL, timeout=2
     )
@@ -105,6 +108,9 @@ def parse_cpu_time_ns(output):
 
 
 def sample_cpu_time_ns(pid):
+    if sys.platform == "win32":
+        import win_process_resources
+        return win_process_resources.native().cpu_time_ns(pid)
     output = subprocess.check_output(
         ["ps", "-o", "time=", "-p", str(pid)], stderr=subprocess.DEVNULL, timeout=2,
         env={**os.environ, "LC_ALL": "C"}
