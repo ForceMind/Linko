@@ -1,0 +1,43 @@
+name: Linko Workspace Lab
+on:
+  pull_request:
+    paths:
+      - 'labs/remote-workspace/**'
+      - '.github/workflows/workspace-lab.yml'
+permissions:
+  contents: read
+concurrency:
+  group: workspace-lab-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  offline-foundation:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: labs/remote-workspace
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - run: rustc -Vv
+      - name: Offline policy, media, geometry, budget and restoration tests
+        run: cargo test --all-targets --locked --offline
+      - name: Strict Clippy
+        if: always()
+        run: cargo clippy --all-targets --locked --offline -- -D warnings
+      - name: Format check
+        if: always()
+        run: cargo fmt --all -- --check
+      - name: Offline cross-module fixture simulation (not native acceptance)
+        if: always()
+        run: cargo run --example workspace_simulation --locked --offline
+      - name: Release build
+        if: always()
+        run: cargo build --release --all-targets --locked --offline
