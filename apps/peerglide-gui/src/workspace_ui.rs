@@ -181,8 +181,10 @@ impl App {
         } else {
             285.0
         };
-        let (canvas, _) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), height), egui::Sense::hover());
+        let (canvas, _) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), height),
+            egui::Sense::hover(),
+        );
         let (local, peer) = workspace_rects(canvas.shrink(20.0), &self.config.edge, registered);
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, 12.0, ui.visuals().faint_bg_color);
@@ -248,7 +250,11 @@ impl App {
             self.config.dark,
         );
         if ui
-            .interact(local, ui.scope_id().with("local-screen"), egui::Sense::click())
+            .interact(
+                local,
+                ui.scope_id().with("local-screen"),
+                egui::Sense::click(),
+            )
             .clicked()
         {
             self.workspace_peer_selected = false;
@@ -474,30 +480,42 @@ mod tests {
     fn essential_context_and_connection_details_fit_the_supported_first_viewport() -> Result<()> {
         fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
             match shape {
-                egui::epaint::Shape::Text(text) if text.galley.job.text == label => Some(text.visual_bounding_rect()),
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.visual_bounding_rect())
+                }
                 egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(|s| text_rect(s, label)),
                 _ => None,
             }
         }
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
-        let ctx = egui::Context::default(); install_fonts(&ctx);
+        let ctx = egui::Context::default();
+        install_fonts(&ctx);
         for paired in [false, true] {
             app.config.fingerprint = paired.then(|| "view-only-not-authentication".into());
             for size in [Vec2::new(920.0, 700.0), Vec2::new(1180.0, 820.0)] {
-                let output = ctx.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                    ..Default::default()
-                }, |root| app.desktop(root));
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |root| app.desktop(root),
+                );
                 for label in ["内容共享", "连接与身份详情"] {
-                    let (clip, rect) = output.shapes.iter().find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r))).context("essential workspace control absent")?;
+                    let (clip, rect) = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)))
+                        .context("essential workspace control absent")?;
                     assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");
                 }
                 output.drop_without_applying_deltas();
                 assert!(app.child.is_none() && !app.config.native && !app.config.allow);
             }
         }
-        drop(app); fixture.close()?; Ok(())
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
     fn text_center(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Pos2> {
         match shape {
