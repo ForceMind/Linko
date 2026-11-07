@@ -177,22 +177,19 @@ impl App {
             self.workspace_canvas(ui);
             ui.add_space(10.0);
             if self.config.fingerprint.is_some() {
-                ui.add_enabled_ui(
-                    self.layout_editable() && self.screen_drag.is_none(),
-                    |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.weak("另一台电脑在我的");
-                            for side in ["left", "right", "top", "bottom"] {
-                                if ui
-                                    .selectable_label(self.config.edge == side, edge_label(side))
-                                    .clicked()
-                                {
-                                    self.try_set_edge(side);
-                                }
+                ui.add_enabled_ui(self.layout_editable() && self.screen_drag.is_none(), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.weak("另一台电脑在我的");
+                        for side in ["left", "right", "top", "bottom"] {
+                            if ui
+                                .selectable_label(self.config.edge == side, edge_label(side))
+                                .clicked()
+                            {
+                                self.try_set_edge(side);
                             }
-                        });
-                    },
-                );
+                        }
+                    });
+                });
             } else {
                 ui.weak("添加电脑后，把它拖到这台电脑的左、右、上或下方。");
             }
@@ -246,7 +243,10 @@ impl App {
         });
         let editable = self.layout_editable();
         let interaction_canvas = canvas.intersect(ui.clip_rect());
-        if self.screen_drag.is_some_and(|(_, _, old)| old != interaction_canvas) {
+        if self
+            .screen_drag
+            .is_some_and(|(_, _, old)| old != interaction_canvas)
+        {
             self.screen_drag = None;
         }
         if let Some(edge) = desktop_ui::update_layout_drag(
@@ -499,7 +499,12 @@ fn roster_item(
     response.on_hover_text(name)
 }
 
-fn workspace_rects(canvas: egui::Rect, edge: &str, paired: bool, zoom: f32) -> (egui::Rect, egui::Rect) {
+fn workspace_rects(
+    canvas: egui::Rect,
+    edge: &str,
+    paired: bool,
+    zoom: f32,
+) -> (egui::Rect, egui::Rect) {
     let vertical = paired && matches!(edge, "top" | "bottom");
     let scale = (canvas.width() / if vertical { 250.0 } else { 480.0 })
         .min(canvas.height() / if vertical { 290.0 } else { 190.0 })
@@ -720,7 +725,8 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn navigation_reaches_six_pages_and_keeps_real_safety_controls_without_side_effects() -> Result<()> {
+    fn navigation_reaches_six_pages_and_keeps_real_safety_controls_without_side_effects(
+    ) -> Result<()> {
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let ctx = egui::Context::default();

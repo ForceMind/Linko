@@ -170,7 +170,10 @@ pub(super) fn brand_mark(ui: &mut egui::Ui) {
         );
     }
     painter.line_segment(
-        [rect.min + egui::vec2(16.0, 25.0), rect.min + egui::vec2(26.0, 16.0)],
+        [
+            rect.min + egui::vec2(16.0, 25.0),
+            rect.min + egui::vec2(26.0, 16.0),
+        ],
         Stroke::new(2.0, Color32::WHITE),
     );
 }

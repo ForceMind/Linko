@@ -47,7 +47,12 @@ struct Options {
     #[arg(long)]
     gesture_lab: bool,
     /// Isolated GUI smoke geometry only; create a new report, never overwrite.
-    #[arg(long, hide = true, requires = "data_dir", conflicts_with = "macos_quit_check_report")]
+    #[arg(
+        long,
+        hide = true,
+        requires = "data_dir",
+        conflicts_with = "macos_quit_check_report"
+    )]
     ui_layout_report: Option<PathBuf>,
     /// Isolated AppKit terminate integration check, never native input.
     #[arg(
@@ -2113,7 +2118,8 @@ mod tests {
     #[test]
     fn ordinary_geometry_option_requires_an_explicit_fresh_profile() -> Result<()> {
         assert!(
-            Options::try_parse_from(["peerglide-gui", "--ui-layout-report", "report.json"]).is_err()
+            Options::try_parse_from(["peerglide-gui", "--ui-layout-report", "report.json"])
+                .is_err()
         );
         let fixture = Fixture::new()?;
         let options = Options::try_parse_from([

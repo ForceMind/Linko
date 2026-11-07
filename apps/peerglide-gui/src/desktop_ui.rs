@@ -1156,7 +1156,10 @@ impl App {
                     }
                     let selected = self.page == page
                         || (page == Page::Shortcuts
-                            && matches!(self.page, Page::Home | Page::GestureLab | Page::GestureRules));
+                            && matches!(
+                                self.page,
+                                Page::Home | Page::GestureLab | Page::GestureRules
+                            ));
                     let response = desktop_style::navigation(ui, label, selected);
                     let key = match page {
                         Page::Devices => "nav_devices",
@@ -1271,7 +1274,9 @@ impl App {
             && self.layout_geometry.contains_key("add_device")
             && self.layout_geometry.contains_key("primary_action")
         {
-            Some(serde_json::json!({"version":2,"controls":self.layout_geometry,"scope":"isolated_gui_widget_geometry"}))
+            Some(
+                serde_json::json!({"version":2,"controls":self.layout_geometry,"scope":"isolated_gui_widget_geometry"}),
+            )
         } else {
             None
         };
