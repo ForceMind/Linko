@@ -1500,3 +1500,15 @@ gui-reference-polish隔离worktree从f3aa8fe继续。两名既有代理分管三
 宿主包在ignored `target/local-validation/kvm-3c11a88/macos-unpacked/Linko-0.3.19-dev-darwin-arm64/Linko.app`，当前未启动/登记TCC；旧17仍为唯一现用授权App，已停止/worker退出。实际Mac锁屏阻碍切换复查，已询问用户“只解锁，其余root操作”；后续先退出17、启动冻结19只读核对版本/图标/实际worker权限，所需系统认证仍须本人完成。沿用已有配对和Windows现有v5，不再索要指纹/证书；仅Mac→Win短测授权，Mac接收仍关闭，不开数据/G1。19未发布/部署/合主线，不宣称17的物理失败已解决。
 
 本机磁盘满导致一次19解压失败；清掉该不完整解压，再核对ZIP逐文件字节/执行位后清理26个旧发布解压目录，约1.4GiB恢复，现用17/源码/Git/工作树/恢复ZIP/身份全部保留；空间恢复后原19ZIP重新解压验证成功。ignored回执`archived-distribution-cleanup.json`。文档收尾不更换3c包/签名，避免为记录更新反复授权；未来候选仅在新证据必要时重建。
+
+## 65. Mac图标实际更新与V2紧凑线稿（待审提案）
+
+用户再次指出Mac仍是旧图标、左上角和顶部留白过多，明确要求实际更新并重新设计线稿。本轮在既有GUI worktree创建ui-compact-wireframes，从22df80b继续；只改设计文档/SVG/PNG、其LF属性和验证记录，不实施新GUI布局，不改Rust/协议/授权。
+
+根因已实查：运行中的17 Info.plist无CFBundleIconFile，19接线/签名包此前尚未切到用户入口。初次CUA被锁屏阻挡，用户本人解锁后，通过正常Command+Q退出17、按完整路径打开冻结3c/0.3.19。实际中文GUI显示0.3.19、已有对端登记、本机接收默认关闭且会话未开启；Finder预览35.7MB/0.3.19及蓝色双屏系统图标已看。通过Finder“添加到程序坞”，只读回读确认persistent-apps内本项目仅一个入口且指向3c的19包；进程回读也仅19 GUI，strict seal仍通过。本轮没有授予/撤销系统输入权限、开启原生键鼠或重做配对。Dock直接目标已修，未新建开机启动或全局重置缓存。
+
+现用App必须保护：`target/local-validation/kvm-3c11a88/macos-unpacked/Linko-0.3.19-dev-darwin-arm64/Linko.app`。旧17包保留回退，不能再把旧清理脚本中“保护17”的硬编码当当前事实；后续任何清理先核对实际运行和Dock目标。ignored `target/local-validation/ui-compact-wireframes/app-update.json`保存无输入内容的本机回执，不上传宿主截图/偏好文件。
+
+新稿在docs/design/linko-v2，三SVG/PNG分别1280×800工作区、920×700紧凑和启用弹窗。品牌64高、侧栏176、标题/主操作/停止恢复合为64高顶部带；移走重复通信卡/停止按钮，主CTA保持“开启键鼠协同…”（只打开独立准备，确认仍严格Ready/30秒/明确同意/worker再查），检查过程在弹窗内，数据导航明确未接通。设备图按已知类型表达，未知对端不假装台式。32原生标题栏只是示意，实施按client viewport且不静默改min-inner。三图已离屏渲染逐张审版，初轮CSS/滤镜导出错误及重复工程提示已修，关键控件/中文/底部说明可见；XML/资源/尺寸/SHA/diff检查过。源码和预览绑定assets.json，无浏览器验收；本机preflight仍缺Rust，未安装，运行程序仍冻结3c不重签。
+
+V2是待用户审阅的排版/交互提案，不是已落地GUI，也不代表用户已接受或C06通过。当前实际App仅更新到既有0.3.19，后续按确认稿实施；恢复/只读/配对异常、深色等细分稿尚未补全，实施需沿用现有真实状态与安全门。原17双机试跑失败、19尚未实机重测、历史内存/#10根因、数据/G1等未完成范围均不变。
