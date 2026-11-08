@@ -2025,3 +2025,5 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 交叉复核后的实现：原子control内分开21位route epoch、20位请求代次和ARMED，保留COUNT/原安全flag；Local持键同CAS取消请求，Down/Up完成也不能复活旧票据，Remote合法按键对不误取消。Stop沿现有ReceiveControl同步关闭同一原子入场门后再发布stop=true，构造时仅共享原子word，无引用环/新锁。初始watchdog不超过原request deadline；延迟CAS后首callback按实时截止退回Local，成功freshness读回后才由既有路径续期。无新hook、协议、依赖或授权。
 
 新增确定性回归覆盖瞬时忙后提交、原预算/次数、旧/迟Grant、持键ABA、Stop在Native尚未观察时到达、原子代次溢出、跨deadline首Down/Up透传和合法Remote按键对。之前三个静态窗口及Linux测试导出已逐项复查关闭；这是窄范围静态复核，不是独立安全审计或物理验收。Rust执行仍待当前源码精确CI。
+
+首轮d13b6f6完整CI42466346726在三平台fmt失败（七处布局和一处互斥cfg import顺序），最低Rust1.95已通过。按runner旧源唯一匹配核验后应用，未改变行为、断言、预算或取消门；新完整候选继续等待检查。

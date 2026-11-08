@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
 use peerglide_platform::{
-    self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute, Captured,
+    self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute,
+    Captured,
 };
 use peerglide_protocol::{
     decode, encode, worker::WorkerInputState, Edge, Input, InputCapabilities, Message, Motion,

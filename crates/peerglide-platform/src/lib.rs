@@ -595,13 +595,9 @@ impl CaptureSession {
         return_x: f64,
         return_y: f64,
     ) -> Result<CaptureCommit> {
-        if self
-            .receive_control
-            .as_ref()
-            .is_some_and(|control| {
-                control.stop_requested() || control.outcome() != ReceiveAck::Retired
-            })
-            || self.return_pending_claim_failed()
+        if self.receive_control.as_ref().is_some_and(|control| {
+            control.stop_requested() || control.outcome() != ReceiveAck::Retired
+        }) || self.return_pending_claim_failed()
         {
             return Ok(CaptureCommit::Cancelled);
         }
@@ -614,12 +610,9 @@ impl CaptureSession {
         // No extra OS permission query runs on the short asynchronous retry path.
         if now_ms() >= deadline
             || !self.gate.source_commit_current(epoch)
-            || self
-                .receive_control
-                .as_ref()
-                .is_some_and(|control| {
-                    control.stop_requested() || control.outcome() != ReceiveAck::Retired
-                })
+            || self.receive_control.as_ref().is_some_and(|control| {
+                control.stop_requested() || control.outcome() != ReceiveAck::Retired
+            })
         {
             self.gate.disable();
             self.gate.0.return_pending.store(false, Ordering::Release);
@@ -640,12 +633,9 @@ impl CaptureSession {
         effect?;
         if now_ms() >= deadline
             || !self.gate.source_commit_current(epoch)
-            || self
-                .receive_control
-                .as_ref()
-                .is_some_and(|control| {
-                    control.stop_requested() || control.outcome() != ReceiveAck::Retired
-                })
+            || self.receive_control.as_ref().is_some_and(|control| {
+                control.stop_requested() || control.outcome() != ReceiveAck::Retired
+            })
         {
             self.restore_checked()?;
             return Ok(CaptureCommit::Cancelled);
@@ -844,11 +834,8 @@ pub fn capture(tx: mpsc::Sender<Captured>, target: InputCapabilities) -> Result<
     {
         let wake = Arc::new(native::ReceiveWake::default());
         let wake_callback = wake.clone();
-        let (driver, engine) = receive_driver::channel(
-            128,
-            Arc::new(move || wake_callback.wake()),
-            Some(&gate),
-        )?;
+        let (driver, engine) =
+            receive_driver::channel(128, Arc::new(move || wake_callback.wake()), Some(&gate))?;
         let control = driver.control();
         let _ = gate.0.receive.set(control.clone());
         let thread = native::capture_receiving(tx, gate.clone(), target, engine, wake)?;
@@ -1382,7 +1369,10 @@ mod tests {
 
         let gate = CaptureGate::default();
         let token = local_commit_token(&gate);
-        assert_eq!(gate.commit_from(token, 1000, 1000), CaptureCommit::Cancelled);
+        assert_eq!(
+            gate.commit_from(token, 1000, 1000),
+            CaptureCommit::Cancelled
+        );
         assert_eq!(gate.0.control.load(Ordering::Acquire) & ACTIVE, 0);
     }
     #[test]
@@ -1448,7 +1438,10 @@ mod tests {
         let gate = CaptureGate::default();
         let token = local_commit_token(&gate);
         let another = CaptureGate::default();
-        assert_eq!(another.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+        assert_eq!(
+            another.commit_from(token, 1000, 100),
+            CaptureCommit::Cancelled
+        );
         gate.0.return_pending.store(true, Ordering::Release);
         assert!(!gate.commit_pending(token));
         assert!(gate.prepare_commit(token.epoch).is_none());
