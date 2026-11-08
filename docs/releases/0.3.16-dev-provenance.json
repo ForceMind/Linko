@@ -1,0 +1,29 @@
+{
+  "version": "0.3.16-dev",
+  "runtimeSourceCommit": "cb27bce72ece205f138180fd1b6ef0c8cbf0764f",
+  "sourceRun": 42382394527,
+  "packages": [
+    {
+      "platform": "macos",
+      "file": "Linko-0.3.16-dev-darwin-arm64.zip",
+      "sha256": "798cb3770929529af6fdf3b6dd6365a7af30113579d111941e8cbab479e04627",
+      "originalPackageSha256": "d49a41aa00a79a7cf9303f2fa665928525a8698448e2a0b7bf1dceab604edc5b",
+      "changedMembers": [
+        "Linko-0.3.16-dev-darwin-arm64/README.md",
+        "Linko-0.3.16-dev-darwin-arm64/SECURITY.md"
+      ],
+      "unchangedOtherMembers": true
+    },
+    {
+      "platform": "windows",
+      "file": "Linko-0.3.16-dev-windows-amd64.zip",
+      "sha256": "f2e6e16132e820912737e69349e2ff2a45edc9196762ade4f0630738e66d874e",
+      "originalPackageSha256": "759e298fd66a5f39f1b0df43a6033d92c1b609a9d89d468c9cb7b6817145a7b1",
+      "changedMembers": [
+        "Linko-0.3.16-dev-windows-amd64/README.md",
+        "Linko-0.3.16-dev-windows-amd64/SECURITY.md"
+      ],
+      "unchangedOtherMembers": true
+    }
+  ]
+}

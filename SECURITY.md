@@ -1,5 +1,15 @@
-# Security
+# 安全政策
 
-See [the security model](docs/SECURITY.md). This is an experimental prototype.
-Use GitHub private vulnerability reporting when available. Never include
-private keys, passwords or captured user input in reports.
+Linko 目前只有开发预览，尚无稳定安全支持分支。不承诺固定响应时限或独立安全审计完成。
+
+## 报告漏洞
+
+如已启用私密报告，请使用 [Security Advisories](https://github.com/ForceMind/Linko/security/advisories)。入口不可用时，可创建仅请求私密联系渠道的 Issue，**不要公开漏洞细节或利用方法**。目前没有公开的专用安全邮箱。
+
+报告包含版本／提交、系统、受影响边界与最小脱敏复现。不要发送私钥、配对码、真实按键、剪贴板或文件内容。普通问题见 [支持说明](SUPPORT.md)。
+
+## 使用边界
+
+系统权限由用户明确授予，不绕过 Secure Input、UAC、安全桌面或防火墙。配对不等于控制授权，输入不等于数据或动作授权。macOS 尚无 Developer ID／公证，Windows 尚未代码签名。自动检查不证明所有环境兼容、物理恢复成功或不存在漏洞。
+
+详细设计见[安全模型](docs/SECURITY.md)。再分发保留 MIT、依赖与字体声明。
