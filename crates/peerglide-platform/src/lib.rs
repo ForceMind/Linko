@@ -417,6 +417,46 @@ impl CaptureGate {
     pub fn idle(&self) -> bool {
         self.0.control.load(Ordering::Acquire) & COUNT == 0
     }
+    fn finish_outgoing_if_idle(&self, epoch: CaptureEpoch) -> bool {
+        let word = self.0.control.load(Ordering::Acquire);
+        self.finish_outgoing_from(epoch, word, || {})
+    }
+    fn finish_outgoing_from(
+        &self,
+        epoch: CaptureEpoch,
+        word: u64,
+        before_publish: impl FnOnce(),
+    ) -> bool {
+        // Ordinary edge return must not terminate a drag or a held modifier.
+        // Pair ownership, callback entry and route retirement share this CAS.
+        if !self.0.healthy.load(Ordering::Acquire)
+            || self.epoch_from(word) != epoch
+            || word & (ACTIVE | RECEIVING | IN_CALLBACK | STOPPED | ADMISSIONS_CLOSED | COUNT)
+                != ACTIVE
+        {
+            return false;
+        }
+        let Some(next) = epoch
+            .generation
+            .checked_add(1)
+            .filter(|next| *next <= GENERATION_MAX)
+        else {
+            self.source_lost();
+            return false;
+        };
+        let local = (word & !(ACTIVE | GENERATION | COMMIT_ARMED)) | (next << COUNT_BITS);
+        before_publish();
+        if self
+            .0
+            .control
+            .compare_exchange(word, local, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        self.0.deadline.store(0, Ordering::Release);
+        true
+    }
     fn source_lost(&self) {
         self.0.control.fetch_or(STOPPED, Ordering::AcqRel);
         self.0.healthy.store(false, Ordering::Release);
@@ -648,6 +688,19 @@ impl CaptureSession {
             .return_pending
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
+    }
+    /// Normal boundary return is conditional; stop/emergency still use the
+    /// unconditional recovery path even when physical inputs remain held.
+    pub fn restore_at_boundary(&self, epoch: CaptureEpoch) -> Result<bool> {
+        // The successful outgoing commit already owns this restoration fence.
+        // A refused return must retain it, not clear another phase's ownership.
+        if !self.gate.0.return_pending.load(Ordering::Acquire)
+            || !self.gate.finish_outgoing_if_idle(epoch)
+        {
+            return Ok(false);
+        }
+        self.restore_checked()?;
+        Ok(true)
     }
     pub fn restore_checked(&self) -> Result<()> {
         self.gate.disable();
@@ -1345,6 +1398,84 @@ impl HookState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn boundary_return_reuses_and_preserves_the_original_restoration_fence() {
+        let session = CaptureSession {
+            gate: CaptureGate::default(),
+            #[cfg(any(windows, target_os = "macos"))]
+            _thread: CaptureThread::spawn(|_| {}),
+            // No OS pointer call or native hook is installed by this fixture.
+            return_position: std::sync::Mutex::new(None),
+            receive_driver: None,
+            receive_control: None,
+        };
+        assert!(session.gate.try_activate());
+        let epoch = session.gate.epoch_from(session.gate.0.control.load(Ordering::Acquire));
+        session.gate.0.return_pending.store(true, Ordering::Release);
+        session.gate.set_held(1);
+        assert!(!session.restore_at_boundary(epoch).unwrap());
+        assert!(session.gate.0.return_pending.load(Ordering::Acquire));
+        assert_eq!(session.gate.route(), Some(CaptureRoute::Remote(epoch)));
+        session.gate.set_held(0);
+        assert!(session.restore_at_boundary(epoch).unwrap());
+        assert!(!session.gate.0.return_pending.load(Ordering::Acquire));
+        assert!(matches!(session.gate.route(), Some(CaptureRoute::Local(_))));
+    }
+    #[test]
+    fn ordinary_return_preserves_holds_and_live_callbacks_until_idle() {
+        let gate = CaptureGate::default();
+        assert!(gate.try_activate());
+        let epoch = gate.epoch_from(gate.0.control.load(Ordering::Acquire));
+        gate.0.deadline.store(u64::MAX, Ordering::Release);
+        for held in [1, 2, COUNT] {
+            gate.set_held(held);
+            let word = gate.0.control.load(Ordering::Acquire);
+            assert!(!gate.finish_outgoing_if_idle(epoch));
+            assert_eq!(gate.0.control.load(Ordering::Acquire), word);
+            assert_eq!(gate.0.deadline.load(Ordering::Acquire), u64::MAX);
+        }
+        gate.set_held(0);
+        let callback = gate.begin_event();
+        assert!(!gate.finish_outgoing_if_idle(epoch));
+        drop(callback);
+        assert!(gate.finish_outgoing_if_idle(epoch));
+        assert!(matches!(gate.route(), Some(CaptureRoute::Local(_))));
+        assert!(!gate.finish_outgoing_if_idle(epoch));
+    }
+    #[test]
+    fn down_racing_boundary_return_wins_without_retiring_its_remote_pair() {
+        let gate = CaptureGate::default();
+        assert!(gate.try_activate());
+        let epoch = gate.epoch_from(gate.0.control.load(Ordering::Acquire));
+        gate.0.deadline.store(u64::MAX, Ordering::Release);
+        let word = gate.0.control.load(Ordering::Acquire);
+        assert!(!gate.finish_outgoing_from(epoch, word, || {
+            let callback = gate.begin_event();
+            gate.set_held(1);
+            drop(callback);
+        }));
+        assert_eq!(gate.route(), Some(CaptureRoute::Remote(epoch)));
+        assert!(!gate.finish_outgoing_if_idle(epoch));
+        // Emergency/stop must still restore even though normal return refused.
+        gate.disable();
+        assert!(matches!(gate.route(), Some(CaptureRoute::Local(_))));
+        assert!(!gate.idle());
+    }
+    #[test]
+    fn ordinary_return_cannot_retire_another_route_or_revive_a_closed_source() {
+        let gate = CaptureGate::default();
+        assert!(gate.try_activate());
+        let old = gate.epoch_from(gate.0.control.load(Ordering::Acquire));
+        gate.disable();
+        assert!(gate.try_activate());
+        let current = gate.epoch_from(gate.0.control.load(Ordering::Acquire));
+        assert!(!gate.finish_outgoing_if_idle(old));
+        let foreign = CaptureGate::default();
+        assert!(!foreign.finish_outgoing_if_idle(current));
+        let word = gate.0.control.load(Ordering::Acquire);
+        assert!(!gate.finish_outgoing_from(current, word, || gate.source_lost()));
+        assert!(gate.route().is_none());
+    }
     fn local_commit_token(gate: &CaptureGate) -> CaptureCommitToken {
         let Some(CaptureRoute::Local(epoch)) = gate.route() else {
             panic!("expected local capture");
@@ -1753,6 +1884,52 @@ mod hook_tests {
         let epoch = s.gate.publish(true).unwrap();
         s.gate.0.deadline.store(u64::MAX, Ordering::Release);
         epoch
+    }
+    #[test]
+    fn boundary_return_keeps_remote_down_up_pairs_and_then_passes_local_input() {
+        for input in [
+            Input::Key { usage: 4, down: true },
+            Input::Key { usage: 0xe1, down: true },
+            Input::Button { button: 1, down: true },
+            Input::Button { button: 2, down: true },
+            Input::Button { button: 3, down: true },
+        ] {
+            let (mut state, mut events) = state(8);
+            let epoch = activate(&state);
+            let gate = state.gate.clone();
+            for down in [true, false] {
+                {
+                    let callback = gate.begin_event();
+                    assert_eq!(callback.route, CaptureRoute::Remote(epoch));
+                    assert!(match input {
+                        Input::Key { usage, .. } => state.key_routed(usage, down, callback.route),
+                        Input::Button { button, .. } => state.button_routed(button, down, callback.route),
+                        _ => unreachable!(),
+                    });
+                    assert!(!gate.finish_outgoing_if_idle(epoch));
+                }
+                if down {
+                    assert!(!gate.finish_outgoing_if_idle(epoch));
+                }
+                let Captured::Input { event, route } = events.try_recv().unwrap() else {
+                    panic!("remote pair must stay queued for the same lease");
+                };
+                assert_eq!(route, CaptureRoute::Remote(epoch));
+                assert!(match (input, event) {
+                    (Input::Key { usage, .. }, Input::Key { usage: actual, down: actual_down }) => usage == actual && down == actual_down,
+                    (Input::Button { button, .. }, Input::Button { button: actual, down: actual_down }) => button == actual && down == actual_down,
+                    _ => false,
+                });
+            }
+            assert_eq!(state.pairs.debt, 0);
+            assert!(gate.finish_outgoing_if_idle(epoch));
+            for down in [true, false] {
+                let callback = gate.begin_event();
+                assert!(matches!(callback.route, CaptureRoute::Local(_)));
+                assert!(!state.key_routed(5, down, callback.route));
+            }
+            assert_eq!(state.pairs.debt, 0);
+        }
     }
     #[test]
     fn pending_commit_aba_never_suppresses_a_local_down_or_its_matching_up() {

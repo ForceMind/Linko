@@ -451,6 +451,20 @@ impl<'a> InputStatus<'a> {
         }
         Ok(())
     }
+    fn restore_at_boundary(
+        &mut self,
+        capture: Option<&platform::CaptureSession>,
+        route: CaptureRoute,
+    ) -> Result<bool> {
+        let (Some(capture), CaptureRoute::Remote(epoch)) = (capture, route) else {
+            return Ok(false);
+        };
+        let restored = self.checked(capture.restore_at_boundary(epoch))?;
+        if restored {
+            self.recovering();
+        }
+        Ok(restored)
+    }
     async fn release(&mut self, recovery: &mut Recovery) -> Result<()> {
         self.recovering();
         self.checked(recovery.release().await)
@@ -787,11 +801,10 @@ pub(super) async fn run_with_status(
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
-                        if returned_to_source(edge, position.0, position.1) {
+                        if returned_to_source(edge, position.0, position.1) && input_status.restore_at_boundary(capture.as_ref(),route)? {
                             // Same reliable stream as earlier discrete input: motion cannot
                             // overtake those events and revoke their lease at the receiver.
                             outgoing=None;
-                            input_status.restore(capture.as_ref())?;
                             send(&mut tx,&Message::Release { lease, cursor: Some(m) }).await?;
                         } else {
                             // Datagram queue pressure may discard motion; the next absolute position repairs it.
