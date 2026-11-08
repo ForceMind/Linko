@@ -1,3 +1,4 @@
+import zlib
 """Staging/signature contract tests; no codesign, GUI, TCC or real artifacts."""
 import hashlib
 import importlib.util
@@ -91,12 +92,69 @@ def fixture(root):
 
 
 class Packaging(unittest.TestCase):
+
+    def test_macos_icon_has_transparent_optical_margin(self):
+        root = Path(package.__file__).resolve().parent.parent
+        brand = root / "apps/peerglide-gui/assets/brand"
+        data = (brand / "Linko.icns").read_bytes()
+        offset = 8
+        master = None
+        while offset < len(data):
+            length = int.from_bytes(data[offset + 4:offset + 8], "big")
+            if data[offset:offset + 4] == b"ic10":
+                master = data[offset + 8:offset + length]
+            offset += length
+        self.assertIsNotNone(master)
+        self.assertEqual(struct.unpack(">II", master[16:24]), (1024, 1024))
+        self.assertEqual(master[24:26], bytes([8, 6]))
+        compressed = bytearray()
+        offset = 8
+        while offset < len(master):
+            length = int.from_bytes(master[offset:offset + 4], "big")
+            if master[offset + 4:offset + 8] == b"IDAT":
+                compressed.extend(master[offset + 8:offset + 8 + length])
+            offset += length + 12
+        raw = zlib.decompress(compressed)
+        self.assertEqual(len(raw), 1024 * 4097)
+        previous = bytearray(4096)
+        bounds = [1024, 1024, -1, -1]
+        for y in range(1024):
+            kind = raw[y * 4097]
+            row = bytearray(raw[y * 4097 + 1:(y + 1) * 4097])
+            for i in range(4096):
+                a = row[i - 4] if i >= 4 else 0
+                b = previous[i]
+                c = previous[i - 4] if i >= 4 else 0
+                if kind == 0:
+                    value = 0
+                elif kind == 1:
+                    value = a
+                elif kind == 2:
+                    value = b
+                elif kind == 3:
+                    value = (a + b) // 2
+                else:
+                    self.assertEqual(kind, 4)
+                    distances = [abs(b - c), abs(a - c), abs(a + b - 2 * c)]
+                    value = [a, b, c][distances.index(min(distances))]
+                row[i] = (row[i] + value) & 255
+            for x in range(1024):
+                if row[x * 4 + 3] > 8:
+                    bounds = [min(bounds[0], x), min(bounds[1], y),
+                              max(bounds[2], x), max(bounds[3], y)]
+            previous = row
+        for actual, expected in zip(bounds, [100, 100, 923, 923]):
+            self.assertLessEqual(abs(actual - expected), 1, bounds)
+
+
     def test_committed_native_icons_match_source_and_container_sizes(self):
         root = Path(package.__file__).resolve().parent.parent
         brand = root / "apps/peerglide-gui/assets/brand"
         metadata = json.loads((brand / "icon-source.json").read_text())
         self.assertEqual(hashlib.sha256((root / metadata["source"]).read_bytes()).hexdigest(),
                          metadata["source_sha256"])
+        self.assertEqual(hashlib.sha256((root / metadata["macos_source"]).read_bytes()).hexdigest(),
+                         metadata["macos_source_sha256"])
         for name, record in metadata["assets"].items():
             data = (brand / name).read_bytes()
             self.assertEqual(len(data), record["bytes"])

@@ -15,3 +15,5 @@ PNG-backed ICNS/ICO 使用 Python 标准库封装。初次 `iconutil -c icns` �
 
 没有新增 Cargo 依赖；锁文件仅同步应用版本。Windows SDK 工具不在 PATH 时，构建脚本搜索现有 Windows Kits 10；缺失则明确失败，不悄悄发布默认图标。
 非 MSVC Windows 构建仅接入运行窗口图标，PE 资源嵌入需另行验证。macOS Finder/Dock 与 Windows Explorer/任务栏的实际显示仍须用新 CI 包确认；不操作图标缓存、TCC、身份或当前冻结 App。
+
+macOS专用源为docs/design/linko-brand-v3/app-icon-macos.svg，1024画布中使用100px透明外边距（824px底板），用于ICNS及Mac窗口位图；这是针对实际过大反馈的光学尺寸修正，需Dock近邻复查，不宣称来自Apple的固定像素契约。Windows ICO/原窗口图和侧栏标记不缩小。

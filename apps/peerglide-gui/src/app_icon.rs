@@ -1,8 +1,13 @@
 //! Native window/taskbar icon, separate from the in-window brand mark.
 use eframe::egui::IconData;
 
+#[cfg(target_os = "macos")]
+const PNG: &[u8] = include_bytes!("../assets/brand/app-icon-macos-256.png");
+#[cfg(not(target_os = "macos"))]
+const PNG: &[u8] = include_bytes!("../assets/brand/app-icon-256.png");
+
 pub(super) fn icon() -> IconData {
-    eframe::icon_data::from_png_bytes(include_bytes!("../assets/brand/app-icon-256.png"))
+    eframe::icon_data::from_png_bytes(PNG)
         .expect("bundled Linko window icon must decode")
 }
 
