@@ -210,7 +210,8 @@ pub(super) fn brand_mark(ui: &mut egui::Ui) {
                 color,
             });
         }
-        mesh.indices.extend_from_slice(&[0, 1, 4, 1, 2, 3, 1, 3, 4, 0, 4, 5]);
+        mesh.indices
+            .extend_from_slice(&[0, 1, 4, 1, 2, 3, 1, 3, 4, 0, 4, 5]);
         painter.add(egui::Shape::mesh(mesh));
     }
 }

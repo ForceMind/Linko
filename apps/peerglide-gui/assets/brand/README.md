@@ -13,5 +13,5 @@
 PNG-backed ICNS/ICO 使用 Python 标准库封装。初次 `iconutil -c icns` 在隔离环境拒绝 iconset，因此不依赖该转换服务。
 生成后的格式、尺寸、来源摘要与 Mac 包资源由 `tools/test_package.py` 校验。
 
-没有新增 Cargo 依赖或改锁文件。Windows SDK 工具不在 PATH 时，构建脚本搜索现有 Windows Kits 10；缺失则明确失败，不悄悄发布默认图标。
+没有新增 Cargo 依赖；锁文件仅同步应用版本。Windows SDK 工具不在 PATH 时，构建脚本搜索现有 Windows Kits 10；缺失则明确失败，不悄悄发布默认图标。
 非 MSVC Windows 构建仅接入运行窗口图标，PE 资源嵌入需另行验证。macOS Finder/Dock 与 Windows Explorer/任务栏的实际显示仍须用新 CI 包确认；不操作图标缓存、TCC、身份或当前冻结 App。
