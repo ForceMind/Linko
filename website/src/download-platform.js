@@ -3,7 +3,7 @@ export function detectPlatform(nav) {
   const ua = nav.userAgent || '';
   const hint = nav.userAgentData?.platform || '';
   const legacy = nav.platform || '';
-  if (nav.userAgentData?.mobile || /Android|iPhone|iPad|iPod/i.test(`${hint} ${ua}`) ||
+  if (nav.userAgentData?.mobile || /Android|iPhone|iPad|iPod|CrOS/i.test(`${hint} ${ua}`) ||
       (/Mac/i.test(`${hint} ${legacy}`) && nav.maxTouchPoints > 1)) return null;
   const source = hint || legacy || ua;
   if (/Windows|Win32|Win64/i.test(source)) return 'windows';

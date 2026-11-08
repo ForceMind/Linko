@@ -14,7 +14,7 @@ test('desktop hints and Safari/Firefox fallback identify OS without assuming arc
   ]) assert.equal(detectPlatform(nav), expected);
 });
 test('mobile, iPad desktop mode, ChromeOS and unknown never recommend a desktop package', () => {
-  for (const nav of [{}, { userAgent: 'unknown' }, { userAgent: 'CrOS x86_64' },
+  for (const nav of [{}, { userAgent: 'unknown' }, { userAgent: 'CrOS x86_64', platform: 'Linux x86_64' },
     { userAgent: 'Linux; Android 16', platform: 'Linux arm' },
     { userAgent: 'iPhone Mac OS X', platform: 'iPhone' },
     { platform: 'MacIntel', maxTouchPoints: 5 },
