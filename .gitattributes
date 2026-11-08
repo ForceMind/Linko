@@ -1,3 +1,4 @@
 # Keep the approved icon source bytes identical on all package builders.
 docs/design/linko-v1/brand/app-icon.svg text eol=lf
 docs/design/linko-v2/*.svg text eol=lf
+docs/design/linko-brand-v3/*.svg text eol=lf

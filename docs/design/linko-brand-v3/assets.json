@@ -1,0 +1,37 @@
+{
+  "status": "brand_proposals_not_installed",
+  "recommended": "A",
+  "renderer": "AppKit offscreen SVG rendering",
+  "assets": [
+    {
+      "file": "a-leap.svg",
+      "sha256": "17ef011623f377e6f3a95569dcacd6145c96a554ffa49c40b2c445bc2ed9f6c3",
+      "width": "256",
+      "height": "256"
+    },
+    {
+      "file": "b-orbit.svg",
+      "sha256": "206fe1dd8f6554e1600293c1336b9bd69c22db947401c52944f7737c6d52a862",
+      "width": "256",
+      "height": "256"
+    },
+    {
+      "file": "brand-comparison.svg",
+      "sha256": "79551670bf07fab1a4f87d55a9bf730cf4d8529a31d21441477bc2130e6ec9e4",
+      "width": "1280",
+      "height": "900"
+    },
+    {
+      "file": "c-link.svg",
+      "sha256": "86c1cabc279094dbc49949bbe2aaa3dfbc40b49be1f8f6599d13fd89f10ced01",
+      "width": "256",
+      "height": "256"
+    },
+    {
+      "file": "previews/brand-comparison.png",
+      "sha256": "85baaaa2812f4e541f9cfb3c4f4944cca0e9273967cd0755b3af8a366622e54a",
+      "width": 1280,
+      "height": 900
+    }
+  ]
+}
