@@ -921,9 +921,10 @@ mod tests {
                         text_rect(&s.shape, "屏幕布局").filter(|rect| rect.min.x >= 196.0)
                     })
                     .min_by(|a, b| a.min.y.total_cmp(&b.min.y));
-                let subtitle = output.shapes.iter().find_map(|s| {
-                    text_rect(&s.shape, "按桌面位置摆放主屏，设置键鼠的跨屏方向。")
-                });
+                let subtitle = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| text_rect(&s.shape, "按桌面位置摆放主屏，设置键鼠的跨屏方向。"));
                 let mut card_alignment = Vec::new();
                 for (name, metadata) in [
                     (desktop_ui::local_device_name(), "系统"),
