@@ -1,6 +1,6 @@
 # Linko / 屏跃官网
 
-中文官网，站点版本 **0.1.4**。Cloudflare Pages 项目 `linko`，正式访问地址：
+中文官网，站点版本 **0.1.5**。Cloudflare Pages 项目 `linko`，正式访问地址：
 <https://linko-63e.pages.dev/>。
 
 官网独立于原生 App，不改变 App 的版本、设备身份、权限或协议。仅发布
@@ -64,3 +64,11 @@ npx --no-install wrangler pages deploy dist --project-name linko --branch main
 不引入第三方镜像、不修改原包、不购买服务或启用付费计划。Cloudflare 中转不保证所有国内网络可达或提速；当前不支持断点续传，失败可重新下载或使用 GitHub 原链。该路由使用现有账户 Pages Functions 配额，耗尽时备用入口可能不可用，静态页面仍走原有服务。
 
 构建后的 `npm run check` 包含 8 项路由、凭据隔离、重定向、源失败和元数据回归。部署后运行 `node verify-downloads.mjs https://linko-63e.pages.dev`，实际流式读取两个完整包并校验大小与 SHA-256；这是下载验证，不是国内网络实测或 App 双机验收。`_worker.js` 仅服务端执行，不作为公开静态资源读取。
+
+## 按访问系统定位下载
+
+只在浏览器本地读取低熵平台提示，缺少时兼容读取平台／UA；不上传识别结果、不申请高熵架构信息、不写入存储。Windows／macOS 对应卡片显示“当前系统”；macOS 明确仅 Apple 芯片包，Windows 明确 x64，系统识别不证明 CPU 架构兼容。iOS、iPad 桌面模式、Android、ChromeOS、未知环境不推荐桌面包；Linux 只定位诊断说明。
+
+首页不强制跳过产品介绍；点击“获取预览”或打开 `#preview` 时定位对应卡片。初次等待页面资源加载，重复点击和前进／后退也适用；减少动态效果时不平滑滚动，键盘触发保留焦点可达性，其他平台始终可见。6项平台／定位代码回归与既有8项中转回归通过；浏览器未验证。
+
+计费边界：Pages Functions 按 Workers 套餐计费。Free 计划每天全账户共享100,000次请求，超限会失败；Paid 计划按套餐及超额请求／CPU计费。官方目前不另外收取 Workers 出站流量费。实现未购买或升级计划，未启用R2等存储；未核实账户账单前不能保证增量费用恒为零。规则来源：[Pages Functions pricing](https://developers.cloudflare.com/pages/functions/pricing/)、[Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)、[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)。
