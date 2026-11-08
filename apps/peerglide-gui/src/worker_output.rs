@@ -7,6 +7,7 @@ pub(super) const MAX_LINE_BYTES: usize = 4096;
 pub(super) enum Line {
     Text(String),
     Oversized,
+    InvalidEncoding,
 }
 
 /// The byte limit includes line endings. Drain excess through the next newline
@@ -49,9 +50,10 @@ pub(super) fn read_line(reader: &mut impl BufRead) -> io::Result<Option<Line>> {
             bytes.pop();
         }
     }
-    String::from_utf8(bytes)
-        .map(|line| Some(Line::Text(line)))
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid worker output encoding"))
+    Ok(Some(match String::from_utf8(bytes) {
+        Ok(line) => Line::Text(line),
+        Err(_) => Line::InvalidEncoding,
+    }))
 }
 
 #[cfg(test)]
@@ -91,11 +93,22 @@ mod tests {
         assert_eq!(read_line(&mut reader)?, Some(Line::Oversized));
         assert_eq!(read_line(&mut reader)?, None);
         let mut invalid = Cursor::new(b"\xff\nnext\n");
-        assert_eq!(
-            read_line(&mut invalid).unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
+        assert_eq!(read_line(&mut invalid)?, Some(Line::InvalidEncoding));
         assert_eq!(read_line(&mut invalid)?, Some(Line::Text("next".into())));
         Ok(())
+    }
+
+    #[test]
+    fn invalid_data_from_the_io_source_is_not_a_consumed_bad_line() {
+        struct ReadFailure;
+        impl Read for ReadFailure {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "source failure"))
+            }
+        }
+        assert_eq!(
+            read_line(&mut BufReader::new(ReadFailure)).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 }

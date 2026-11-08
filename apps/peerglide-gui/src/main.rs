@@ -344,9 +344,9 @@ fn read_worker_output(
     loop {
         let line = match worker_output::read_line(&mut reader) {
             Ok(Some(worker_output::Line::Text(line))) => line,
-            Ok(Some(worker_output::Line::Oversized)) => {
+            Ok(Some(worker_output::Line::Oversized | worker_output::Line::InvalidEncoding)) => {
                 snapshot.3.store(true, Ordering::Release);
-                let _ = diagnostics.try_send("工作进程输出超过限制，最终状态需要重新确认。".into());
+                let _ = diagnostics.try_send("工作进程输出无效或超过限制，最终状态需要重新确认。".into());
                 wake();
                 continue;
             }
@@ -382,6 +382,9 @@ fn read_worker_diagnostics(
         let line = match worker_output::read_line(&mut reader) {
             Ok(Some(worker_output::Line::Text(line))) => line.chars().take(600).collect(),
             Ok(Some(worker_output::Line::Oversized)) => "工作进程诊断超过限制，已省略该行。".into(),
+            Ok(Some(worker_output::Line::InvalidEncoding)) => {
+                "工作进程诊断编码无效，已省略该行。".into()
+            }
             Ok(None) | Err(_) => break,
         };
         if diagnostics.try_send(line).is_ok() {
@@ -2919,11 +2922,36 @@ mod lifecycle_tests {
         Ok(())
     }
     #[test]
-    fn oversized_stderr_is_redacted_and_following_diagnostics_are_drained() -> Result<()> {
-        let source = format!(
-            "{}\nfinal diagnostic\n",
-            "oversized fixture text".repeat(worker_output::MAX_LINE_BYTES)
+    fn malformed_stdout_is_drained_without_certifying_cleanup() {
+        let mut source = b"\xff\n".to_vec();
+        source.extend_from_slice(
+            WorkerInputEvent::new_terminal(WorkerInputState::Disabled)
+                .unwrap()
+                .line()
+                .as_bytes(),
         );
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let (tx, _rx) = mpsc::sync_channel(1);
+        read_worker_output(
+            std::io::Cursor::new(source),
+            snapshot.clone(),
+            tx,
+            Arc::new(|| {}),
+        );
+        assert!(snapshot.2.load(Ordering::Acquire) && snapshot.3.load(Ordering::Acquire));
+        assert_eq!(
+            snapshot.take_input(),
+            Some((WorkerInputState::Disabled, true))
+        );
+    }
+    #[test]
+    fn oversized_stderr_is_redacted_and_following_diagnostics_are_drained() -> Result<()> {
+        let mut source = format!(
+            "{}\n",
+            "oversized fixture text".repeat(worker_output::MAX_LINE_BYTES)
+        )
+        .into_bytes();
+        source.extend_from_slice(b"\xff\nfinal diagnostic\n");
         let (tx, rx) = mpsc::sync_channel(3);
         read_worker_diagnostics(
             BufReader::with_capacity(13, std::io::Cursor::new(source)),
@@ -2931,6 +2959,7 @@ mod lifecycle_tests {
             Arc::new(|| {}),
         );
         assert_eq!(rx.try_recv()?, "工作进程诊断超过限制，已省略该行。");
+        assert_eq!(rx.try_recv()?, "工作进程诊断编码无效，已省略该行。");
         assert_eq!(rx.try_recv()?, "final diagnostic");
         assert!(matches!(
             rx.try_recv(),

@@ -162,3 +162,12 @@ or continuous tracking. Local startup-down ownership and its passed-up pair
 remain unchanged. Unsupported buttons remain unsupported by the peer bitmap.
 Native tests check refusal while held, local-up clearing and subsequent admission;
 real side-button hardware and permission acceptance remain C06.
+
+## Idempotent release after clean Native retirement
+
+A managed Stop can retire the receiving epoch before the async session queues
+its final Release. A Closed command/reply is accepted only when a fresh snapshot
+confirms the same epoch Retired and the whole receive owner reports Retired.
+Draining, failed/source-lost, unknown epoch and a new active owner still reject;
+Timeout/Stale/QueueFull are never translated. Thread shutdown, join, source health
+and sticky recovery failure checks remain independent and mandatory.

@@ -15,7 +15,9 @@ Before decoding or allocating a whole line, GUI stdout/stderr readers now cap
 each record at 4 KiB including line endings. Excess is drained to the next newline
 without parsing a retained prefix. Stdout overflow latches untrusted output, so
 a later terminal record cannot certify clean recovery; stderr overflow becomes
-only a fixed diagnostic. Subsequent records and EOF still drain normally. This
+only a fixed diagnostic. Consumed invalid UTF-8 records are also redacted and
+drained, while actual source I/O errors still terminate the reader. Stdout
+encoding failure retains the same sticky untrusted-output state. This
 bound is not a diagnosis of any historical native memory incident.
 
 Disconnect-and-revoke is available during a session. It requests graceful worker

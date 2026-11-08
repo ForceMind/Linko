@@ -393,11 +393,24 @@ mod implementation {
             // Queue-full/cancel/timeout invokes CancelRequest's atomic recovery.
             // A normally queued release may still apply its terminal cursor before
             // retiring; requesting takeover first would discard that cursor.
-            self.submit(Kind::Release {
-                epoch,
-                cursor: terminal_cursor,
-            })
-            .await
+            match self
+                .submit(Kind::Release {
+                    epoch,
+                    cursor: terminal_cursor,
+                })
+                .await
+            {
+                // Stop may retire this epoch and close the Native inbox after
+                // the caller observed it active. Closed alone is not cleanup:
+                // both the epoch and the whole owner must now confirm retirement.
+                Err(ReceiveError::Closed)
+                    if self.snapshot(epoch) == ReceiveSnapshot::Retired
+                        && self.control.outcome() == ReceiveAck::Retired =>
+                {
+                    Ok(ReceiveAck::Retired)
+                }
+                result => result,
+            }
         }
         async fn submit(&mut self, kind: Kind) -> Result<ReceiveAck, ReceiveError> {
             match self.command(kind).await? {
@@ -1258,6 +1271,143 @@ mod implementation {
             match reply.try_recv().unwrap().unwrap() {
                 Reply::Ack(ack) => ack,
                 _ => panic!("no cleanup reply"),
+            }
+        }
+
+        #[tokio::test]
+        async fn closed_release_is_idempotent_only_after_the_observed_owner_retires() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+            assert_eq!(
+                input(
+                    &mut driver,
+                    &mut engine,
+                    &mut backend,
+                    epoch,
+                    Input::Key {
+                        usage: 4,
+                        down: true,
+                    },
+                    1,
+                ),
+                Ok(ReceiveAck::Submitted)
+            );
+            // The caller's Active observation precedes the Native stop/exit.
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Active);
+            driver.control().request_stop();
+            pump(&mut engine, &mut backend, 2);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+            assert_eq!(driver.control().outcome(), ReceiveAck::Retired);
+            assert!(engine.can_exit());
+            assert!(backend.effects.contains(&Effect::Key(4, false)));
+            assert!(backend.effects.contains(&Effect::Leave));
+            let effects = backend.effects.clone();
+            drop(engine);
+            assert_eq!(
+                driver.release(epoch, Some(point())).await,
+                Ok(ReceiveAck::Retired)
+            );
+            assert_eq!(
+                backend.effects, effects,
+                "closed cleanup must not replay effects"
+            );
+            assert_eq!(
+                driver
+                    .release(
+                        epoch,
+                        Some(ReceivePoint {
+                            x: f64::NAN,
+                            y: 0.5,
+                        }),
+                    )
+                    .await,
+                Err(ReceiveError::Invalid)
+            );
+        }
+
+        #[tokio::test]
+        async fn closed_release_never_confirms_draining_failed_or_unknown_owners() {
+            for scenario in [
+                "draining",
+                "failed",
+                "source_lost",
+                "unknown",
+                "new_owner",
+            ] {
+                let (mut driver, mut engine, mut backend, _) = setup(8);
+                let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+                let mut released = epoch;
+                match scenario {
+                    "draining" => {
+                        backend.modifiers = true;
+                        driver.control().request_stop();
+                        pump(&mut engine, &mut backend, 1);
+                        assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+                    }
+                    "failed" => {
+                        engine.fail();
+                        assert_eq!(driver.control().outcome(), ReceiveAck::RecoveryRequired);
+                    }
+                    "source_lost" => {
+                        backend.alive = false;
+                        pump(&mut engine, &mut backend, 1);
+                        assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
+                    }
+                    "unknown" => {
+                        assert_eq!(
+                            release(&mut driver, &mut engine, &mut backend, epoch, 1),
+                            ReceiveAck::Retired
+                        );
+                        released.instance += 1;
+                        assert_eq!(driver.snapshot(released), ReceiveSnapshot::RecoveryRequired);
+                        assert_eq!(driver.control().outcome(), ReceiveAck::Retired);
+                    }
+                    "new_owner" => {
+                        assert_eq!(
+                            release(&mut driver, &mut engine, &mut backend, epoch, 1),
+                            ReceiveAck::Retired
+                        );
+                        let current = begin(&mut driver, &mut engine, &mut backend, 2);
+                        assert_eq!(driver.snapshot(current), ReceiveSnapshot::Active);
+                        assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+                        assert_eq!(driver.control().outcome(), ReceiveAck::Submitted);
+                    }
+                    _ => unreachable!(),
+                }
+                drop(engine);
+                let effects = backend.effects.clone();
+                assert_eq!(driver.release(released, None).await, Err(ReceiveError::Closed));
+                assert_eq!(backend.effects, effects);
+            }
+        }
+
+        #[tokio::test]
+        async fn retired_owner_does_not_hide_nonclosed_release_errors() {
+            use std::{
+                future::{poll_fn, Future},
+                task::Poll,
+            };
+            for error in [
+                ReceiveError::Timeout,
+                ReceiveError::Stale,
+                ReceiveError::QueueFull,
+            ] {
+                let (mut driver, mut engine, mut backend, _) = setup(8);
+                let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+                let control = driver.control();
+                let mut pending = Box::pin(driver.release(epoch, None));
+                poll_fn(|cx| {
+                    assert!(matches!(pending.as_mut().poll(cx), Poll::Pending));
+                    Poll::Ready(())
+                })
+                .await;
+                let command = engine.inbox.try_recv().unwrap();
+                control.request_stop();
+                pump(&mut engine, &mut backend, 1);
+                assert_eq!(control.snapshot(epoch), ReceiveSnapshot::Retired);
+                assert_eq!(control.outcome(), ReceiveAck::Retired);
+                assert!(command.reply.unwrap().send(Err(error)).is_ok());
+                assert_eq!(pending.await, Err(error));
             }
         }
 
