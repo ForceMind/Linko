@@ -1410,7 +1410,9 @@ mod tests {
             receive_control: None,
         };
         assert!(session.gate.try_activate());
-        let epoch = session.gate.epoch_from(session.gate.0.control.load(Ordering::Acquire));
+        let epoch = session
+            .gate
+            .epoch_from(session.gate.0.control.load(Ordering::Acquire));
         session.gate.0.return_pending.store(true, Ordering::Release);
         session.gate.set_held(1);
         assert!(!session.restore_at_boundary(epoch).unwrap());
@@ -1888,11 +1890,26 @@ mod hook_tests {
     #[test]
     fn boundary_return_keeps_remote_down_up_pairs_and_then_passes_local_input() {
         for input in [
-            Input::Key { usage: 4, down: true },
-            Input::Key { usage: 0xe1, down: true },
-            Input::Button { button: 1, down: true },
-            Input::Button { button: 2, down: true },
-            Input::Button { button: 3, down: true },
+            Input::Key {
+                usage: 4,
+                down: true,
+            },
+            Input::Key {
+                usage: 0xe1,
+                down: true,
+            },
+            Input::Button {
+                button: 1,
+                down: true,
+            },
+            Input::Button {
+                button: 2,
+                down: true,
+            },
+            Input::Button {
+                button: 3,
+                down: true,
+            },
         ] {
             let (mut state, mut events) = state(8);
             let epoch = activate(&state);
@@ -1903,7 +1920,8 @@ mod hook_tests {
                     assert_eq!(callback.route, CaptureRoute::Remote(epoch));
                     assert!(match input {
                         Input::Key { usage, .. } => state.key_routed(usage, down, callback.route),
-                        Input::Button { button, .. } => state.button_routed(button, down, callback.route),
+                        Input::Button { button, .. } =>
+                            state.button_routed(button, down, callback.route),
                         _ => unreachable!(),
                     });
                     assert!(!gate.finish_outgoing_if_idle(epoch));
@@ -1916,8 +1934,20 @@ mod hook_tests {
                 };
                 assert_eq!(route, CaptureRoute::Remote(epoch));
                 assert!(match (input, event) {
-                    (Input::Key { usage, .. }, Input::Key { usage: actual, down: actual_down }) => usage == actual && down == actual_down,
-                    (Input::Button { button, .. }, Input::Button { button: actual, down: actual_down }) => button == actual && down == actual_down,
+                    (
+                        Input::Key { usage, .. },
+                        Input::Key {
+                            usage: actual,
+                            down: actual_down,
+                        },
+                    ) => usage == actual && down == actual_down,
+                    (
+                        Input::Button { button, .. },
+                        Input::Button {
+                            button: actual,
+                            down: actual_down,
+                        },
+                    ) => button == actual && down == actual_down,
                     _ => false,
                 });
             }
