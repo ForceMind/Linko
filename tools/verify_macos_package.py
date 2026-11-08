@@ -8,7 +8,7 @@ import sys
 import tempfile
 import zipfile
 
-from package import APP_BUNDLE_NAME, PRODUCT_NAME, verify_macos_bundle_metadata
+from package import APP_BUNDLE_NAME, APP_ICON_FILE, PRODUCT_NAME, verify_macos_bundle_metadata
 
 
 def verify(app):
@@ -35,7 +35,7 @@ def main():
         if len(apps) != 1:
             raise RuntimeError("expected one app bundle")
         verify(apps[0])
-        for kind in ("plist", "helper"):
+        for kind in ("plist", "helper", "icon"):
             altered = root / kind / APP_BUNDLE_NAME
             shutil.copytree(apps[0], altered)
             if kind == "plist":
@@ -43,7 +43,7 @@ def main():
                 value = plistlib.loads(path.read_bytes())
                 value["CFBundleDisplayName"] += " modified fixture"
                 path.write_bytes(plistlib.dumps(value))
-            else:
+            elif kind == "helper":
                 path = altered / "Contents/MacOS/peerglide"
                 with path.open("r+b") as file:
                     file.seek(4096)
@@ -52,11 +52,16 @@ def main():
                         raise RuntimeError("helper fixture is too small")
                     file.seek(4096)
                     file.write(bytes([byte[0] ^ 1]))
+            else:
+                path = altered / "Contents/Resources" / APP_ICON_FILE
+                data = bytearray(path.read_bytes())
+                data[-1] ^= 1
+                path.write_bytes(data)
             result = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(altered)],
                                     capture_output=True)
             if result.returncode == 0:
                 raise RuntimeError("modified package was incorrectly accepted")
-    print("PASS: extracted macOS bundle identity/seal and modified plist/helper rejection")
+    print("PASS: extracted macOS bundle identity/icon/seal and modified plist/helper/icon rejection")
     print("This verifies ad-hoc integrity only, not Developer ID, notarization, TCC or physical input.")
 
 

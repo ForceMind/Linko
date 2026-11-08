@@ -1,8 +1,11 @@
 """Staging/signature contract tests; no codesign, GUI, TCC or real artifacts."""
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import plistlib
+import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -44,12 +47,21 @@ class FakeCodesign:
             executable = path / "Contents/MacOS/peerglide-gui" if operation == "app_sign" else path
             executable.write_bytes(executable.read_bytes() + b"-fake-signed")
             if operation == "app_sign" and self.seal:
+                icon = path / "Contents/Resources/Linko.icns"
+                if not icon.is_file():
+                    raise AssertionError("icon must exist before the complete bundle is signed")
                 seal = path / "Contents/_CodeSignature/CodeResources"
                 seal.parent.mkdir()
                 nested = {"cdhash": b"f" * 20, "requirement": 'cdhash H"fixture"'}
                 if self.seal == "raw_resource":
                     nested = {"hash2": b"not-a-nested-signature"}
-                seal.write_bytes(plistlib.dumps({"files2": {"MacOS/peerglide": nested}}))
+                files = {"MacOS/peerglide": nested,
+                         "Resources/Linko.icns": {"hash2": hashlib.sha256(icon.read_bytes()).digest()}}
+                if self.seal == "missing_icon":
+                    files.pop("Resources/Linko.icns")
+                elif self.seal == "wrong_icon":
+                    files["Resources/Linko.icns"] = {"hash2": b"x" * 32}
+                seal.write_bytes(plistlib.dumps({"files2": files}))
         elif "--verify" in command:
             if self.fail == "verify":
                 raise subprocess.CalledProcessError(1, command)
@@ -72,9 +84,63 @@ def fixture(root):
         (root / name).write_text("fixture " + name)
     (root / "docs").mkdir()
     (root / "docs/contract.md").write_text("fixture contract")
+    brand = root / "apps/peerglide-gui/assets/brand"
+    brand.mkdir(parents=True)
+    shutil.copyfile(Path(package.__file__).resolve().parent.parent /
+                    "apps/peerglide-gui/assets/brand/Linko.icns", brand / "Linko.icns")
 
 
 class Packaging(unittest.TestCase):
+    def test_committed_native_icons_match_source_and_container_sizes(self):
+        root = Path(package.__file__).resolve().parent.parent
+        brand = root / "apps/peerglide-gui/assets/brand"
+        metadata = json.loads((brand / "icon-source.json").read_text())
+        self.assertEqual(hashlib.sha256((root / metadata["source"]).read_bytes()).hexdigest(),
+                         metadata["source_sha256"])
+        for name, record in metadata["assets"].items():
+            data = (brand / name).read_bytes()
+            self.assertEqual(len(data), record["bytes"])
+            self.assertEqual(hashlib.sha256(data).hexdigest(), record["sha256"])
+        for name, size in (("app-icon.png", 1024), ("app-icon-256.png", 256)):
+            data = (brand / name).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), (size, size))
+            self.assertEqual(data[24:26], bytes([8, 6]), "native icon must retain RGBA alpha")
+        data = (brand / "Linko.ico").read_bytes()
+        reserved, kind, count = struct.unpack("<HHH", data[:6])
+        self.assertEqual((reserved, kind, count), (0, 1, 7))
+        sizes = []
+        offset = 6 + 16 * count
+        for index in range(count):
+            width, height, _colors, _zero, planes, bits, length, at = struct.unpack_from(
+                "<BBBBHHII", data, 6 + 16 * index)
+            size = width or 256
+            self.assertEqual((height or 256, planes, bits, at), (size, 1, 32, offset))
+            png = data[at:at + length]
+            self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", png[16:24]), (size, size))
+            sizes.append(size)
+            offset += length
+        self.assertEqual(sizes, [16, 24, 32, 48, 64, 128, 256])
+        self.assertEqual(offset, len(data))
+        data = (brand / "Linko.icns").read_bytes()
+        self.assertEqual(data[:4], b"icns")
+        self.assertEqual(int.from_bytes(data[4:8], "big"), len(data))
+        offset, chunks = 8, {}
+        while offset < len(data):
+            kind = data[offset:offset + 4].decode("ascii")
+            length = int.from_bytes(data[offset + 4:offset + 8], "big")
+            self.assertGreater(length, 8)
+            self.assertLessEqual(offset + length, len(data))
+            png = data[offset + 8:offset + length]
+            self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+            chunks[kind] = struct.unpack(">II", png[16:24])
+            offset += length
+        self.assertEqual(offset, len(data))
+        self.assertEqual(chunks["ic08"], (256, 256))
+        self.assertEqual(chunks["ic09"], (512, 512))
+        self.assertEqual(chunks["ic10"], (1024, 1024))
+
     def test_import_has_no_packaging_subprocess_or_argv_side_effect(self):
         spec = importlib.util.spec_from_file_location("package_import_probe", package.__file__)
         module = importlib.util.module_from_spec(spec)
@@ -120,6 +186,9 @@ class Packaging(unittest.TestCase):
                 self.assertEqual(info["CFBundleIdentifier"], package.APP_IDENTIFIER)
                 self.assertEqual(info["CFBundleVersion"], "0.2.3")
                 self.assertEqual(info["CFBundleExecutable"], "peerglide-gui")
+                self.assertEqual(info["CFBundleIconFile"], "Linko.icns")
+                self.assertEqual(zipped.read(app + "Resources/Linko.icns"),
+                                 (root / "apps/peerglide-gui/assets/brand/Linko.icns").read_bytes())
                 self.assertEqual(info["NSBonjourServices"], ["_peerglide._udp", "_peerglide-pair._tcp"])
                 self.assertIn(app + "_CodeSignature/CodeResources", zipped.namelist())
                 self.assertTrue(zipped.read(app + "MacOS/peerglide").endswith(b"-fake-signed"))
@@ -139,6 +208,13 @@ class Packaging(unittest.TestCase):
             verification = [command for command, _options in run.calls[before:]]
             self.assertEqual(verification[0][1:4], ["--verify", "--deep", "--strict"])
             self.assertTrue(all("--sign" not in command for command in verification))
+            icon = extracted / label / "Linko.app/Contents/Resources/Linko.icns"
+            changed = bytearray(icon.read_bytes())
+            changed[-1] ^= 1
+            icon.write_bytes(changed)
+            with patch.object(verify_macos_package.subprocess, "run", new=run):
+                with self.assertRaisesRegex(RuntimeError, "icon.*resource seal"):
+                    verify_macos_package.verify(extracted / label / "Linko.app")
             self.assertEqual(archive.with_suffix(".zip.sha256").read_text(),
                              f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
             self.assertFalse(Path(codesign[1][-1]).exists(), "only our temporary staging was signed and removed")
@@ -179,7 +255,7 @@ class Packaging(unittest.TestCase):
                     package.build_package(root, "Darwin", "arm64", FakeCodesign(fail=operation))
                 self.assertEqual(list((root / "dist").iterdir()), [])
 
-        for key in ("CFBundleName", "CFBundleDisplayName"):
+        for key in ("CFBundleName", "CFBundleDisplayName", "CFBundleIconFile"):
             with self.subTest(plist_key=key), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 fixture(root)
@@ -199,6 +275,8 @@ class Packaging(unittest.TestCase):
             {"main": MAIN_METADATA.replace("Sealed Resources version=2 rules=13 files=1", "Sealed Resources=none")},
             {"seal": False},
             {"seal": "raw_resource"},
+            {"seal": "missing_icon"},
+            {"seal": "wrong_icon"},
         ]
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as folder:

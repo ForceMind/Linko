@@ -39,6 +39,9 @@ jobs:
             cargo test -p peerglide-gui --locked -- --test-threads=8
           done
       - run: cargo build --release --workspace --locked
+      - name: Verify the Windows EXE shell icon without executing it
+        if: runner.os == 'Windows'
+        run: powershell -NoProfile -File tools/verify_windows_icon.ps1 -Executable target/release/peerglide-gui.exe -ExpectedIcon apps/peerglide-gui/assets/brand/Linko.ico
       - run: python tools/smoke.py
       - run: python tools/reconnect_smoke.py
       - name: First connection wait (real pinned peers, no native input)
