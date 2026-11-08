@@ -658,12 +658,26 @@ unsafe fn initial_keys() -> std::collections::BTreeSet<u16> {
         .map(|code| from_code(code).unwrap_or(0x8000 | code))
         .collect()
 }
-unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
-    [(1, 0), (2, 1), (3, 2)]
-        .into_iter()
-        .filter(|(_, b)| CGEventSourceButtonState(0, *b))
-        .map(|(u, _)| u)
+fn sampled_buttons(held: u64) -> std::collections::BTreeSet<u8> {
+    // Match the existing callback's 0..31 native button numbers. No additional
+    // remote button capability or physical-origin proof is created here.
+    (0u8..32)
+        .filter(|number| held & (1u64 << number) != 0)
+        .map(|number| number + 1)
         .collect()
+}
+unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
+    // NSEvent's one-time snapshot can include synthesized state. It is used only
+    // conservatively to refuse admission while held, never for event tracking or
+    // physical provenance. Preserve the original three CG source observations.
+    let mut held =
+        objc2::rc::autoreleasepool(|_| objc2_app_kit::NSEvent::pressedMouseButtons() as u64);
+    for number in 0..3 {
+        if CGEventSourceButtonState(0, number) {
+            held |= 1u64 << number;
+        }
+    }
+    sampled_buttons(held)
 }
 
 #[cfg(test)]
@@ -686,6 +700,38 @@ mod tests {
     }
 
     use super::*;
+    #[test]
+    fn startup_other_button_hold_blocks_receiving_until_its_local_up() {
+        for number in 3u8..32 {
+            let button = number + 1;
+            let (tx, mut rx) = mpsc::channel(8);
+            let mut state = HookState {
+                pairs: PairLedger::default(),
+                stopping: false,
+                toggle_route: None,
+                tx,
+                gate: CaptureGate::default(),
+                keys: Default::default(),
+                buttons: sampled_buttons(1u64 << number),
+                toggle_armed: false,
+                target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
+            };
+            state.update_held();
+            assert!(!state.gate.idle());
+            assert!(state.gate.enter_receiving().is_none());
+            let local = state.gate.route().unwrap();
+            assert!(!state.unsupported_button(button, false, local));
+            assert_eq!(state.pairs.debt, 0, "startup Down belonged to the local OS");
+            assert!(state.gate.idle());
+            assert!(state.gate.enter_receiving().is_some());
+            assert!(!state.target.supports(Input::Button { button, down: true }));
+            assert!(matches!(rx.try_recv().unwrap(), Captured::UnsupportedInput));
+            assert!(
+                rx.try_recv().is_err(),
+                "other-button input was never forwarded"
+            );
+        }
+    }
     #[test]
     fn key_positions_roundtrip() {
         for &(u, c) in KEYS {

@@ -815,12 +815,23 @@ unsafe fn initial_keys() -> std::collections::BTreeSet<u16> {
         .map(|v| STARTUP_VK | v)
         .collect()
 }
+fn sampled_buttons(mut down: impl FnMut(i32) -> bool) -> std::collections::BTreeSet<u8> {
+    // Startup admission must include unsupported side buttons too. Observing a
+    // hold does not add those buttons to the peer's three-button receive map.
+    [
+        (1, VK_LBUTTON),
+        (2, VK_RBUTTON),
+        (3, VK_MBUTTON),
+        (4, VK_XBUTTON1),
+        (5, VK_XBUTTON2),
+    ]
+    .into_iter()
+    .filter(|(_, vk)| down(i32::from(*vk)))
+    .map(|(button, _)| button)
+    .collect()
+}
 unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
-    [(1, 1), (2, 2), (3, 4)]
-        .into_iter()
-        .filter(|(_, v)| GetAsyncKeyState(*v) < 0)
-        .map(|(b, _)| b)
-        .collect()
+    sampled_buttons(|vk| GetAsyncKeyState(vk) < 0)
 }
 
 #[cfg(test)]
@@ -1012,6 +1023,38 @@ mod tests {
         assert_eq!(from_scan(0x4f, true), Some(0x4d));
         assert_eq!(from_scan(0x1d, false), Some(0xe0));
         assert_eq!(from_scan(0x1d, true), Some(0xe4));
+    }
+    #[test]
+    fn startup_side_button_hold_blocks_receiving_until_its_local_up() {
+        for (button, vk) in [(4, VK_XBUTTON1), (5, VK_XBUTTON2)] {
+            let (tx, mut rx) = mpsc::channel(8);
+            let mut state = HookState {
+                pairs: PairLedger::default(),
+                stopping: false,
+                toggle_route: None,
+                local_gestures: None,
+                tx,
+                gate: CaptureGate::default(),
+                keys: Default::default(),
+                buttons: sampled_buttons(|observed| observed == i32::from(vk)),
+                toggle_armed: false,
+                target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
+            };
+            state.update_held();
+            assert!(!state.gate.idle());
+            assert!(state.gate.enter_receiving().is_none());
+            let local = state.gate.route().unwrap();
+            assert!(!state.unsupported_button(button, false, local));
+            assert_eq!(state.pairs.debt, 0, "startup Down belonged to the local OS");
+            assert!(state.gate.idle());
+            assert!(state.gate.enter_receiving().is_some());
+            assert!(!state.target.supports(Input::Button { button, down: true }));
+            assert!(matches!(rx.try_recv().unwrap(), Captured::UnsupportedInput));
+            assert!(
+                rx.try_recv().is_err(),
+                "side-button input was never forwarded"
+            );
+        }
     }
     #[test]
     fn startup_virtual_sample_repeat_is_not_a_fresh_switch_press() {

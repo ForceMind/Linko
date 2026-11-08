@@ -1998,3 +1998,19 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 发布0.3.16-dev仍为Pre-release。原始cb27bce两平台内层ZIP摘要已复核；新包只替换根README／SECURITY，全部其他成员逐字节一致，文件列表与执行权限一致，CRC通过。新Mac包解压后codesign --verify --deep --strict退出0。来源与新摘要在docs/releases/0.3.16-dev-provenance.json；程序Rust源码与cb27bce无差异。
 
 官网0.1.1将两端下载改为公开Release，摘要改为实际便携包；Linux诊断构建仍明确需登录。本地构建、10文件链接／摘要／隐私检查、JS语法和新文档链接／产品文案检查通过。预检因本机无Rust在fmt入口失败（preflight-20261108T022643362173Z-41386），未安装；C06／长期内存／历史故障根因未因发布完成。最终同提交CI、发布匿名下载与Pages回读结果记录于对应PR，浏览器未验证。
+
+## 0.3.17-dev 基础键鼠稳定性候选
+
+源码检查发现GUI对stdout/stderr使用lines()后才截断文本，单行可在入队前无界分配，违背有界管道契约。新增4KiB（含行尾）读入上限，超长行排空至换行且不解析前缀；stdout超限锁存状态不可信，后续terminal不能制造clean；stderr超限仅保留固定说明，继续读取下一行。新增16MiB惰性输入、边界/CRLF/EOF/编码、队列满后终态以及stderr排空回归。只读源码定位，不等于此前6.83GB根因或实机复现。
+
+本机无Rust，预检fmt入口失败，后续not_run；新增Rust回归、fmt/Clippy/build/test与平台检查等待当前候选CI。未启动宿主原生输入或更改系统权限，C06仍未验收。
+
+0.3.17第二步修复startup-held采样：Windows只采左/右/中且initial_keys排除VK5/6，导致已按住侧键可漏过Receiving guard；Mac同样只采三个CG按钮。现分别补两侧键与一次性NSEvent 0..31保守快照，原CG采样保留；该快照可能含合成状态，仅拒绝入场，非物理来源凭证。原生模块回归断言held拒绝、Local Up放行/清hold、随后可入场且侧键不进入接收能力、不转发Input。源码/diff检查过，实际执行待CI。
+
+第三步修复停止竞态：managed stop先原子通知Native，可在session读取Active之后、Release排队前完成清理并关闭inbox；过去Closed直接锁存Unconfirmed。现在只对Closed重新确认原epoch Retired且全局owner Retired后幂等成功，其他错误和shutdown/join/source健康门不变。真实ReceiveEngine+假OS后端确定性回归覆盖owned key释放、leave、退役后队列关闭无重复效果，以及Draining/FAILED/source-lost/未知epoch/新owner和Timeout/Stale/QueueFull负例，不模拟物理验收。
+
+独立静态复核发现stderr坏UTF-8整行已消费后仍提前断管的旧问题；现用显式InvalidEncoding与底层I/O错误区分，坏行固定提示并继续排空，stdout异常仍sticky。补充坏编码后terminal/诊断可读与永久InvalidData I/O不重试的回归。本机公开0.3.16包另完成隔离重连、换pin拒绝、Stop退避取消及全部startup-wait探针（均无输入）；只是本机旧版基线，不作为0.3.17新代码执行证据。实际worker只读诊断两项权限Denied，暂不要求用户给未冻结的新包授权。
+
+首轮5a598f7完整CI 42441898480在三平台fmt失败（6处runner格式差异），Linux截图上传因上游未运行亦无产物；不将其写成通过。按runner输出修正换行，未修改行为、断言或检查门。同步候选README/快速开始到0.3.17-dev，既有公开0.3.16及其官网入口不覆盖。两名代理交叉静态复核GUI管道与Closed退役逻辑，无阻塞发现；这是静态复核，不是独立安全审计。
+
+638e58e三平台通过fmt/严格Clippy/build，最低1.95及审计通过；工作区回归在新增Closed负例准备阶段失败（Received Submitted，错误预期Retired）。既有契约明确Release回执Submitted只表示请求接受，pump后的snapshot/outcome才确认退役；据此修正准备断言为Submitted，并新增独立epoch Retired及owner Retired断言，再构造未知/新owner负例。没有改生产Release语义或放宽最终Closed拒绝断言。Win/Mac新增startup-held回归已在该轮实际通过，整体候选仍需新CI。
