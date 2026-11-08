@@ -1,6 +1,6 @@
 # Linko 原生应用图标
 
-图形直接来自已确认的 `docs/design/linko-v1/brand/app-icon.svg`，没有重新设计或引入第三方素材。
+图形直接来自已确认的 `docs/design/linko-brand-v3/app-icon.svg`，采用用户确认的A跃迁新标记，没有引入第三方素材。
 `icon-source.json` 记录源文件与产物的摘要。
 
 - `app-icon.png`：AppKit 从 SVG 渲染的 1024px RGBA 主图。

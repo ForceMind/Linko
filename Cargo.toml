@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "apps/*"]
 
 [workspace.package]
-version = "0.3.19-dev"
+version = "0.3.20-dev"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/ForceMind/Linko"

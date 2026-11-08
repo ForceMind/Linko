@@ -176,27 +176,43 @@ pub(super) fn status_text(text: &str, dark: bool, tone: Tone) -> RichText {
 
 /// Small original dual-screen mark, painted locally without assets or timers.
 pub(super) fn brand_mark(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 10.0, Color32::from_rgb(66, 99, 235));
-    for (position, size) in [
-        (egui::vec2(7.5, 10.0), egui::vec2(17.0, 13.0)),
-        (egui::vec2(18.0, 19.0), egui::vec2(15.0, 13.0)),
-    ] {
-        painter.rect_stroke(
-            egui::Rect::from_min_size(rect.min + position, size),
-            3.0,
-            Stroke::new(2.0, Color32::WHITE),
-            egui::StrokeKind::Inside,
-        );
-    }
-    painter.line_segment(
+    let color = if ui.visuals().dark_mode {
+        Color32::from_rgb(177, 166, 255)
+    } else {
+        Color32::from_rgb(101, 84, 232)
+    };
+    let polygons = [
         [
-            rect.min + egui::vec2(16.0, 25.0),
-            rect.min + egui::vec2(26.0, 16.0),
+            [54.0, 87.0],
+            [111.0, 49.0],
+            [199.0, 106.0],
+            [165.0, 129.0],
+            [111.0, 94.0],
+            [87.0, 111.0],
         ],
-        Stroke::new(2.0, Color32::WHITE),
-    );
+        [
+            [202.0, 169.0],
+            [145.0, 207.0],
+            [57.0, 150.0],
+            [91.0, 127.0],
+            [145.0, 162.0],
+            [169.0, 145.0],
+        ],
+    ];
+    for points in polygons {
+        let mut mesh = egui::epaint::Mesh::default();
+        for point in points {
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: rect.min + egui::vec2(point[0], point[1]) * (rect.width() / 256.0),
+                uv: egui::epaint::WHITE_UV,
+                color,
+            });
+        }
+        mesh.indices.extend_from_slice(&[0, 1, 4, 1, 2, 3, 1, 3, 4, 0, 4, 5]);
+        painter.add(egui::Shape::mesh(mesh));
+    }
 }
 
 pub(super) fn card(ui: &egui::Ui) -> egui::Frame {

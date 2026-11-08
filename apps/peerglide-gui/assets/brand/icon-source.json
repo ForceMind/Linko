@@ -1,23 +1,23 @@
 {
-  "source": "docs/design/linko-v1/brand/app-icon.svg",
-  "source_sha256": "33ce4032ac3233acb0b629c03244d61b80a3ff98af230bfbf3020071a81b15eb",
-  "renderer": "macOS AppKit SVG; sips sizes; stdlib PNG-backed ICNS/ICO",
+  "source": "docs/design/linko-brand-v3/app-icon.svg",
+  "source_sha256": "00a1546ed0bc87f212e7bad864c15caa420c80d274192048e3ad1d0ec332ddcf",
+  "renderer": "AppKit transparent SVG; sips sizes; PNG-backed ICNS/ICO",
   "assets": {
     "app-icon.png": {
-      "sha256": "845d7ccf637c700659fe8715ac1c61a97d787f0b96c6a1dd7daac2f6b6532fb6",
-      "bytes": 733510
+      "sha256": "48218a8eb77b96de75ea147017a5c5a139db73531057c423e58d7d8de46fe024",
+      "bytes": 57049
     },
     "app-icon-256.png": {
-      "sha256": "0325fa4e4c93a8367308b01e8783f42c7d17c66d8001df225fd553e7411c4f32",
-      "bytes": 36954
+      "sha256": "34a8c43f5ecf36dee2acefe860063bbc031997dd3505c5f125082e70b65ac27b",
+      "bytes": 12535
     },
     "Linko.icns": {
-      "sha256": "49f41f8cd1265fab82b8351b4d3304be402abce0a46cc491f4f1ccd45aff065c",
-      "bytes": 938083
+      "sha256": "04020d168715bec40fd159659fdec2b8fd978fc751c2a10deef2608580105548",
+      "bytes": 111161
     },
     "Linko.ico": {
-      "sha256": "04236ab88d1881ed73352cb453ca8666e8cc3e892166e4021dc3461c00162142",
-      "bytes": 64551
+      "sha256": "d720e4fa46a0618eb9947a21e1d1622bdb47b04686ff3e647413cd429c14c5c7",
+      "bytes": 29295
     }
   }
 }
