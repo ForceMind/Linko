@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 const release = JSON.parse(await readFile(new URL('./src/release.json', import.meta.url)));
 const origin = new URL('https://gh-proxy.org');
-assert(origin.protocol === 'https:' && origin.hostname.endsWith('.pages.dev') &&
+assert(origin.protocol === 'https:' && origin.hostname === 'gh-proxy.org' &&
   !origin.username && !origin.password && !origin.port && origin.pathname === '/' && !origin.search);
 for (const download of release.downloads) {
   const url = new URL(`/${download.url}`, origin);
