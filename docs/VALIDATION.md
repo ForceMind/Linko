@@ -2022,3 +2022,14 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 视觉去顶部冗余空间、内层灰板与过重选择框，调整硬件尺度/基线、卡片和图标；不改业务权限/恢复门，不添加虚构设备或状态。候选需要新原生窗口图与参考逐项对照，旧图/旧CI不能作为本批通过。浏览器未验证，宿主运行中的17 App未替换。
 
 69beb0b首轮完整CI42449294641在11处fmt差异失败，低Rust/审计及资源42449294628、固定依赖42449294874通过。根据runner格式输出逐hunk核对旧源唯一匹配，仅应用空白/尾逗号等价变更，未改行为或断言。新原生图由已通过资源作业产生，仍需读取对照后判断视觉差距；Windows资源链接/图标像素与真实新包seal尚需完整CI。
+
+
+### 0.3.18中间候选6bc76a5与宿主权限核对
+
+[完整CI42452003149](https://github.com/ForceMind/Linko/actions/runs/42452003149)的macOS/Linux、最低Rust1.95、依赖审计通过；Windows fmt/Clippy/workspace test/debug及Release build通过，但新增shell图标逐ARGB比较失败，其后的Windows专项尚未执行。失败原因待定位，不能把本候选写成五项全过。[资源42452003132](https://github.com/ForceMind/Linko/actions/runs/42452003132)两平台、[固定上游42452003138](https://github.com/ForceMind/Linko/actions/runs/42452003138)通过。
+
+同源原生标准1280×800及紧凑920×700图已读取。artifact13605714068的外层SHA256为890c4597f17c5fe4201c3e3b33becfb6f5db6948241aa39a142560d8889549a3，路径/CRC通过；图为隔离Xvfb/NoNative原始窗口像素。头部/画布较17改善；副标题和设备卡标题仍有对齐差距，不称为用户视觉验收。macOS新图标seal及plist/helper/icon篡改拒绝在CI通过，不代表Finder/Dock或TCC验证。
+
+用户授权代操作后，已在系统UI分别核实旧辅助功能/输入监控登记实际指向0.1.0，用户本人完成系统认证，再选入冻结17。重启旧包误选已纠正，单个冻结17实际GUI worker确认两项Granted、未检测到Secure Input。本机接收控制仍关闭，未开数据/G1。按原Mac→已登记Windows短测授权启动一次，实际UI等待约一分钟后超时、未连接；未作物理输入验收，配对保留。启动弹窗中结果过期/滚动引发同意区重排，作为本批交互缺陷修复；不放宽30秒新鲜度或实际worker复查。
+
+用户允许清理旧版后，仅删除仓库target内42个旧App/篡改测试副本；逐个先核对现有或新建恢复ZIP的文件字节和执行权限。当前冻结17、全部源码/Git/工作树/ZIP、身份与配置均保留。只注销旧App路径并注册当前包，没有全局重置系统登记或删除GitHub仓库。本地清单/回执保存在ignored target/local-validation/old-app-recovery，不上传宿主路径/权限报告。
