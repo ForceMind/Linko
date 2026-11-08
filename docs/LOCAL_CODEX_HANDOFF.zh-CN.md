@@ -1480,3 +1480,5 @@ gui-reference-polish隔离worktree从f3aa8fe继续。两名既有代理分管三
 63节本轮后续：用户纠正本机图标不能固定笔记本，已接真实本机形态探测（一次缓存/有界/失败Unknown）、对端无形态metadata用通用类型未知，不猜型号/不改v5。Native确认固定检查/同意/停止区，说明单独滚动，30秒及实际worker复查不变，新增回归待新CI。Windows图标核验修复c838c42已推送：先逐帧核对PE原资源字节，真实Shell读回走同一HICON原生解码，要求所有可见RGBA完全相等，只有双方全透明的RGB忽略；原比较保留差异诊断，真实Windows结果尚待CI。
 
 用户本人启动冻结17后已真实认证连接；物理右边缘不能跨，物理Control+Option+Right后GUI明确TimedOut。实际C06失败保持，另开kvm-acquire-commit-retry从979检查已收到Granted但Mac一次publish竞争失败的路径，不能直接认定Win未回应。宿主17/配对/TCC继续冻结。
+
+63节00aa781已通过完整五项42460853547、资源42460853583和上游42460853542；实际标准/紧凑原生图核读显示真实Linux台式形态和明确未知对端。仍发现add_sized的halign未能左对齐、标准底部说明贴clip，c7a0ba8继续用LTR文字槽/紧凑metadata修，Unknown改中性双屏symbol，不补假metadata。新源码必须等新CI/原生图；冻结17物理试跑已失败并正常停止，worker退出，Issue3更新仍未勾C06。
