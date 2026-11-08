@@ -1281,3 +1281,10 @@ kbd {
 }
 
 .backup-download { display:inline-block; margin-top:12px; color:var(--brand); font-size:14px; text-decoration:underline; text-underline-offset:3px; }
+
+.download-system-status { margin-top:20px; color:#d5deec; font-size:14px; }
+[data-platform] { scroll-margin-top:120px; }
+.download-card.is-system-match { border-color:#b8aaff; box-shadow:0 0 0 2px #b8aaff,0 12px 36px #17132155; background:#323345; }
+.download-card h3 .platform-match { color:#eee8ff; background:#6554e866; border:1px solid #b8aaff; border-radius:20px; padding:2px 9px; font-size:12px; font-weight:600; }
+.linux-note.is-system-match { border-left:3px solid #b8aaff; padding-left:14px; }
+.preview-section .backup-download { color:#bdcaff; }

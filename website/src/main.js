@@ -1,3 +1,5 @@
+import { setupPlatformDownloads } from './download-platform.js';
+
 (() => {
   "use strict";
 
@@ -81,5 +83,6 @@
     }
   }
 
+  setupPlatformDownloads(document, window, navigator);
   readRelease();
 })();
