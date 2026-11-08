@@ -1482,3 +1482,21 @@ gui-reference-polish隔离worktree从f3aa8fe继续。两名既有代理分管三
 用户本人启动冻结17后已真实认证连接；物理右边缘不能跨，物理Control+Option+Right后GUI明确TimedOut。实际C06失败保持，另开kvm-acquire-commit-retry从979检查已收到Granted但Mac一次publish竞争失败的路径，不能直接认定Win未回应。宿主17/配对/TCC继续冻结。
 
 63节00aa781已通过完整五项42460853547、资源42460853583和上游42460853542；实际标准/紧凑原生图核读显示真实Linux台式形态和明确未知对端。仍发现add_sized的halign未能左对齐、标准底部说明贴clip，c7a0ba8继续用LTR文字槽/紧凑metadata修，Unknown改中性双屏symbol，不补假metadata。新源码必须等新CI/原生图；冻结17物理试跑已失败并正常停止，worker退出，Issue3更新仍未勾C06。
+
+## 64. 实机连接成功但切换超时后的提交竞态修复（2026-11-08）
+
+冻结979/0.3.17实际GUI worker两项Granted、SecureInputInactive；用户本人启动后，Mac→Windows Native认证连接成功、Local，但物理右边缘及Control+Option+Right均未进入，GUI读回TimedOut。正常停止后GUI已断开/Local且无恢复警告，对应worker已退出。C06保持失败；不得用CI或一次握手关闭Issue3。宿主配对、TCC和17包不换。
+
+独立worktree/分支kvm-acquire-commit-retry从979出发，版本候选0.3.19-dev，UI18独立进行。源码明确Granted后begin_routed一次失败会Release却保留pending，随后混报TimedOut；这是需修复竞态，不是已证实的实机根因。当前实现保留原1000ms预算，瞬时回调/CAS竞争有界重试，held/归属/权限/停止变化取消，迟到Grant不激活。交叉静态复核指出ACTIVE后检查独立活动版本和循环顶Stop后提交的两个窗口，必须修正后才能交付，不能以最终撤销掩盖短暂抑制。
+
+仅必要平台/session文件由复用代理修改，root负责版本/记录/CI/提交；不引入第二钩子、协议变化、任意远程命令或生产测试token。本机preflight-20261108T082135352119Z-47462仍缺Cargo/Rust，fmt未启动，后续not_run，按用户决定不安装。新回归/精确CI和物理重跑都未完成。
+
+64节源码收敛：仅session.rs/lib.rs/receive_driver.rs必要改动，request代次/ARMED/COUNT同原子word，route epoch独立且不改变已放行/抑制pair归属；Stop在原ReceiveControl先同步关同word门后发布stop，初始watchdog不超过原期限。静态复查的ACTIVE后revision、Stop到提交和跨deadline首callback窗口均已补生产路径回归并复查关闭，无新增明确阻塞，可进CI；本机没有执行Rust。只在原1000ms预算内对瞬时callback/CAS忙按需10ms、至多100次，不等待held释放、不刷新旧票据。宿主17继续停用且冻结，最终候选仍需精确CI和用户物理重跑。
+
+64节整合：UI冻结a245b21完整五项42465916752、资源42465916763和固定上游42465916745全过，原生新标准/紧凑图已核读，左对齐/底部clip已修。本批在功能分支整合UI与core，保持0.3.19-dev；冲突仅Cargo版本、CHANGELOG和两份追加记录，保留双方历史，源文件逐项核对来自已冻结父提交。PR80将堆叠在PR79上，只审core差异。整合新HEAD仍须独立CI/运行包验证，不拿父分支通过代替；不改宿主App、TCC、配对或生产官网。
+
+64节最终运行包冻结`3c11a88ac946ef664a87a74056c5b1b18ea62872`（0.3.19-dev），完整五项42469667355、两平台资源42469667277及上游42469667274全过；实际新两尺寸PNG、Win PE/图标、Mac完整seal/图标/worker版本及两包MIT/394依赖/字体声明、摘要/CRC均核验，详见VALIDATION。Mac实际包helper的本机独立NoNative reconnect/startup-wait专项全过，保护原pin与停止/首次等待预算。新增固定阶段诊断区分Grant前/后超时，不含输入内容/坐标/票据；补Apple官方明确M4 Air映射，未知型号/对端仍不猜测。此为软件自动验证，不是C06或独立安全审计。
+
+宿主包在ignored `target/local-validation/kvm-3c11a88/macos-unpacked/Linko-0.3.19-dev-darwin-arm64/Linko.app`，当前未启动/登记TCC；旧17仍为唯一现用授权App，已停止/worker退出。实际Mac锁屏阻碍切换复查，已询问用户“只解锁，其余root操作”；后续先退出17、启动冻结19只读核对版本/图标/实际worker权限，所需系统认证仍须本人完成。沿用已有配对和Windows现有v5，不再索要指纹/证书；仅Mac→Win短测授权，Mac接收仍关闭，不开数据/G1。19未发布/部署/合主线，不宣称17的物理失败已解决。
+
+本机磁盘满导致一次19解压失败；清掉该不完整解压，再核对ZIP逐文件字节/执行位后清理26个旧发布解压目录，约1.4GiB恢复，现用17/源码/Git/工作树/恢复ZIP/身份全部保留；空间恢复后原19ZIP重新解压验证成功。ignored回执`archived-distribution-cleanup.json`。文档收尾不更换3c包/签名，避免为记录更新反复授权；未来候选仅在新证据必要时重建。

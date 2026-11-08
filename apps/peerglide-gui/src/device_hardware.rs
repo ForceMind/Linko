@@ -29,6 +29,11 @@ fn mac_model_kind(model: &str) -> DeviceKind {
     if model.len() > 127 {
         return DeviceKind::Unknown;
     }
+    // These generic identifiers are explicitly listed as 2025 MacBook Air by
+    // Apple: https://support.apple.com/zh-cn/102869 . Never infer from "Mac" alone.
+    if matches!(model, "Mac16,12" | "Mac16,13") {
+        return DeviceKind::Laptop;
+    }
     for (prefix, kind) in [
         ("MacBookPro", DeviceKind::Laptop),
         ("MacBookAir", DeviceKind::Laptop),
@@ -52,7 +57,7 @@ fn mac_model_kind(model: &str) -> DeviceKind {
             return kind;
         }
     }
-    // Apple silicon identifiers such as Mac14,2 do not encode a form factor.
+    // Unlisted generic Apple silicon identifiers do not encode a form factor.
     DeviceKind::Unknown
 }
 
@@ -234,7 +239,13 @@ mod tests {
 
     #[test]
     fn explicit_mac_families_are_classified_without_guessing_generic_mac_ids() {
-        for model in ["MacBook10,1", "MacBookPro18,3", "MacBookAir10,1"] {
+        for model in [
+            "MacBook10,1",
+            "MacBookPro18,3",
+            "MacBookAir10,1",
+            "Mac16,12",
+            "Mac16,13",
+        ] {
             assert_eq!(mac_model_kind(model), DeviceKind::Laptop);
         }
         for model in [
@@ -249,6 +260,7 @@ mod tests {
         for model in [
             "Mac14,2",
             "Mac15,7",
+            "Mac16,999",
             "MacBook",
             "MacBookProX,1",
             "iMac1,",

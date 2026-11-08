@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-actions"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -2192,7 +2192,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-core"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "peerglide-actions",
  "peerglide-gestures",
@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-desktop"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -2216,7 +2216,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-discovery"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "anyhow",
  "mdns-sd",
@@ -2225,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-gestures"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -2233,7 +2233,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-gui"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2252,7 +2252,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-platform"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -2268,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-protocol"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-transfer"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "blake3",
  "serde",
@@ -2286,7 +2286,7 @@ dependencies = [
 
 [[package]]
 name = "peerglide-transport"
-version = "0.3.18-dev"
+version = "0.3.19-dev"
 dependencies = [
  "anyhow",
  "blake3",
