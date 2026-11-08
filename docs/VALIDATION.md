@@ -2004,3 +2004,5 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 源码检查发现GUI对stdout/stderr使用lines()后才截断文本，单行可在入队前无界分配，违背有界管道契约。新增4KiB（含行尾）读入上限，超长行排空至换行且不解析前缀；stdout超限锁存状态不可信，后续terminal不能制造clean；stderr超限仅保留固定说明，继续读取下一行。新增16MiB惰性输入、边界/CRLF/EOF/编码、队列满后终态以及stderr排空回归。只读源码定位，不等于此前6.83GB根因或实机复现。
 
 本机无Rust，预检fmt入口失败，后续not_run；新增Rust回归、fmt/Clippy/build/test与平台检查等待当前候选CI。未启动宿主原生输入或更改系统权限，C06仍未验收。
+
+0.3.17第二步修复startup-held采样：Windows只采左/右/中且initial_keys排除VK5/6，导致已按住侧键可漏过Receiving guard；Mac同样只采三个CG按钮。现分别补两侧键与一次性NSEvent 0..31保守快照，原CG采样保留；该快照可能含合成状态，仅拒绝入场，非物理来源凭证。原生模块回归断言held拒绝、Local Up放行/清hold、随后可入场且侧键不进入接收能力、不转发Input。源码/diff检查过，实际执行待CI。

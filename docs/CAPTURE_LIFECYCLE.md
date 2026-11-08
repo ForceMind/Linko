@@ -150,3 +150,15 @@ Mac event对象创建成功前不修改BUTTONS；CGEventPost为SDK请求而非OS
 此代码与20个Engine fake、Parent配对/滚轮/观测缺口回归尚待本批实际fmt/编译/
 测试/进程验证；真实Win/Mac、权限、DPI、睡眠与OS效果没有因此通过。Linux仍仅
 诊断，unsupported facade不会生成ready状态或调用OS输入。
+
+## 0.3.17 startup-held button guard
+
+KVM startup now includes Windows XBUTTON1/2 and macOS observable extra buttons
+in its held set before admitting Receiving. macOS keeps the original three
+CoreGraphics samples and adds a one-time NSEvent pressedMouseButtons snapshot
+for native button numbers 0..31. That snapshot may include synthesized state;
+it is only a conservative admission veto, never physical-origin authentication
+or continuous tracking. Local startup-down ownership and its passed-up pair
+remain unchanged. Unsupported buttons remain unsupported by the peer bitmap.
+Native tests check refusal while held, local-up clearing and subsequent admission;
+real side-button hardware and permission acceptance remain C06.
