@@ -1,6 +1,6 @@
 # Linko / 屏跃官网
 
-中文静态官网，站点版本 **0.1.2**。Cloudflare Pages 项目 `linko`，正式访问地址：
+中文静态官网，站点版本 **0.1.3**。Cloudflare Pages 项目 `linko`，正式访问地址：
 <https://linko-63e.pages.dev/>。
 
 官网独立于原生 App，不改变 App 的版本、设备身份、权限或协议。仅发布
@@ -40,12 +40,14 @@ npx --no-install wrangler pages deploy dist --project-name linko --branch main
 
 ## 公开素材与下载来源
 
-- `assets/linko-mark.svg`：本项目原创双屏标识，来源于 `docs/design/linko-v1/brand/app-icon.svg`。
-- `assets/app-preview.png`：代码 `cb27bce72ece205f138180fd1b6ef0c8cbf0764f`
+- `assets/linko-mark.svg`：已确认 A 跃迁标识，来源于 `docs/design/linko-brand-v3/app-icon.svg`。
+- `assets/app-preview.png`：代码 `8c6ecbb6517b855f57f4d41ffb41092973cfbc25`
   的原生 GUI CI 原图，1280×800，隔离 NoNative 通信场景；未启用原生键鼠。
-  SHA-256：`ab7630f0eb3621672c8803607e56b3625a0c30ddab77582fcdd8ea7c33f89ca5`。
+  SHA-256：`071f2760a97838a44457d87dbd0fcc03c62c4d71a76afc5e0ffa0f11b38481e9`。
   图内已实现页面不代表真实 Win/macOS 双机验收完成。
 - `release.json` 指向公开的 GitHub Pre-release 便携包，免登录下载。
   SHA-256 对应实际便携包 ZIP，不是 CI artifact 外层 ZIP。
 - 0.3.17-dev 程序与包来自受测提交 9797d60，直接使用核验后的 CI 原包；来源及摘要见对应 Release。
 - 原生包不托管到 Pages，当前仍是开发预览，未发布稳定版。
+
+截图为 0.3.20-dev 候选，与公开下载 0.3.17-dev 分别标注；候选尚未发布，也未完成真实双机验收。

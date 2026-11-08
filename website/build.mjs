@@ -40,7 +40,7 @@ if (origin) {
 }
 const staging = join(root, `.build-history/staging-${randomUUID()}`);
 await mkdir(staging, { recursive: true });
-const manifest = { createdBy: marker, siteVersion: '0.1.2', sourceCommit, appVersion: '0.3.17-dev', files: {} };
+const manifest = { createdBy: marker, siteVersion: '0.1.3', sourceCommit, appVersion: '0.3.17-dev', files: {} };
 for (const { path, rel } of paths.sort((a, b) => a.rel.localeCompare(b.rel))) {
   let bytes = await readFile(path);
   if (/\.(html|xml|txt)$/.test(rel)) {

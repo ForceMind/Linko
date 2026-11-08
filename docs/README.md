@@ -1,5 +1,7 @@
 # Linko 文档
 
+[功能与交付状态](STATUS.zh-CN.md)：公开版本、候选、实机失败与剩余范围。
+
 ## 使用
 
 - [快速开始](GETTING_STARTED.zh-CN.md)：下载、校验、配对、授权、停止

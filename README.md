@@ -10,7 +10,11 @@ Linko 是使用 Rust 构建的局域网键鼠协作工具，面向 Windows 与 m
 
 ![Linko 中文屏幕布局界面](website/src/assets/app-preview.png)
 
-*开发版实际界面，隔离 NoNative 通信场景，未启用原生键鼠。*
+*0.3.20-dev 候选实际界面（8c6ecbb），隔离 NoNative 通信场景，未启用原生键鼠；公开下载仍为 0.3.17-dev。*
+
+## 当前进度
+
+**功能尚未全部完成。** 公开下载仍为 0.3.17-dev；最新 0.3.20-dev 修复候选尚未发布。此前真实 Mac→Windows 已连接但无法跨屏，候选包含竞争修复，尚未完成物理重测。新 V2 排版也未完整落地。详见[功能与交付状态](docs/STATUS.zh-CN.md)。
 
 ## 当前能做什么
 
