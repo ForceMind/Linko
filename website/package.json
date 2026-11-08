@@ -1,12 +1,12 @@
 {
   "name": "linko-official-site",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "type": "module",
   "license": "MIT",
   "scripts": {
     "build": "node build.mjs",
-    "check": "node check.mjs"
+    "check": "node check.mjs && node --test test-download.mjs"
   },
   "devDependencies": {
     "wrangler": "4.158.0"

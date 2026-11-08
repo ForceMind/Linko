@@ -1,11 +1,11 @@
 # Linko / 屏跃官网
 
-中文静态官网，站点版本 **0.1.3**。Cloudflare Pages 项目 `linko`，正式访问地址：
+中文官网，站点版本 **0.1.4**。Cloudflare Pages 项目 `linko`，正式访问地址：
 <https://linko-63e.pages.dev/>。
 
 官网独立于原生 App，不改变 App 的版本、设备身份、权限或协议。仅发布
 `website/dist`，不能从仓库根目录执行上传，也不能上传本机 profile 或 `target/`。
-无需运行服务端、访问者账号、分析脚本、远程字体或第三方 CDN。
+不需要访问者账号、分析脚本或远程字体。仅下载路由使用 Pages Function，其余为静态文件。
 
 ## 构建与检查
 
@@ -51,3 +51,16 @@ npx --no-install wrangler pages deploy dist --project-name linko --branch main
 - 原生包不托管到 Pages，当前仍是开发预览，未发布稳定版。
 
 截图为 0.3.20-dev 候选，与公开下载 0.3.17-dev 分别标注；候选尚未发布，也未完成真实双机验收。
+
+## 国内网络备用下载
+
+官网提供 GitHub 原链与同域中转两个入口：
+
+- `https://linko-63e.pages.dev/download/0.3.17-dev/macos`
+- `https://linko-63e.pages.dev/download/0.3.17-dev/windows`
+
+使用 [Pages Advanced mode](https://developers.cloudflare.com/pages/functions/advanced-mode/)，构建将公开 `release.json` 注入 `_worker.js`，`_routes.json` 仅匹配 `/download/*`。仅转发固定版本的两个公开 ZIP，不接受任意 URL、查询参数、上传或访问者凭据。手动检查 GitHub 重定向目标，限制至官方资产域；核对公开包大小和类型、限制重定向次数与 5 分钟传输期限，流式转发避免整包驻留内存，失败不缓存。用户仍需核对公开 SHA-256，响应头声明不能代替完整内容校验。
+
+不引入第三方镜像、不修改原包、不购买服务或启用付费计划。Cloudflare 中转不保证所有国内网络可达或提速；当前不支持断点续传，失败可重新下载或使用 GitHub 原链。该路由使用现有账户 Pages Functions 配额，耗尽时备用入口可能不可用，静态页面仍走原有服务。
+
+构建后的 `npm run check` 包含 8 项路由、凭据隔离、重定向、源失败和元数据回归。部署后运行 `node verify-downloads.mjs https://linko-63e.pages.dev`，实际流式读取两个完整包并校验大小与 SHA-256；这是下载验证，不是国内网络实测或 App 双机验收。`_worker.js` 仅服务端执行，不作为公开静态资源读取。

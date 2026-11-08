@@ -33,7 +33,7 @@ Linko 是使用 Rust 构建的局域网键鼠协作工具，面向 Windows 与 m
 
 ## 下载与开始
 
-在 [Releases](https://github.com/ForceMind/Linko/releases) 下载对应 ZIP 和 SHA-256 文件，无需 GitHub 账号。
+在 [Releases](https://github.com/ForceMind/Linko/releases) 下载对应 ZIP 和 SHA-256 文件，无需 GitHub 账号。国内网络也可使用[官网备用下载](https://linko-63e.pages.dev/#preview)（Cloudflare 同域中转，不保证所有网络可达或提速）；与 GitHub 原包一致，下载后仍需核对摘要。
 
 | 平台 | 入口 | 发布状态 |
 | --- | --- | --- |
