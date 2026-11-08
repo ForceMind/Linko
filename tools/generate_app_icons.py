@@ -15,8 +15,9 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "docs/design/linko-brand-v3/app-icon.svg"
+MAC_SOURCE = ROOT / "docs/design/linko-brand-v3/app-icon-macos.svg"
 OUTPUT = ROOT / "apps/peerglide-gui/assets/brand"
-NAMES = ("app-icon.png", "app-icon-256.png", "Linko.icns", "Linko.ico", "icon-source.json")
+NAMES = ("app-icon.png", "app-icon-256.png", "Linko.icns", "Linko.ico", "icon-source.json", "app-icon-macos-256.png")
 
 SWIFT = r'''
 import AppKit
@@ -99,16 +100,31 @@ def main():
                                 str(master), "--out", str(image)], check=True,
                                stdout=subprocess.DEVNULL)
             sizes[size] = image
+        # Legacy ICNS needs optical outer space; never shrink the Windows icon.
+        mac_master = temporary / "mac-master.png"
+        subprocess.run(["/usr/bin/swift", "-module-cache-path", str(cache),
+                        str(script), str(MAC_SOURCE), str(mac_master)], env=env, check=True)
+        mac_sizes = {}
+        for size in (16, 32, 64, 128, 256, 512, 1024):
+            image = temporary / f"mac-{size}.png"
+            subprocess.run(["/usr/bin/sips", "-z", str(size), str(size),
+                            str(mac_master), "--out", str(image)], check=True,
+                           stdout=subprocess.DEVNULL)
+            mac_sizes[size] = image
         # Modern macOS supports PNG-backed ICNS chunks. The explicit container
         # avoids depending on iconutil's iconset conversion service in a sandbox.
-        icns = make_icns([(kind, size, sizes[size].read_bytes()) for kind, size in
+        icns = make_icns([(kind, size, mac_sizes[size].read_bytes()) for kind, size in
                           (("icp4", 16), ("icp5", 32), ("icp6", 64), ("ic07", 128),
                            ("ic08", 256), ("ic09", 512), ("ic10", 1024))])
         ico = make_ico([(size, sizes[size].read_bytes()) for size in (16, 24, 32, 48, 64, 128, 256)])
         files = {"app-icon.png": master.read_bytes(), "app-icon-256.png": sizes[256].read_bytes(),
-                 "Linko.icns": icns, "Linko.ico": ico}
+                 "Linko.icns": icns, "Linko.ico": ico,
+                 "app-icon-macos-256.png": mac_sizes[256].read_bytes()}
         metadata = {"source": str(SOURCE.relative_to(ROOT)),
                     "source_sha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(),
+                    "macos_source": str(MAC_SOURCE.relative_to(ROOT)),
+                    "macos_source_sha256": hashlib.sha256(MAC_SOURCE.read_bytes()).hexdigest(),
+                    "macos_artwork_bounds": [100, 100, 824, 824],
                     "renderer": "macOS AppKit SVG; sips sizes; stdlib PNG-backed ICNS/ICO",
                     "assets": {name: {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
                                for name, data in files.items()}}

@@ -12,12 +12,24 @@
       "bytes": 12535
     },
     "Linko.icns": {
-      "sha256": "04020d168715bec40fd159659fdec2b8fd978fc751c2a10deef2608580105548",
-      "bytes": 111161
+      "bytes": 101277,
+      "sha256": "b23ee6a15d99a8644c952c0084347994864ddd52cf61274f97cf797bd99bfbac"
     },
     "Linko.ico": {
       "sha256": "d720e4fa46a0618eb9947a21e1d1622bdb47b04686ff3e647413cd429c14c5c7",
       "bytes": 29295
+    },
+    "app-icon-macos-256.png": {
+      "bytes": 11254,
+      "sha256": "96353d22a777f49275a041f429f8b9d9f237d9e8356bad00af540b1141f974bb"
     }
-  }
+  },
+  "macos_source": "docs/design/linko-brand-v3/app-icon-macos.svg",
+  "macos_source_sha256": "2cda0b5a532284f2c16494a92b0430a5415bd5d67e50ba76951f23c226bbd74f",
+  "macos_artwork_bounds": [
+    100,
+    100,
+    824,
+    824
+  ]
 }
