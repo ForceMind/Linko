@@ -1350,8 +1350,9 @@ mod implementation {
                     "unknown" => {
                         assert_eq!(
                             release(&mut driver, &mut engine, &mut backend, epoch, 1),
-                            ReceiveAck::Retired
+                            ReceiveAck::Submitted
                         );
+                        assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
                         released.instance += 1;
                         assert_eq!(driver.snapshot(released), ReceiveSnapshot::RecoveryRequired);
                         assert_eq!(driver.control().outcome(), ReceiveAck::Retired);
@@ -1359,8 +1360,10 @@ mod implementation {
                     "new_owner" => {
                         assert_eq!(
                             release(&mut driver, &mut engine, &mut backend, epoch, 1),
-                            ReceiveAck::Retired
+                            ReceiveAck::Submitted
                         );
+                        assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+                        assert_eq!(driver.control().outcome(), ReceiveAck::Retired);
                         let current = begin(&mut driver, &mut engine, &mut backend, 2);
                         assert_eq!(driver.snapshot(current), ReceiveSnapshot::Active);
                         assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);

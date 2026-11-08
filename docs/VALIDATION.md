@@ -2012,3 +2012,5 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 独立静态复核发现stderr坏UTF-8整行已消费后仍提前断管的旧问题；现用显式InvalidEncoding与底层I/O错误区分，坏行固定提示并继续排空，stdout异常仍sticky。补充坏编码后terminal/诊断可读与永久InvalidData I/O不重试的回归。本机公开0.3.16包另完成隔离重连、换pin拒绝、Stop退避取消及全部startup-wait探针（均无输入）；只是本机旧版基线，不作为0.3.17新代码执行证据。实际worker只读诊断两项权限Denied，暂不要求用户给未冻结的新包授权。
 
 首轮5a598f7完整CI 42441898480在三平台fmt失败（6处runner格式差异），Linux截图上传因上游未运行亦无产物；不将其写成通过。按runner输出修正换行，未修改行为、断言或检查门。同步候选README/快速开始到0.3.17-dev，既有公开0.3.16及其官网入口不覆盖。两名代理交叉静态复核GUI管道与Closed退役逻辑，无阻塞发现；这是静态复核，不是独立安全审计。
+
+638e58e三平台通过fmt/严格Clippy/build，最低1.95及审计通过；工作区回归在新增Closed负例准备阶段失败（Received Submitted，错误预期Retired）。既有契约明确Release回执Submitted只表示请求接受，pump后的snapshot/outcome才确认退役；据此修正准备断言为Submitted，并新增独立epoch Retired及owner Retired断言，再构造未知/新owner负例。没有改生产Release语义或放宽最终Closed拒绝断言。Win/Mac新增startup-held回归已在该轮实际通过，整体候选仍需新CI。
