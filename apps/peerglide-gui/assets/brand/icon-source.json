@@ -1,0 +1,23 @@
+{
+  "source": "docs/design/linko-v1/brand/app-icon.svg",
+  "source_sha256": "33ce4032ac3233acb0b629c03244d61b80a3ff98af230bfbf3020071a81b15eb",
+  "renderer": "macOS AppKit SVG; sips sizes; stdlib PNG-backed ICNS/ICO",
+  "assets": {
+    "app-icon.png": {
+      "sha256": "845d7ccf637c700659fe8715ac1c61a97d787f0b96c6a1dd7daac2f6b6532fb6",
+      "bytes": 733510
+    },
+    "app-icon-256.png": {
+      "sha256": "0325fa4e4c93a8367308b01e8783f42c7d17c66d8001df225fd553e7411c4f32",
+      "bytes": 36954
+    },
+    "Linko.icns": {
+      "sha256": "49f41f8cd1265fab82b8351b4d3304be402abce0a46cc491f4f1ccd45aff065c",
+      "bytes": 938083
+    },
+    "Linko.ico": {
+      "sha256": "04236ab88d1881ed73352cb453ca8666e8cc3e892166e4021dc3461c00162142",
+      "bytes": 64551
+    }
+  }
+}

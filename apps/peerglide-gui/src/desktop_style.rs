@@ -118,8 +118,8 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     }
     visuals.widgets.noninteractive.bg_fill = colors.surface;
     visuals.widgets.noninteractive.weak_bg_fill = colors.surface;
-    visuals.widgets.inactive.bg_fill = colors.soft;
-    visuals.widgets.inactive.weak_bg_fill = colors.soft;
+    visuals.widgets.inactive.bg_fill = colors.surface;
+    visuals.widgets.inactive.weak_bg_fill = colors.surface;
     visuals.widgets.hovered.bg_fill = colors.hover;
     visuals.widgets.hovered.weak_bg_fill = colors.hover;
     visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, colors.accent);
@@ -208,10 +208,51 @@ pub(super) fn card(ui: &egui::Ui) -> egui::Frame {
         .inner_margin(18.0)
         .shadow(egui::epaint::Shadow {
             offset: [0, 2],
-            blur: 10,
+            blur: 14,
             spread: 0,
-            color: Color32::from_black_alpha(if ui.visuals().dark_mode { 12 } else { 5 }),
+            color: Color32::from_black_alpha(if ui.visuals().dark_mode { 18 } else { 8 }),
         })
+}
+
+/// A quiet, single-layer wash; no second rounded panel sits behind the hardware.
+pub(super) fn canvas_wash(painter: &egui::Painter, rect: egui::Rect, dark: bool) {
+    let colors = palette(dark);
+    let mut mesh = egui::Mesh::default();
+    for band in 0..24 {
+        let middle = 1.0 - ((band as f32 + 0.5) / 12.0 - 1.0).abs();
+        let blend = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * middle) as u8;
+        let color = Color32::from_rgb(
+            blend(colors.surface.r(), colors.canvas.r()),
+            blend(colors.surface.g(), colors.canvas.g()),
+            blend(colors.surface.b(), colors.canvas.b()),
+        );
+        mesh.add_colored_rect(
+            egui::Rect::from_min_max(
+                rect.min + egui::vec2(0.0, rect.height() * band as f32 / 24.0),
+                egui::pos2(
+                    rect.max.x,
+                    rect.min.y + rect.height() * (band + 1) as f32 / 24.0,
+                ),
+            ),
+            color,
+        );
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+pub(super) fn status_chip(ui: &mut egui::Ui, label: &str, tone: Tone) {
+    let (fill, text) = tone_colors(ui.visuals().dark_mode, tone);
+    egui::Frame::NONE
+        .fill(fill)
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::symmetric(7, 2))
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(RichText::new(label).size(11.0).color(text)).truncate());
+        });
+}
+
+pub(super) fn status_colors(dark: bool, tone: Tone) -> (Color32, Color32) {
+    tone_colors(dark, tone)
 }
 
 /// A noninteractive label: color supplements the text and does not grant access.
@@ -236,6 +277,39 @@ pub(super) fn primary(label: &str) -> egui::Button<'static> {
 
 pub(super) fn selection_colors(ui: &egui::Ui) -> (Color32, Color32) {
     tone_colors(ui.visuals().dark_mode, Tone::Accent)
+}
+
+pub(super) fn detail_icon(ui: &mut egui::Ui, permission: bool) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    let color = palette(ui.visuals().dark_mode).muted;
+    let coordinates: &[(f32, f32)] = if permission {
+        &[
+            (9.0, 1.5),
+            (15.5, 4.0),
+            (14.0, 12.5),
+            (9.0, 16.5),
+            (4.0, 12.5),
+            (2.5, 4.0),
+            (9.0, 1.5),
+        ]
+    } else {
+        &[
+            (4.0, 1.5),
+            (4.0, 15.0),
+            (7.5, 11.0),
+            (11.0, 16.0),
+            (13.0, 14.5),
+            (9.5, 9.5),
+            (15.0, 9.5),
+            (4.0, 1.5),
+        ]
+    };
+    let points = coordinates
+        .iter()
+        .map(|&(x, y)| rect.min + egui::vec2(x, y))
+        .collect();
+    painter.add(egui::Shape::line(points, Stroke::new(1.3, color)));
 }
 
 pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
@@ -279,20 +353,32 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
         );
     }
     match label {
-        "设备" | "屏幕布局" => {
-            painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
+        "设备" => {
+            painter.rect_stroke(
+                icon.shrink2(egui::vec2(1.0, 1.0)),
+                2.0,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
             painter.line_segment(
                 [
                     icon.center_bottom(),
-                    icon.center_bottom() + egui::vec2(0.0, 3.0),
+                    icon.center_bottom() + egui::vec2(0.0, 2.0),
                 ],
                 stroke,
             );
-            if label == "屏幕布局" {
+        }
+        "屏幕布局" => {
+            for (offset, size) in [
+                (egui::vec2(0.0, 1.0), egui::vec2(9.0, 11.0)),
+                (egui::vec2(11.0, 4.0), egui::vec2(8.0, 8.0)),
+            ] {
+                let monitor = egui::Rect::from_min_size(icon.min + offset, size);
+                painter.rect_stroke(monitor, 1.0, stroke, egui::StrokeKind::Inside);
                 painter.line_segment(
                     [
-                        icon.center_top() + egui::vec2(3.0, 2.0),
-                        icon.center_bottom() + egui::vec2(3.0, -2.0),
+                        monitor.center_bottom(),
+                        monitor.center_bottom() + egui::vec2(0.0, 3.0),
                     ],
                     stroke,
                 );
@@ -310,22 +396,50 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
                 stroke,
             );
         }
-        "设置" => {
-            painter.circle_stroke(icon.center(), 7.0, stroke);
-            painter.circle_stroke(icon.center(), 2.5, stroke);
+        "剪贴板" => {
+            let paper = icon.shrink2(egui::vec2(2.0, 0.0));
+            painter.rect_stroke(paper, 2.0, stroke, egui::StrokeKind::Inside);
+            let clip = egui::Rect::from_center_size(paper.center_top(), egui::vec2(7.0, 4.0));
+            painter.rect_filled(clip, 1.0, ui.visuals().panel_fill);
+            painter.rect_stroke(clip, 1.0, stroke, egui::StrokeKind::Inside);
         }
-        _ => {
+        "快捷键" => {
             painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
-            for offset in [-4.0, 0.0, 4.0] {
+            for row in 0..2 {
+                for column in 0..4 {
+                    let position =
+                        icon.min + egui::vec2(4.0 + column as f32 * 3.4, 4.0 + row as f32 * 3.8);
+                    painter.rect_filled(
+                        egui::Rect::from_center_size(position, egui::vec2(1.5, 1.5)),
+                        0.3,
+                        color,
+                    );
+                }
+            }
+            painter.line_segment(
+                [
+                    icon.center() + egui::vec2(-4.0, 4.0),
+                    icon.center() + egui::vec2(4.0, 4.0),
+                ],
+                stroke,
+            );
+        }
+        "设置" => {
+            painter.circle_stroke(icon.center(), 5.5, stroke);
+            painter.circle_stroke(icon.center(), 2.0, stroke);
+            for index in 0..8 {
+                let angle = index as f32 * std::f32::consts::TAU / 8.0;
+                let direction = egui::vec2(angle.cos(), angle.sin());
                 painter.line_segment(
                     [
-                        icon.center() + egui::vec2(-5.0, offset),
-                        icon.center() + egui::vec2(5.0, offset),
+                        icon.center() + direction * 6.5,
+                        icon.center() + direction * 8.5,
                     ],
                     stroke,
                 );
             }
         }
+        _ => (),
     }
     if selected {
         painter.rect_filled(

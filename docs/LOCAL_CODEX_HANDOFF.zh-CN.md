@@ -1460,3 +1460,25 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 用户确认优先Win+Mac各一个主显示器，逐批提交推送，实机操作再集中提示。kvm-stability从70b1da1受测预览继续；main当前5ec6c15仅合入文档，PR75受测树与合并树一致；公开0.3.16-dev和官网0.1.1已无认证下载/摘要验证，发布接线PR74保留。
 
 本批0.3.17-dev候选先收敛GUI输出读入内存上限，再修复原生startup-held鼠标采样入场。复用两名既有代理，只承担平台与desktop会话的窄范围检查，不扩G1/数据/多屏。现用App、配对、身份、TCC不动，v5/MIT不变。本机preflight-20261108T030113156043Z-48319缺Rust/Cargo，按用户决定不安装，Rust回归须精确提交CI。当前源码回归未运行；不要称为已复现实机或已定位6.83GB。最终检查和C06状态见VALIDATION及PR。
+
+## 63. 系统图标漏接与视觉验收重新打开（2026-11-08）
+
+用户反馈运行App图标仍默认，实际UI仍缺设计感。本机已确认0.3.17打包无CFBundleIconFile/ICNS，NativeOptions也无window icon，仅窗口内Logo已换，属于真实漏项。用户三设备参考图位于原附件fca18bd3，优先级高于linko-v1早期卡片效果图；仍只显示实际两台，不补假版本/延迟/传输开关。
+
+gui-reference-polish隔离worktree从f3aa8fe继续。两名既有代理分管三视觉文件与系统图标，root分管版本/验证/CI，未动冻结979/0.3.17 App、身份或TCC。候选0.3.18使用确认SVG生成PNG/ICNS/ICO，Mac在原完整签名前加资源并检查hash2，Windows MSVC用已有rc.exe嵌入资源，原生窗口单次解码图标。无新Cargo依赖，非MSVC仅runtime icon明确warning。新增Windows shell读取EXE图标像素对照原ICO（不执行程序）；Mac加icon篡改拒绝。
+
+视觉三文件合并顶部52px安全条与重复标题，单层浅渐变画布、硬件底边/大小层级、屏框轻光晕、白底细边状态chip设备卡及六独立导航图标。停止/恢复/只读/登记/焦点/存储门与关键断言保留，新增头部几何检查。Python打包8项及生成资产原生读回已过，Rust与新包/新原生图仍待CI，不能宣称视觉完成。
+
+原基础功能仍冻结979。八项CI、两端包和公开v0.3.17-dev五资源匿名下载已核验，官网0.1.2生产/部署各10文件回读过；版本文档PR77合入main921ea70且受测树相同，入口PR78六项全过。实际C06未开始；用户称已开权限后重启GUI/worker仍Denied，UI核对辅助功能条目仍指向0.1.0旧包。用户要求代操作，root选中旧记录移除时系统已弹认证，等待本人TouchID（不能输入/接收系统密码）；后续只对冻结17重登记，不伪造Ready，不动TCC数据库。
+
+
+63节后续：6bc76a5的Mac/Linux/MSRV/审计、两平台资源与固定上游通过；Windows编译/测试通过但新增shell图标ARGB比较失败，后续专项未运行，不能声明五项全过。新原生标准/紧凑图已读，仍有副标题/设备卡对齐差距。用户本人认证后root通过系统UI替换两项旧0.1登记；重启冻结17实际GUI worker为Granted/Granted、Secure Input未激活。按既有Mac→Windows授权启动等待，实际超时未连，C06未通过；启动弹窗过期/滚动引起确认区重排待修。当前17包继续冻结，不为界面18更换权限。
+
+用户允许清理旧版后，只清理target内42个旧App及篡改副本，均先有字节/执行权限核对过的恢复ZIP；保留源码、Git、工作树、ZIP、当前17及身份配对。无远端仓库删除，无全局LS/TCC重置。ignored old-app-recovery保存逐项回执，勿上传宿主资料。
+
+
+63节本轮后续：用户纠正本机图标不能固定笔记本，已接真实本机形态探测（一次缓存/有界/失败Unknown）、对端无形态metadata用通用类型未知，不猜型号/不改v5。Native确认固定检查/同意/停止区，说明单独滚动，30秒及实际worker复查不变，新增回归待新CI。Windows图标核验修复c838c42已推送：先逐帧核对PE原资源字节，真实Shell读回走同一HICON原生解码，要求所有可见RGBA完全相等，只有双方全透明的RGB忽略；原比较保留差异诊断，真实Windows结果尚待CI。
+
+用户本人启动冻结17后已真实认证连接；物理右边缘不能跨，物理Control+Option+Right后GUI明确TimedOut。实际C06失败保持，另开kvm-acquire-commit-retry从979检查已收到Granted但Mac一次publish竞争失败的路径，不能直接认定Win未回应。宿主17/配对/TCC继续冻结。
+
+63节00aa781已通过完整五项42460853547、资源42460853583和上游42460853542；实际标准/紧凑原生图核读显示真实Linux台式形态和明确未知对端。仍发现add_sized的halign未能左对齐、标准底部说明贴clip，c7a0ba8继续用LTR文字槽/紧凑metadata修，Unknown改中性双屏symbol，不补假metadata。新源码必须等新CI/原生图；冻结17物理试跑已失败并正常停止，worker退出，Issue3更新仍未勾C06。

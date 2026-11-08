@@ -2014,3 +2014,38 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 首轮5a598f7完整CI 42441898480在三平台fmt失败（6处runner格式差异），Linux截图上传因上游未运行亦无产物；不将其写成通过。按runner输出修正换行，未修改行为、断言或检查门。同步候选README/快速开始到0.3.17-dev，既有公开0.3.16及其官网入口不覆盖。两名代理交叉静态复核GUI管道与Closed退役逻辑，无阻塞发现；这是静态复核，不是独立安全审计。
 
 638e58e三平台通过fmt/严格Clippy/build，最低1.95及审计通过；工作区回归在新增Closed负例准备阶段失败（Received Submitted，错误预期Retired）。既有契约明确Release回执Submitted只表示请求接受，pump后的snapshot/outcome才确认退役；据此修正准备断言为Submitted，并新增独立epoch Retired及owner Retired断言，再构造未知/新owner负例。没有改生产Release语义或放宽最终Closed拒绝断言。Win/Mac新增startup-held回归已在该轮实际通过，整体候选仍需新CI。
+
+## 0.3.18系统图标与视觉候选（未验收）
+
+用户再次否定实际UI与确认参考的落差，视觉验收保持开放。图标问题经源码核实为未接Mac bundle资源及原生viewport，非单纯图标缓存。新增原SVG生成的PNG/ICNS/ICO和原生接线，Mac资源在签名前入包并核验seal；Windows使用SDK资源编译器，另以shell API读取图标对照ICO像素而不执行EXE。打包Python8项、Python编译和sips/iconutil读回通过；实际MSVC链接/新包seal/系统显示未验证。
+
+视觉去顶部冗余空间、内层灰板与过重选择框，调整硬件尺度/基线、卡片和图标；不改业务权限/恢复门，不添加虚构设备或状态。候选需要新原生窗口图与参考逐项对照，旧图/旧CI不能作为本批通过。浏览器未验证，宿主运行中的17 App未替换。
+
+69beb0b首轮完整CI42449294641在11处fmt差异失败，低Rust/审计及资源42449294628、固定依赖42449294874通过。根据runner格式输出逐hunk核对旧源唯一匹配，仅应用空白/尾逗号等价变更，未改行为或断言。新原生图由已通过资源作业产生，仍需读取对照后判断视觉差距；Windows资源链接/图标像素与真实新包seal尚需完整CI。
+
+
+### 0.3.18中间候选6bc76a5与宿主权限核对
+
+[完整CI42452003149](https://github.com/ForceMind/Linko/actions/runs/42452003149)的macOS/Linux、最低Rust1.95、依赖审计通过；Windows fmt/Clippy/workspace test/debug及Release build通过，但新增shell图标逐ARGB比较失败，其后的Windows专项尚未执行。失败原因待定位，不能把本候选写成五项全过。[资源42452003132](https://github.com/ForceMind/Linko/actions/runs/42452003132)两平台、[固定上游42452003138](https://github.com/ForceMind/Linko/actions/runs/42452003138)通过。
+
+同源原生标准1280×800及紧凑920×700图已读取。artifact13605714068的外层SHA256为890c4597f17c5fe4201c3e3b33becfb6f5db6948241aa39a142560d8889549a3，路径/CRC通过；图为隔离Xvfb/NoNative原始窗口像素。头部/画布较17改善；副标题和设备卡标题仍有对齐差距，不称为用户视觉验收。macOS新图标seal及plist/helper/icon篡改拒绝在CI通过，不代表Finder/Dock或TCC验证。
+
+用户授权代操作后，已在系统UI分别核实旧辅助功能/输入监控登记实际指向0.1.0，用户本人完成系统认证，再选入冻结17。重启旧包误选已纠正，单个冻结17实际GUI worker确认两项Granted、未检测到Secure Input。本机接收控制仍关闭，未开数据/G1。按原Mac→已登记Windows短测授权启动一次，实际UI等待约一分钟后超时、未连接；未作物理输入验收，配对保留。启动弹窗中结果过期/滚动引发同意区重排，作为本批交互缺陷修复；不放宽30秒新鲜度或实际worker复查。
+
+用户允许清理旧版后，仅删除仓库target内42个旧App/篡改测试副本；逐个先核对现有或新建恢复ZIP的文件字节和执行权限。当前冻结17、全部源码/Git/工作树/ZIP、身份与配置均保留。只注销旧App路径并注册当前包，没有全局重置系统登记或删除GitHub仓库。本地清单/回执保存在ignored target/local-validation/old-app-recovery，不上传宿主路径/权限报告。
+
+
+后续0.3.18源码修正：Native启动确认改为固定检查摘要/固定同意确认和停止区，仅中间说明滚动；不改30秒观察期限、实际worker复查及独立同意。新增两尺寸、报告状态/过期、实际滚动/点击的模型回归，待新CI执行。设备素材由Local/Peer改Laptop/Desktop/Unknown；本机用一次性只读有界系统信息探测，失败/含糊型号返回Unknown。当前v5不交换设备形态，对端明确类型未识别，不能按对端角色/名称猜成台式或笔记本。无新配置、依赖或协议。新preflight-20261108T071226776730Z-4939仍因Rust/Cargo缺失在fmt入口失败，其余未运行，不安装。
+
+宿主冻结17后续：用户本人启动后实际GUI确认认证连接、Native模式/Local；用户物理向右跨屏未成功，Control+Option+Right后仍未进入，GUI读回Switch TimedOut。不能声明C06完成，也不能将超时直接归因Windows无回执；需区分Granted后的本机提交失败与真正无回执。此问题继续独立基础键鼠修复，UI18不会覆盖当前测试包或身份。
+
+
+0cef8b3中间CI42458858560因20处fmt和新增MouseWheel测试缺phase/source失败；审计、资源42458858546及固定依赖42458858567成功。按runner纯格式输出逐hunk唯一匹配/等价核验应用，再按egui0.37真实定义补Move/Wheel，不改滚动/同意断言。c838c42的Windows作业128655173616已通过PE原资源逐字节与Shell可见RGBA检查，随后test_package在SVG源SHA失败；Windows CRLF字节重算精确复现e644cfb0，仓库LF为33ce4032。仅为批准SVG添加eol=lf，保持源和二进制摘要门，而非放宽断言。新完整候选仍待CI。
+
+本次宿主17正常停止后，GUI回读已断开/Local且无恢复警告；只读进程核对GUI仍在、对应worker已退出。此为软件停止观察，不能冒充物理按键释放或C06通过。此前物理跨屏/快捷键测试未成功，修复后需重跑。
+
+00aa781完整五项42460853547、资源42460853583两平台及固定上游42460853542全部通过，含实际Windows PE/Shell图标与进程/重连/GUI/签名篡改专项。设备形态和固定确认区自动回归已执行通过。最新两尺寸原生图artifact13609419891外层SHA256 f078c660b6890039265def2aed3d70eab07f120f52c6e22af9efd517b0902ae5已核读：本机实际Linux机箱被识别为台式，对端无形态显示未知；未按角色伪装笔记本。该图仍揭示halign不能消除add_sized默认居中，以及新元数据挤到底部说明。c7a0ba8改显式LTR固定文字槽、20px元数据行和中性双屏未知符号，新增实际文字起点/底部clip断言；不能用00aa通过替代新代码CI/新图。
+
+宿主只读规则核对本机型号分类结果为Unknown；不保留/上传原始型号，不能借系统为macOS推断笔记本。对端形态交换尚未实现，当前明确未知，v5/授权不改。
+
+c7a0ba8完整检查42464042816因新增对齐断言的一处fmt失败，最低1.95/审计及资源42464042654、固定上游42464042884通过。已按runner精确应用该格式hunk，未改新断言或实际呈现逻辑；最终提交仍以新完整CI为准。
