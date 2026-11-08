@@ -123,10 +123,17 @@ fn smbios_kind(table: &[u8]) -> Option<DeviceKind> {
         let formatted = table.get(offset..end)?;
         // Skip the unformatted string set without decoding, retaining or logging
         // any strings (which may contain serial/asset identifiers).
-        let terminator = table.get(end..)?.windows(2).position(|pair| pair == [0, 0])?;
+        let terminator = table
+            .get(end..)?
+            .windows(2)
+            .position(|pair| pair == [0, 0])?;
         let next = end.checked_add(terminator)?.checked_add(2)?;
         if header[0] == 127 {
-            return if length == 4 && terminator == 0 { kind } else { None };
+            return if length == 4 && terminator == 0 {
+                kind
+            } else {
+                None
+            };
         }
         if header[0] == 3 {
             if length < 9 {
@@ -149,7 +156,12 @@ fn probe() -> DeviceKind {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         #[link_name = "GetSystemFirmwareTable"]
-        fn get_system_firmware_table(provider: u32, table: u32, buffer: *mut c_void, size: u32) -> u32;
+        fn get_system_firmware_table(
+            provider: u32,
+            table: u32,
+            buffer: *mut c_void,
+            size: u32,
+        ) -> u32;
     }
     const RSMB: u32 = 0x5253_4d42; // C provider signature 'RSMB'; table id is zero.
     let size = unsafe { get_system_firmware_table(RSMB, 0, ptr::null_mut(), 0) } as usize;
@@ -157,10 +169,14 @@ fn probe() -> DeviceKind {
         return DeviceKind::Unknown;
     }
     let mut raw = vec![0u8; size];
-    let written = unsafe {
-        get_system_firmware_table(RSMB, 0, raw.as_mut_ptr().cast(), size as u32)
-    } as usize;
-    let kind = if written == size { raw_smbios_kind(&raw) } else { DeviceKind::Unknown };
+    let written =
+        unsafe { get_system_firmware_table(RSMB, 0, raw.as_mut_ptr().cast(), size as u32) }
+            as usize;
+    let kind = if written == size {
+        raw_smbios_kind(&raw)
+    } else {
+        DeviceKind::Unknown
+    };
     raw.fill(0); // Best-effort temporary-buffer clearing, not a secure-memory claim.
     kind
 }
@@ -177,7 +193,9 @@ fn sysfs_chassis_kind(bytes: &[u8]) -> DeviceKind {
     if value.is_empty() || value.len() > 3 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return DeviceKind::Unknown;
     }
-    value.parse::<u8>().map_or(DeviceKind::Unknown, chassis_kind)
+    value
+        .parse::<u8>()
+        .map_or(DeviceKind::Unknown, chassis_kind)
 }
 
 #[cfg(target_os = "linux")]
@@ -219,10 +237,23 @@ mod tests {
         for model in ["MacBook10,1", "MacBookPro18,3", "MacBookAir10,1"] {
             assert_eq!(mac_model_kind(model), DeviceKind::Laptop);
         }
-        for model in ["iMac20,1", "iMacPro1,1", "Macmini9,1", "MacStudio1,1", "MacPro7,1"] {
+        for model in [
+            "iMac20,1",
+            "iMacPro1,1",
+            "Macmini9,1",
+            "MacStudio1,1",
+            "MacPro7,1",
+        ] {
             assert_eq!(mac_model_kind(model), DeviceKind::Desktop);
         }
-        for model in ["Mac14,2", "Mac15,7", "MacBook", "MacBookProX,1", "iMac1,", "Other"] {
+        for model in [
+            "Mac14,2",
+            "Mac15,7",
+            "MacBook",
+            "MacBookProX,1",
+            "iMac1,",
+            "Other",
+        ] {
             assert_eq!(mac_model_kind(model), DeviceKind::Unknown);
         }
     }
@@ -249,20 +280,33 @@ mod tests {
         let structures = table(9);
         for length in 0..structures.len() {
             // Also exercise truncated records with a self-consistent outer Length.
-            assert_eq!(raw_smbios_kind(&raw(&structures[..length])), DeviceKind::Unknown);
+            assert_eq!(
+                raw_smbios_kind(&raw(&structures[..length])),
+                DeviceKind::Unknown
+            );
         }
         let mut bad = complete.clone();
         bad[4] += 1;
         assert_eq!(raw_smbios_kind(&bad), DeviceKind::Unknown);
-        assert_eq!(raw_smbios_kind(&vec![0; MAX_FIRMWARE_BYTES + 1]), DeviceKind::Unknown);
-        for table in [vec![3, 3, 0, 0], vec![3, 255, 0, 0], vec![3, 5, 0, 0, 0, 0, 0]] {
+        assert_eq!(
+            raw_smbios_kind(&vec![0; MAX_FIRMWARE_BYTES + 1]),
+            DeviceKind::Unknown
+        );
+        for table in [
+            vec![3, 3, 0, 0],
+            vec![3, 255, 0, 0],
+            vec![3, 5, 0, 0, 0, 0, 0],
+        ] {
             assert_eq!(raw_smbios_kind(&raw(&table)), DeviceKind::Unknown);
         }
     }
 
     #[test]
     fn missing_or_conflicting_type_three_records_stay_unknown() {
-        assert_eq!(raw_smbios_kind(&raw(&[127, 4, 0, 0, 0, 0])), DeviceKind::Unknown);
+        assert_eq!(
+            raw_smbios_kind(&raw(&[127, 4, 0, 0, 0, 0])),
+            DeviceKind::Unknown
+        );
         let mut conflict = table(9);
         conflict.truncate(11);
         conflict.extend_from_slice(&table(3));
@@ -276,7 +320,14 @@ mod tests {
     fn bounded_linux_chassis_text_never_defaults_on_failure() {
         assert_eq!(sysfs_chassis_kind(b"9\n"), DeviceKind::Laptop);
         assert_eq!(sysfs_chassis_kind(b"3\n"), DeviceKind::Desktop);
-        for bytes in [&b""[..], &b"unknown\n"[..], &b"+3"[..], &b"30\n"[..], &b"\xff"[..], &[b'9'; 33][..]] {
+        for bytes in [
+            &b""[..],
+            &b"unknown\n"[..],
+            &b"+3"[..],
+            &b"30\n"[..],
+            &b"\xff"[..],
+            &[b'9'; 33][..],
+        ] {
             assert_eq!(sysfs_chassis_kind(bytes), DeviceKind::Unknown);
         }
     }
@@ -286,12 +337,18 @@ mod tests {
         let cache = OnceLock::new();
         let calls = std::cell::Cell::new(0);
         for _ in 0..3 {
-            assert_eq!(detect_once(&cache, || {
-                calls.set(calls.get() + 1);
+            assert_eq!(
+                detect_once(&cache, || {
+                    calls.set(calls.get() + 1);
+                    DeviceKind::Unknown
+                }),
                 DeviceKind::Unknown
-            }), DeviceKind::Unknown);
+            );
         }
         assert_eq!(calls.get(), 1);
-        assert_eq!(detect_once(&cache, || DeviceKind::Laptop), DeviceKind::Unknown);
+        assert_eq!(
+            detect_once(&cache, || DeviceKind::Laptop),
+            DeviceKind::Unknown
+        );
     }
 }

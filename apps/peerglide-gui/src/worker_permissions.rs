@@ -561,10 +561,8 @@ mod tests {
             });
             app.native_confirmation = true;
             native_dialog_frame(&mut app, &ctx, size, vec![]).drop_without_applying_deltas();
-            let (baseline, _) = native_dialog_layout(
-                native_dialog_frame(&mut app, &ctx, size, vec![]),
-                size,
-            )?;
+            let (baseline, _) =
+                native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
             assert!(app.native_confirmation);
             for outcome in [
                 None,
@@ -583,10 +581,8 @@ mod tests {
                     finished: Instant::now(),
                 });
                 app.native_confirmation = true;
-                let (actual, _) = native_dialog_layout(
-                    native_dialog_frame(&mut app, &ctx, size, vec![]),
-                    size,
-                )?;
+                let (actual, _) =
+                    native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
                 assert_eq!(actual, baseline);
                 assert!(!app.native_confirmation);
             }
@@ -595,20 +591,16 @@ mod tests {
                 finished: Instant::now() - FRESHNESS,
             });
             app.native_confirmation = true;
-            let (expired, _) = native_dialog_layout(
-                native_dialog_frame(&mut app, &ctx, size, vec![]),
-                size,
-            )?;
+            let (expired, _) =
+                native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
             assert_eq!(expired, baseline);
             assert!(!app.native_confirmation);
             let (_sender, receiver) = mpsc::channel();
             app.worker_permissions.receiver = Some(receiver);
             app.worker_permissions.result = None;
             app.native_confirmation = true;
-            let (checking, _) = native_dialog_layout(
-                native_dialog_frame(&mut app, &ctx, size, vec![]),
-                size,
-            )?;
+            let (checking, _) =
+                native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
             assert_eq!(checking, baseline);
             assert!(!app.native_confirmation);
             app.worker_permissions.receiver = None;
@@ -636,10 +628,8 @@ mod tests {
             });
             app.native_confirmation = true;
             native_dialog_frame(&mut app, &ctx, size, vec![]).drop_without_applying_deltas();
-            let (baseline, anchor) = native_dialog_layout(
-                native_dialog_frame(&mut app, &ctx, size, vec![]),
-                size,
-            )?;
+            let (baseline, anchor) =
+                native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
             let point = egui::pos2(
                 baseline[0].center().x,
                 (baseline[0].max.y + baseline[1].min.y) / 2.0,
@@ -653,15 +643,15 @@ mod tests {
                     egui::Event::MouseWheel {
                         unit: egui::MouseWheelUnit::Point,
                         delta: egui::vec2(0.0, -500.0),
+                        phase: egui::TouchPhase::Move,
+                        source: egui::MouseWheelSource::Wheel,
                         modifiers: egui::Modifiers::NONE,
                     },
                 ],
             )
             .drop_without_applying_deltas();
-            let (scrolled, after_scroll) = native_dialog_layout(
-                native_dialog_frame(&mut app, &ctx, size, vec![]),
-                size,
-            )?;
+            let (scrolled, after_scroll) =
+                native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
             assert_eq!(scrolled, baseline);
             assert_ne!(
                 after_scroll, anchor,
@@ -671,10 +661,8 @@ mod tests {
                 outcome: Ok(ready()),
                 finished: Instant::now() - FRESHNESS,
             });
-            let (expired, _) = native_dialog_layout(
-                native_dialog_frame(&mut app, &ctx, size, vec![]),
-                size,
-            )?;
+            let (expired, _) =
+                native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
             assert_eq!(expired, baseline);
             assert!(!app.native_confirmation);
             let notice = app.notice.clone();
@@ -695,10 +683,8 @@ mod tests {
                 outcome: Ok(ready()),
                 finished: Instant::now(),
             });
-            let (fresh, _) = native_dialog_layout(
-                native_dialog_frame(&mut app, &ctx, size, vec![]),
-                size,
-            )?;
+            let (fresh, _) =
+                native_dialog_layout(native_dialog_frame(&mut app, &ctx, size, vec![]), size)?;
             assert_eq!(fresh, baseline);
             assert!(
                 !app.native_confirmation,

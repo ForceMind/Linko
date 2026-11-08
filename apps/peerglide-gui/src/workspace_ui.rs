@@ -207,11 +207,14 @@ impl App {
                     ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 8.0 };
                     ui.set_min_height(if compact { 70.0 } else { 96.0 });
                     read_only_row(ui, |ui| {
-                        device_glyph(ui, if peer {
-                            visual_assets::DeviceKind::Unknown
-                        } else {
-                            visual_assets::local_device_kind()
-                        });
+                        device_glyph(
+                            ui,
+                            if peer {
+                                visual_assets::DeviceKind::Unknown
+                            } else {
+                                visual_assets::local_device_kind()
+                            },
+                        );
                         let name_width = (ui.available_width() - 64.0).max(1.0);
                         ui.add_sized(
                             [name_width, 24.0],
@@ -583,24 +586,38 @@ fn device_glyph(ui: &mut egui::Ui, kind: visual_assets::DeviceKind) {
     painter.rect_stroke(screen, 2.0, stroke, egui::StrokeKind::Inside);
     match kind {
         visual_assets::DeviceKind::Laptop => {
-            painter.line_segment([
-                rect.min + egui::vec2(1.0, 19.0),
-                rect.min + egui::vec2(21.0, 19.0),
-            ], stroke);
+            painter.line_segment(
+                [
+                    rect.min + egui::vec2(1.0, 19.0),
+                    rect.min + egui::vec2(21.0, 19.0),
+                ],
+                stroke,
+            );
         }
         visual_assets::DeviceKind::Desktop => {
-            painter.line_segment([
-                rect.min + egui::vec2(11.0, 16.0),
-                rect.min + egui::vec2(11.0, 20.0),
-            ], stroke);
-            painter.line_segment([
-                rect.min + egui::vec2(6.0, 20.0),
-                rect.min + egui::vec2(16.0, 20.0),
-            ], stroke);
+            painter.line_segment(
+                [
+                    rect.min + egui::vec2(11.0, 16.0),
+                    rect.min + egui::vec2(11.0, 20.0),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    rect.min + egui::vec2(6.0, 20.0),
+                    rect.min + egui::vec2(16.0, 20.0),
+                ],
+                stroke,
+            );
         }
         visual_assets::DeviceKind::Unknown => {
-            painter.text(screen.center(), egui::Align2::CENTER_CENTER, "?",
-                egui::FontId::proportional(11.0), ui.visuals().text_color());
+            painter.text(
+                screen.center(),
+                egui::Align2::CENTER_CENTER,
+                "?",
+                egui::FontId::proportional(11.0),
+                ui.visuals().text_color(),
+            );
         }
     }
 }
