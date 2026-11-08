@@ -5,6 +5,7 @@ mod connection_info;
 mod desktop_state;
 mod desktop_style;
 mod desktop_ui;
+mod device_hardware;
 mod discovery_panel;
 mod enrollment_store;
 mod gesture_lab;

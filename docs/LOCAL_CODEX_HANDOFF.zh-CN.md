@@ -1475,3 +1475,8 @@ gui-reference-polish隔离worktree从f3aa8fe继续。两名既有代理分管三
 63节后续：6bc76a5的Mac/Linux/MSRV/审计、两平台资源与固定上游通过；Windows编译/测试通过但新增shell图标ARGB比较失败，后续专项未运行，不能声明五项全过。新原生标准/紧凑图已读，仍有副标题/设备卡对齐差距。用户本人认证后root通过系统UI替换两项旧0.1登记；重启冻结17实际GUI worker为Granted/Granted、Secure Input未激活。按既有Mac→Windows授权启动等待，实际超时未连，C06未通过；启动弹窗过期/滚动引起确认区重排待修。当前17包继续冻结，不为界面18更换权限。
 
 用户允许清理旧版后，只清理target内42个旧App及篡改副本，均先有字节/执行权限核对过的恢复ZIP；保留源码、Git、工作树、ZIP、当前17及身份配对。无远端仓库删除，无全局LS/TCC重置。ignored old-app-recovery保存逐项回执，勿上传宿主资料。
+
+
+63节本轮后续：用户纠正本机图标不能固定笔记本，已接真实本机形态探测（一次缓存/有界/失败Unknown）、对端无形态metadata用通用类型未知，不猜型号/不改v5。Native确认固定检查/同意/停止区，说明单独滚动，30秒及实际worker复查不变，新增回归待新CI。Windows图标核验修复c838c42已推送：先逐帧核对PE原资源字节，真实Shell读回走同一HICON原生解码，要求所有可见RGBA完全相等，只有双方全透明的RGB忽略；原比较保留差异诊断，真实Windows结果尚待CI。
+
+用户本人启动冻结17后已真实认证连接；物理右边缘不能跨，物理Control+Option+Right后GUI明确TimedOut。实际C06失败保持，另开kvm-acquire-commit-retry从979检查已收到Granted但Mac一次publish竞争失败的路径，不能直接认定Win未回应。宿主17/配对/TCC继续冻结。

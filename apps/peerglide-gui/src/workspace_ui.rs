@@ -207,6 +207,11 @@ impl App {
                     ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 8.0 };
                     ui.set_min_height(if compact { 70.0 } else { 96.0 });
                     read_only_row(ui, |ui| {
+                        device_glyph(ui, if peer {
+                            visual_assets::DeviceKind::Unknown
+                        } else {
+                            visual_assets::local_device_kind()
+                        });
                         let name_width = (ui.available_width() - 64.0).max(1.0);
                         ui.add_sized(
                             [name_width, 24.0],
@@ -214,7 +219,8 @@ impl App {
                                 &name,
                                 if compact { 14.0 } else { 16.0 },
                             ))
-                            .truncate(),
+                            .truncate()
+                            .halign(egui::Align::LEFT),
                         )
                         .on_hover_text(&name);
                         let (label, tone) = if !peer {
@@ -246,6 +252,12 @@ impl App {
                     } else {
                         card_metadata(ui, "系统", local_system_name());
                     }
+                    let kind = if peer {
+                        visual_assets::DeviceKind::Unknown
+                    } else {
+                        visual_assets::local_device_kind()
+                    };
+                    card_metadata(ui, "设备", device_kind_label(kind));
                     card_metadata(ui, "会话", self.input_label());
                 });
                 let id = column.scope_id().with(if peer {
@@ -345,7 +357,7 @@ impl App {
             &painter,
             local,
             (desktop_ui::local_device_name(), "本机"),
-            visual_assets::DeviceKind::Local,
+            visual_assets::local_device_kind(),
             !self.workspace_peer_selected || !registered,
         );
         if ui
@@ -364,7 +376,7 @@ impl App {
                 &painter,
                 shown_peer,
                 (&self.config.peer_name, self.peer_connection_label()),
-                visual_assets::DeviceKind::Peer,
+                visual_assets::DeviceKind::Unknown,
                 self.workspace_peer_selected,
             );
             if ui
@@ -551,6 +563,48 @@ fn local_system_name() -> &'static str {
     }
 }
 
+fn device_kind_label(kind: visual_assets::DeviceKind) -> &'static str {
+    match kind {
+        visual_assets::DeviceKind::Laptop => "笔记本电脑",
+        visual_assets::DeviceKind::Desktop => "台式电脑",
+        visual_assets::DeviceKind::Unknown => "类型未识别",
+    }
+}
+
+fn device_glyph(ui: &mut egui::Ui, kind: visual_assets::DeviceKind) {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::hover());
+    response.on_hover_text(device_kind_label(kind));
+    let painter = ui.painter();
+    let screen = egui::Rect::from_min_max(
+        rect.min + egui::vec2(2.0, 3.0),
+        rect.min + egui::vec2(20.0, 16.0),
+    );
+    let stroke = egui::Stroke::new(1.3, ui.visuals().text_color());
+    painter.rect_stroke(screen, 2.0, stroke, egui::StrokeKind::Inside);
+    match kind {
+        visual_assets::DeviceKind::Laptop => {
+            painter.line_segment([
+                rect.min + egui::vec2(1.0, 19.0),
+                rect.min + egui::vec2(21.0, 19.0),
+            ], stroke);
+        }
+        visual_assets::DeviceKind::Desktop => {
+            painter.line_segment([
+                rect.min + egui::vec2(11.0, 16.0),
+                rect.min + egui::vec2(11.0, 20.0),
+            ], stroke);
+            painter.line_segment([
+                rect.min + egui::vec2(6.0, 20.0),
+                rect.min + egui::vec2(16.0, 20.0),
+            ], stroke);
+        }
+        visual_assets::DeviceKind::Unknown => {
+            painter.text(screen.center(), egui::Align2::CENTER_CENTER, "?",
+                egui::FontId::proportional(11.0), ui.visuals().text_color());
+        }
+    }
+}
+
 fn read_only_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), 24.0),
@@ -596,8 +650,9 @@ fn draw_workspace_device(
         egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
     let aspect = visual_assets::device_aspect(kind);
     let illustration_scale = match kind {
-        visual_assets::DeviceKind::Local => 0.70,
-        visual_assets::DeviceKind::Peer => 1.0,
+        visual_assets::DeviceKind::Laptop => 0.70,
+        visual_assets::DeviceKind::Desktop => 1.0,
+        visual_assets::DeviceKind::Unknown => 0.85,
     };
     let width = image_area.width().min(image_area.height() * aspect) * illustration_scale;
     let size = Vec2::new(width, width / aspect);
@@ -605,7 +660,9 @@ fn draw_workspace_device(
         egui::pos2(image_area.center().x, image_area.max.y - size.y / 2.0),
         size,
     );
-    let selected_frame = if matches!(kind, visual_assets::DeviceKind::Peer) {
+    let selected_frame = if kind == visual_assets::DeviceKind::Unknown {
+        image_rect.shrink(5.0)
+    } else if kind == visual_assets::DeviceKind::Desktop {
         egui::Rect::from_min_max(
             image_rect.min,
             egui::pos2(
@@ -638,11 +695,20 @@ fn draw_workspace_device(
             egui::Color32::WHITE,
         );
     } else {
+        // An unclassified device has no invented laptop/desktop chassis.
+        painter.rect_filled(image_rect.shrink(5.0), 10.0, ui.visuals().window_fill);
         painter.rect_stroke(
             image_rect.shrink(5.0),
             6.0,
             egui::Stroke::new(1.0, ui.visuals().text_color()),
             egui::StrokeKind::Inside,
+        );
+        painter.text(
+            image_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "电脑\n类型未识别",
+            egui::FontId::proportional(14.0),
+            ui.visuals().weak_text_color(),
         );
     }
     if selected {

@@ -2,10 +2,15 @@
 use eframe::egui::{self, ColorImage, Rect, TextureHandle};
 use std::sync::{Arc, OnceLock};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DeviceKind {
-    Local,
-    Peer,
+    Laptop,
+    Desktop,
+    Unknown,
+}
+
+pub(super) fn local_device_kind() -> DeviceKind {
+    super::device_hardware::local_device_kind()
 }
 
 struct DecodedDevice {
@@ -61,20 +66,22 @@ fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
 
 fn decoded(kind: DeviceKind) -> Option<&'static DecodedDevice> {
     match kind {
-        DeviceKind::Local => {
+        DeviceKind::Laptop => {
             LAPTOP.get_or_init(|| decode(include_bytes!("../assets/devices/local-laptop.png")))
         }
-        DeviceKind::Peer => {
+        DeviceKind::Desktop => {
             MONITOR.get_or_init(|| decode(include_bytes!("../assets/devices/desktop-monitor.png")))
         }
+        DeviceKind::Unknown => return None,
     }
     .as_ref()
 }
 
 pub(super) fn device_texture(ctx: &egui::Context, kind: DeviceKind) -> Option<TextureHandle> {
     let name = match kind {
-        DeviceKind::Local => "linko-local-device-art",
-        DeviceKind::Peer => "linko-peer-device-art",
+        DeviceKind::Laptop => "linko-laptop-device-art",
+        DeviceKind::Desktop => "linko-desktop-device-art",
+        DeviceKind::Unknown => return None,
     };
     let key = egui::Id::unique(name);
     if let Some(texture) = ctx.data(|memory| memory.get_temp::<TextureHandle>(key)) {
@@ -96,7 +103,8 @@ pub(super) fn device_uv(kind: DeviceKind) -> Rect {
 }
 
 pub(super) fn device_aspect(kind: DeviceKind) -> f32 {
-    decoded(kind).map_or(1.0, |source| source.aspect)
+    // Decorative generic-computer proportions, never measured display geometry.
+    decoded(kind).map_or(4.0 / 3.0, |source| source.aspect)
 }
 
 #[cfg(test)]
@@ -105,7 +113,7 @@ mod tests {
 
     #[test]
     fn fixed_device_assets_decode_to_bounded_transparent_images() {
-        for kind in [DeviceKind::Local, DeviceKind::Peer] {
+        for kind in [DeviceKind::Laptop, DeviceKind::Desktop] {
             let source = decoded(kind).expect("bundled device image must decode");
             assert!(source.image.width() <= 2048 && source.image.height() <= 2048);
             assert!(source.image.pixels.iter().any(|pixel| pixel.a() == 0));
@@ -123,11 +131,12 @@ mod tests {
         let mut previous = None;
         for _ in 0..3 {
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let first = device_texture(ui.ctx(), DeviceKind::Local).unwrap();
-                let second = device_texture(ui.ctx(), DeviceKind::Local).unwrap();
-                let peer = device_texture(ui.ctx(), DeviceKind::Peer).unwrap();
+                let first = device_texture(ui.ctx(), DeviceKind::Laptop).unwrap();
+                let second = device_texture(ui.ctx(), DeviceKind::Laptop).unwrap();
+                let desktop = device_texture(ui.ctx(), DeviceKind::Desktop).unwrap();
                 assert_eq!(first.id(), second.id());
-                assert_ne!(first.id(), peer.id());
+                assert_ne!(first.id(), desktop.id());
+                assert!(device_texture(ui.ctx(), DeviceKind::Unknown).is_none());
                 if let Some(id) = previous {
                     assert_eq!(first.id(), id);
                 }
@@ -135,5 +144,15 @@ mod tests {
             });
             output.drop_without_applying_deltas();
         }
+    }
+
+    #[test]
+    fn unknown_type_never_decodes_or_uploads_a_desktop_or_laptop_asset() {
+        assert!(decoded(DeviceKind::Unknown).is_none());
+        assert_eq!(device_aspect(DeviceKind::Unknown), 4.0 / 3.0);
+        assert_eq!(
+            device_uv(DeviceKind::Unknown),
+            Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0))
+        );
     }
 }

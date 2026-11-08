@@ -1047,10 +1047,131 @@ impl App {
             self.wizard = None;
         }
     }
+    fn native_start_window(&mut self, ctx: &egui::Context) {
+        let mut open = true;
+        let viewport = ctx.viewport_rect();
+        let size = Vec2::new(
+            580.0f32.min((viewport.width() - 48.0).max(1.0)),
+            540.0f32.min((viewport.height() - 48.0).max(1.0)),
+        );
+        egui::Window::new("开启键鼠协同")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .fixed_size(size)
+            .vscroll(false)
+            .show(ctx, |ui| self.native_start_contents(ui));
+        if !open {
+            self.native_confirmation = false;
+            self.dialog = None;
+        }
+    }
+
+    fn native_start_contents(&mut self, ui: &mut egui::Ui) {
+        const HEADER_HEIGHT: f32 = 112.0;
+        const FOOTER_HEIGHT: f32 = 104.0;
+        let permission_idle =
+            self.child.is_none() || self.active_mode == Some(SessionMode::Communication);
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), HEADER_HEIGHT),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| {
+                ui.set_min_height(HEADER_HEIGHT);
+                self.worker_permissions
+                    .native_start_header(ui, permission_idle && self.stopping.is_none());
+            },
+        );
+        // Keep all changing explanations inside this one bounded scroll body.
+        // Neither an expired observation nor scrolling may move the controls.
+        let body_height =
+            (ui.available_height() - FOOTER_HEIGHT - ui.spacing().item_spacing.y).max(1.0);
+        egui::ScrollArea::vertical()
+            .id_salt("native-start-explanation")
+            .auto_shrink([false, false])
+            .min_scrolled_height(body_height)
+            .max_height(body_height)
+            .show(ui, |ui| {
+                self.worker_permissions.native_start_details(ui);
+                ui.separator();
+                ui.label("这会启动真实原生键鼠捕获与注入；实际工作进程将重新检查系统权限。连接/认证不代表对端允许本机控制。");
+                if !self.config.listen && !self.config.reconnect {
+                    ui.weak("本次会等待另一台电脑约一分钟，可随时停止；连接并重新验权后才开始捕获键鼠。这不会开启断线自动重连。");
+                }
+                ui.label(if self.config.allow {
+                    "本机接收偏好：允许已登记对端控制本机。"
+                } else {
+                    "本机接收偏好：不允许对端控制本机；可请求控制已授权本机的对端。"
+                });
+                if self.child.is_some() {
+                    ui.weak("当前仅通信会话将先停止；清理成功后再以键鼠模式重连。失败不自动继续。");
+                }
+                ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");
+                ui.label("接收端首次物理动作仅用于收回控制，不执行或回放。切回本机后先松开物理按键／鼠标按钮，再继续操作。");
+                if !self.notice.is_empty() {
+                    ui.separator();
+                    ui.label(&self.notice);
+                }
+            });
+        let permissions_fresh =
+            self.worker_permissions.readiness() == worker_permissions::Readiness::Ready;
+        if !permissions_fresh {
+            self.native_confirmation = false;
+        }
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), FOOTER_HEIGHT),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| {
+                ui.set_min_height(FOOTER_HEIGHT);
+                ui.separator();
+                ui.add_enabled(
+                    permissions_fresh,
+                    egui::Checkbox::new(
+                        &mut self.native_confirmation,
+                        "我明确同意本次使用真实键鼠协同",
+                    ),
+                );
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), 38.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if ui.button("立即停止并恢复本机").clicked() {
+                            self.stop();
+                        }
+                        if ui
+                            .add_enabled(
+                                cfg!(any(windows, target_os = "macos"))
+                                    && self.writable()
+                                    && self.worker_permissions.readiness()
+                                        == worker_permissions::Readiness::Ready
+                                    && self.native_confirmation
+                                    && self.stopping.is_none()
+                                    && !self.recovery_blocked,
+                                egui::Button::new("确认并开启键鼠"),
+                            )
+                            .clicked()
+                        {
+                            let result = self.request_native();
+                            let success = result.is_ok();
+                            self.feedback(result, "正在准备真实键鼠会话，输入归属等待进程报告。");
+                            if success {
+                                self.dialog = None;
+                            }
+                        }
+                    },
+                );
+            },
+        );
+    }
+
     fn dialog_window(&mut self, ctx: &egui::Context) {
         let Some(dialog) = self.dialog else {
             return;
         };
+        if dialog == Dialog::NativeStart {
+            self.native_start_window(ctx);
+            return;
+        }
         let mut open = true;
         let title = match dialog {
             Dialog::NativeStart => "开启键鼠协同",
@@ -1062,20 +1183,7 @@ impl App {
         egui::Window::new(title).open(&mut open).collapsible(false).default_width(580.0).default_height(540.0).vscroll(true).show(ctx,|ui|{
             if ui.button("立即停止并恢复本机").clicked(){self.stop();}
             ui.separator();match dialog{
-                Dialog::NativeStart=>{
-                    let permission_idle=self.child.is_none()||self.active_mode==Some(SessionMode::Communication);
-                    self.worker_permissions.ui(ui,permission_idle&&self.stopping.is_none());
-                    let permissions_fresh=self.worker_permissions.readiness()==worker_permissions::Readiness::Ready;
-                    if !permissions_fresh{self.native_confirmation=false;}
-                    ui.label("这会启动真实原生键鼠捕获与注入；实际工作进程将重新检查系统权限。连接/认证不代表对端允许本机控制。");
-                    if !self.config.listen && !self.config.reconnect {ui.weak("本次会等待另一台电脑约一分钟，可随时停止；连接并重新验权后才开始捕获键鼠。这不会开启断线自动重连。");}
-                    ui.label(if self.config.allow{"本机接收偏好：允许已登记对端控制本机。"}else{"本机接收偏好：不允许对端控制本机；可请求控制已授权本机的对端。"});
-                    if self.child.is_some(){ui.weak("当前仅通信会话将先停止；清理成功后再以键鼠模式重连。失败不自动继续。");}
-                    ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");
-                    ui.label("接收端首次物理动作仅用于收回控制，不执行或回放。切回本机后先松开物理按键／鼠标按钮，再继续操作。");
-                    ui.add_enabled(permissions_fresh,egui::Checkbox::new(&mut self.native_confirmation,"我明确同意本次使用真实键鼠协同"));
-                    if ui.add_enabled(cfg!(any(windows,target_os="macos"))&&self.writable()&&self.worker_permissions.readiness()==worker_permissions::Readiness::Ready&&self.native_confirmation&&self.stopping.is_none()&&!self.recovery_blocked,egui::Button::new("确认并开启键鼠")).clicked(){let result=self.request_native();let success=result.is_ok();self.feedback(result,"正在准备真实键鼠会话，输入归属等待进程报告。");if success{self.dialog=None;}}
-                },
+                Dialog::NativeStart=>{},
                 Dialog::Revoke=>{ui.label("停止会话并清除对端信任与本机接收许可。保留本机身份；下次需重新核验。");if ui.button("撤销并停止会话").clicked(){let result=self.revoke();self.feedback(result,"设备信任已撤销，旧会话正在停止。");self.dialog=None;}},
                 Dialog::Reset=>{ui.label("先备份设置和设备登记，再恢复默认并撤销信任。本机身份保持；无效或未来版本只读保留。");if ui.add_enabled(self.idle_writable(),egui::Button::new("确认备份并恢复设置")).clicked(){match self.reset_settings(){Ok(())=>{self.theme(ctx);self.notice="已备份并恢复默认，设备信任和授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},
                 Dialog::ForceStop=>{ui.label("仅在正常停止无响应时使用。强制结束不能确认输入已释放，之后本窗口只允许通信诊断。");if ui.button("明确强制结束，保留恢复警告").clicked(){if let Some(child)=self.child.as_mut(){let result=child.kill().map_err(anyhow::Error::from);self.feedback(result,"已请求强制结束，输入恢复未确认。");}
@@ -1263,6 +1371,7 @@ impl App {
                             ui.add_sized(
                                 [width, 24.0],
                                 egui::Label::new(egui::RichText::new(subtitle).size(14.0).weak())
+                                    .halign(egui::Align::LEFT)
                                     .truncate(),
                             )
                             .on_hover_text(subtitle);

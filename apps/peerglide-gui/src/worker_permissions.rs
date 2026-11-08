@@ -326,10 +326,7 @@ impl Checker {
         self.receiver = Some(rx);
         self.cancel = Some(cancel);
     }
-    pub fn ui(&mut self, ui: &mut egui::Ui, idle: bool) {
-        ui.add_space(12.0);
-        ui.strong("键鼠权限");
-        ui.weak("由实际输入程序检查，不联网、不捕获输入，也不申请权限。这里显示上次检查结果，开启键鼠时会再次确认。");
+    fn check_button(&mut self, ui: &mut egui::Ui, idle: bool) {
         if ui
             .add_enabled(
                 idle && self.receiver.is_none(),
@@ -339,9 +336,9 @@ impl Checker {
         {
             self.start();
         }
-        if self.receiver.is_some() {
-            ui.label("正在检查键鼠权限…");
-        }
+    }
+
+    fn report_ui(&self, ui: &mut egui::Ui) {
         match self.result.map(|observation| observation.outcome) {
             Some(Ok(report)) => {
                 let label = |value| match value {
@@ -372,6 +369,76 @@ impl Checker {
             }
             None => (),
         }
+    }
+
+    /// A fixed-size presentation for the confirmation window, not an input grant.
+    pub(super) fn native_start_header(&mut self, ui: &mut egui::Ui, idle: bool) {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 38.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                let width = (ui.available_width() - 152.0).max(1.0);
+                ui.add_sized(
+                    [width, 38.0],
+                    egui::Label::new(super::desktop_style::semibold("键鼠权限", 16.0))
+                        .halign(egui::Align::LEFT),
+                );
+                self.check_button(ui, idle);
+            },
+        );
+        let state = self.readiness();
+        let expired = self.result.is_some() && state == Readiness::Unchecked;
+        let summary = if expired {
+            "上次结果已过期，开启前请重新检查。检查通过也不代表对端许可或实际输入效果。"
+        } else {
+            state.detail()
+        };
+        let tone = if state == Readiness::Ready {
+            super::desktop_style::Tone::Good
+        } else if matches!(state, Readiness::Checking | Readiness::Unchecked) && !expired {
+            super::desktop_style::Tone::Neutral
+        } else {
+            super::desktop_style::Tone::Warning
+        };
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 64.0),
+            egui::Layout::top_down(egui::Align::LEFT),
+            |ui| {
+                ui.set_min_height(64.0);
+                ui.label(
+                    super::desktop_style::status_text(summary, ui.visuals().dark_mode, tone)
+                        .size(13.0),
+                );
+                ui.label(
+                    egui::RichText::new("检查不联网、不捕获输入，也不申请系统权限。")
+                        .size(12.0)
+                        .weak(),
+                );
+            },
+        );
+    }
+
+    /// Historical observations stay in the scroll body when freshness expires.
+    pub(super) fn native_start_details(&self, ui: &mut egui::Ui) {
+        ui.label(super::desktop_style::semibold("检查详情", 15.0));
+        ui.weak("由实际输入程序检查。这里显示上次检查结果，开启键鼠时会再次确认；界面自身的许可不能代替实际输入程序的许可。");
+        self.report_ui(ui);
+        ui.weak(format!(
+            "权限观察仅{}秒有效，过期后需重新检查。检查通过也不代表对端许可或实际输入效果。",
+            FRESHNESS.as_secs()
+        ));
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, idle: bool) {
+        ui.add_space(12.0);
+        ui.strong("键鼠权限");
+        ui.weak("由实际输入程序检查，不联网、不捕获输入，也不申请权限。这里显示上次检查结果，开启键鼠时会再次确认。");
+        self.check_button(ui, idle);
+        if self.receiver.is_some() {
+            ui.label("正在检查键鼠权限…");
+        }
+        self.report_ui(ui);
         if self.result.is_some() && self.readiness() == Readiness::Unchecked {
             ui.weak("上次结果已过期，开启前请重新检查。检查通过也不代表对端许可或实际输入效果。");
         }
@@ -403,6 +470,262 @@ mod tests {
             secure_input: SecureInput::Inactive,
         }
     }
+    fn native_dialog_frame(
+        app: &mut crate::App,
+        ctx: &egui::Context,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                focused: true,
+                events,
+                ..Default::default()
+            },
+            |root| app.desktop(root),
+        )
+    }
+
+    fn text_bounds(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
+        match shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                Some(text.visual_bounding_rect())
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                shapes.iter().find_map(|shape| text_bounds(shape, label))
+            }
+            _ => None,
+        }
+    }
+
+    fn native_dialog_layout(
+        output: egui::FullOutput,
+        size: egui::Vec2,
+    ) -> anyhow::Result<([egui::Rect; 4], Option<egui::Rect>)> {
+        use anyhow::Context as _;
+        let labels = [
+            "检查键鼠权限",
+            "我明确同意本次使用真实键鼠协同",
+            "确认并开启键鼠",
+            "立即停止并恢复本机",
+        ];
+        let controls: Vec<_> = labels
+            .iter()
+            .map(|label| {
+                output.shapes.iter().find_map(|shape| {
+                    text_bounds(&shape.shape, label).map(|rect| (shape.clip_rect, rect))
+                })
+            })
+            .collect();
+        let explanation = output
+            .shapes
+            .iter()
+            .find_map(|shape| text_bounds(&shape.shape, "检查详情"));
+        output.drop_without_applying_deltas();
+        let mut result = [egui::Rect::NOTHING; 4];
+        for (index, (label, bounds)) in labels.iter().zip(controls).enumerate() {
+            let (clip, rect) = bounds.with_context(|| format!("{label} absent"))?;
+            assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");
+            assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(rect));
+            result[index] = rect;
+        }
+        Ok((result, explanation))
+    }
+
+    fn pointer_button(position: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    #[test]
+    fn native_dialog_controls_stay_fixed_as_permission_reports_change() -> anyhow::Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = crate::App::load(fixture.path.clone());
+        let before = app.config.clone();
+        // Synthetic observations exercise presentation only; no worker or input.
+        for size in [egui::vec2(1280.0, 800.0), egui::vec2(920.0, 700.0)] {
+            let ctx = crate::tests::ui_context();
+            app.theme(&ctx);
+            app.dialog = Some(crate::Dialog::NativeStart);
+            app.worker_permissions.result = Some(Observation {
+                outcome: Ok(ready()),
+                finished: Instant::now(),
+            });
+            app.native_confirmation = true;
+            native_dialog_frame(&mut app, &ctx, size, vec![]).drop_without_applying_deltas();
+            let (baseline, _) = native_dialog_layout(
+                native_dialog_frame(&mut app, &ctx, size, vec![]),
+                size,
+            )?;
+            assert!(app.native_confirmation);
+            for outcome in [
+                None,
+                Some(Err("synthetic diagnostic failure")),
+                Some(Ok(PermissionReport {
+                    accessibility: PermissionStatus::Denied,
+                    ..ready()
+                })),
+                Some(Ok(PermissionReport {
+                    input_monitoring: PermissionStatus::Unknown,
+                    ..ready()
+                })),
+            ] {
+                app.worker_permissions.result = outcome.map(|outcome| Observation {
+                    outcome,
+                    finished: Instant::now(),
+                });
+                app.native_confirmation = true;
+                let (actual, _) = native_dialog_layout(
+                    native_dialog_frame(&mut app, &ctx, size, vec![]),
+                    size,
+                )?;
+                assert_eq!(actual, baseline);
+                assert!(!app.native_confirmation);
+            }
+            app.worker_permissions.result = Some(Observation {
+                outcome: Ok(ready()),
+                finished: Instant::now() - FRESHNESS,
+            });
+            app.native_confirmation = true;
+            let (expired, _) = native_dialog_layout(
+                native_dialog_frame(&mut app, &ctx, size, vec![]),
+                size,
+            )?;
+            assert_eq!(expired, baseline);
+            assert!(!app.native_confirmation);
+            let (_sender, receiver) = mpsc::channel();
+            app.worker_permissions.receiver = Some(receiver);
+            app.worker_permissions.result = None;
+            app.native_confirmation = true;
+            let (checking, _) = native_dialog_layout(
+                native_dialog_frame(&mut app, &ctx, size, vec![]),
+                size,
+            )?;
+            assert_eq!(checking, baseline);
+            assert!(!app.native_confirmation);
+            app.worker_permissions.receiver = None;
+            assert!(app.config == before && app.child.is_none());
+            assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        }
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_dialog_scroll_and_recheck_never_restore_uncommitted_consent() -> anyhow::Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = crate::App::load(fixture.path.clone());
+        let before = app.config.clone();
+        app.notice = "布局回归说明，不包含实际输入内容。".repeat(80);
+        for size in [egui::vec2(1280.0, 800.0), egui::vec2(920.0, 700.0)] {
+            let ctx = crate::tests::ui_context();
+            app.theme(&ctx);
+            app.dialog = Some(crate::Dialog::NativeStart);
+            app.worker_permissions.result = Some(Observation {
+                outcome: Ok(ready()),
+                finished: Instant::now(),
+            });
+            app.native_confirmation = true;
+            native_dialog_frame(&mut app, &ctx, size, vec![]).drop_without_applying_deltas();
+            let (baseline, anchor) = native_dialog_layout(
+                native_dialog_frame(&mut app, &ctx, size, vec![]),
+                size,
+            )?;
+            let point = egui::pos2(
+                baseline[0].center().x,
+                (baseline[0].max.y + baseline[1].min.y) / 2.0,
+            );
+            native_dialog_frame(
+                &mut app,
+                &ctx,
+                size,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -500.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            )
+            .drop_without_applying_deltas();
+            let (scrolled, after_scroll) = native_dialog_layout(
+                native_dialog_frame(&mut app, &ctx, size, vec![]),
+                size,
+            )?;
+            assert_eq!(scrolled, baseline);
+            assert_ne!(
+                after_scroll, anchor,
+                "the middle explanation did not actually scroll"
+            );
+            app.worker_permissions.result = Some(Observation {
+                outcome: Ok(ready()),
+                finished: Instant::now() - FRESHNESS,
+            });
+            let (expired, _) = native_dialog_layout(
+                native_dialog_frame(&mut app, &ctx, size, vec![]),
+                size,
+            )?;
+            assert_eq!(expired, baseline);
+            assert!(!app.native_confirmation);
+            let notice = app.notice.clone();
+            for pressed in [true, false] {
+                native_dialog_frame(
+                    &mut app,
+                    &ctx,
+                    size,
+                    pointer_button(expired[2].center(), pressed),
+                )
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(
+                app.notice, notice,
+                "expired confirmation button accepted a click"
+            );
+            app.worker_permissions.result = Some(Observation {
+                outcome: Ok(ready()),
+                finished: Instant::now(),
+            });
+            let (fresh, _) = native_dialog_layout(
+                native_dialog_frame(&mut app, &ctx, size, vec![]),
+                size,
+            )?;
+            assert_eq!(fresh, baseline);
+            assert!(
+                !app.native_confirmation,
+                "a new report must not restore old consent"
+            );
+            for pressed in [true, false] {
+                native_dialog_frame(
+                    &mut app,
+                    &ctx,
+                    size,
+                    pointer_button(fresh[1].center(), pressed),
+                )
+                .drop_without_applying_deltas();
+            }
+            assert!(
+                app.native_confirmation,
+                "fresh consent requires the explicit checkbox click"
+            );
+            assert!(app.config == before && app.child.is_none());
+            assert!(!app.worker_permissions.needs_poll());
+            assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        }
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
     #[test]
     fn readiness_preserves_denials_unknown_and_system_protection() {
         let original = ready();
