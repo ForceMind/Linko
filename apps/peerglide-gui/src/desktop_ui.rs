@@ -1119,6 +1119,33 @@ impl App {
             self.dialog = None;
         }
     }
+    fn safety_controls(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .button("紧急恢复本机")
+            .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
+            .clicked()
+        {
+            self.stop();
+            self.gesture_lab.cancel();
+        }
+        if ui
+            .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
+            .clicked()
+        {
+            self.stop();
+        }
+        if self.stopping.is_some() || self.recovery_blocked {
+            if ui.button("查看恢复状态").clicked() {
+                self.dialog = Some(Dialog::Recovery);
+            }
+            let view = self.workspace_view();
+            ui.label(desktop_style::status_text(
+                view.title,
+                self.config.dark,
+                view.tone,
+            ));
+        }
+    }
     pub(super) fn desktop(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         if self.layout_report.is_some() {
@@ -1130,45 +1157,6 @@ impl App {
             self.stop();
             self.gesture_lab.cancel();
         }
-        egui::Panel::top("global-actions")
-            .exact_size(52.0)
-            .resizable(false)
-            .show_separator_line(false)
-            .show(root, |ui| {
-                ui.add_space(4.0);
-                ui.allocate_ui_with_layout(
-                    Vec2::new(ui.available_width(), 40.0),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        if ui
-                            .button("紧急恢复本机")
-                            .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
-                            .clicked()
-                        {
-                            self.stop();
-                            self.gesture_lab.cancel();
-                        }
-                        if ui
-                            .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
-                            .clicked()
-                        {
-                            self.stop();
-                        }
-                        if self.stopping.is_some() || self.recovery_blocked {
-                            if ui.button("查看恢复状态").clicked() {
-                                self.dialog = Some(Dialog::Recovery);
-                            }
-                            let view = self.workspace_view();
-                            ui.label(desktop_style::status_text(
-                                view.title,
-                                self.config.dark,
-                                view.tone,
-                            ));
-                        }
-                    },
-                );
-                ui.add_space(4.0);
-            });
         egui::Panel::left("navigation")
             .exact_size(196.0)
             .show(root, |ui| {
@@ -1225,6 +1213,74 @@ impl App {
                         ui.separator();
                     },
                 );
+            });
+        let workspace_header = matches!(self.page, Page::Devices | Page::Displays);
+        egui::Panel::top("global-actions")
+            .exact_size(if workspace_header { 96.0 } else { 52.0 })
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(root.visuals().panel_fill)
+                    .inner_margin(egui::Margin::symmetric(
+                        24,
+                        if workspace_header { 12 } else { 6 },
+                    )),
+            )
+            .show(root, |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), 40.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if workspace_header {
+                            ui.heading(desktop_style::heading_text(if self.page == Page::Devices {
+                                "设备"
+                            } else {
+                                "屏幕布局"
+                            }));
+                        }
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_width(), 40.0),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| self.safety_controls(ui),
+                        );
+                    },
+                );
+                if workspace_header {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), 24.0),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            let subtitle = if self.page == Page::Devices {
+                                "管理已记住的电脑与独立协作许可。"
+                            } else {
+                                "按桌面位置摆放主屏，设置键鼠的跨屏方向。"
+                            };
+                            let width = (ui.available_width() - 152.0).max(1.0);
+                            ui.add_sized(
+                                [width, 24.0],
+                                egui::Label::new(egui::RichText::new(subtitle).size(14.0).weak())
+                                    .truncate(),
+                            )
+                            .on_hover_text(subtitle);
+                            if ui
+                                .add_sized(
+                                    [140.0, 24.0],
+                                    egui::Button::new(if self.connection_details_open {
+                                        "收起连接详情"
+                                    } else {
+                                        "连接与身份详情"
+                                    })
+                                    .small(),
+                                )
+                                .clicked()
+                            {
+                                self.connection_details_open = !self.connection_details_open;
+                            }
+                        },
+                    );
+                }
             });
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {

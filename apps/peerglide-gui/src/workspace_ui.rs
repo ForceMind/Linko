@@ -54,29 +54,6 @@ impl App {
     }
 
     pub(super) fn device_workspace(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.heading(desktop_style::heading_text(if self.page == Page::Devices {
-                "设备"
-            } else {
-                "屏幕布局"
-            }));
-            if ui
-                .small_button(if self.connection_details_open {
-                    "收起连接详情"
-                } else {
-                    "连接与身份详情"
-                })
-                .clicked()
-            {
-                self.connection_details_open = !self.connection_details_open;
-            }
-        });
-        ui.weak(if self.page == Page::Devices {
-            "管理已记住的电脑与独立协作许可。"
-        } else {
-            "拖动设备调整相对方向，让鼠标顺着桌面跨过屏幕边缘。"
-        });
-        ui.add_space(8.0);
         if self.device_tab == DeviceTab::Permissions {
             if ui.button("‹ 返回屏幕布局").clicked() {
                 self.device_tab = DeviceTab::Device;
@@ -209,12 +186,10 @@ impl App {
                 } else {
                     desktop_ui::local_device_name().into()
                 };
-                let title = format!("{} · {}", name, if peer { "对端" } else { "本机" });
-                let (fill, _) = desktop_style::selection_colors(column);
                 let frame = card(column)
                     .inner_margin(if compact { 10.0 } else { 14.0 })
-                    .fill(if selected {
-                        fill
+                    .fill(if selected && !column.visuals().dark_mode {
+                        egui::Color32::from_rgb(251, 252, 255)
                     } else {
                         column.visuals().window_fill
                     })
@@ -228,33 +203,50 @@ impl App {
                     ));
                 let response = frame.show(column, |ui| {
                     ui.set_min_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = if compact { 3.0 } else { 6.0 };
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 8.0 };
                     ui.set_min_height(if compact { 70.0 } else { 96.0 });
-                    ui.add(
-                        egui::Label::new(desktop_style::semibold(
-                            &title,
-                            if compact { 15.0 } else { 16.0 },
-                        ))
-                        .truncate(),
-                    )
-                    .on_hover_text(&name);
-                    let system = if peer {
-                        "系统信息未知"
-                    } else {
-                        local_system_name()
-                    };
-                    ui.add(egui::Label::new(RichText::new(system).size(13.0).weak()).truncate());
-                    let connection = if peer {
-                        self.peer_connection_label()
-                    } else {
-                        "本机设备"
-                    };
-                    ui.add(egui::Label::new(RichText::new(connection).size(13.0)).truncate());
-                    ui.add(
-                        egui::Label::new(RichText::new(self.input_label()).size(12.0).weak())
+                    read_only_row(ui, |ui| {
+                        let name_width = (ui.available_width() - 64.0).max(1.0);
+                        ui.add_sized(
+                            [name_width, 24.0],
+                            egui::Label::new(desktop_style::semibold(
+                                &name,
+                                if compact { 14.0 } else { 16.0 },
+                            ))
                             .truncate(),
-                    )
-                    .on_hover_text(self.input_label());
+                        )
+                        .on_hover_text(&name);
+                        let (label, tone) = if !peer {
+                            ("本机", Tone::Accent)
+                        } else if self.pairing_pending() {
+                            ("待确认", Tone::Warning)
+                        } else if self.stopping.is_some() {
+                            ("断开中", Tone::Neutral)
+                        } else if self.connected && self.child.is_some() {
+                            ("已连接", Tone::Good)
+                        } else if self.child.is_some() {
+                            ("连接中", Tone::Neutral)
+                        } else {
+                            ("已登记", Tone::Neutral)
+                        };
+                        desktop_style::status_chip(ui, label, tone);
+                    });
+                    ui.add_space(2.0);
+                    if peer {
+                        card_metadata(
+                            ui,
+                            "登记",
+                            if self.pairing_pending() {
+                                "等待对端回执"
+                            } else {
+                                "已登记设备"
+                            },
+                        );
+                    } else {
+                        card_metadata(ui, "系统", local_system_name());
+                    }
+                    card_metadata(ui, "会话", self.input_label());
                 });
                 let id = column.scope_id().with(if peer {
                     "peer-device-card"
@@ -293,7 +285,7 @@ impl App {
         let height = if ui.available_width() < 440.0 {
             180.0
         } else {
-            260.0
+            280.0
         };
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
@@ -306,7 +298,7 @@ impl App {
             self.workspace_zoom,
         );
         let painter = ui.painter_at(canvas);
-        painter.rect_filled(canvas, 12.0, ui.visuals().faint_bg_color);
+        desktop_style::canvas_wash(&painter, canvas, self.config.dark);
         let dot = ui.visuals().widgets.noninteractive.bg_stroke.color;
         let (focused, down, events) =
             ui.input(|i| (i.focused, i.pointer.primary_down(), i.events.clone()));
@@ -352,7 +344,7 @@ impl App {
             ui,
             &painter,
             local,
-            (desktop_ui::local_device_name(), "本机 · 主屏示意"),
+            (desktop_ui::local_device_name(), "本机"),
             visual_assets::DeviceKind::Local,
             !self.workspace_peer_selected || !registered,
         );
@@ -488,6 +480,7 @@ impl App {
                 }
             }
             text_row(ui, "当前会话", self.input_label());
+            ui.separator();
             let readiness = self.worker_permissions.readiness();
             let label = match readiness {
                 worker_permissions::Readiness::Ready => "刚刚检查通过",
@@ -566,10 +559,22 @@ fn read_only_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
     );
 }
 
-fn text_row(ui: &mut egui::Ui, label: &str, value: &str) {
+fn card_metadata(ui: &mut egui::Ui, label: &str, value: &str) {
     read_only_row(ui, |ui| {
         ui.add_sized(
-            [60.0, 20.0],
+            [38.0, 20.0],
+            egui::Label::new(RichText::new(label).size(12.0).weak()),
+        );
+        ui.add(egui::Label::new(RichText::new(value).size(13.0)).truncate())
+            .on_hover_text(value);
+    });
+}
+
+fn text_row(ui: &mut egui::Ui, label: &str, value: &str) {
+    read_only_row(ui, |ui| {
+        desktop_style::detail_icon(ui, label == "本机权限");
+        ui.add_sized(
+            [52.0, 20.0],
             egui::Label::new(RichText::new(label).size(13.0).weak()),
         );
         ui.add(egui::Label::new(RichText::new(value).size(14.0)).truncate())
@@ -586,13 +591,42 @@ fn draw_workspace_device(
     selected: bool,
 ) {
     let (name, status) = labels;
-    let label_height = node.height() * 0.21;
+    let label_height = node.height() * 0.26;
     let image_area =
         egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
     let aspect = visual_assets::device_aspect(kind);
-    let width = image_area.width().min(image_area.height() * aspect);
-    let image_rect =
-        egui::Rect::from_center_size(image_area.center(), Vec2::new(width, width / aspect));
+    let illustration_scale = match kind {
+        visual_assets::DeviceKind::Local => 0.70,
+        visual_assets::DeviceKind::Peer => 1.0,
+    };
+    let width = image_area.width().min(image_area.height() * aspect) * illustration_scale;
+    let size = Vec2::new(width, width / aspect);
+    let image_rect = egui::Rect::from_center_size(
+        egui::pos2(image_area.center().x, image_area.max.y - size.y / 2.0),
+        size,
+    );
+    let selected_frame = if matches!(kind, visual_assets::DeviceKind::Peer) {
+        egui::Rect::from_min_max(
+            image_rect.min,
+            egui::pos2(image_rect.max.x, image_rect.min.y + image_rect.height() * 0.79),
+        )
+    } else {
+        egui::Rect::from_min_max(
+            image_rect.min + egui::vec2(image_rect.width() * 0.07, 0.0),
+            egui::pos2(
+                image_rect.max.x - image_rect.width() * 0.07,
+                image_rect.min.y + image_rect.height() * 0.83,
+            ),
+        )
+    };
+    if selected {
+        let accent = ui.visuals().selection.bg_fill;
+        painter.rect_filled(
+            selected_frame.expand(5.0),
+            8.0,
+            egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 18),
+        );
+    }
     if let Some(texture) = visual_assets::device_texture(ui.ctx(), kind) {
         painter.image(
             texture.id(),
@@ -610,8 +644,8 @@ fn draw_workspace_device(
     }
     if selected {
         painter.rect_stroke(
-            image_rect.expand(4.0),
-            9.0,
+            selected_frame.expand(3.0),
+            7.0,
             egui::Stroke::new(1.2, ui.visuals().selection.bg_fill),
             egui::StrokeKind::Inside,
         );
@@ -622,7 +656,7 @@ fn draw_workspace_device(
     let labels = painter.with_clip_rect(node);
     let title = labels.layout_no_wrap(
         name.chars().take(24).collect(),
-        egui::FontId::new(14.0, egui::FontFamily::Name("linko-semibold".into())),
+        egui::FontId::new(15.0, egui::FontFamily::Name("linko-semibold".into())),
         ui.visuals().text_color(),
     );
     let title_rect = egui::Align2::CENTER_TOP.anchor_size(
@@ -633,17 +667,23 @@ fn draw_workspace_device(
         labels.galley(title_rect.min, title, ui.visuals().text_color());
     }
     if label_height >= 46.0 {
-        let status = labels.layout_no_wrap(
-            status.into(),
-            egui::FontId::proportional(12.0),
-            ui.visuals().weak_text_color(),
-        );
+        let tone = if status == "已连接" {
+            Tone::Good
+        } else if status == "本机" {
+            Tone::Accent
+        } else {
+            Tone::Neutral
+        };
+        let (fill, text) = desktop_style::status_colors(ui.visuals().dark_mode, tone);
+        let status = labels.layout_no_wrap(status.into(), egui::FontId::proportional(11.0), text);
         let status_rect = egui::Align2::CENTER_TOP.anchor_size(
-            egui::pos2(node.center().x, image_area.max.y + 27.0),
+            egui::pos2(node.center().x, image_area.max.y + 33.0),
             status.size(),
         );
-        if node.contains_rect(status_rect) {
-            labels.galley(status_rect.min, status, ui.visuals().weak_text_color());
+        let chip = status_rect.expand2(egui::vec2(7.0, 2.0));
+        if node.contains_rect(chip) {
+            labels.rect_filled(chip, 8.0, fill);
+            labels.galley(status_rect.min, status, text);
         }
     }
 }
@@ -761,7 +801,19 @@ mod tests {
                         (label, bounds)
                     })
                     .collect();
+                let heading = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| {
+                        text_rect(&s.shape, "屏幕布局").filter(|rect| rect.min.x >= 196.0)
+                    })
+                    .min_by(|a, b| a.min.y.total_cmp(&b.min.y));
                 output.drop_without_applying_deltas();
+                let heading = heading.context("workspace heading absent")?;
+                assert!(
+                    heading.min.y <= 32.0,
+                    "workspace title was pushed below the shared header"
+                );
                 for (label, bounds) in controls {
                     let (clip, rect) = bounds
                         .with_context(|| format!("{label} absent at {size:?}, paired={paired}"))?;
@@ -825,16 +877,19 @@ mod tests {
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
         for (label, selected) in [
-            ("已登记电脑 · 对端".to_owned(), true),
-            (format!("{} · 本机", desktop_ui::local_device_name()), false),
+            ("已登记电脑".to_owned(), true),
+            (desktop_ui::local_device_name().to_owned(), false),
         ] {
             let output = frame(&mut app, &ctx, vec![]);
+            // The same real name appears below its illustration; the lower
+            // occurrence is the formal card. All side-effect assertions remain.
             let at = output
                 .shapes
                 .iter()
-                .find_map(|s| text_center(&s.shape, &label))
-                .context("actual topology device card absent")?;
+                .filter_map(|s| text_center(&s.shape, &label))
+                .max_by(|a, b| a.y.total_cmp(&b.y));
             output.drop_without_applying_deltas();
+            let at = at.context("actual topology device card absent")?;
             click(&mut app, &ctx, at);
             assert_eq!(app.workspace_peer_selected, selected);
             assert!(app.config == original && app.child.is_none());

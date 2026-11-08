@@ -2014,3 +2014,9 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 首轮5a598f7完整CI 42441898480在三平台fmt失败（6处runner格式差异），Linux截图上传因上游未运行亦无产物；不将其写成通过。按runner输出修正换行，未修改行为、断言或检查门。同步候选README/快速开始到0.3.17-dev，既有公开0.3.16及其官网入口不覆盖。两名代理交叉静态复核GUI管道与Closed退役逻辑，无阻塞发现；这是静态复核，不是独立安全审计。
 
 638e58e三平台通过fmt/严格Clippy/build，最低1.95及审计通过；工作区回归在新增Closed负例准备阶段失败（Received Submitted，错误预期Retired）。既有契约明确Release回执Submitted只表示请求接受，pump后的snapshot/outcome才确认退役；据此修正准备断言为Submitted，并新增独立epoch Retired及owner Retired断言，再构造未知/新owner负例。没有改生产Release语义或放宽最终Closed拒绝断言。Win/Mac新增startup-held回归已在该轮实际通过，整体候选仍需新CI。
+
+## 0.3.18系统图标与视觉候选（未验收）
+
+用户再次否定实际UI与确认参考的落差，视觉验收保持开放。图标问题经源码核实为未接Mac bundle资源及原生viewport，非单纯图标缓存。新增原SVG生成的PNG/ICNS/ICO和原生接线，Mac资源在签名前入包并核验seal；Windows使用SDK资源编译器，另以shell API读取图标对照ICO像素而不执行EXE。打包Python8项、Python编译和sips/iconutil读回通过；实际MSVC链接/新包seal/系统显示未验证。
+
+视觉去顶部冗余空间、内层灰板与过重选择框，调整硬件尺度/基线、卡片和图标；不改业务权限/恢复门，不添加虚构设备或状态。候选需要新原生窗口图与参考逐项对照，旧图/旧CI不能作为本批通过。浏览器未验证，宿主运行中的17 App未替换。

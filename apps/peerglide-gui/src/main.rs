@@ -1,4 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod app_icon;
 mod config_store;
 mod connection_info;
 mod desktop_state;
@@ -1600,6 +1601,7 @@ fn main() -> eframe::Result<()> {
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_icon(app_icon::icon())
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([920.0, 700.0]),
         ..Default::default()

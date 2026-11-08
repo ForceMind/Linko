@@ -20,6 +20,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PRODUCT_NAME = "Linko"
 APP_BUNDLE_NAME = PRODUCT_NAME + ".app"
 APP_DISPLAY_NAME = "Linko · 屏跃"
+APP_ICON_FILE = "Linko.icns"
 APP_IDENTIFIER = "com.peerglide.PeerGlide"
 WORKER_IDENTIFIER = APP_IDENTIFIER + ".worker"
 
@@ -29,6 +30,7 @@ def bundle_info(version):
             "CFBundleIdentifier": APP_IDENTIFIER, "CFBundleVersion": version.split("-")[0],
             "CFBundleShortVersionString": version.split("-")[0], "CFBundlePackageType": "APPL",
             "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,
+            "CFBundleIconFile": APP_ICON_FILE,
             "LSMinimumSystemVersion": "13.0", "NSBonjourServices": ["_peerglide._udp", "_peerglide-pair._tcp"],
             "NSLocalNetworkUsageDescription": "屏跃使用本地网络连接已核验的电脑，并转发用户明确同意的键鼠输入。发现设备不会自动登记信任或授予控制权限。"}
 
@@ -57,8 +59,12 @@ def verify_macos_bundle_metadata(app, run):
             or info.get("CFBundleDisplayName") != APP_DISPLAY_NAME
             or info.get("CFBundleIdentifier") != APP_IDENTIFIER
             or info.get("CFBundleExecutable") != "peerglide-gui"
+            or info.get("CFBundleIconFile") != APP_ICON_FILE
             or info.get("CFBundlePackageType") != "APPL"):
         raise RuntimeError("staging app bundle identity metadata mismatch")
+    icon = (contents / "Resources" / APP_ICON_FILE).read_bytes()
+    if icon[:4] != b"icns" or len(icon) <= 8 or int.from_bytes(icon[4:8], "big") != len(icon):
+        raise RuntimeError("staging app icon is not a complete ICNS resource")
     main = _display_signature(app, run)
     worker = _display_signature(contents / "MacOS" / "peerglide", run)
     _require_identifier(main, APP_IDENTIFIER)
@@ -73,6 +79,9 @@ def verify_macos_bundle_metadata(app, run):
     if (not isinstance(nested, dict) or not isinstance(nested.get("cdhash"), bytes)
             or len(nested["cdhash"]) not in (20, 32)):
         raise RuntimeError("staging helper is not recorded as sealed nested code")
+    icon_seal = seal.get("files2", {}).get("Resources/" + APP_ICON_FILE)
+    if not isinstance(icon_seal, dict) or icon_seal.get("hash2") != hashlib.sha256(icon).digest():
+        raise RuntimeError("staging app icon is missing from the resource seal or changed")
 
 
 def sign_macos_bundle(app, run):
@@ -95,6 +104,10 @@ def _stage_bundle(root, bundle, system, version, run):
         binary_dir = contents / "MacOS"
         binary_dir.mkdir(parents=True)
         (contents / "Info.plist").write_bytes(plistlib.dumps(bundle_info(version)))
+        resources = contents / "Resources"
+        resources.mkdir()
+        shutil.copy2(root / "apps/peerglide-gui/assets/brand" / APP_ICON_FILE,
+                     resources / APP_ICON_FILE)
     suffix = ".exe" if system == "Windows" else ""
     gui_entry = "peerglide-gui" if system == "Darwin" else ("Linko.exe" if system == "Windows" else "linko")
     # Rename only new staging output. The compiled bin and sibling worker names
