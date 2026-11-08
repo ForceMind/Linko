@@ -1279,3 +1279,5 @@ kbd {
 .preview-section summary:focus-visible {
   outline-color:#aebeff;
 }
+
+.backup-download { display:inline-block; margin-top:12px; color:var(--brand); font-size:14px; text-decoration:underline; text-underline-offset:3px; }

@@ -26,6 +26,7 @@ for (const name of files) {
     if (target.startsWith('#')) { assert(ids.has(target.slice(1)), `${name}: missing anchor ${target}`); continue; }
     if (/^https:\/\//.test(target)) continue;
     assert(!/^[a-z]+:/i.test(target) && !target.startsWith('//'), `Unexpected URL: ${target}`);
+    if (/^\/download\/0\.3\.17-dev\/(macos|windows)$/.test(target)) continue;
     const clean = target.split(/[?#]/)[0];
     let path = clean.startsWith('/') ? resolve(root, '.' + clean) : resolve(root, name, '..', clean);
     if (clean.endsWith('/')) path = join(path, 'index.html');

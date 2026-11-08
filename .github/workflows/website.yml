@@ -29,3 +29,4 @@ jobs:
       - name: Check links, hashes, Chinese pages and publication boundary
         run: npm run check
       - run: node --check src/main.js
+      - run: node --check dist/_worker.js

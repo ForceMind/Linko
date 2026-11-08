@@ -8,13 +8,15 @@
       "platform": "macos",
       "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.17-dev/Linko-0.3.17-dev-darwin-arm64.zip",
       "sha256": "4c6535559e92eb897bf7da82f8c83aed51362294a0e66197d178336bae79b87b",
-      "checksumScope": "Portable package ZIP"
+      "checksumScope": "Portable package ZIP",
+      "bytes": 40428229
     },
     {
       "platform": "windows",
       "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.17-dev/Linko-0.3.17-dev-windows-amd64.zip",
       "sha256": "dda2cf284b85bafc661c64ad0658c8ac2d094259450ece986617252f12ab0aef",
-      "checksumScope": "Portable package ZIP"
+      "checksumScope": "Portable package ZIP",
+      "bytes": 40808848
     }
   ]
 }
