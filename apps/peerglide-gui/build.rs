@@ -70,8 +70,8 @@ fn main() {
         return;
     }
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"));
-    let output =
-        PathBuf::from(env::var_os("OUT_DIR").expect("Cargo output directory")).join("linko-icon.res");
+    let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo output directory"))
+        .join("linko-icon.res");
     let status = Command::new(resource_compiler())
         .current_dir(&root)
         .args(["/nologo", "/fo"])
@@ -79,7 +79,13 @@ fn main() {
         .arg(root.join("assets/brand/linko.rc"))
         .status()
         .expect("Windows resource compiler could not start");
-    assert!(status.success(), "Windows resource compiler rejected the Linko icon");
+    assert!(
+        status.success(),
+        "Windows resource compiler rejected the Linko icon"
+    );
     assert!(output.is_file(), "Windows icon resource was not produced");
-    println!("cargo:rustc-link-arg-bin=peerglide-gui={}", output.display());
+    println!(
+        "cargo:rustc-link-arg-bin=peerglide-gui={}",
+        output.display()
+    );
 }

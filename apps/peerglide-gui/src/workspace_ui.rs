@@ -608,7 +608,10 @@ fn draw_workspace_device(
     let selected_frame = if matches!(kind, visual_assets::DeviceKind::Peer) {
         egui::Rect::from_min_max(
             image_rect.min,
-            egui::pos2(image_rect.max.x, image_rect.min.y + image_rect.height() * 0.79),
+            egui::pos2(
+                image_rect.max.x,
+                image_rect.min.y + image_rect.height() * 0.79,
+            ),
         )
     } else {
         egui::Rect::from_min_max(

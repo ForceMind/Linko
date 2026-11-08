@@ -229,7 +229,10 @@ pub(super) fn canvas_wash(painter: &egui::Painter, rect: egui::Rect, dark: bool)
         mesh.add_colored_rect(
             egui::Rect::from_min_max(
                 rect.min + egui::vec2(0.0, rect.height() * band as f32 / 24.0),
-                egui::pos2(rect.max.x, rect.min.y + rect.height() * (band + 1) as f32 / 24.0),
+                egui::pos2(
+                    rect.max.x,
+                    rect.min.y + rect.height() * (band + 1) as f32 / 24.0,
+                ),
             ),
             color,
         );
@@ -358,7 +361,10 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
                 egui::StrokeKind::Inside,
             );
             painter.line_segment(
-                [icon.center_bottom(), icon.center_bottom() + egui::vec2(0.0, 2.0)],
+                [
+                    icon.center_bottom(),
+                    icon.center_bottom() + egui::vec2(0.0, 2.0),
+                ],
                 stroke,
             );
         }
@@ -370,7 +376,10 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
                 let monitor = egui::Rect::from_min_size(icon.min + offset, size);
                 painter.rect_stroke(monitor, 1.0, stroke, egui::StrokeKind::Inside);
                 painter.line_segment(
-                    [monitor.center_bottom(), monitor.center_bottom() + egui::vec2(0.0, 3.0)],
+                    [
+                        monitor.center_bottom(),
+                        monitor.center_bottom() + egui::vec2(0.0, 3.0),
+                    ],
                     stroke,
                 );
             }
@@ -398,8 +407,8 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
             painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
             for row in 0..2 {
                 for column in 0..4 {
-                    let position = icon.min
-                        + egui::vec2(4.0 + column as f32 * 3.4, 4.0 + row as f32 * 3.8);
+                    let position =
+                        icon.min + egui::vec2(4.0 + column as f32 * 3.4, 4.0 + row as f32 * 3.8);
                     painter.rect_filled(
                         egui::Rect::from_center_size(position, egui::vec2(1.5, 1.5)),
                         0.3,
@@ -408,7 +417,10 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
                 }
             }
             painter.line_segment(
-                [icon.center() + egui::vec2(-4.0, 4.0), icon.center() + egui::vec2(4.0, 4.0)],
+                [
+                    icon.center() + egui::vec2(-4.0, 4.0),
+                    icon.center() + egui::vec2(4.0, 4.0),
+                ],
                 stroke,
             );
         }
@@ -419,7 +431,10 @@ pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui
                 let angle = index as f32 * std::f32::consts::TAU / 8.0;
                 let direction = egui::vec2(angle.cos(), angle.sin());
                 painter.line_segment(
-                    [icon.center() + direction * 6.5, icon.center() + direction * 8.5],
+                    [
+                        icon.center() + direction * 6.5,
+                        icon.center() + direction * 8.5,
+                    ],
                     stroke,
                 );
             }

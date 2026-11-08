@@ -16,6 +16,11 @@ mod tests {
         assert_eq!([icon.width, icon.height], [256, 256]);
         assert_eq!(icon.rgba.len(), 256 * 256 * 4);
         assert!(icon.rgba.iter().skip(3).step_by(4).any(|alpha| *alpha == 0));
-        assert!(icon.rgba.iter().skip(3).step_by(4).any(|alpha| *alpha == 255));
+        assert!(icon
+            .rgba
+            .iter()
+            .skip(3)
+            .step_by(4)
+            .any(|alpha| *alpha == 255));
     }
 }

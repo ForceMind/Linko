@@ -1234,11 +1234,13 @@ impl App {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         if workspace_header {
-                            ui.heading(desktop_style::heading_text(if self.page == Page::Devices {
-                                "设备"
-                            } else {
-                                "屏幕布局"
-                            }));
+                            ui.heading(desktop_style::heading_text(
+                                if self.page == Page::Devices {
+                                    "设备"
+                                } else {
+                                    "屏幕布局"
+                                },
+                            ));
                         }
                         ui.allocate_ui_with_layout(
                             Vec2::new(ui.available_width(), 40.0),
