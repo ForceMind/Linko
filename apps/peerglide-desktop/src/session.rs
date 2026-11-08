@@ -647,9 +647,9 @@ pub(super) async fn run_with_status(
             },
             PendingStep::Cancelled{lease,timed_out}=>{
                 eprintln!("{}", match (peer_granted,timed_out) {
-                    (false,true)=>"Switch expired before peer grant; input stayed local.",
-                    (true,true)=>"Switch expired after peer grant while committing locally; input stayed local.",
-                    (_,false)=>"Switch cancelled by local admission protection; input stayed local.",
+                    (false,true)=>"Switch expired before peer grant.",
+                    (true,true)=>"Switch expired after peer grant while committing locally.",
+                    (_,false)=>"Switch cancelled by local admission protection.",
                 });
                 edge_gate.require_interior();input_status.reporter.switch(if timed_out {super::WorkerSwitchState::TimedOut}else{super::WorkerSwitchState::Idle});
                 send(&mut tx,&Message::Release{lease,cursor:None}).await?;
