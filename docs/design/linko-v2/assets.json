@@ -13,25 +13,25 @@
   "assets": [
     {
       "source": "01-workspace-1280.svg",
-      "source_sha256": "0c612fa6207091e3234f5d87658e32edf48a25aaf124b4835c2a6257582c1627",
+      "source_sha256": "155508ccc2339468504be39dab40f3ed4b6fb746946ce47e2598ee07cccf66f2",
       "preview": "previews/01-workspace-1280.png",
-      "preview_sha256": "9849036d4d61bf4f69ca2a4a26a4ef4e6ddfa373c0cd2daf7d34dc0dbed38c51",
+      "preview_sha256": "fdceeabbf60956808845bc80f6b0667b7bb523892e7eb1e4657c186624fb1b6f",
       "width": 1280,
       "height": 800
     },
     {
       "source": "02-workspace-920.svg",
-      "source_sha256": "d104cd737040d127d9d2d83a9bc33f2e57b01c6130ed84c31acfdc210188d6da",
+      "source_sha256": "ae0fc110440a50ed81a024b548cd09a30e3c39bff459a5a2b8eb0d3df6692103",
       "preview": "previews/02-workspace-920.png",
-      "preview_sha256": "1c4a2cf480291b96c1e0eac933053804089bf93bf80c5d1075c1252b27206270",
+      "preview_sha256": "fbf240456f638ce79a55d195d489a934840d39637a5e39bee07bac928d15f4da",
       "width": 920,
       "height": 700
     },
     {
       "source": "03-enable-input.svg",
-      "source_sha256": "f0e6215710d28c37e627f81e7cfeeed1e115a079964a1b1c4afa5d52cc35aca7",
+      "source_sha256": "73844cc95702ef9763664974cd2d3b9729bf4ee03de517ca772467675eec4b1f",
       "preview": "previews/03-enable-input.png",
-      "preview_sha256": "34149096feb165179a7385d34bad5287e78551070698c03b79516f52e4d4aa1b",
+      "preview_sha256": "b2b324e166183c803fc4380a187aced62b4379f9848f5238beaec8e3e7516568",
       "width": 920,
       "height": 700
     }

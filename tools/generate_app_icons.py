@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "docs/design/linko-v1/brand/app-icon.svg"
+SOURCE = ROOT / "docs/design/linko-brand-v3/app-icon.svg"
 OUTPUT = ROOT / "apps/peerglide-gui/assets/brand"
 NAMES = ("app-icon.png", "app-icon-256.png", "Linko.icns", "Linko.ico", "icon-source.json")
 

@@ -1,5 +1,11 @@
 # 更新记录
 
+## 0.3.20-dev — 跃迁品牌候选
+
+- 采用确认的A跃迁标记，更新应用/窗口图标及Mac ICNS、Windows ICO。
+- 左上品牌区改为中文“屏跃”为主、LINKO为辅及36px无底标记；输入与授权行为保持。
+- 新运行包与实际系统显示仍需精确CI和本机复查。
+
 `-dev` 是开发预览，不是稳定版。下载以 [Releases](https://github.com/ForceMind/Linko/releases) 为准；工程证据见 [VALIDATION](docs/VALIDATION.md)。
 
 ## 0.3.19-dev — 键鼠切换提交候选

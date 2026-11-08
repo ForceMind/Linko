@@ -1272,8 +1272,8 @@ impl App {
                 ui.horizontal(|ui| {
                     desktop_style::brand_mark(ui);
                     ui.vertical(|ui| {
-                        ui.heading(desktop_style::heading_text("Linko"));
-                        ui.small("屏跃");
+                        ui.label(desktop_style::semibold("屏跃", 22.0));
+                        ui.label(egui::RichText::new("LINKO").size(10.0).weak());
                     });
                 });
                 ui.add_space(28.0);
