@@ -1,6 +1,6 @@
 # Linko / 屏跃官网
 
-中文静态官网，站点版本 **0.1.0**。Cloudflare Pages 项目 `linko`，正式访问地址：
+中文静态官网，站点版本 **0.1.1**。Cloudflare Pages 项目 `linko`，正式访问地址：
 <https://linko-63e.pages.dev/>。
 
 官网独立于原生 App，不改变 App 的版本、设备身份、权限或协议。仅发布
@@ -45,10 +45,7 @@ npx --no-install wrangler pages deploy dist --project-name linko --branch main
   的原生 GUI CI 原图，1280×800，隔离 NoNative 通信场景；未启用原生键鼠。
   SHA-256：`ab7630f0eb3621672c8803607e56b3625a0c30ddab77582fcdd8ea7c33f89ca5`。
   图内已实现页面不代表真实 Win/macOS 双机验收完成。
-- `release.json` 指向同一代码的 GitHub Actions 构建产物，版本 `0.3.16-dev`。
-  SHA-256 对应下载链接的**外层 GitHub artifact ZIP**，不是内层便携包 ZIP。
-  下载需 GitHub 登录，产物受 GitHub 保留期约束；失效时必须更新入口。
-- 原生包不托管到 Pages，也没有为此次官网发布建立 GitHub 稳定版 Release。
-
-网站准确区分开发版流程、原生未验收项和尚未接通的剪贴板、文件与全局手势。
-仓库 MIT 许可证不变。
+- `release.json` 指向公开的 GitHub Pre-release 便携包，免登录下载。
+  SHA-256 对应实际便携包 ZIP，不是 CI artifact 外层 ZIP。
+- 0.3.16-dev 程序来自 cb27bce；公开包只替换包外 README／SECURITY，程序和签名不变。
+- 原生包不托管到 Pages，当前仍是开发预览，未发布稳定版。

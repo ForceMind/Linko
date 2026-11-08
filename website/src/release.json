@@ -2,21 +2,19 @@
   "version": "0.3.16-dev",
   "sourceCommit": "cb27bce72ece205f138180fd1b6ef0c8cbf0764f",
   "releaseStatus": "experimental",
-  "requiresGitHubLogin": true,
+  "requiresGitHubLogin": false,
   "downloads": [
     {
       "platform": "macos",
-      "url": "https://github.com/ForceMind/Linko/actions/runs/42382394527/artifacts/13578905150",
-      "sha256": "81cf0298e5824d9139793c5f32c31cbf09ff6a67ae0ed8c58180669b5118ca29",
-      "checksumScope": "GitHub artifact ZIP",
-      "artifactId": 13578905150
+      "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.16-dev/Linko-0.3.16-dev-darwin-arm64.zip",
+      "sha256": "798cb3770929529af6fdf3b6dd6365a7af30113579d111941e8cbab479e04627",
+      "checksumScope": "Portable package ZIP"
     },
     {
       "platform": "windows",
-      "url": "https://github.com/ForceMind/Linko/actions/runs/42382394527/artifacts/13577989202",
-      "sha256": "ff9ab2f6b18c909e300382e2a593c6e6b29507e3a4306c4b479a32a0dc9275be",
-      "checksumScope": "GitHub artifact ZIP",
-      "artifactId": 13577989202
+      "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.16-dev/Linko-0.3.16-dev-windows-amd64.zip",
+      "sha256": "f2e6e16132e820912737e69349e2ff2a45edc9196762ade4f0630738e66d874e",
+      "checksumScope": "Portable package ZIP"
     }
   ]
 }

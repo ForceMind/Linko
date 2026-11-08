@@ -1,0 +1,24 @@
+name: 问题报告
+description: 报告可复现的 Linko 故障
+body:
+  - type: markdown
+    attributes:
+      value: 请先检查已有问题。不要上传私钥、配对码、真实输入或私人配置；安全漏洞按 SECURITY.md 私密报告。
+  - type: textarea
+    id: environment
+    attributes:
+      label: 版本与两端环境
+      description: 包名、系统、架构、显示器数量、DPI／缩放与连接方向
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤、预期与实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: 停止／恢复状态及脱敏证据
+      description: 说明真实设备或通信探针场景，不要混为同一种验收。
