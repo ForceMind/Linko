@@ -4,9 +4,9 @@
 
 Linko 是使用 Rust 构建的局域网键鼠协作工具，面向 Windows 与 macOS。电脑各自运行应用、保留本地桌面，通过经过认证的连接协作。
 
-**[官网](https://linko-63e.pages.dev/) · [下载开发预览](https://github.com/ForceMind/Linko/releases/tag/v0.3.16-dev) · [快速开始](docs/GETTING_STARTED.zh-CN.md) · [问题反馈](https://github.com/ForceMind/Linko/issues)**
+**[官网](https://linko-63e.pages.dev/) · [下载开发预览](https://github.com/ForceMind/Linko/releases/tag/v0.3.17-dev) · [快速开始](docs/GETTING_STARTED.zh-CN.md) · [问题反馈](https://github.com/ForceMind/Linko/issues)**
 
-> **0.3.16-dev 开发预览**：真实 Windows ↔ macOS 双机键鼠验收尚未完成，暂不承诺日常主力使用。自动测试和通信探针不替代实机验收。
+> **0.3.17-dev 开发预览**：真实 Windows ↔ macOS 双机键鼠验收尚未完成，暂不承诺日常主力使用。自动测试和通信探针不替代实机验收。
 
 ![Linko 中文屏幕布局界面](website/src/assets/app-preview.png)
 
@@ -60,7 +60,7 @@ Linko 是使用 Rust 构建的局域网键鼠协作工具，面向 Windows 与 m
 GUI 最低 Rust **1.95**：
 
 ```sh
-git checkout v0.3.16-dev
+git checkout v0.3.17-dev
 cargo build --release --workspace --locked
 ```
 

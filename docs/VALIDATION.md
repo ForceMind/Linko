@@ -430,3 +430,9 @@ Automatic Codex code review could not run: repository review usage limit reached
 No credits/purchases/review-gate bypass were requested. CI does not replace that
 review. Independent security review, native OS backends/network integration,
 persistent/global disk accounting and real Win/Mac acceptance remain open.
+
+## 0.3.17-dev 基础键鼠稳定性候选（2026-11-08）
+
+程序冻结于9797d608390d8ccff99426db1c05e69a47277cc9（PR76）。完整五项CI 42442632779、两平台资源42442632823与固定依赖42442632769全部通过；修复分配前输出边界、启动额外鼠标键held保护与干净退役后Closed释放幂等。保留v5/唯一捕获/独立许可/shutdown健康与join恢复门。新增12项回归；首轮格式及新增测试把Submitted误当Retired的失败、修正过程保留在PR76及功能分支记录。
+
+Mac包已核验同run/head、内外摘要、CRC、版本、许可与完整seal/篡改拒绝，本机隔离无输入重连/换pin拒绝/停止及startup-wait通过。Windows包、公开下载与完整资源核验收尾记录见PR76及Release来源文件。此处仅同步已受测候选版本文档，main运行源码未因此合入；构建该版本需先检出对应tag。真实C06、长期内存和历史根因未完成，不发布稳定版。
