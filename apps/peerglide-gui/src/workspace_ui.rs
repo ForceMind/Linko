@@ -162,7 +162,7 @@ impl App {
         ui.add_space(8.0);
         ui.label(desktop_style::semibold("设备详情", 17.0));
         self.workspace_device_cards(ui);
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         ui.small(if self.child.is_some() {
             "会话中布局已锁定，停止后可以调整。"
         } else {
@@ -204,7 +204,7 @@ impl App {
                 let response = frame.show(column, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 8.0 };
+                    ui.spacing_mut().item_spacing.y = if compact { 3.0 } else { 5.0 };
                     ui.set_min_height(if compact { 70.0 } else { 96.0 });
                     read_only_row(ui, |ui| {
                         device_glyph(
@@ -216,14 +216,11 @@ impl App {
                             },
                         );
                         let name_width = (ui.available_width() - 64.0).max(1.0);
-                        ui.add_sized(
-                            [name_width, 24.0],
-                            egui::Label::new(desktop_style::semibold(
-                                &name,
-                                if compact { 14.0 } else { 16.0 },
-                            ))
-                            .truncate()
-                            .halign(egui::Align::LEFT),
+                        desktop_ui::left_text_slot(
+                            ui,
+                            name_width,
+                            24.0,
+                            desktop_style::semibold(&name, if compact { 14.0 } else { 16.0 }),
                         )
                         .on_hover_text(&name);
                         let (label, tone) = if !peer {
@@ -578,6 +575,15 @@ fn device_glyph(ui: &mut egui::Ui, kind: visual_assets::DeviceKind) {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::hover());
     response.on_hover_text(device_kind_label(kind));
     let painter = ui.painter();
+    if kind == visual_assets::DeviceKind::Unknown {
+        generic_device_symbol(
+            painter,
+            rect,
+            ui.visuals().text_color(),
+            ui.visuals().window_fill,
+        );
+        return;
+    }
     let screen = egui::Rect::from_min_max(
         rect.min + egui::vec2(2.0, 3.0),
         rect.min + egui::vec2(20.0, 16.0),
@@ -610,16 +616,38 @@ fn device_glyph(ui: &mut egui::Ui, kind: visual_assets::DeviceKind) {
                 stroke,
             );
         }
-        visual_assets::DeviceKind::Unknown => {
-            painter.text(
-                screen.center(),
-                egui::Align2::CENTER_CENTER,
-                "?",
-                egui::FontId::proportional(11.0),
-                ui.visuals().text_color(),
-            );
-        }
+        visual_assets::DeviceKind::Unknown => {}
     }
+}
+
+fn generic_device_symbol(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    ink: egui::Color32,
+    surface: egui::Color32,
+) {
+    let size = rect.size();
+    let stroke = egui::Stroke::new((size.y * 0.014).clamp(1.2, 2.0), ink);
+    let first = egui::Rect::from_min_size(
+        rect.min + egui::vec2(size.x * 0.12, size.y * 0.18),
+        egui::vec2(size.x * 0.50, size.y * 0.44),
+    );
+    let second = egui::Rect::from_min_size(
+        rect.min + egui::vec2(size.x * 0.38, size.y * 0.40),
+        egui::vec2(size.x * 0.50, size.y * 0.44),
+    );
+    let radius = (size.y * 0.04).clamp(1.0, 5.0);
+    painter.rect_filled(first, radius, surface);
+    painter.rect_stroke(first, radius, stroke, egui::StrokeKind::Inside);
+    painter.rect_filled(second, radius, surface);
+    painter.rect_stroke(second, radius, stroke, egui::StrokeKind::Inside);
+    painter.line_segment(
+        [
+            rect.min + egui::vec2(size.x * 0.34, size.y * 0.69),
+            rect.min + egui::vec2(size.x * 0.65, size.y * 0.34),
+        ],
+        stroke,
+    );
 }
 
 fn read_only_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
@@ -631,14 +659,15 @@ fn read_only_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
 }
 
 fn card_metadata(ui: &mut egui::Ui, label: &str, value: &str) {
-    read_only_row(ui, |ui| {
-        ui.add_sized(
-            [38.0, 20.0],
-            egui::Label::new(RichText::new(label).size(12.0).weak()),
-        );
-        ui.add(egui::Label::new(RichText::new(value).size(13.0)).truncate())
-            .on_hover_text(value);
-    });
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), 20.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            desktop_ui::left_text_slot(ui, 38.0, 20.0, RichText::new(label).size(12.0).weak());
+            ui.add(egui::Label::new(RichText::new(value).size(13.0)).truncate())
+                .on_hover_text(value);
+        },
+    );
 }
 
 fn text_row(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -712,20 +741,12 @@ fn draw_workspace_device(
             egui::Color32::WHITE,
         );
     } else {
-        // An unclassified device has no invented laptop/desktop chassis.
-        painter.rect_filled(image_rect.shrink(5.0), 10.0, ui.visuals().window_fill);
-        painter.rect_stroke(
-            image_rect.shrink(5.0),
-            6.0,
-            egui::Stroke::new(1.0, ui.visuals().text_color()),
-            egui::StrokeKind::Inside,
-        );
-        painter.text(
-            image_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "电脑\n类型未识别",
-            egui::FontId::proportional(14.0),
+        // A generic pair of outlines is a symbol, not an identified chassis.
+        generic_device_symbol(
+            painter,
+            image_rect.shrink(4.0),
             ui.visuals().weak_text_color(),
+            ui.visuals().window_fill,
         );
     }
     if selected {
@@ -877,16 +898,22 @@ mod tests {
                     },
                     |root| app.desktop(root),
                 );
-                let controls: Vec<_> = ["快捷操作", "所选设备", "内容共享", "连接与身份详情"]
-                    .into_iter()
-                    .map(|label| {
-                        let bounds = output
-                            .shapes
-                            .iter()
-                            .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)));
-                        (label, bounds)
-                    })
-                    .collect();
+                let controls: Vec<_> = [
+                    "快捷操作",
+                    "所选设备",
+                    "内容共享",
+                    "连接与身份详情",
+                    "两台主屏的相对方向；另一端需设置相反方向。",
+                ]
+                .into_iter()
+                .map(|label| {
+                    let bounds = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| text_rect(&s.shape, label).map(|r| (s.clip_rect, r)));
+                    (label, bounds)
+                })
+                .collect();
                 let heading = output
                     .shapes
                     .iter()
@@ -894,8 +921,45 @@ mod tests {
                         text_rect(&s.shape, "屏幕布局").filter(|rect| rect.min.x >= 196.0)
                     })
                     .min_by(|a, b| a.min.y.total_cmp(&b.min.y));
+                let subtitle = output.shapes.iter().find_map(|s| {
+                    text_rect(&s.shape, "按桌面位置摆放主屏，设置键鼠的跨屏方向。")
+                });
+                let mut card_alignment = Vec::new();
+                for (name, metadata) in [
+                    (desktop_ui::local_device_name(), "系统"),
+                    (app.config.peer_name.as_str(), "登记"),
+                ]
+                .into_iter()
+                .take(if paired { 2 } else { 1 })
+                {
+                    // The lowest name occurrence belongs to its formal card.
+                    let name_rect = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| text_rect(&s.shape, name))
+                        .max_by(|a, b| a.min.y.total_cmp(&b.min.y));
+                    let metadata_rect = output
+                        .shapes
+                        .iter()
+                        .find_map(|s| text_rect(&s.shape, metadata));
+                    card_alignment.push((name.to_owned(), name_rect, metadata_rect));
+                }
                 output.drop_without_applying_deltas();
                 let heading = heading.context("workspace heading absent")?;
+                let subtitle = subtitle.context("workspace subtitle absent")?;
+                assert!(
+                    (subtitle.min.x - heading.min.x).abs() <= 3.0,
+                    "workspace subtitle is not left-aligned with title at {size:?}"
+                );
+                for (name, name_rect, metadata_rect) in card_alignment {
+                    let name_rect = name_rect.with_context(|| format!("{name} card absent"))?;
+                    let metadata_rect = metadata_rect.context("card metadata absent")?;
+                    // A 22px glyph plus 8px gap precedes the ordinary name label.
+                    assert!(
+                        (name_rect.min.x - metadata_rect.min.x - 30.0).abs() <= 3.0,
+                        "{name} card name is not left-aligned after its icon at {size:?}"
+                    );
+                }
                 assert!(
                     heading.min.y <= 32.0,
                     "workspace title was pushed below the shared header"
@@ -904,6 +968,10 @@ mod tests {
                     let (clip, rect) = bounds
                         .with_context(|| format!("{label} absent at {size:?}, paired={paired}"))?;
                     assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");
+                    assert!(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(rect),
+                        "{label} left the first viewport at {size:?}"
+                    );
                 }
                 assert!(app.child.is_none() && !app.config.native && !app.config.allow);
             }

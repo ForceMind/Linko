@@ -1368,11 +1368,11 @@ impl App {
                                 "按桌面位置摆放主屏，设置键鼠的跨屏方向。"
                             };
                             let width = (ui.available_width() - 152.0).max(1.0);
-                            ui.add_sized(
-                                [width, 24.0],
-                                egui::Label::new(egui::RichText::new(subtitle).size(14.0).weak())
-                                    .halign(egui::Align::LEFT)
-                                    .truncate(),
+                            left_text_slot(
+                                ui,
+                                width,
+                                24.0,
+                                egui::RichText::new(subtitle).size(14.0).weak(),
                             )
                             .on_hover_text(subtitle);
                             if ui
@@ -1480,6 +1480,26 @@ impl App {
             }
         }
     }
+}
+
+/// Reserve a stable slot while leaving text in an ordinary left-to-right Ui.
+/// add_sized uses centered_and_justified and must not carry these text labels.
+pub(super) fn left_text_slot(
+    ui: &mut egui::Ui,
+    width: f32,
+    height: f32,
+    text: egui::RichText,
+) -> egui::Response {
+    ui.allocate_ui_with_layout(
+        Vec2::new(width, height),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |slot| {
+            slot.set_min_width(width);
+            slot.set_min_height(height);
+            slot.add(egui::Label::new(text).truncate())
+        },
+    )
+    .inner
 }
 
 pub(super) fn local_device_name() -> &'static str {
