@@ -107,7 +107,9 @@ mod tests {
             }
         }
         assert_eq!(
-            read_line(&mut BufReader::new(ReadFailure)).unwrap_err().kind(),
+            read_line(&mut BufReader::new(ReadFailure))
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::InvalidData
         );
     }

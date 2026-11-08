@@ -1050,7 +1050,10 @@ mod tests {
             assert!(state.gate.enter_receiving().is_some());
             assert!(!state.target.supports(Input::Button { button, down: true }));
             assert!(matches!(rx.try_recv().unwrap(), Captured::UnsupportedInput));
-            assert!(rx.try_recv().is_err(), "side-button input was never forwarded");
+            assert!(
+                rx.try_recv().is_err(),
+                "side-button input was never forwarded"
+            );
         }
     }
     #[test]

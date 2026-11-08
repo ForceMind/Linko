@@ -1,21 +1,21 @@
 # 快速开始
 
-适用于 Windows x64 与 Apple 芯片 Mac，每台一个主显示器。当前为 **0.3.16-dev 开发预览**，真实双机键鼠验收尚未完成，请先在可中断的场景试用。
+适用于 Windows x64 与 Apple 芯片 Mac，每台一个主显示器。当前为 **0.3.17-dev 开发预览**，真实双机键鼠验收尚未完成，请先在可中断的场景试用。
 
 ## 下载与校验
 
-从[发布页](https://github.com/ForceMind/Linko/releases/tag/v0.3.16-dev)选择对应 ZIP 与同名 `.sha256`，免登录下载。
+从[发布页](https://github.com/ForceMind/Linko/releases/tag/v0.3.17-dev)选择对应 ZIP 与同名 `.sha256`，免登录下载。
 
 Windows PowerShell：
 
 ```powershell
-Get-FileHash .\Linko-0.3.16-dev-windows-amd64.zip -Algorithm SHA256
+Get-FileHash .\Linko-0.3.17-dev-windows-amd64.zip -Algorithm SHA256
 ```
 
 macOS 终端：
 
 ```sh
-shasum -a 256 Linko-0.3.16-dev-darwin-arm64.zip
+shasum -a 256 Linko-0.3.17-dev-darwin-arm64.zip
 ```
 
 输出与 `.sha256` 对照。完整解压后，Windows 打开 `Linko.exe`，Mac 打开 `Linko.app`。保留同包 worker，不混用版本。Windows 未代码签名；Mac 仅 ad-hoc 完整性签名，尚无 Developer ID／公证。系统安全提示不能通过关闭防护解决。

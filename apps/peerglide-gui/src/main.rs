@@ -346,7 +346,8 @@ fn read_worker_output(
             Ok(Some(worker_output::Line::Text(line))) => line,
             Ok(Some(worker_output::Line::Oversized | worker_output::Line::InvalidEncoding)) => {
                 snapshot.3.store(true, Ordering::Release);
-                let _ = diagnostics.try_send("工作进程输出无效或超过限制，最终状态需要重新确认。".into());
+                let _ = diagnostics
+                    .try_send("工作进程输出无效或超过限制，最终状态需要重新确认。".into());
                 wake();
                 continue;
             }

@@ -1327,13 +1327,7 @@ mod implementation {
 
         #[tokio::test]
         async fn closed_release_never_confirms_draining_failed_or_unknown_owners() {
-            for scenario in [
-                "draining",
-                "failed",
-                "source_lost",
-                "unknown",
-                "new_owner",
-            ] {
+            for scenario in ["draining", "failed", "source_lost", "unknown", "new_owner"] {
                 let (mut driver, mut engine, mut backend, _) = setup(8);
                 let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
                 let mut released = epoch;
@@ -1376,7 +1370,10 @@ mod implementation {
                 }
                 drop(engine);
                 let effects = backend.effects.clone();
-                assert_eq!(driver.release(released, None).await, Err(ReceiveError::Closed));
+                assert_eq!(
+                    driver.release(released, None).await,
+                    Err(ReceiveError::Closed)
+                );
                 assert_eq!(backend.effects, effects);
             }
         }
