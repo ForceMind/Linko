@@ -11,6 +11,13 @@ accumulate unbounded queued events or stop draining child pipes. The CLI emits
 only a handful of lifecycle events, not per-input events. Diagnostic text is
 bounded before queuing and the UI retains at most 100 entries.
 
+Before decoding or allocating a whole line, GUI stdout/stderr readers now cap
+each record at 4 KiB including line endings. Excess is drained to the next newline
+without parsing a retained prefix. Stdout overflow latches untrusted output, so
+a later terminal record cannot certify clean recovery; stderr overflow becomes
+only a fixed diagnostic. Subsequent records and EOF still drain normally. This
+bound is not a diagnosis of any historical native memory incident.
+
 Disconnect-and-revoke is available during a session. It requests graceful worker
 stop, immediately clears the displayed connection/grant, removes pinned trust and
 persists revocation. Persistence/removal errors are surfaced; a failed write is

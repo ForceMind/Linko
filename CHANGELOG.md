@@ -2,6 +2,11 @@
 
 `-dev` 是开发预览，不是稳定版。下载以 [Releases](https://github.com/ForceMind/Linko/releases) 为准；工程证据见 [VALIDATION](docs/VALIDATION.md)。
 
+## 0.3.17-dev — 基础键鼠稳定性候选
+
+- GUI 在读取 worker 输出时限制单行内存，超长记录整行丢弃并继续排空管道；stdout 异常不得被后来的清理状态掩盖。
+- 候选验证与真实双机验收分别记录，尚未宣称长期内存问题根因已确认。
+
 ## 0.3.16-dev — 首个公开开发预览
 
 - 中文设备与屏幕布局工作区、正式设备素材、字重与紧凑窗口布局。

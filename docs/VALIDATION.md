@@ -1998,3 +1998,9 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 发布0.3.16-dev仍为Pre-release。原始cb27bce两平台内层ZIP摘要已复核；新包只替换根README／SECURITY，全部其他成员逐字节一致，文件列表与执行权限一致，CRC通过。新Mac包解压后codesign --verify --deep --strict退出0。来源与新摘要在docs/releases/0.3.16-dev-provenance.json；程序Rust源码与cb27bce无差异。
 
 官网0.1.1将两端下载改为公开Release，摘要改为实际便携包；Linux诊断构建仍明确需登录。本地构建、10文件链接／摘要／隐私检查、JS语法和新文档链接／产品文案检查通过。预检因本机无Rust在fmt入口失败（preflight-20261108T022643362173Z-41386），未安装；C06／长期内存／历史故障根因未因发布完成。最终同提交CI、发布匿名下载与Pages回读结果记录于对应PR，浏览器未验证。
+
+## 0.3.17-dev 基础键鼠稳定性候选
+
+源码检查发现GUI对stdout/stderr使用lines()后才截断文本，单行可在入队前无界分配，违背有界管道契约。新增4KiB（含行尾）读入上限，超长行排空至换行且不解析前缀；stdout超限锁存状态不可信，后续terminal不能制造clean；stderr超限仅保留固定说明，继续读取下一行。新增16MiB惰性输入、边界/CRLF/EOF/编码、队列满后终态以及stderr排空回归。只读源码定位，不等于此前6.83GB根因或实机复现。
+
+本机无Rust，预检fmt入口失败，后续not_run；新增Rust回归、fmt/Clippy/build/test与平台检查等待当前候选CI。未启动宿主原生输入或更改系统权限，C06仍未验收。

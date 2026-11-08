@@ -15,6 +15,7 @@ pub mod pairing_supervisor;
 mod quit_check;
 mod resource_check;
 mod visual_assets;
+mod worker_output;
 mod worker_permissions;
 mod workspace_ui;
 use anyhow::{Context, Result};
@@ -335,14 +336,21 @@ impl WorkerSnapshot {
     }
 }
 fn read_worker_output(
-    reader: impl BufRead,
+    mut reader: impl BufRead,
     snapshot: Arc<WorkerSnapshot>,
     diagnostics: mpsc::SyncSender<String>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) {
-    for result in reader.lines() {
-        let line = match result {
-            Ok(line) => line,
+    loop {
+        let line = match worker_output::read_line(&mut reader) {
+            Ok(Some(worker_output::Line::Text(line))) => line,
+            Ok(Some(worker_output::Line::Oversized)) => {
+                snapshot.3.store(true, Ordering::Release);
+                let _ = diagnostics.try_send("工作进程输出超过限制，最终状态需要重新确认。".into());
+                wake();
+                continue;
+            }
+            Ok(None) => break,
             Err(_) => {
                 snapshot.3.store(true, Ordering::Release);
                 break;
@@ -361,6 +369,25 @@ fn read_worker_output(
     }
     snapshot.publish_switch(WorkerSwitchState::Idle);
     snapshot.2.store(true, Ordering::Release);
+    drop(diagnostics);
+    wake();
+}
+
+fn read_worker_diagnostics(
+    mut reader: impl BufRead,
+    diagnostics: mpsc::SyncSender<String>,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) {
+    loop {
+        let line = match worker_output::read_line(&mut reader) {
+            Ok(Some(worker_output::Line::Text(line))) => line.chars().take(600).collect(),
+            Ok(Some(worker_output::Line::Oversized)) => "工作进程诊断超过限制，已省略该行。".into(),
+            Ok(None) | Err(_) => break,
+        };
+        if diagnostics.try_send(line).is_ok() {
+            wake();
+        }
+    }
     drop(diagnostics);
     wake();
 }
@@ -839,13 +866,7 @@ impl App {
         });
         let error_wake = self.wake_ui.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if tx.try_send(line.chars().take(600).collect()).is_ok() {
-                    error_wake();
-                }
-            }
-            drop(tx);
-            error_wake();
+            read_worker_diagnostics(BufReader::new(stderr), tx, error_wake);
         });
         self.child = Some(child);
         self.active_mode = Some(mode);
@@ -2857,6 +2878,60 @@ mod lifecycle_tests {
             Some((WorkerInputState::Disabled, true))
         );
         assert_eq!(rx.try_recv()?, "already queued");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        Ok(())
+    }
+    #[test]
+    fn oversized_output_keeps_cleanup_unconfirmed_and_preserves_terminal() -> Result<()> {
+        let terminal = WorkerInputEvent::new_terminal(WorkerInputState::Disabled)
+            .unwrap()
+            .line();
+        let source = format!(
+            "{terminal}{}\n{terminal}\n",
+            " ".repeat(worker_output::MAX_LINE_BYTES)
+        );
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send("queue already full".into())?;
+        read_worker_output(
+            BufReader::with_capacity(17, std::io::Cursor::new(source)),
+            snapshot.clone(),
+            tx,
+            Arc::new(|| {}),
+        );
+        assert!(snapshot.2.load(Ordering::Acquire) && snapshot.3.load(Ordering::Acquire));
+        assert_eq!(
+            snapshot.take_input(),
+            Some((WorkerInputState::Disabled, true))
+        );
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.worker_state = Some(snapshot);
+        app.input_terminal = true;
+        app.input_state = Some(WorkerInputState::Disabled);
+        assert!(!app.native_cleanup_reported());
+        assert_eq!(rx.try_recv()?, "queue already full");
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn oversized_stderr_is_redacted_and_following_diagnostics_are_drained() -> Result<()> {
+        let source = format!(
+            "{}\nfinal diagnostic\n",
+            "oversized fixture text".repeat(worker_output::MAX_LINE_BYTES)
+        );
+        let (tx, rx) = mpsc::sync_channel(3);
+        read_worker_diagnostics(
+            BufReader::with_capacity(13, std::io::Cursor::new(source)),
+            tx,
+            Arc::new(|| {}),
+        );
+        assert_eq!(rx.try_recv()?, "工作进程诊断超过限制，已省略该行。");
+        assert_eq!(rx.try_recv()?, "final diagnostic");
         assert!(matches!(
             rx.try_recv(),
             Err(mpsc::TryRecvError::Disconnected)
