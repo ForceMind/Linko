@@ -632,6 +632,8 @@ pub(super) async fn run_with_status(
         // retrying. Keep the other select branches fair; only retries yield.
         let network_ready=!messages.is_empty();
         let defer_commit=network_ready && current && pending.is_some_and(|request|now<request.deadline);
+        // Stage-only diagnostics: never key/button contents, positions or lease ids.
+        let peer_granted=pending.is_some_and(|request|request.commit.is_some());
         let step=if defer_commit {PendingStep::Waiting}else{advance_pending(&mut pending,now,current,|token,deadline| {
             let cap=capture.as_ref().ok_or_else(||anyhow::anyhow!("native capture unavailable during acquire"))?;
             input_status.checked(cap.begin_routed_from(token,deadline,local_return.0,local_return.1))
@@ -644,6 +646,11 @@ pub(super) async fn run_with_status(
                 continue;
             },
             PendingStep::Cancelled{lease,timed_out}=>{
+                eprintln!("{}", match (peer_granted,timed_out) {
+                    (false,true)=>"Switch expired before peer grant; input stayed local.",
+                    (true,true)=>"Switch expired after peer grant while committing locally; input stayed local.",
+                    (_,false)=>"Switch cancelled by local admission protection; input stayed local.",
+                });
                 edge_gate.require_interior();input_status.reporter.switch(if timed_out {super::WorkerSwitchState::TimedOut}else{super::WorkerSwitchState::Idle});
                 send(&mut tx,&Message::Release{lease,cursor:None}).await?;
                 continue;
@@ -696,11 +703,14 @@ pub(super) async fn run_with_status(
                         }else{send(&mut tx,&Message::Denied{lease}).await?;}
                     },
                     Message::Granted{lease}=>{
+                        let first_grant=pending.is_some_and(|request|request.lease==lease && request.commit.is_none() && now<request.deadline);
                         if !pending.as_mut().is_some_and(|request|request.grant(lease,now)) {
                             if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::TimedOut);}
                             // A duplicate Grant for the already active lease is
                             // inert; a late/foreign Grant is explicitly released.
                             if !outgoing.is_some_and(|current|current.lease==lease){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        }else if first_grant{
+                            eprintln!("Peer grant received; checking local capture admission.");
                         }
                     },
                     Message::Denied{lease}=>{if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
