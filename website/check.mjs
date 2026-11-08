@@ -26,7 +26,6 @@ for (const name of files) {
     if (target.startsWith('#')) { assert(ids.has(target.slice(1)), `${name}: missing anchor ${target}`); continue; }
     if (/^https:\/\//.test(target)) continue;
     assert(!/^[a-z]+:/i.test(target) && !target.startsWith('//'), `Unexpected URL: ${target}`);
-    if (/^\/download\/0\.3\.17-dev\/(macos|windows)$/.test(target)) continue;
     const clean = target.split(/[?#]/)[0];
     let path = clean.startsWith('/') ? resolve(root, '.' + clean) : resolve(root, name, '..', clean);
     if (clean.endsWith('/')) path = join(path, 'index.html');
@@ -40,3 +39,12 @@ assert.equal([...homepage.matchAll(/<h1\b/g)].length, 1);
 assert(homepage.includes('0.3.17') && /开发|预览/.test(homepage));
 assert(/GitHub/.test(homepage));
 console.log(`PASS: ${files.length} public hashes, asset size, Chinese pages, local links/anchors, external targets and private-data checks`);
+
+const release = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'));
+for (const download of release.downloads) {
+  assert(homepage.includes(`href="https://gh-proxy.org/${download.url}"`), 'Proxy must prefix the exact public release URL');
+  assert(homepage.includes(`href="${download.url}"`), 'Keep GitHub original download');
+}
+assert(!files.includes('_worker.js') && !files.includes('_routes.json'), 'Site must not deploy download Functions');
+assert(!homepage.includes('href="/download/'), 'Retired self-hosted download route');
+console.log('PASS: exact third-party proxy prefixes, original links retained, no self-hosted download Function');
