@@ -2144,3 +2144,29 @@ kvm-020-acceptance延续2ab0cd3，运行程序保持3c645c5／0.3.20-dev，不�
 本轮同源候选补齐：Mac现用3c645c5／20保持原样，Windows取同次CI42501372361的artifact13625564989，完整39995228字节外层SHA e784c8ae4db3c8421af818bab37bc77c622de42bf30c694a23765fe6452d5288。经GitHub连接器取得完整副本并对照官方摘要后，停止本轮重复慢速下载、保留部分文件；不是把部分下载当成完整包。内层Linko-0.3.20-dev-windows-amd64.zip为41655889字节，SHA32810f4f488c3dca73083464cde36af5fc6c1d82a1155f424574aed3d951ea84；路径／CRC／MIT／394依赖／字体声明和两个amd64 PE通过。本机不能执行Windows程序，原生专项以精确CI为证，物理验收仍未运行。
 
 两包均绑定同一3c645c5和run42501372361；Mac内层41319954字节／SHA8f9771ee03c04b65113a06139c2d00912271a8054132c186be177797c9f32825重新核对。ignored same-source-packages.local.json记录候选准备，尚未发布0.3.20至Releases或更改官网下载，公开17仍保持。用户指出Windows仍17后，已解释公开版与候选未同步；随后用户明确Windows17已等待连接，遂先按既有Mac→Windows授权做混合版本故障复查，不把这一结果当两端同源验收。Mac20实际权限再次Ready，启动弹窗自动点击未稳定勾选，已集中请用户只完成App内检查／勾选／确认，无须重配对或系统密码；此时尚未观察到Native连接，禁止写成已启动／已认证／已跨屏。
+
+
+## 2026-11-09 混合版本源端切换观察与持键回程候选
+
+用户本人完成App内启动后，现用Mac20实际GUI为已连接／Local，已核对其工作进程带--native／--managed且无--allow-control。用户物理向右短测期间，仅读取本应用窗口，观察状态变为“正在控制对端”；这证明源端已提交远端活动范围，越过旧TimedOut阶段，但Windows实际移动／点击／滚轮／返回结果仍等本人回执，未勾C06。Win17＋Mac20为混合版本，不冒充两端同源最终验收；未发送模拟鼠标或按键。两项权限在启动前由实际worker确认Granted，GUI过期显示不替代会话中权限状态。
+
+继续检查发现普通边缘返回直接无条件restore，即使物理按钮／修饰键仍按住也会发送Release；这与“按住按钮不跨屏”不符。独立kvm-held-return基于e60313d，源码候选21改为原gate同一原子word核对原Remote epoch／COUNT／IN_CALLBACK并退役；竞争保持原会话及运动转发，下一次运动可重试，不在回调等待。返回位置沿用return_pending fence，无第二钩子／协议更改。停止／紧急／失去来源／故障仍无条件恢复，按下抬起归属保留。新增确定性持键／回调／并发Down／旧epoch／关闭源以及原HookState按键与三按钮pair路径回归。
+
+本机无Rust，不安装；新源码尚未执行编译／回归，必须精确CI。现用3c645c5／20与Windows17试跑保持不变，不重签／替换或改配对／权限；新21尚未打包／发布或声称物理拖拽通过。当前修复是代码中独立可核验的持键回程缺口，不将其当成用户尚未回报的Windows响应故障根因。
+
+### 持键回程候选自动验证收尾
+
+运行源码冻结 `8b6f256e80c8855f0430500381bbf97d39917dde`／0.3.21-dev。首轮2199c21的42514360743因4处rustfmt失败，按runner修为84965d3，保留失败和全部断言。自查再补既有tick重试：最后一次Motion可能先于回调退出被消费，不能要求用户再移动才返回；tick先确认输入队列排空，再由原epoch／零持键／无回调的原子检查退役，使用原可靠流和递增sequence发送终点Release。未增加新队列或回调等待。
+
+8b6f256的完整五项 [42515136133](https://github.com/ForceMind/Linko/actions/runs/42515136133) 和固定上游 [42515136009](https://github.com/ForceMind/Linko/actions/runs/42515136009) 全过，覆盖fmt、严格workspace Clippy、locked test/build、最低1.95、依赖审计及原有进程／平台／GUI专项。新增Gate、原CaptureSession恢复fence、并发Down和原HookState key／Shift／三按钮pair回归在对应平台通过；这是软件回归，不是物理拖拽或独立安全审查。被取代的84965d3重复运行42514837616／42514837657已回读为cancelled，最新检查未删减。
+
+同源两端包均来自run42515136133，ZIP路径／CRC／MIT／394依赖和字体声明通过：
+
+| 平台 | Artifact | 外层SHA-256 | 原始便携ZIP SHA-256 |
+| --- | --- | --- | --- |
+| Windows | 13631118195 | f8a1234f04de2861d0ba17b4e679d529885636827976b22411ad95798b6b89bf | 0bd303fba15e9a3edab87741cf7f0b848496b09a09f89fe78f4b16c44f27a6fc |
+| macOS | 13631381120 | e1ff000ab85d5b6f5b72aaf58c4bfc406e219a12656e1d8c9c3d555d642d67ca | 1c7ee821a09cd02062e52f29915bfd202b9f7190996358942a7ed14194480278 |
+
+Windows两个amd64 PE通过；Mac0.3.21 plist、图标原字节、bundle身份、strict seal和实际helper版本通过，原ZIP未改。包在ignored `held-return-8b6f256`；未启动21 GUI、安装、登记权限或公开发布21，现用20签名和TCC保留。
+
+短测后未收到Windows移动／点击／滚轮／返回回执，root通过本机菜单请求停止。随后确认原worker退出且无替代worker；这不证明Windows释放或物理恢复通过。后台窗口捕获仍有旧Connected／Remote画面，显示／缩放／正常退出尝试未给出清晰终态，唯一GUI仍在；1秒线程采样显示主线程正常等待AppKit事件，无Native worker。可能涉及后台绘制缓存或未生效的自动动作，根因未确认，不能声称GUI死锁、正常退出或恢复成功。未强杀、重置权限或替换App；原始采样仅在本地ignored保留。需要用户实际前台状态及物理响应回执再继续，C06、历史内存及#10状态不变。
