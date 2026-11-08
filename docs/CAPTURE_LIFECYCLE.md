@@ -178,7 +178,9 @@ and sticky recovery failure checks remain independent and mandatory.
 Normal return from an outgoing lease uses the existing capture gate to atomically
 check the exact Remote epoch, no held physical keys/buttons and no active callback
 before retiring suppression. A hold or a callback/CAS collision keeps the original
-remote route and forwards motion normally; later motion may retry after release.
+remote route and forwards motion normally. Later motion or the existing session
+heartbeat tick may retry after release; the tick first waits for queued captured
+input to drain, retaining reliable discrete-input/terminal-cursor ordering.
 This is not a new hook or a wait inside a callback. Source cursor restoration
 retains the existing return-pending fence. Explicit stop, emergency, source loss
 and failed-session recovery remain unconditional and may release held inputs.

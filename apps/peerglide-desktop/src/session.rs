@@ -680,10 +680,18 @@ pub(super) async fn run_with_status(
             _=tick.tick()=>{
                 let now=now_ms();
                 if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
-                if let Some(Outgoing {lease,..})=outgoing {
+                if let Some(Outgoing {lease,epoch})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
+                    }else if input.is_empty() && returned_to_source(edge,position.0,position.1) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
+                        // A motion can wake this task before its callback drops.
+                        // Retry on the existing tick after older captured input
+                        // drained, even if the user made no further movement.
+                        outgoing=None;
+                        sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;
+                        let cursor=Motion{lease,sequence,x:position.0,y:position.1};
+                        send(&mut tx,&Message::Release{lease,cursor:Some(cursor)}).await?;
                     }else{send(&mut tx,&Message::Ping{lease}).await?;}
                 }
                 // A full native event queue disables capture in the callback. Reconcile protocol immediately.
