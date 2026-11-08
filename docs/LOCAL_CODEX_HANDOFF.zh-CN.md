@@ -1494,3 +1494,9 @@ gui-reference-polish隔离worktree从f3aa8fe继续。两名既有代理分管三
 64节源码收敛：仅session.rs/lib.rs/receive_driver.rs必要改动，request代次/ARMED/COUNT同原子word，route epoch独立且不改变已放行/抑制pair归属；Stop在原ReceiveControl先同步关同word门后发布stop，初始watchdog不超过原期限。静态复查的ACTIVE后revision、Stop到提交和跨deadline首callback窗口均已补生产路径回归并复查关闭，无新增明确阻塞，可进CI；本机没有执行Rust。只在原1000ms预算内对瞬时callback/CAS忙按需10ms、至多100次，不等待held释放、不刷新旧票据。宿主17继续停用且冻结，最终候选仍需精确CI和用户物理重跑。
 
 64节整合：UI冻结a245b21完整五项42465916752、资源42465916763和固定上游42465916745全过，原生新标准/紧凑图已核读，左对齐/底部clip已修。本批在功能分支整合UI与core，保持0.3.19-dev；冲突仅Cargo版本、CHANGELOG和两份追加记录，保留双方历史，源文件逐项核对来自已冻结父提交。PR80将堆叠在PR79上，只审core差异。整合新HEAD仍须独立CI/运行包验证，不拿父分支通过代替；不改宿主App、TCC、配对或生产官网。
+
+64节最终运行包冻结`3c11a88ac946ef664a87a74056c5b1b18ea62872`（0.3.19-dev），完整五项42469667355、两平台资源42469667277及上游42469667274全过；实际新两尺寸PNG、Win PE/图标、Mac完整seal/图标/worker版本及两包MIT/394依赖/字体声明、摘要/CRC均核验，详见VALIDATION。Mac实际包helper的本机独立NoNative reconnect/startup-wait专项全过，保护原pin与停止/首次等待预算。新增固定阶段诊断区分Grant前/后超时，不含输入内容/坐标/票据；补Apple官方明确M4 Air映射，未知型号/对端仍不猜测。此为软件自动验证，不是C06或独立安全审计。
+
+宿主包在ignored `target/local-validation/kvm-3c11a88/macos-unpacked/Linko-0.3.19-dev-darwin-arm64/Linko.app`，当前未启动/登记TCC；旧17仍为唯一现用授权App，已停止/worker退出。实际Mac锁屏阻碍切换复查，已询问用户“只解锁，其余root操作”；后续先退出17、启动冻结19只读核对版本/图标/实际worker权限，所需系统认证仍须本人完成。沿用已有配对和Windows现有v5，不再索要指纹/证书；仅Mac→Win短测授权，Mac接收仍关闭，不开数据/G1。19未发布/部署/合主线，不宣称17的物理失败已解决。
+
+本机磁盘满导致一次19解压失败；清掉该不完整解压，再核对ZIP逐文件字节/执行位后清理26个旧发布解压目录，约1.4GiB恢复，现用17/源码/Git/工作树/恢复ZIP/身份全部保留；空间恢复后原19ZIP重新解压验证成功。ignored回执`archived-distribution-cleanup.json`。文档收尾不更换3c包/签名，避免为记录更新反复授权；未来候选仅在新证据必要时重建。

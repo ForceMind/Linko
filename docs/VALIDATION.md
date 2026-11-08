@@ -2067,3 +2067,17 @@ c7a0ba8完整检查42464042816因新增对齐断言的一处fmt失败，最低1.
 为下一次实机复跑补充仅阶段的固定诊断：首次匹配且未过期Granted已收到、等待Granted超时、Granted后本机提交超时或本机安全门取消。只在这些有限状态转换输出固定字符串，不输出按键/按钮内容、位置、lease/身份或时间值，不在Native回调记录。它不改变IPC/输入协议、权限、重试、截止或恢复判断；不据此声称此次根因已定。
 
 本机形态实查还暴露一个直接缺口：新Apple通用Mac编号不带MacBook前缀，初版安全回退Unknown。已按[Apple官方MacBook Air目录](https://support.apple.com/zh-cn/102869)补明确的M4 Air两型号映射，并补正/负回归；不把其他Mac编号一概猜成笔记本。仍只读hw.model且仅缓存粗类型，不查询序列号/UUID、持久化或上传机型。当前对端无形态交换，明确未知。
+
+### 0.3.19冻结运行候选：3c11a88
+
+`3c11a88ac946ef664a87a74056c5b1b18ea62872`通过[完整五项42469667355](https://github.com/ForceMind/Linko/actions/runs/42469667355)、[两平台资源42469667277](https://github.com/ForceMind/Linko/actions/runs/42469667277)和[固定上游42469667274](https://github.com/ForceMind/Linko/actions/runs/42469667274)。含三平台fmt、严格Clippy、locked workspace test/build、Release、最低Rust1.95、依赖审计、实际进程/重连/配对/worker、平台模型与Mac GUI退出/并行、Windows原图标资源/Shell读回、Mac资源seal及篡改拒绝。资源检查不证明8h/24h或历史6.83GB根因。
+
+同提交标准1280×800和紧凑920×700原生图已读，版本0.3.19、文字左对齐、完整设备卡与底部说明已确认；图为隔离Xvfb/NoNative，不是物理桌面。artifact13613126885外层SHA256 `c16a99ad155564a5f6f3f238f9cd39f52fc5fe71e5c85a8ecb27cd481024cddb`，两张PNG分别为`630fd187ff0b588376c9917754b485e131143e54f4f3191c799dba6fd53a38f4`、`c7831c44dbe01c269d687f9c6544afe56cec1f9e5ae75d8e28e899fd69f9892e`。不据此声明用户已接受视觉。
+
+两端包已核验同run/head、外层digest、内层checksum、ZIP路径/CRC、MIT、394项依赖声明和中文字体OFL。Windows artifact13613068244外层SHA256 `87819821e6a56dfc874572eea22214338b7a9bae77d978d54fd6122d42135eec`，内层ZIP `76e7d76c596fb3256b5a16b2f79e820a157dd44b9e52b8624e955aafbcb2532f`，两份AMD64 PE通过。Mac artifact13613661012外层 `9923787b20ca9f447352909c1ba0777262766c816e101d051dbd30fd93426920`，内层 `e21b86c0a1798d467b8a31a4e23b897a67cfbabcb49ee8b42a7bbdfb4149125c`；解压后strict seal、GUI/worker身份、图标原字节/hash2与0.3.19版本均通过，原ZIP不变。仅ad-hoc完整性，不是Developer ID/公证/TCC证明。
+
+Mac实际包helper的`--version`与源Clap契约一致为`peerglide-desktop 0.3.19-dev`；初次验证器误期望二进制文件名peerglide，已按源契约修正，未改程序。该helper在宿主以新临时身份/回环完成reconnect_smoke和startup_wait_smoke全部专项，包括同pin重连、换pin拒绝、Stop取消退避、首次等待/预算、认证及本地key错误不重试；未捕获/注入键鼠，不是双机物理验收。
+
+解压曾因实际磁盘满失败，随后仅清除本次不完整解压，并逐文件/执行权限对照保留ZIP，清理26个旧发布解压副本（约1.4GiB）。源码/Git/工作树/全部恢复ZIP、现用17及身份/配对均保留；没有全局清理。空间恢复后重新解压/核验通过，失败未掩盖。本地来源、验证、图和清理回执在ignored target/local-validation，未上传宿主数据。
+
+**状态边界：**软件及上述自动/隔离检查已完成；19的宿主GUI图标、实际worker权限、原生键鼠与双机C06尚未验收。17实机试跑曾失败，19修复尚未证实解决该次根因。切换到19前Mac实际锁屏，已请求本人解锁；未改宿主App/TCC或开始新键鼠会话。先可沿用Windows现有v5对端验证Mac来源端，不重装/重配对；反向控制仍需独立明确接收同意。对端形态交换、数据/G1等既有未完成项不变。文档收尾不重建或替换冻结3c运行包。
