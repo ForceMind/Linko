@@ -50,6 +50,21 @@ pub enum CaptureRoute {
     /// Protected receiver admission; never an outgoing input route.
     Receiving(CaptureEpoch),
 }
+
+/// Local-only commit result; never a network grant or OS/application receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaptureCommit {
+    Committed(CaptureEpoch),
+    Retry,
+    Cancelled,
+}
+/// One pending source request. Its admission generation lives in the same
+/// atomic word as callback/held/mode state. Never serialized as peer authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CaptureCommitToken {
+    epoch: CaptureEpoch,
+    request: u64,
+}
 #[cfg(any(windows, target_os = "macos"))]
 impl CaptureRoute {
     fn epoch(self) -> CaptureEpoch {
@@ -90,15 +105,22 @@ const IN_CALLBACK: u64 = 1 << 62;
 const STOPPED: u64 = 1 << 61;
 const RECEIVING: u64 = 1 << 60;
 const ADMISSIONS_CLOSED: u64 = 1 << 59;
+const COMMIT_ARMED: u64 = 1 << 58;
 const COUNT_BITS: u32 = 17;
 const COUNT: u64 = (1 << COUNT_BITS) - 1;
-const GENERATION_MAX: u64 = (1 << (59 - COUNT_BITS)) - 1;
+// Keep route epochs/pair ownership separate from pending-request admission.
+// Both bounded generations share the callback/mode CAS; neither ever wraps.
+const GENERATION_BITS: u32 = 21;
+const GENERATION_MAX: u64 = (1 << GENERATION_BITS) - 1;
 const GENERATION: u64 = GENERATION_MAX << COUNT_BITS;
+const REQUEST_SHIFT: u32 = COUNT_BITS + GENERATION_BITS;
+const REQUEST_MAX: u64 = (1 << (58 - REQUEST_SHIFT)) - 1;
+const REQUEST: u64 = REQUEST_MAX << REQUEST_SHIFT;
 static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(1);
 struct GateState {
     instance: u64,
     deadline: AtomicU64,
-    control: AtomicU64,
+    control: Arc<AtomicU64>,
     healthy: std::sync::atomic::AtomicBool,
     receive: OnceLock<ReceiveControl>,
     return_pending: std::sync::atomic::AtomicBool,
@@ -126,7 +148,7 @@ impl Default for CaptureGate {
         Self(Arc::new(GateState {
             instance,
             deadline: AtomicU64::new(0),
-            control: AtomicU64::new(if instance == 0 { STOPPED } else { 0 }),
+            control: Arc::new(AtomicU64::new(if instance == 0 { STOPPED } else { 0 })),
             healthy: std::sync::atomic::AtomicBool::new(instance != 0),
             receive: OnceLock::new(),
             return_pending: std::sync::atomic::AtomicBool::new(false),
@@ -174,7 +196,7 @@ impl CaptureGate {
             },
             Ordering::Release,
         );
-        let new = (next << COUNT_BITS) | mode;
+        let new = (old & REQUEST) | (next << COUNT_BITS) | mode;
         self.0
             .control
             .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
@@ -183,6 +205,113 @@ impl CaptureGate {
     }
     pub fn try_activate(&self) -> bool {
         self.publish(true).is_some()
+    }
+    pub fn prepare_commit(&self, expected: CaptureEpoch) -> Option<CaptureCommitToken> {
+        let word = self.0.control.load(Ordering::Acquire);
+        if !self.0.healthy.load(Ordering::Acquire)
+            || self.0.return_pending.load(Ordering::Acquire)
+            || self.epoch_from(word) != expected
+            || word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED | COUNT) != 0
+        {
+            return None;
+        }
+        let Some(request) = ((word & REQUEST) >> REQUEST_SHIFT)
+            .checked_add(1)
+            .filter(|request| *request <= REQUEST_MAX)
+        else {
+            self.source_lost();
+            return None;
+        };
+        // A movement callback can still be exiting when its event is consumed.
+        // Arming leaves its frozen route/pair epoch unchanged. A physical Down
+        // atomically clears ARMED with COUNT, even if it completes before commit.
+        let armed = (word & !REQUEST) | (request << REQUEST_SHIFT) | COMMIT_ARMED;
+        self.0
+            .control
+            .compare_exchange(word, armed, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| CaptureCommitToken {
+                epoch: expected,
+                request,
+            })
+    }
+    pub fn commit_pending(&self, token: CaptureCommitToken) -> bool {
+        let word = self.0.control.load(Ordering::Acquire);
+        !self.0.return_pending.load(Ordering::Acquire)
+            && !matches!(
+                self.commit_blocker(token, u64::MAX, 0, word),
+                Some(CaptureCommit::Cancelled)
+            )
+    }
+    fn commit_blocker(
+        &self,
+        token: CaptureCommitToken,
+        deadline: u64,
+        now: u64,
+        word: u64,
+    ) -> Option<CaptureCommit> {
+        if now >= deadline
+            || !self.0.healthy.load(Ordering::Acquire)
+            || self.epoch_from(word) != token.epoch
+            || (word & REQUEST) >> REQUEST_SHIFT != token.request
+            || word & COMMIT_ARMED == 0
+            || word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED | COUNT) != 0
+        {
+            Some(CaptureCommit::Cancelled)
+        } else if word & IN_CALLBACK != 0 {
+            Some(CaptureCommit::Retry)
+        } else {
+            None
+        }
+    }
+    fn commit_from(&self, token: CaptureCommitToken, deadline: u64, now: u64) -> CaptureCommit {
+        let word = self.0.control.load(Ordering::Acquire);
+        self.commit_from_word(token, deadline, now, word, || {})
+    }
+    fn source_commit_current(&self, epoch: CaptureEpoch) -> bool {
+        let word = self.0.control.load(Ordering::Acquire);
+        self.0.healthy.load(Ordering::Acquire)
+            && word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED) == ACTIVE
+            && self.epoch_from(word) == epoch
+    }
+    fn commit_from_word(
+        &self,
+        token: CaptureCommitToken,
+        deadline: u64,
+        now: u64,
+        word: u64,
+        before_cas: impl FnOnce(),
+    ) -> CaptureCommit {
+        if let Some(blocked) = self.commit_blocker(token, deadline, now, word) {
+            return blocked;
+        }
+        let Some(next) = token
+            .epoch
+            .generation
+            .checked_add(1)
+            .filter(|next| *next <= GENERATION_MAX)
+        else {
+            self.source_lost();
+            return CaptureCommit::Cancelled;
+        };
+        // A scheduler pause may cross the original request deadline after this
+        // check but before the CAS. Callbacks must fail open even before the
+        // async caller gets its fresh readback and permits normal lease renewal.
+        self.0
+            .deadline
+            .store(now.saturating_add(1000).min(deadline), Ordering::Release);
+        let committed = (word & REQUEST) | (next << COUNT_BITS) | ACTIVE;
+        before_cas();
+        match self
+            .0
+            .control
+            .compare_exchange(word, committed, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => CaptureCommit::Committed(self.epoch_from(committed)),
+            Err(actual) => self
+                .commit_blocker(token, deadline, now, actual)
+                .unwrap_or(CaptureCommit::Retry),
+        }
     }
     /// Atomically fence a local/receiving phase only with no physical holds and
     /// no callback in progress. This is not a receive permission by itself.
@@ -227,9 +356,10 @@ impl CaptureGate {
             }
             let generation = (old & GENERATION) >> COUNT_BITS;
             let new = if old & STOPPED != 0 || generation == GENERATION_MAX {
-                (old & !(ACTIVE | RECEIVING)) | STOPPED
+                (old & !(ACTIVE | RECEIVING | COMMIT_ARMED)) | STOPPED
             } else {
-                (old & !(ACTIVE | RECEIVING | GENERATION)) | ((generation + 1) << COUNT_BITS)
+                (old & !(ACTIVE | RECEIVING | GENERATION | COMMIT_ARMED))
+                    | ((generation + 1) << COUNT_BITS)
             };
             match self.0.control.compare_exchange_weak(
                 old,
@@ -265,7 +395,7 @@ impl CaptureGate {
             self.source_lost();
             return false;
         }
-        let new = (old & !(RECEIVING | GENERATION))
+        let new = (old & !(RECEIVING | GENERATION | COMMIT_ARMED))
             | ((generation + 1) << COUNT_BITS)
             | if force { ADMISSIONS_CLOSED } else { 0 };
         self.0
@@ -294,10 +424,14 @@ impl CaptureGate {
     }
     #[cfg(any(windows, target_os = "macos", test))]
     fn begin_event(&self) -> CallbackGuard {
+        self.begin_event_with_clock(now_ms)
+    }
+    #[cfg(any(windows, target_os = "macos", test))]
+    fn begin_event_with_clock(&self, now: impl FnOnce() -> u64) -> CallbackGuard {
         let word = self.0.control.fetch_or(IN_CALLBACK, Ordering::AcqRel);
         let route = if word & STOPPED != 0 {
             CaptureRoute::Local(self.epoch_from(word))
-        } else if word & ACTIVE != 0 && self.0.deadline.load(Ordering::Acquire) <= now_ms() {
+        } else if word & ACTIVE != 0 && self.0.deadline.load(Ordering::Acquire) <= now() {
             self.disable();
             self.route_from(self.0.control.load(Ordering::Acquire) & !ACTIVE)
         } else {
@@ -314,7 +448,10 @@ impl CaptureGate {
         debug_assert!(count <= COUNT);
         let mut old = self.0.control.load(Ordering::Acquire);
         loop {
-            let new = (old & !COUNT) | (count & COUNT);
+            let mut new = (old & !COUNT) | (count & COUNT);
+            if count != 0 && old & (ACTIVE | RECEIVING) == 0 {
+                new &= !COMMIT_ARMED;
+            }
             match self.0.control.compare_exchange_weak(
                 old,
                 new,
@@ -448,6 +585,79 @@ impl CaptureSession {
             self.gate.disable();
         }
         result
+    }
+    /// Commit only the original Local epoch and original request budget. Busy
+    /// callbacks/CAS collisions are retryable; holds/protection/context loss are not.
+    pub fn begin_routed_from(
+        &self,
+        token: CaptureCommitToken,
+        deadline: u64,
+        return_x: f64,
+        return_y: f64,
+    ) -> Result<CaptureCommit> {
+        if self
+            .receive_control
+            .as_ref()
+            .is_some_and(|control| {
+                control.stop_requested() || control.outcome() != ReceiveAck::Retired
+            })
+            || self.return_pending_claim_failed()
+        {
+            return Ok(CaptureCommit::Cancelled);
+        }
+        let result = self.gate.commit_from(token, deadline, now_ms());
+        let CaptureCommit::Committed(epoch) = result else {
+            self.gate.0.return_pending.store(false, Ordering::Release);
+            return Ok(result);
+        };
+        // SourceHealth's observed permission/source loss closes this same gate.
+        // No extra OS permission query runs on the short asynchronous retry path.
+        if now_ms() >= deadline
+            || !self.gate.source_commit_current(epoch)
+            || self
+                .receive_control
+                .as_ref()
+                .is_some_and(|control| {
+                    control.stop_requested() || control.outcome() != ReceiveAck::Retired
+                })
+        {
+            self.gate.disable();
+            self.gate.0.return_pending.store(false, Ordering::Release);
+            return Ok(CaptureCommit::Cancelled);
+        }
+        let effect: Result<()> = (|| {
+            *self
+                .return_position
+                .lock()
+                .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))? =
+                Some((return_x, return_y));
+            pointer(0.5, 0.5)?;
+            Ok(())
+        })();
+        if effect.is_err() {
+            self.gate.disable();
+        }
+        effect?;
+        if now_ms() >= deadline
+            || !self.gate.source_commit_current(epoch)
+            || self
+                .receive_control
+                .as_ref()
+                .is_some_and(|control| {
+                    control.stop_requested() || control.outcome() != ReceiveAck::Retired
+                })
+        {
+            self.restore_checked()?;
+            return Ok(CaptureCommit::Cancelled);
+        }
+        Ok(CaptureCommit::Committed(epoch))
+    }
+    fn return_pending_claim_failed(&self) -> bool {
+        self.gate
+            .0
+            .return_pending
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
     }
     pub fn restore_checked(&self) -> Result<()> {
         self.gate.disable();
@@ -634,8 +844,11 @@ pub fn capture(tx: mpsc::Sender<Captured>, target: InputCapabilities) -> Result<
     {
         let wake = Arc::new(native::ReceiveWake::default());
         let wake_callback = wake.clone();
-        let (driver, engine) =
-            receive_driver::channel(128, Arc::new(move || wake_callback.wake()))?;
+        let (driver, engine) = receive_driver::channel(
+            128,
+            Arc::new(move || wake_callback.wake()),
+            Some(&gate),
+        )?;
         let control = driver.control();
         let _ = gate.0.receive.set(control.clone());
         let thread = native::capture_receiving(tx, gate.clone(), target, engine, wake)?;
@@ -1145,6 +1358,224 @@ impl HookState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn local_commit_token(gate: &CaptureGate) -> CaptureCommitToken {
+        let Some(CaptureRoute::Local(epoch)) = gate.route() else {
+            panic!("expected local capture");
+        };
+        gate.prepare_commit(epoch).unwrap()
+    }
+    #[test]
+    fn source_commit_retries_a_live_callback_without_renewing_the_request_budget() {
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        let callback = gate.begin_event();
+        assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Retry);
+        assert_eq!(gate.0.control.load(Ordering::Acquire) & ACTIVE, 0);
+        drop(callback);
+        let CaptureCommit::Committed(epoch) = gate.commit_from(token, 1000, 110) else {
+            panic!("callback should have drained");
+        };
+        assert_eq!(
+            gate.route_from(gate.0.control.load(Ordering::Acquire)),
+            CaptureRoute::Remote(epoch)
+        );
+
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        assert_eq!(gate.commit_from(token, 1000, 1000), CaptureCommit::Cancelled);
+        assert_eq!(gate.0.control.load(Ordering::Acquire) & ACTIVE, 0);
+    }
+    #[test]
+    fn source_commit_classifies_cas_callback_collision_and_physical_hold_aba() {
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        let word = gate.0.control.load(Ordering::Acquire);
+        let mut callback = None;
+        assert_eq!(
+            gate.commit_from_word(token, 1000, 100, word, || {
+                callback = Some(gate.begin_event());
+            }),
+            CaptureCommit::Retry
+        );
+        drop(callback);
+        assert!(matches!(
+            gate.commit_from(token, 1000, 110),
+            CaptureCommit::Committed(_)
+        ));
+
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        let word = gate.0.control.load(Ordering::Acquire);
+        assert_eq!(
+            gate.commit_from_word(token, 1000, 100, word, || {
+                let callback = gate.begin_event();
+                assert_eq!(callback.route, CaptureRoute::Local(token.epoch));
+                gate.set_held(1);
+                gate.set_held(0);
+                assert_eq!(gate.0.control.load(Ordering::Acquire) & ACTIVE, 0);
+            }),
+            CaptureCommit::Cancelled
+        );
+        assert_eq!(
+            gate.0.control.load(Ordering::Acquire) & ACTIVE,
+            0,
+            "completed hold must not make the old grant eligible again"
+        );
+        assert!(!gate.commit_pending(token));
+        let callback = gate.begin_event();
+        assert_eq!(callback.route, CaptureRoute::Local(token.epoch));
+    }
+    #[test]
+    fn source_commit_cancels_holds_epoch_protection_return_and_source_loss() {
+        for blocked in [COUNT, ACTIVE, RECEIVING, STOPPED, ADMISSIONS_CLOSED] {
+            let gate = CaptureGate::default();
+            let token = local_commit_token(&gate);
+            gate.0.control.fetch_or(blocked, Ordering::AcqRel);
+            assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+        }
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        gate.set_held(1);
+        gate.set_held(0);
+        assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+        let fresh = local_commit_token(&gate);
+        assert_ne!(fresh, token);
+        assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+        assert!(gate.commit_pending(fresh));
+        gate.disable();
+        assert_eq!(gate.commit_from(fresh, 1000, 100), CaptureCommit::Cancelled);
+
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        let another = CaptureGate::default();
+        assert_eq!(another.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+        gate.0.return_pending.store(true, Ordering::Release);
+        assert!(!gate.commit_pending(token));
+        assert!(gate.prepare_commit(token.epoch).is_none());
+        gate.0.return_pending.store(false, Ordering::Release);
+        gate.source_lost();
+        assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        gate.0.control.fetch_or(REQUEST, Ordering::AcqRel);
+        assert!(gate.prepare_commit(token.epoch).is_none());
+        assert!(
+            gate.route().is_none(),
+            "request generation exhaustion never wraps"
+        );
+        assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+    }
+    #[test]
+    fn source_commit_stop_closes_the_cas_even_before_native_observes_stop() {
+        let gate = CaptureGate::default();
+        let (driver, _engine) = receive_driver::channel(1, Arc::new(|| {}), Some(&gate)).unwrap();
+        let control = driver.control();
+        let token = local_commit_token(&gate);
+        let word = gate.0.control.load(Ordering::Acquire);
+        assert_eq!(control.outcome(), ReceiveAck::Retired);
+        assert!(!control.stop_requested());
+        assert_eq!(
+            gate.commit_from_word(token, 1000, 100, word, || {
+                // The real managed-stop control path, after prechecks and before
+                // the production publication CAS. No Engine pump is performed.
+                control.request_stop();
+                assert!(control.stop_requested());
+                assert_eq!(control.outcome(), ReceiveAck::Retired);
+                let callback = gate.begin_event();
+                assert_eq!(callback.route, CaptureRoute::Local(token.epoch));
+            }),
+            CaptureCommit::Cancelled
+        );
+        let callback = gate.begin_event();
+        assert_eq!(callback.route, CaptureRoute::Local(token.epoch));
+        assert_eq!(gate.0.control.load(Ordering::Acquire) & ACTIVE, 0);
+        assert!(!gate.commit_pending(token));
+        assert!(gate.prepare_commit(token.epoch).is_none());
+    }
+    #[test]
+    fn source_commit_paused_past_request_deadline_is_local_at_the_first_callback() {
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        let word = gate.0.control.load(Ordering::Acquire);
+        let clock = std::cell::Cell::new(900);
+        let CaptureCommit::Committed(epoch) =
+            gate.commit_from_word(token, 1000, clock.get(), word, || clock.set(1001))
+        else {
+            panic!("controlled CAS window must complete before caller readback");
+        };
+        assert_eq!(gate.0.deadline.load(Ordering::Acquire), 1000);
+        // This is the same callback admission path as Native, immediately after
+        // the delayed CAS and before any async freshness check/restore can run.
+        let callback = gate.begin_event_with_clock(|| clock.get());
+        assert!(matches!(callback.route, CaptureRoute::Local(_)));
+        assert_ne!(callback.route, CaptureRoute::Remote(epoch));
+        assert_eq!(gate.0.control.load(Ordering::Acquire) & ACTIVE, 0);
+    }
+    #[test]
+    fn source_commit_keeps_a_real_remote_down_after_its_linearization_point() {
+        let gate = CaptureGate::default();
+        let token = local_commit_token(&gate);
+        let CaptureCommit::Committed(epoch) = gate.commit_from(token, 1000, 100) else {
+            panic!("idle commit must succeed");
+        };
+        // Avoid a real clock in this controlled post-CAS callback window.
+        gate.0.deadline.store(u64::MAX, Ordering::Release);
+        let callback = gate.begin_event();
+        assert_eq!(callback.route, CaptureRoute::Remote(epoch));
+        gate.set_held(1);
+        assert!(gate.source_commit_current(epoch));
+        assert_eq!(callback.route, CaptureRoute::Remote(epoch));
+        gate.set_held(0);
+        assert!(gate.source_commit_current(epoch));
+    }
+    #[test]
+    fn source_commit_cas_never_overwrites_a_new_owner_or_epoch() {
+        for mode in [RECEIVING, ADMISSIONS_CLOSED, STOPPED, 0] {
+            let gate = CaptureGate::default();
+            let token = local_commit_token(&gate);
+            let word = gate.0.control.load(Ordering::Acquire);
+            assert_eq!(
+                gate.commit_from_word(token, 1000, 100, word, || {
+                    if mode == 0 {
+                        gate.disable();
+                    } else {
+                        gate.0.control.fetch_or(mode, Ordering::AcqRel);
+                    }
+                }),
+                CaptureCommit::Cancelled
+            );
+            assert_eq!(gate.0.control.load(Ordering::Acquire) & ACTIVE, 0);
+        }
+    }
+    #[test]
+    fn source_commit_old_mode_paths_clear_armed_and_preserve_request_generation() {
+        for mode in [0, ACTIVE, RECEIVING] {
+            let gate = CaptureGate::default();
+            let token = local_commit_token(&gate);
+            let epoch = gate.publish_mode(mode).unwrap();
+            let word = gate.0.control.load(Ordering::Acquire);
+            assert_eq!(word & COMMIT_ARMED, 0);
+            assert_eq!((word & REQUEST) >> REQUEST_SHIFT, token.request);
+            assert_eq!(gate.epoch_from(word), epoch);
+            assert_ne!(epoch, token.epoch);
+            assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+        }
+        for local_fence in [false, true] {
+            let gate = CaptureGate::default();
+            let token = local_commit_token(&gate);
+            if local_fence {
+                assert!(gate.try_local_epoch().is_some());
+            } else {
+                gate.disable();
+            }
+            let word = gate.0.control.load(Ordering::Acquire);
+            assert_eq!(word & COMMIT_ARMED, 0);
+            assert_eq!((word & REQUEST) >> REQUEST_SHIFT, token.request);
+            assert_ne!(gate.epoch_from(word), token.epoch);
+            assert_eq!(gate.commit_from(token, 1000, 100), CaptureCommit::Cancelled);
+        }
+    }
     #[test]
     fn source_observation_checks_wall_and_monotonic_without_refreshing_after_a_slow_call() {
         use std::time::{Duration, SystemTime};
@@ -1329,6 +1760,97 @@ mod hook_tests {
         let epoch = s.gate.publish(true).unwrap();
         s.gate.0.deadline.store(u64::MAX, Ordering::Release);
         epoch
+    }
+    #[test]
+    fn pending_commit_aba_never_suppresses_a_local_down_or_its_matching_up() {
+        let (mut state, mut events) = state(8);
+        let gate = state.gate.clone();
+        let Some(CaptureRoute::Local(local)) = gate.route() else {
+            panic!("expected local route");
+        };
+        let token = gate.prepare_commit(local).unwrap();
+        let word = gate.0.control.load(Ordering::Acquire);
+        assert_eq!(
+            gate.commit_from_word(token, 1000, 100, word, || {
+                for down in [true, false] {
+                    let callback = gate.begin_event();
+                    assert_eq!(callback.route, CaptureRoute::Local(local));
+                    assert!(!state.key_routed(4, down, callback.route));
+                }
+            }),
+            CaptureCommit::Cancelled
+        );
+        for down in [true, false] {
+            let callback = gate.begin_event();
+            assert_eq!(callback.route, CaptureRoute::Local(local));
+            assert!(!state.key_routed(5, down, callback.route));
+        }
+        for (usage, down) in [(4, true), (4, false), (5, true), (5, false)] {
+            let Captured::Input { event, route } = events.try_recv().unwrap() else {
+                panic!("expected the original physical pair");
+            };
+            assert!(event == Input::Key { usage, down });
+            assert_eq!(route, CaptureRoute::Local(local));
+        }
+        assert_eq!(state.pairs.debt, 0);
+    }
+    #[test]
+    fn committed_source_retains_a_remote_pair_arriving_before_session_readback() {
+        let (mut state, mut events) = state(8);
+        let gate = state.gate.clone();
+        let Some(CaptureRoute::Local(local)) = gate.route() else {
+            panic!("expected local route");
+        };
+        let token = gate.prepare_commit(local).unwrap();
+        let CaptureCommit::Committed(epoch) = gate.commit_from(token, 1000, 100) else {
+            panic!("idle commit must succeed");
+        };
+        gate.0.deadline.store(u64::MAX, Ordering::Release);
+        for down in [true, false] {
+            let callback = gate.begin_event();
+            assert_eq!(callback.route, CaptureRoute::Remote(epoch));
+            assert!(state.key_routed(4, down, callback.route));
+            assert!(gate.source_commit_current(epoch));
+        }
+        for down in [true, false] {
+            let Captured::Input { event, route } = events.try_recv().unwrap() else {
+                panic!("expected retained remote pair");
+            };
+            assert!(event == Input::Key { usage: 4, down });
+            assert_eq!(route, CaptureRoute::Remote(epoch));
+        }
+        assert_eq!(state.pairs.debt, 0);
+    }
+    #[test]
+    fn commit_paused_past_deadline_passes_the_first_physical_down_and_up_locally() {
+        let (mut state, mut events) = state(8);
+        let gate = state.gate.clone();
+        let Some(CaptureRoute::Local(local)) = gate.route() else {
+            panic!("expected local route");
+        };
+        let token = gate.prepare_commit(local).unwrap();
+        let word = gate.0.control.load(Ordering::Acquire);
+        let clock = std::cell::Cell::new(900);
+        let CaptureCommit::Committed(epoch) =
+            gate.commit_from_word(token, 1000, clock.get(), word, || clock.set(1001))
+        else {
+            panic!("controlled CAS window must complete before caller readback");
+        };
+        for down in [true, false] {
+            let callback = gate.begin_event_with_clock(|| clock.get());
+            assert!(matches!(callback.route, CaptureRoute::Local(_)));
+            assert_ne!(callback.route, CaptureRoute::Remote(epoch));
+            assert!(!state.key_routed(4, down, callback.route));
+        }
+        for down in [true, false] {
+            let Captured::Input { event, route } = events.try_recv().unwrap() else {
+                panic!("expected local physical pair");
+            };
+            assert!(event == Input::Key { usage: 4, down });
+            assert!(matches!(route, CaptureRoute::Local(_)));
+            assert_ne!(route, CaptureRoute::Remote(epoch));
+        }
+        assert_eq!(state.pairs.debt, 0);
     }
     #[test]
     fn receiving_consumes_fixed_pairs_without_queueing_and_keeps_ups_after_mode_retirement() {
@@ -1939,8 +2461,8 @@ mod fresh_escape_tests {
     impl Rig {
         fn new() -> Self {
             let (tx, events) = mpsc::channel(16);
-            let (driver, engine) = channel(8, Arc::new(|| {})).unwrap();
             let gate = CaptureGate::default();
+            let (driver, engine) = channel(8, Arc::new(|| {}), Some(&gate)).unwrap();
             assert!(gate.0.receive.set(driver.control()).is_ok());
             Self {
                 state: HookState {

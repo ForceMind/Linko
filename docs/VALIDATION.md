@@ -2014,3 +2014,14 @@ Python打包7项单元/mock验证通过，覆盖新入口、旧包共存不覆�
 首轮5a598f7完整CI 42441898480在三平台fmt失败（6处runner格式差异），Linux截图上传因上游未运行亦无产物；不将其写成通过。按runner输出修正换行，未修改行为、断言或检查门。同步候选README/快速开始到0.3.17-dev，既有公开0.3.16及其官网入口不覆盖。两名代理交叉静态复核GUI管道与Closed退役逻辑，无阻塞发现；这是静态复核，不是独立安全审计。
 
 638e58e三平台通过fmt/严格Clippy/build，最低1.95及审计通过；工作区回归在新增Closed负例准备阶段失败（Received Submitted，错误预期Retired）。既有契约明确Release回执Submitted只表示请求接受，pump后的snapshot/outcome才确认退役；据此修正准备断言为Submitted，并新增独立epoch Retired及owner Retired断言，再构造未知/新owner负例。没有改生产Release语义或放宽最终Closed拒绝断言。Win/Mac新增startup-held回归已在该轮实际通过，整体候选仍需新CI。
+
+
+## 0.3.19-dev 切换提交竞态候选（尚未验收）
+
+来自冻结979的真实短测：Native认证通道已建立，用户物理右边缘与切换快捷键均未成功，实际GUI显示TimedOut；正常停止/Local及worker退出已观察。没有上传真实键值/坐标/桌面/私有身份报告。不能据此断言Win没有回执：源码在匹配Granted后，本机一次begin_routed失败就发Release，但仍留pending到超时，存在与现象相容的竞态。
+
+当前独立修复以原1000ms预算/原归属和活动范围为约束，仅瞬时回调/CAS竞争重试，取消即撤销并Release，拒绝迟到Grant。静态交叉复核发现提交ACTIVE后检查revision及Stop顶检到提交之间的窗口，正在修正；未把该中间实现写为已通过。新增确定性模型回归待CI。本机Rust预检缺失，未安装。最终候选须完整五项/进程/平台/资源检查以及实机重跑。
+
+交叉复核后的实现：原子control内分开21位route epoch、20位请求代次和ARMED，保留COUNT/原安全flag；Local持键同CAS取消请求，Down/Up完成也不能复活旧票据，Remote合法按键对不误取消。Stop沿现有ReceiveControl同步关闭同一原子入场门后再发布stop=true，构造时仅共享原子word，无引用环/新锁。初始watchdog不超过原request deadline；延迟CAS后首callback按实时截止退回Local，成功freshness读回后才由既有路径续期。无新hook、协议、依赖或授权。
+
+新增确定性回归覆盖瞬时忙后提交、原预算/次数、旧/迟Grant、持键ABA、Stop在Native尚未观察时到达、原子代次溢出、跨deadline首Down/Up透传和合法Remote按键对。之前三个静态窗口及Linux测试导出已逐项复查关闭；这是窄范围静态复核，不是独立安全审计或物理验收。Rust执行仍待当前源码精确CI。

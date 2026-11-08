@@ -1,6 +1,8 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
-use peerglide_platform::{self as platform, now_ms, CaptureEpoch, CaptureRoute, Captured};
+use peerglide_platform::{
+    self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute, Captured,
+};
 use peerglide_protocol::{
     decode, encode, worker::WorkerInputState, Edge, Input, InputCapabilities, Message, Motion,
 };
@@ -296,6 +298,106 @@ struct Outgoing {
     lease: u64,
     epoch: CaptureEpoch,
 }
+const ACQUIRE_TIMEOUT_MS: u64 = 1000;
+const COMMIT_RETRY_MS: u64 = 10;
+const MAX_COMMIT_ATTEMPTS: u16 = 100;
+#[derive(Clone, Copy)]
+struct CommitRetry {
+    next: u64,
+    attempts: u16,
+}
+#[derive(Clone, Copy)]
+struct PendingAcquire {
+    lease: u64,
+    token: CaptureCommitToken,
+    deadline: u64,
+    commit: Option<CommitRetry>,
+}
+impl PendingAcquire {
+    fn new(lease: u64, token: CaptureCommitToken, now: u64) -> Self {
+        Self {
+            lease,
+            token,
+            deadline: now.saturating_add(ACQUIRE_TIMEOUT_MS),
+            commit: None,
+        }
+    }
+    fn grant(&mut self, lease: u64, now: u64) -> bool {
+        if self.lease != lease || now >= self.deadline {
+            return false;
+        }
+        // Replayed Grants cannot extend either the budget or the next attempt.
+        self.commit.get_or_insert(CommitRetry {
+            next: now,
+            attempts: 0,
+        });
+        true
+    }
+    fn wake_at(self) -> u64 {
+        self.commit
+            .map_or(self.deadline, |retry| retry.next.min(self.deadline))
+    }
+}
+#[derive(Debug, PartialEq, Eq)]
+enum PendingStep {
+    Waiting,
+    Committed { lease: u64, epoch: CaptureEpoch },
+    Cancelled { lease: u64, timed_out: bool },
+}
+/// Pure clock/context transitions; the only effect is the injected atomic commit.
+fn advance_pending(
+    pending: &mut Option<PendingAcquire>,
+    now: u64,
+    context_current: bool,
+    mut commit: impl FnMut(CaptureCommitToken, u64) -> Result<CaptureCommit>,
+) -> Result<PendingStep> {
+    let Some(request) = pending.as_mut() else {
+        return Ok(PendingStep::Waiting);
+    };
+    if !context_current || now >= request.deadline {
+        let request = pending.take().unwrap();
+        return Ok(PendingStep::Cancelled {
+            lease: request.lease,
+            timed_out: context_current && now >= request.deadline,
+        });
+    }
+    let Some(retry) = request.commit.as_mut() else {
+        return Ok(PendingStep::Waiting);
+    };
+    if now < retry.next {
+        return Ok(PendingStep::Waiting);
+    }
+    retry.attempts += 1;
+    match commit(request.token, request.deadline)? {
+        CaptureCommit::Committed(epoch) => {
+            let lease = request.lease;
+            *pending = None;
+            Ok(PendingStep::Committed { lease, epoch })
+        }
+        CaptureCommit::Retry => {
+            retry.next = if retry.attempts < MAX_COMMIT_ATTEMPTS {
+                now.saturating_add(COMMIT_RETRY_MS)
+            } else {
+                request.deadline
+            };
+            Ok(PendingStep::Waiting)
+        }
+        CaptureCommit::Cancelled => {
+            let lease = request.lease;
+            *pending = None;
+            Ok(PendingStep::Cancelled {
+                lease,
+                timed_out: false,
+            })
+        }
+    }
+}
+async fn pending_wake(at: Option<u64>) {
+    match at {
+        Some(at) => tokio::time::sleep(Duration::from_millis(at.saturating_sub(now_ms()))).await,
+        None => std::future::pending::<()>().await,
+    }
+}
 /// State is emitted by this async session only. Routing is not OS/application
 /// completion, and a failed cleanup remains unconfirmed even if Drop retries it.
 struct InputStatus<'a> {
@@ -490,7 +592,7 @@ pub(super) async fn run_with_status(
         driver,
         receive_epoch: None,
     };
-    let mut pending: Option<(u64, u64)> = None;
+    let mut pending: Option<PendingAcquire> = None;
     let mut outgoing: Option<Outgoing> = None;
     let mut next_lease = 0u64;
     let mut sequence = 0u64;
@@ -504,6 +606,13 @@ pub(super) async fn run_with_status(
     if let Some(error)=driver_error{return Err(error);}
     anyhow::ensure!(!native||recovery.driver.is_some(),"native receive service unavailable");
     loop {
+        // A timer only wakes this loop. Stop/closed ownership is checked before
+        // every attempt, so an old Granted cannot activate after cancellation.
+        if *stop.borrow() || stop.has_changed().is_err() {return Ok(());}
+        if let Some(closed)=c.close_reason() {
+            return if invalid_frame.load(std::sync::atomic::Ordering::Acquire) {Err(transport::InvalidMessageFrame.into())} else {connection_end(closed)};
+        }
+        if messages.is_closed() && messages.is_empty(){return Ok(());}
         // Queue pressure or an emergency can retire a capture fence without a
         // queued takeover record. Do not keep renewing its old receive lease.
         if native && recovery.outcome()==ReceiveAck::RecoveryRequired {
@@ -516,15 +625,39 @@ pub(super) async fn run_with_status(
         }
         if recovery.snapshot()==ReceiveSnapshot::Draining || (native && recovery.receiver.active().is_none() && recovery.outcome()==ReceiveAck::Submitted) {input_status.recovering();}
         else{input_status.routing(outgoing.is_some(), recovery.receiver.active().is_some());}
+        let current=pending.is_none_or(|request|capture.as_ref().is_some_and(|cap|cap.gate.commit_pending(request.token)) && !recovery.protection_pending());
+        let now=now_ms();
+        // Process already-received reliable Release/Denied/stream errors before
+        // retrying. Keep the other select branches fair; only retries yield.
+        let network_ready=!messages.is_empty();
+        let defer_commit=network_ready && current && pending.is_some_and(|request|now<request.deadline);
+        let step=if defer_commit {PendingStep::Waiting}else{advance_pending(&mut pending,now,current,|token,deadline| {
+            let cap=capture.as_ref().ok_or_else(||anyhow::anyhow!("native capture unavailable during acquire"))?;
+            input_status.checked(cap.begin_routed_from(token,deadline,local_return.0,local_return.1))
+        })?};
+        match step {
+            PendingStep::Waiting=>{},
+            PendingStep::Committed{lease,epoch}=>{
+                input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now_ms();
+                if let Some(cap)=&capture{cap.gate.refresh();}
+                continue;
+            },
+            PendingStep::Cancelled{lease,timed_out}=>{
+                edge_gate.require_interior();input_status.reporter.switch(if timed_out {super::WorkerSwitchState::TimedOut}else{super::WorkerSwitchState::Idle});
+                send(&mut tx,&Message::Release{lease,cursor:None}).await?;
+                continue;
+            },
+        }
+        let acquire_wake=pending.map(PendingAcquire::wake_at);
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
             closed=c.closed()=>return if invalid_frame.load(std::sync::atomic::Ordering::Acquire) {
                 Err(transport::InvalidMessageFrame.into())
             } else { connection_end(closed) },
+            _=pending_wake(acquire_wake),if !network_ready=>{},
             _=tick.tick()=>{
                 let now=now_ms();
                 if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
-                if pending.is_some_and(|(_,start)|now.saturating_sub(start)>1000){pending=None;input_status.reporter.switch(super::WorkerSwitchState::TimedOut);}
                 if let Some(Outgoing {lease,..})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
                         input_status.restore(capture.as_ref())?;
@@ -562,11 +695,14 @@ pub(super) async fn run_with_status(
                         }else{send(&mut tx,&Message::Denied{lease}).await?;}
                     },
                     Message::Granted{lease}=>{
-                        let activated=if pending.is_some_and(|(id,_)|id==lease) {if let Some(cap)=&capture{input_status.checked(cap.begin_routed(local_return.0,local_return.1))?}else{None}}else{None};
-                        if let Some(epoch)=activated{input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();pending=None;outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}
-                        else{send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        if !pending.as_mut().is_some_and(|request|request.grant(lease,now)) {
+                            if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::TimedOut);}
+                            // A duplicate Grant for the already active lease is
+                            // inert; a late/foreign Grant is explicitly released.
+                            if !outgoing.is_some_and(|current|current.lease==lease){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        }
                     },
-                    Message::Denied{lease}=>{if pending.is_some_and(|(id,_)|id==lease){pending=None;input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
+                    Message::Denied{lease}=>{if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
                     Message::Input{lease,event,cursor}=>{
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
                         let result=recovery.input(lease,event,cursor,now).await;
@@ -574,6 +710,7 @@ pub(super) async fn run_with_status(
                         input_status.checked(result)?;
                     },
                     Message::Release { lease, cursor }=>{
+                        if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);}
                         if recovery.receiver.active()==Some(lease){input_status.recovering();}
                         input_status.checked(recovery.finish(lease,cursor,now).await)?;
                         if outgoing.is_some_and(|current|current.lease==lease){outgoing=None;input_status.restore(capture.as_ref())?;}
@@ -611,7 +748,8 @@ pub(super) async fn run_with_status(
                         edge_gate.require_interior();
                         if matches!(e,Captured::UnsupportedInput) {eprintln!("Unsupported input capability: stopping control; input was not forwarded.");}
                         input_status.restore(capture.as_ref())?;
-                        pending=None;input_status.reporter.switch(super::WorkerSwitchState::Idle); if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        if let Some(request)=pending.take(){send(&mut tx,&Message::Release { lease:request.lease, cursor: None }).await?;}
+                        input_status.reporter.switch(super::WorkerSwitchState::Idle); if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                         if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery).await?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
                     Captured::Position{x,y,width,height,route}=>{
@@ -620,14 +758,20 @@ pub(super) async fn run_with_status(
                         let nx=(x/(size.0-1.0).max(1.0)).clamp(0.0,1.0);let ny=(y/(size.1-1.0).max(1.0)).clamp(0.0,1.0);
                         let cross=edge_gate.update(distance(edge,nx,ny)<=0.001,now_ms());
                         if cross && peer.motion() && capture.as_ref().is_some_and(|cap|cap.gate.idle()) && outgoing.is_none() && pending.is_none() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
+                            let CaptureRoute::Local(epoch)=route else{continue;};
+                            let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let along=match edge{Edge::Left|Edge::Right=>ny,_=>nx};position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
-                            pending=Some((next_lease,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
+                            pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
                         }
                     },
                     Captured::Toggle{route}=>{
                         if let Some(Outgoing{lease,..})=outgoing.take(){input_status.restore(capture.as_ref())?;send(&mut tx,&Message::Release { lease, cursor: Some(Motion {lease,sequence,x:position.0,y:position.1}) }).await?;}
-                        else if matches!(route,CaptureRoute::Local(_)) && peer.motion() && pending.is_none() && recovery.receiver.active().is_none() && !recovery.protection_pending(){next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some((next_lease,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;}
+                        else if let Some(request)=pending.take(){edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Release{lease:request.lease,cursor:None}).await?;}
+                        else if let CaptureRoute::Local(epoch)=route {if peer.motion() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
+                            let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
+                            next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
+                        }}
                     },
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
@@ -659,6 +803,7 @@ pub(super) async fn run_with_status(
     input_status.recovering();
     let receiving = recovery.receiver.active();
     let sending = outgoing.take().map(|current| current.lease);
+    let acquiring = pending.take().map(|request| request.lease);
     let cleanup = input_status.checked(recovery.release().await);
     let stop_started = std::time::Instant::now();
     let first_shutdown = capture.as_mut().map(|capture| {
@@ -668,7 +813,7 @@ pub(super) async fn run_with_status(
     // Notify a still-connected source/receiver after stopping local routing. A
     // queued Release is not an acknowledgement of the peer's native effects.
     let mut notification = Ok(());
-    for lease in [receiving, sending].into_iter().flatten() {
+    for lease in [receiving, sending, acquiring].into_iter().flatten() {
         if let Err(error) = send(
             &mut tx,
             &Message::Release {
@@ -775,6 +920,169 @@ fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
 mod tests {
     use super::*;
     use transport::Identity;
+
+    fn pending_request(lease: u64, started: u64) -> (PendingAcquire, CaptureEpoch) {
+        let gate = platform::CaptureGate::default();
+        let Some(CaptureRoute::Local(epoch)) = gate.route() else {
+            panic!("expected local capture");
+        };
+        let token = gate.prepare_commit(epoch).unwrap();
+        (PendingAcquire::new(lease, token, started), epoch)
+    }
+    #[test]
+    fn granted_callback_retry_commits_once_with_the_original_request_and_budget() -> Result<()> {
+        let (mut request, epoch) = pending_request(7, 100);
+        let token = request.token;
+        assert!(request.grant(7, 200));
+        let mut pending = Some(request);
+        let mut calls = 0;
+        assert_eq!(
+            advance_pending(&mut pending, 200, true, |observed, deadline| {
+                calls += 1;
+                assert_eq!(observed, token);
+                assert_eq!(deadline, 1100);
+                Ok(CaptureCommit::Retry)
+            })?,
+            PendingStep::Waiting
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(pending.unwrap().wake_at(), 210);
+        assert_eq!(
+            advance_pending(&mut pending, 209, true, |_, _| panic!("retry cannot spin"))?,
+            PendingStep::Waiting
+        );
+        assert!(pending.as_mut().unwrap().grant(7, 209));
+        assert_eq!(
+            pending.unwrap().wake_at(),
+            210,
+            "duplicate Grant cannot accelerate attempts"
+        );
+        assert_eq!(
+            advance_pending(&mut pending, 210, true, |observed, deadline| {
+                calls += 1;
+                assert_eq!(observed, token);
+                assert_eq!(deadline, 1100);
+                Ok(CaptureCommit::Committed(epoch))
+            })?,
+            PendingStep::Committed { lease: 7, epoch }
+        );
+        assert_eq!(calls, 2);
+        assert!(pending.is_none());
+        assert_eq!(
+            advance_pending(&mut pending, 220, true, |_, _| {
+                panic!("committed request was removed")
+            })?,
+            PendingStep::Waiting
+        );
+        Ok(())
+    }
+    #[test]
+    fn cancelled_retry_is_removed_and_cannot_wait_for_a_later_release_of_held_input() -> Result<()>
+    {
+        let (mut request, _) = pending_request(9, 100);
+        assert!(request.grant(9, 200));
+        let mut pending = Some(request);
+        assert_eq!(
+            advance_pending(&mut pending, 200, true, |_, _| Ok(CaptureCommit::Retry))?,
+            PendingStep::Waiting
+        );
+        assert_eq!(
+            advance_pending(&mut pending, 210, true, |_, _| Ok(CaptureCommit::Cancelled))?,
+            PendingStep::Cancelled {
+                lease: 9,
+                timed_out: false
+            }
+        );
+        assert!(pending.is_none());
+        assert_eq!(
+            advance_pending(&mut pending, 400, true, |_, _| {
+                panic!("released old grant cannot revive")
+            })?,
+            PendingStep::Waiting
+        );
+        Ok(())
+    }
+    #[test]
+    fn late_grant_and_retry_at_the_original_deadline_never_activate() -> Result<()> {
+        let (mut request, _) = pending_request(11, 100);
+        assert!(!request.grant(11, 1100));
+        assert!(request.commit.is_none());
+        assert!(request.grant(11, 1095));
+        let mut pending = Some(request);
+        assert_eq!(
+            advance_pending(&mut pending, 1095, true, |_, deadline| {
+                assert_eq!(deadline, 1100);
+                Ok(CaptureCommit::Retry)
+            })?,
+            PendingStep::Waiting
+        );
+        assert_eq!(pending.unwrap().wake_at(), 1100);
+        assert_eq!(
+            advance_pending(&mut pending, 1100, true, |_, _| panic!("late commit"))?,
+            PendingStep::Cancelled {
+                lease: 11,
+                timed_out: true
+            }
+        );
+        assert!(pending.is_none());
+        Ok(())
+    }
+    #[test]
+    fn lost_context_or_foreign_grant_cannot_commit_or_rebind_a_pending_request() -> Result<()> {
+        let (mut request, _) = pending_request(13, 100);
+        assert!(!request.grant(12, 200));
+        assert!(request.commit.is_none());
+        assert!(request.grant(13, 200));
+        let mut pending = Some(request);
+        // The production caller checks Stop/closed before this transition, then
+        // capture epoch/request admission and receiver protection for `current`.
+        assert_eq!(
+            advance_pending(&mut pending, 200, false, |_, _| panic!("invalid context"))?,
+            PendingStep::Cancelled {
+                lease: 13,
+                timed_out: false
+            }
+        );
+        let (replacement, _) = pending_request(14, 300);
+        pending = Some(replacement);
+        assert!(!pending.as_mut().unwrap().grant(13, 301));
+        assert!(pending.unwrap().commit.is_none());
+        assert_eq!(pending.unwrap().deadline, 1300);
+        Ok(())
+    }
+    #[test]
+    fn commit_retry_attempts_are_bounded_without_sleeping_or_refreshing_deadline() -> Result<()> {
+        let (mut request, _) = pending_request(15, 0);
+        assert!(request.grant(15, 0));
+        let mut pending = Some(request);
+        let mut calls = 0;
+        for attempt in 0..MAX_COMMIT_ATTEMPTS {
+            let step = advance_pending(
+                &mut pending,
+                u64::from(attempt) * COMMIT_RETRY_MS,
+                true,
+                |_, deadline| {
+                    calls += 1;
+                    assert_eq!(deadline, 1000);
+                    Ok(CaptureCommit::Retry)
+                },
+            )?;
+            assert_eq!(step, PendingStep::Waiting);
+        }
+        assert_eq!(calls, MAX_COMMIT_ATTEMPTS);
+        assert_eq!(pending.unwrap().wake_at(), 1000);
+        assert_eq!(
+            advance_pending(&mut pending, 1000, true, |_, _| {
+                panic!("attempt budget is exhausted")
+            })?,
+            PendingStep::Cancelled {
+                lease: 15,
+                timed_out: true
+            }
+        );
+        assert!(pending.is_none());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn clean_stream_fin_and_truncated_frame_take_distinct_session_cleanup_paths() -> Result<()>

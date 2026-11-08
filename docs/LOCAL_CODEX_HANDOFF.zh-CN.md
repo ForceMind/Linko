@@ -1460,3 +1460,14 @@ Linux实际GUI继续生成设置/添加弹窗截图，仅读取后才可声明�
 用户确认优先Win+Mac各一个主显示器，逐批提交推送，实机操作再集中提示。kvm-stability从70b1da1受测预览继续；main当前5ec6c15仅合入文档，PR75受测树与合并树一致；公开0.3.16-dev和官网0.1.1已无认证下载/摘要验证，发布接线PR74保留。
 
 本批0.3.17-dev候选先收敛GUI输出读入内存上限，再修复原生startup-held鼠标采样入场。复用两名既有代理，只承担平台与desktop会话的窄范围检查，不扩G1/数据/多屏。现用App、配对、身份、TCC不动，v5/MIT不变。本机preflight-20261108T030113156043Z-48319缺Rust/Cargo，按用户决定不安装，Rust回归须精确提交CI。当前源码回归未运行；不要称为已复现实机或已定位6.83GB。最终检查和C06状态见VALIDATION及PR。
+
+
+## 64. 实机连接成功但切换超时后的提交竞态修复（2026-11-08）
+
+冻结979/0.3.17实际GUI worker两项Granted、SecureInputInactive；用户本人启动后，Mac→Windows Native认证连接成功、Local，但物理右边缘及Control+Option+Right均未进入，GUI读回TimedOut。正常停止后GUI已断开/Local且无恢复警告，对应worker已退出。C06保持失败；不得用CI或一次握手关闭Issue3。宿主配对、TCC和17包不换。
+
+独立worktree/分支kvm-acquire-commit-retry从979出发，版本候选0.3.19-dev，UI18独立进行。源码明确Granted后begin_routed一次失败会Release却保留pending，随后混报TimedOut；这是需修复竞态，不是已证实的实机根因。当前实现保留原1000ms预算，瞬时回调/CAS竞争有界重试，held/归属/权限/停止变化取消，迟到Grant不激活。交叉静态复核指出ACTIVE后检查独立活动版本和循环顶Stop后提交的两个窗口，必须修正后才能交付，不能以最终撤销掩盖短暂抑制。
+
+仅必要平台/session文件由复用代理修改，root负责版本/记录/CI/提交；不引入第二钩子、协议变化、任意远程命令或生产测试token。本机preflight-20261108T082135352119Z-47462仍缺Cargo/Rust，fmt未启动，后续not_run，按用户决定不安装。新回归/精确CI和物理重跑都未完成。
+
+64节源码收敛：仅session.rs/lib.rs/receive_driver.rs必要改动，request代次/ARMED/COUNT同原子word，route epoch独立且不改变已放行/抑制pair归属；Stop在原ReceiveControl先同步关同word门后发布stop，初始watchdog不超过原期限。静态复查的ACTIVE后revision、Stop到提交和跨deadline首callback窗口均已补生产路径回归并复查关闭，无新增明确阻塞，可进CI；本机没有执行Rust。只在原1000ms预算内对瞬时callback/CAS忙按需10ms、至多100次，不等待held释放、不刷新旧票据。宿主17继续停用且冻结，最终候选仍需精确CI和用户物理重跑。

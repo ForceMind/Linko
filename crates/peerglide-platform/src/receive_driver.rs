@@ -95,11 +95,12 @@ mod implementation {
         recovery: AtomicU64,
         force: AtomicU64,
         cancelled_through: AtomicU64,
+        capture_admission: Option<Arc<AtomicU64>>,
         stop: AtomicBool,
         required: AtomicBool,
     }
     impl Shared {
-        fn new() -> Self {
+        fn new(capture_admission: Option<Arc<AtomicU64>>) -> Self {
             Self {
                 phase: AtomicU8::new(IDLE),
                 instance: AtomicU64::new(0),
@@ -109,6 +110,7 @@ mod implementation {
                 recovery: AtomicU64::new(0),
                 force: AtomicU64::new(0),
                 cancelled_through: AtomicU64::new(0),
+                capture_admission,
                 stop: AtomicBool::new(false),
                 required: AtomicBool::new(false),
             }
@@ -182,6 +184,12 @@ mod implementation {
             }
         }
         pub fn request_stop(&self) {
+            // This is the same atomic word used by source commit. Close it
+            // before publishing stop=true; no Native-loop poll is required.
+            // Holding only the word avoids a CaptureGate/ReceiveControl cycle.
+            if let Some(admission) = &self.shared.capture_admission {
+                admission.fetch_or(crate::ADMISSIONS_CLOSED, Ordering::AcqRel);
+            }
             self.shared.stop.store(true, Ordering::Release);
         }
         pub fn stop_requested(&self) -> bool {
@@ -571,13 +579,14 @@ mod implementation {
     pub(crate) fn channel(
         capacity: usize,
         wake: Wake,
+        capture: Option<&crate::CaptureGate>,
     ) -> Result<(ReceiveDriver, ReceiveEngine), ReceiveError> {
         if !(1..=128).contains(&capacity) {
             return Err(ReceiveError::Invalid);
         }
         let (sender, inbox) = mpsc::sync_channel(capacity);
         let control = ReceiveControl {
-            shared: Arc::new(Shared::new()),
+            shared: Arc::new(Shared::new(capture.map(|gate| gate.0.control.clone()))),
             wake,
         };
         Ok((
@@ -1181,6 +1190,7 @@ mod implementation {
                 Arc::new(move || {
                     count.fetch_add(1, Ordering::Relaxed);
                 }),
+                None,
             )
             .unwrap();
             (driver, engine, Fake::new(), wakes)
@@ -2265,6 +2275,8 @@ mod implementation {
 
 #[cfg(any(windows, target_os = "macos"))]
 pub(crate) use implementation::{channel, ReceiveBackend, ReceiveEngine};
+#[cfg(all(test, not(any(windows, target_os = "macos"))))]
+pub(crate) use implementation::channel;
 #[cfg(any(windows, target_os = "macos", test))]
 pub use implementation::{ReceiveControl, ReceiveDriver};
 
