@@ -7,8 +7,7 @@ const PNG: &[u8] = include_bytes!("../assets/brand/app-icon-macos-256.png");
 const PNG: &[u8] = include_bytes!("../assets/brand/app-icon-256.png");
 
 pub(super) fn icon() -> IconData {
-    eframe::icon_data::from_png_bytes(PNG)
-        .expect("bundled Linko window icon must decode")
+    eframe::icon_data::from_png_bytes(PNG).expect("bundled Linko window icon must decode")
 }
 
 #[cfg(test)]
