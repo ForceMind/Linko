@@ -29,7 +29,7 @@
       const url = new URL(value);
       const path = /^\/ForceMind\/Linko\/actions\/runs\/\d+(?:\/artifacts\/\d+)?\/?$/;
       return url.protocol === "https:" && url.hostname === "github.com" &&
-        !url.port && !url.username && !url.password && !url.search && !url.hash && path.test(url.pathname)
+        !url.port && !url.username && !url.password && !url.search && !url.hash && (path.test(url.pathname) || /^\/ForceMind\/Linko\/releases\/download\/v\d+\.\d+\.\d+-dev\/Linko-\d+\.\d+\.\d+-dev-(?:darwin-arm64|windows-amd64)\.zip$/.test(url.pathname))
         ? url.href : null;
     } catch {
       return null;
