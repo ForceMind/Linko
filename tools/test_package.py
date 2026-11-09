@@ -93,6 +93,52 @@ def fixture(root):
 
 class Packaging(unittest.TestCase):
 
+    def test_windows_signing_verifies_both_staged_exes_before_creating_zip(self):
+        for reject_worker in (False, True):
+            with self.subTest(reject_worker=reject_worker), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                fixture(root)
+                fake = FakeCodesign()
+                signed = []
+                verified = []
+
+                def run(command, **options):
+                    if command[0] != "signtool.exe":
+                        return fake(command, **options)
+                    path = Path(command[-1])
+                    self.assertNotEqual(path.parent, root / "target/release")
+                    self.assertTrue(options["check"])
+                    if command[1] == "sign":
+                        self.assertIn("/tr", command)
+                        path.write_bytes(path.read_bytes() + b"-fake-signed")
+                        signed.append(path.name)
+                    else:
+                        self.assertEqual(command[1:-1], ["verify", "/pa", "/all", "/tw"])
+                        if reject_worker and path.name == "peerglide.exe":
+                            raise subprocess.CalledProcessError(2, command)
+                        verified.append(path.name)
+                    return subprocess.CompletedProcess(command, 0)
+
+                signing = package.WindowsSigning("a" * 40, "https://timestamp.example.test")
+                if reject_worker:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        package.build_package(root, "Windows", "AMD64", run, windows_signing=signing)
+                    self.assertEqual(list((root / "dist").iterdir()), [])
+                else:
+                    archive = package.build_package(
+                        root, "Windows", "AMD64", run, windows_signing=signing
+                    )
+                    self.assertEqual(verified, ["Linko.exe", "peerglide.exe"])
+                    with zipfile.ZipFile(archive) as zipped:
+                        for name in verified:
+                            self.assertTrue(
+                                zipped.read(f"{archive.stem}/{name}").endswith(b"-fake-signed")
+                            )
+                self.assertEqual(signed, ["Linko.exe", "peerglide.exe"])
+                for name in ("peerglide-gui.exe", "peerglide.exe"):
+                    self.assertEqual((root / "target/release" / name).read_bytes(),
+                                     b"fixture-" + name.encode())
+
     def test_macos_icon_has_transparent_optical_margin(self):
         root = Path(package.__file__).resolve().parent.parent
         brand = root / "apps/peerglide-gui/assets/brand"

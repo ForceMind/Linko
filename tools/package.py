@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build a local portable prototype; never publish, install or change permissions.
 
-macOS staging bundles get ad-hoc integrity signatures, not a Developer ID
-publisher identity or notarization. No signing credentials, custom requirements,
-private entitlements, OS protection changes or TCC edits are used.
+macOS staging bundles get ad-hoc integrity signatures. Windows staging can
+use an existing Authenticode certificate through the Windows certificate store.
 """
+import argparse
+from dataclasses import dataclass
 import hashlib
 import pathlib
 import platform
@@ -14,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import urlsplit
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -23,6 +25,27 @@ APP_DISPLAY_NAME = "Linko · 屏跃"
 APP_ICON_FILE = "Linko.icns"
 APP_IDENTIFIER = "com.peerglide.PeerGlide"
 WORKER_IDENTIFIER = APP_IDENTIFIER + ".worker"
+
+
+@dataclass(frozen=True)
+class WindowsSigning:
+    thumbprint: str
+    timestamp_url: str
+    signtool: str = "signtool.exe"
+
+    def validate(self):
+        if not re.fullmatch(r"[0-9a-fA-F]{40}", self.thumbprint):
+            raise ValueError("Windows certificate thumbprint must contain 40 hex digits")
+        url = urlsplit(self.timestamp_url)
+        if url.scheme != "https" or not url.hostname or url.username is not None or url.fragment:
+            raise ValueError("Windows signing requires an HTTPS RFC 3161 timestamp URL")
+
+    def sign_and_verify(self, directory, run):
+        for name in ("Linko.exe", "peerglide.exe"):
+            path = str(directory / name)
+            run([self.signtool, "sign", "/s", "My", "/sha1", self.thumbprint,
+                 "/fd", "SHA256", "/tr", self.timestamp_url, "/td", "SHA256", path], check=True)
+            run([self.signtool, "verify", "/pa", "/all", "/tw", path], check=True)
 
 
 def bundle_info(version):
@@ -96,7 +119,7 @@ def sign_macos_bundle(app, run):
     verify_macos_bundle_metadata(app, run)
 
 
-def _stage_bundle(root, bundle, system, version, run):
+def _stage_bundle(root, bundle, system, version, run, windows_signing):
     bundle.mkdir()
     binary_dir = bundle
     if system == "Darwin":
@@ -114,20 +137,25 @@ def _stage_bundle(root, bundle, system, version, run):
     # remain compatible with existing builds and current_exe().with_file_name().
     shutil.copy2(root / "target" / "release" / ("peerglide" + suffix), binary_dir)
     shutil.copy2(root / "target" / "release" / ("peerglide-gui" + suffix), binary_dir / gui_entry)
+    if windows_signing is not None:
+        windows_signing.sign_and_verify(binary_dir, run)
     for name in ("README.md", "LICENSE", "SECURITY.md"):
         shutil.copy2(root / name, bundle)
     shutil.copytree(root / "docs", bundle / "docs")
     run([sys.executable, str(root / "tools" / "third_party.py"), "--notices", str(bundle / "third-party")],
         cwd=root, check=True)
     signing = ("macOS bundle uses local ad-hoc integrity signatures only; no Developer ID publisher identity or notarization.\n"
-               if system == "Darwin" else "Windows/Linux archive has no authenticated publisher signature or notarization.\n")
+               if system == "Darwin" else
+               "Both Windows executables use timestamped Authenticode signatures verified during packaging.\n"
+               if windows_signing is not None else
+               "Windows/Linux archive has no authenticated publisher signature or notarization.\n")
     launch = ("Open Linko.app; keep its GUI and peerglide worker together inside Contents/MacOS.\n"
               if system == "Darwin" else
               "Launch Linko.exe; keep peerglide.exe in the same directory.\n"
               if system == "Windows" else
               "Launch ./linko; keep ./peerglide in the same directory. Linux supports GUI/communication diagnostics, not native input.\n")
     (bundle / "PROTOTYPE.txt").write_text(
-        "Linko experimental prototype with no authenticated publisher identity.\n"
+        "Linko experimental prototype.\n"
         + launch
         + "Existing configuration, device identities and protocol identifiers are not migrated or replaced by packaging.\n"
         "Physical Windows/macOS dual-machine acceptance remains pending.\n"
@@ -141,12 +169,16 @@ def _stage_bundle(root, bundle, system, version, run):
         sign_macos_bundle(bundle / APP_BUNDLE_NAME, run)
 
 
-def build_package(root=ROOT, system=None, machine=None, run=None):
+def build_package(root=ROOT, system=None, machine=None, run=None, *, windows_signing=None):
     """Assemble/sign new temporary staging, verify, then create a new archive."""
     root = pathlib.Path(root)
     system = system or platform.system()
     machine = machine or platform.machine()
     run = run or subprocess.run
+    if windows_signing is not None:
+        if system != "Windows":
+            raise ValueError("Authenticode signing requires a Windows packaging environment")
+        windows_signing.validate()
     match = re.search(r'(?m)^version = "([^"\n]+)"', (root / "Cargo.toml").read_text())
     if match is None:
         raise ValueError("workspace version is missing")
@@ -160,7 +192,7 @@ def build_package(root=ROOT, system=None, machine=None, run=None):
     dist.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="peerglide-package-") as temporary:
         bundle = pathlib.Path(temporary) / label
-        _stage_bundle(root, bundle, system, version, run)
+        _stage_bundle(root, bundle, system, version, run, windows_signing)
         archive_created = False
         checksum_created = False
         try:
@@ -187,7 +219,19 @@ def build_package(root=ROOT, system=None, machine=None, run=None):
 
 
 def main():
-    print(build_package())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--windows-signing-thumbprint")
+    parser.add_argument("--windows-timestamp-url")
+    parser.add_argument("--signtool", default="signtool.exe")
+    args = parser.parse_args()
+    if (args.windows_signing_thumbprint is None) != (args.windows_timestamp_url is None):
+        parser.error("provide both --windows-signing-thumbprint and --windows-timestamp-url")
+    signing = None
+    if args.windows_signing_thumbprint is not None:
+        signing = WindowsSigning(
+            args.windows_signing_thumbprint, args.windows_timestamp_url, args.signtool
+        )
+    print(build_package(windows_signing=signing))
     return 0
 
 
