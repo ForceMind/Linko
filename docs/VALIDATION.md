@@ -2276,3 +2276,14 @@ KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0
 旧App随后已正常退出，并确认旧路径没有本项目进程。剩余App文件逐个与新工作区副本核对，迁移说明等残留另行备份后，旧工作区目录已删除。只使用新工作区中的冻结0.3.23/f8cce5d包；不要重新创建旧目录或使用旧绝对路径。新路径实际worker的系统权限是否沿用尚未复查，不能把迁移前授权或验签通过当成新路径输入权限已确认，更不要先反复要求用户重配对/授权。当前没有本轮原生worker运行；Windows当前进程状态需另行核对。
 
 用户接下来会新开主执行对话，并让Claude独立诊断。主执行负责集成/最小修复/验证/提交推送；Claude默认只读审查，避免两方并发改同一文件。优先检查首个真实分歧：Mac事件/坐标与能力协商→队列/epoch→Acquire/Grant→本机提交→发送→Windows接收/租约/注入owner→实际光标。不要把CI、系统API返回值或已连接当作物理验收通过，不引入新全局钩子、任意远程命令或安全防护绕过。
+
+
+## 2026-11-09 新工作区接管：单向故障证据核验
+
+接管起点为干净的 `kvm-023-native-validation` / `0ad92c04940946de246b1d2521c4f5925fe109e8`；远端分支同 SHA，main 为 `921ea7075b0f14d7f697e2198b2bb709cf2d07c4`。PR95 仍开放，base 为 `preview-023-downloads`，没有退回 main 或合并堆栈。该精确 HEAD 的 [Rust CI 42607340092](https://github.com/ForceMind/Linko/actions/runs/42607340092) 已完成：三平台 fmt、严格 locked workspace Clippy、locked build/test/release、原有进程专项，以及最低 Rust1.95和依赖审计五项全过。运行源码仍冻结 f8cce5d，不以文档 HEAD 替换已冻结运行包。
+
+重新读取第二轮本地摘要，cap97/deq97/grant1/commit1/tx96及其限制与最新交接一致。源码核对：Hello 的 motion 是接收支持能力，不协商相对移动帧；Mac callback 读取事件字段4/5的相对位移，session 以本机主屏尺寸累加并限制为0..1的绝对坐标，v5 Motion 经 QUIC datagram 发送。Windows 接收先检查解码、lease、sequence，再由现有 Native owner 提交带 TAG 的绝对 SendInput；注入事件绕过物理接管路径。这些是代码事实，不证明实际坐标、Windows收包或系统响应正确。尚未定位本次物理故障的首个分歧，不修改输入行为。
+
+新路径冻结 Mac App 的 `codesign --verify --deep --strict` exit0。通过正常应用入口打开后，GUI显示0.3.23、原Windows登记和右侧布局、本机允许接收、尚未连接；只读进程核对仅该包GUI，没有原生worker。直接从工具宿主启动同包 `diagnose-context` exit0，报告AX/IM denied、SecureInput inactive、no_foreground；该启动上下文不同，不能作为GUI托管worker权限结论。实际GUI触发只读检查后最后可见状态仍为“正在检查”，未读到最终报告；没有重配对、变更TCC、开启Native或发送模拟跨屏输入。自动界面输入/截图的延迟或检查显示不推进不作为单向故障根因。
+
+已集中请求Windows系统版本/缩放、对端方向、当前会话状态和原KVM-DIAG/2摘要。收到后先比较对应窗口的Mac tx与Windows rx/decode/lease/replay/apply/sdk/光标观察；旧摘要缺失时再组织一次同步120秒内物理短测。Mac新路径权限仍需实际GUI托管检查最终结果。Windows端状态/采样窗口未知，根因与C06仍未确认。本机仍无Rust/Cargo且未安装；本批仅记录，自查diff，不新增浏览器测试、发布或机器配置变更。
