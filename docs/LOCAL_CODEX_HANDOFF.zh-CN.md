@@ -1670,3 +1670,10 @@ KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0
 已复核第二轮摘要和Mac位移→归一化绝对Motion→Windows lease/sequence→Native owner/带TAG SendInput链路，未找到可验证的本次物理首个分歧。新路径App严格seal通过；GUI正常打开，原登记/右侧布局/接收设置保留，未连接，进程只有GUI。工具宿主直接启动helper的AX/IM denied不能归因于GUI身份；GUI只读检查最后仍显示正在检查，权限最终结论待实际读回，未改系统授权。不要据此要求重新授权或推断原故障根因。
 
 已向用户集中索取Windows系统版本/显示缩放、对端方向、当前会话状态及上轮完整KVM-DIAG/2。尚无Windows接收摘要，不凭Mac tx96选择修复。若原Windows摘要丢失，先取得Mac托管权限最终结果，再用同一冻结包安排一次同步采样及物理动作，动作须落在120秒窗口内；停止采样不等于停止会话。完整证据范围见VALIDATION本日接管节。Claude仍按用户安排只读，尚未收到其结论。下一步保持单向故障主线，不扩UI/G1/数据。
+
+
+## 2026-11-10 主执行：KVM-DIAG/3 计数补丁（待 CI）
+
+从 `617158f` 起新建 `kvm-023-input-diagnostics-v3`，计划快进推送到 `kvm-023-native-validation` 更新 PR95。只加聚合计数，不改输入行为、协议或生命周期；详见 VALIDATION“KVM-DIAG/3”节。改动文件：`platform/input_diagnostics.rs`、`receive_driver.rs`、`lib.rs`、`windows.rs`、`desktop/session.rs`、`gui/main.rs`。本机缺 Rust，未编译；必须等精确提交 CI。
+
+下一步不变：用同一份新包两端同步 120 秒窗口物理短测，复制两端摘要。解读顺序写在 VALIDATION。旧 f8cce5d 冻结包仍是 `/2`，其摘要与新 GUI 不兼容；新候选需两端同包，权限需实际 GUI 托管 worker 复查，不要先要求重配对。Windows→Mac 滚轮失效是本轮用户新增现象：代码路径读不出缺陷，等 `wh_*`／`scr_*` 计数再定位。

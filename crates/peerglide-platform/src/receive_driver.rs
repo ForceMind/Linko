@@ -454,6 +454,21 @@ mod implementation {
         }
     }
 
+    /// The first check that retired a data command, for aggregate diagnostics only.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum GuardFailure {
+        /// Command deadline passed or the requester cancelled it.
+        Time,
+        /// The epoch is no longer Active (draining, retired or recovery).
+        State,
+        /// The input source health observation is stale or lost.
+        Source,
+        /// Another Receiving epoch (or none) now owns the capture gate.
+        Epoch,
+        /// A suppressed modifier domain is still held.
+        Modifiers,
+    }
+
     /// Implementations must submit only this receiving scope's typed effects.
     /// All methods are called on the Native loop OUTSIDE every STATE RefCell borrow.
     /// Query methods are atomic/fixed-state reads. An Ok effect is an SDK submission
@@ -477,6 +492,8 @@ mod implementation {
         fn now_ms(&self) -> u64 {
             now_ms()
         }
+        /// Aggregate-only hook; it must never block, log or touch input state.
+        fn note_guard_failure(&mut self, _failure: GuardFailure) {}
     }
 
     struct Ledger {
@@ -680,6 +697,36 @@ mod implementation {
                 self.retire();
             }
         }
+        /// Same short-circuit order as the original single expression.
+        fn guard_failure(
+            &self,
+            backend: &impl ReceiveBackend,
+            epoch: CaptureEpoch,
+            request: u64,
+            expires: u64,
+            now: u64,
+        ) -> Option<GuardFailure> {
+            if now >= expires
+                || self
+                    .control
+                    .shared
+                    .cancelled_through
+                    .load(Ordering::Acquire)
+                    >= request
+            {
+                Some(GuardFailure::Time)
+            } else if self.control.shared.snapshot(epoch) != ReceiveSnapshot::Active {
+                Some(GuardFailure::State)
+            } else if !backend.source_alive() {
+                Some(GuardFailure::Source)
+            } else if !backend.is_current(epoch) {
+                Some(GuardFailure::Epoch)
+            } else if backend.consumed_modifiers_held() {
+                Some(GuardFailure::Modifiers)
+            } else {
+                None
+            }
+        }
         fn data_guard(
             &self,
             backend: &impl ReceiveBackend,
@@ -688,17 +735,8 @@ mod implementation {
             expires: u64,
             now: u64,
         ) -> bool {
-            now < expires
-                && self
-                    .control
-                    .shared
-                    .cancelled_through
-                    .load(Ordering::Acquire)
-                    < request
-                && self.control.shared.snapshot(epoch) == ReceiveSnapshot::Active
-                && backend.source_alive()
-                && backend.is_current(epoch)
-                && !backend.consumed_modifiers_held()
+            self.guard_failure(backend, epoch, request, expires, now)
+                .is_none()
         }
         fn ack(&self, epoch: CaptureEpoch) -> ReceiveAck {
             match self.control.shared.snapshot(epoch) {
@@ -860,7 +898,8 @@ mod implementation {
             if !cursor.valid() || event.is_some_and(|event| !event.valid()) {
                 return Err(ReceiveError::Invalid);
             }
-            if !self.data_guard(backend, epoch, request, expires, now) {
+            if let Some(failure) = self.guard_failure(backend, epoch, request, expires, now) {
+                backend.note_guard_failure(failure);
                 self.retire_epoch(epoch);
                 return Err(ReceiveError::Stale);
             }
@@ -881,7 +920,9 @@ mod implementation {
                 return Err(ReceiveError::Native(error));
             }
             if let Some(event) = event {
-                if !self.data_guard(backend, epoch, request, expires, backend.now_ms().max(now)) {
+                let late = backend.now_ms().max(now);
+                if let Some(failure) = self.guard_failure(backend, epoch, request, expires, late) {
+                    backend.note_guard_failure(failure);
                     self.retire_epoch(epoch);
                     return Err(ReceiveError::Stale);
                 }
@@ -1064,6 +1105,7 @@ mod implementation {
             fail_up: bool,
             fail_key_up: Option<u16>,
             effects: Vec<Effect>,
+            guard_failures: Vec<GuardFailure>,
         }
         impl Fake {
             fn new() -> Self {
@@ -1084,6 +1126,7 @@ mod implementation {
                     fail_up: false,
                     fail_key_up: None,
                     effects: Vec::new(),
+                    guard_failures: Vec::new(),
                 }
             }
         }
@@ -1180,6 +1223,9 @@ mod implementation {
             }
             fn now_ms(&self) -> u64 {
                 self.clock
+            }
+            fn note_guard_failure(&mut self, failure: GuardFailure) {
+                self.guard_failures.push(failure);
             }
         }
         fn setup(capacity: usize) -> (ReceiveDriver, ReceiveEngine, Fake, Arc<AtomicUsize>) {
@@ -1282,6 +1328,25 @@ mod implementation {
                 Reply::Ack(ack) => ack,
                 _ => panic!("no cleanup reply"),
             }
+        }
+
+        #[test]
+        fn an_expired_data_command_reports_its_guard_reason_and_still_retires() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+            let (_, mut reply) = enqueue(
+                &mut driver,
+                Kind::Pointer {
+                    epoch,
+                    point: point(),
+                },
+                0,
+            );
+            pump(&mut engine, &mut backend, COMMAND_MS + 1);
+            assert!(matches!(reply.try_recv().unwrap(), Err(ReceiveError::Stale)));
+            assert_eq!(backend.guard_failures, vec![GuardFailure::Time]);
+            assert_ne!(driver.snapshot(epoch), ReceiveSnapshot::Active);
+            assert!(!backend.effects.contains(&Effect::Pointer));
         }
 
         #[tokio::test]
@@ -2276,7 +2341,7 @@ mod implementation {
 #[cfg(all(test, not(any(windows, target_os = "macos"))))]
 pub(crate) use implementation::channel;
 #[cfg(any(windows, target_os = "macos"))]
-pub(crate) use implementation::{channel, ReceiveBackend, ReceiveEngine};
+pub(crate) use implementation::{channel, GuardFailure, ReceiveBackend, ReceiveEngine};
 #[cfg(any(windows, target_os = "macos", test))]
 pub use implementation::{ReceiveControl, ReceiveDriver};
 

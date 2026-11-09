@@ -380,7 +380,7 @@ fn read_worker_output(
                 }
             }
         } else {
-            let _ = diagnostics.try_send(line.chars().take(600).collect());
+            let _ = diagnostics.try_send(bounded_diagnostic(&line));
         }
         wake();
     }
@@ -390,6 +390,12 @@ fn read_worker_output(
     wake();
 }
 
+/// Worker diagnostics are shown and copied only up to the largest valid summary.
+fn bounded_diagnostic(line: &str) -> String {
+    let limit = peerglide_platform::input_diagnostics::MAX_SUMMARY_BYTES;
+    line.chars().take(limit).collect()
+}
+
 fn read_worker_diagnostics(
     mut reader: impl BufRead,
     diagnostics: mpsc::SyncSender<String>,
@@ -397,7 +403,7 @@ fn read_worker_diagnostics(
 ) {
     loop {
         let line = match worker_output::read_line(&mut reader) {
-            Ok(Some(worker_output::Line::Text(line))) => line.chars().take(600).collect(),
+            Ok(Some(worker_output::Line::Text(line))) => bounded_diagnostic(&line),
             Ok(Some(worker_output::Line::Oversized)) => "工作进程诊断超过限制，已省略该行。".into(),
             Ok(Some(worker_output::Line::InvalidEncoding)) => {
                 "工作进程诊断编码无效，已省略该行。".into()

@@ -2287,3 +2287,21 @@ KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0
 新路径冻结 Mac App 的 `codesign --verify --deep --strict` exit0。通过正常应用入口打开后，GUI显示0.3.23、原Windows登记和右侧布局、本机允许接收、尚未连接；只读进程核对仅该包GUI，没有原生worker。直接从工具宿主启动同包 `diagnose-context` exit0，报告AX/IM denied、SecureInput inactive、no_foreground；该启动上下文不同，不能作为GUI托管worker权限结论。实际GUI触发只读检查后最后可见状态仍为“正在检查”，未读到最终报告；没有重配对、变更TCC、开启Native或发送模拟跨屏输入。自动界面输入/截图的延迟或检查显示不推进不作为单向故障根因。
 
 已集中请求Windows系统版本/缩放、对端方向、当前会话状态和原KVM-DIAG/2摘要。收到后先比较对应窗口的Mac tx与Windows rx/decode/lease/replay/apply/sdk/光标观察；旧摘要缺失时再组织一次同步120秒内物理短测。Mac新路径权限仍需实际GUI托管检查最终结果。Windows端状态/采样窗口未知，根因与C06仍未确认。本机仍无Rust/Cargo且未安装；本批仅记录，自查diff，不新增浏览器测试、发布或机器配置变更。
+
+
+## 2026-11-10 KVM-DIAG/3：补齐单向故障与滚轮的计数盲区（待 CI）
+
+起点 `617158f`，运行包仍冻结 f8cce5d／0.3.23-dev，本批没有改任何输入行为、线上协议、v5／ALPN、捕获生命周期或安全门，只增加会话内聚合计数。第二轮 Mac 摘要只能确认发送链到 QUIC 入队：`deq` 等于 `tx`＋一次边缘返回，说明唯一一次远端阶段由 Mac 的第 97 个移动事件结束；Pong 超时、对端 Release、能力不支持三条结束路径、位移方向、滚轮和 Windows 接收退役原因此前没有计数，所以不能据 Mac 一端判定首个分歧。
+
+新增字段（摘要版本 `KVM-DIAG/3`，旧 `/2` 行不再被 GUI 复制入口接受，诊断需两端同包）：
+
+- 发送端阶段结束：`pong` 收到当前租约的 Pong；`pong_to` 因 1 秒无 Pong 恢复本机；`peer_rel` 对端 Release 结束远端阶段；`cap_stop` 因对端不支持某输入而停止。
+- 位移方向：`mv_pos`／`mv_neg` 为 dx 大于／小于 0 的已转发移动事件个数，只计数，不记录数值。可与 `return` 对照实际轨迹是否回拉。
+- 滚轮：`wh_phys` Windows 钩子看到的物理滚轮事件；`wh_inj` 带注入标记而被放行不转发的滚轮事件（平滑滚动驱动可能如此）；`scr_tx` 发出非零滚轮；`scr_zero` 发出 0／0 滚轮（亚格累加未满一格）；`scr_apply` 接收端提交滚轮。`wh_*` 只在 Windows 钩子计数，Mac 恒为 0。
+- 接收端数据面被退役的首个原因：`g_time` 命令超期或被取消；`g_state` epoch 已不在 Active；`g_source` 输入源观测失效；`g_epoch` 捕获门已属于另一接收 epoch；`g_mods` 仍有被吞修饰键。此前合并在 `retired` 里无法区分。原判定顺序与短路不变，只在失败时多记一笔。
+
+读数建议：先看 Windows 行 `rx`；`rx＝decode＋lease＋replay＋apply（＋retired＋apply_fail）` 应闭合。`rx` 近 0 查传输；`lease` 高查心跳／Pong；`retired` 高看 `g_*`；`apply`≈`sdk` 且 `sdk_fail`＝0 而 `moved`＝0、`unchanged`＞0 属系统层问题。滚轮先比较 Windows 的 `wh_phys`／`wh_inj`／`scr_tx`／`scr_zero` 与 Mac 的 `rel_rx`／`scr_apply`。
+
+代码核对（读代码，未运行）：滚轮路径 Windows 钩子→整格折算→可靠流 Input→Mac `CGEventCreateScrollWheelEvent`（Rust 以可变参数声明，调用约定正确）一路没有发现缺陷；Oink 参考实现使用 `CGEventCreateScrollWheelEvent2`、像素／行单位和阶段字段，本项目只发整格行单位。是否需要对齐取决于上述计数。Mac 位移取自 CGEvent 浮点字段，Oink 注释称其在部分帧不可靠并改读 IOHID 指针子事件，同样等计数后再判断，不预先更换。
+
+摘要最长约 892 字节；`MAX_SUMMARY_BYTES`＝1200 同时约束摘要校验和 GUI 诊断行截断（原 600）。新增回归：最大摘要不超限、旧版本行被拒，以及过期数据命令按 `Time` 记录并仍然退役。本机无 Rust/Cargo，未编译；fmt、严格 Clippy、locked test/build 以精确提交 CI 为准。真实物理验收仍须同包双端在同一 120 秒窗口内复测并取两端摘要，不能以 CI、连接成功或 SendInput 返回当作通过。

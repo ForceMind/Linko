@@ -751,6 +751,7 @@ pub(super) async fn run_with_diagnostics(
                 if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
                 if let Some(Outgoing {lease,epoch})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
+                        count(Count::PongTimeout);
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
                     }else if input.is_empty() && returned_to_source(edge,position.0,position.1) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
@@ -812,7 +813,10 @@ pub(super) async fn run_with_diagnostics(
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
                         let result=recovery.input(lease,event,cursor,now).await;
                         match &result {
-                            Ok(true)=>count(Count::ReliableSubmitted),
+                            Ok(true)=>{
+                                count(Count::ReliableSubmitted);
+                                if matches!(event,Input::Scroll{..}){count(Count::ScrollApplied);}
+                            },
                             Err(_)=>count(Count::ReliableFailed),
                             Ok(false)=>{},
                         }
@@ -823,10 +827,10 @@ pub(super) async fn run_with_diagnostics(
                         if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);}
                         if recovery.receiver.active()==Some(lease){input_status.recovering();}
                         input_status.checked(recovery.finish(lease,cursor,now).await)?;
-                        if outgoing.is_some_and(|current|current.lease==lease){outgoing=None;input_status.restore(capture.as_ref())?;}
+                        if outgoing.is_some_and(|current|current.lease==lease){count(Count::PeerRelease);outgoing=None;input_status.restore(capture.as_ref())?;}
                     },
                     Message::Ping{lease}=>{if lease==0 || recovery.heartbeat(lease,now){send(&mut tx,&Message::Pong{lease}).await?;}},
-                    Message::Pong{lease}=>{if outgoing.is_some_and(|current|current.lease==lease){last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}},
+                    Message::Pong{lease}=>{if outgoing.is_some_and(|current|current.lease==lease){count(Count::PongReceived);last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}},
                     Message::Hello{..}=>bail!("unexpected repeated handshake"),
                 }
             },
@@ -903,6 +907,8 @@ pub(super) async fn run_with_diagnostics(
                         }}
                     },
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
+                        // Sign tallies only; displacement values are never recorded.
+                        if dx>0.0 {count(Count::MovePositive);} else if dx<0.0 {count(Count::MoveNegative);}
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
                         if returned_to_source(edge, position.0, position.1) && input_status.restore_at_boundary(capture.as_ref(),route)? {
@@ -924,10 +930,11 @@ pub(super) async fn run_with_diagnostics(
                         }
                     }else{count(Count::NoLease);}},
                     Captured::Input{event,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)){
-                        if !peer.supports(event) { input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
+                        if !peer.supports(event) { count(Count::CapabilityStop);input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let cursor=Motion{lease,sequence,x:position.0,y:position.1};
                         let result=send(&mut tx,&Message::Input{lease,event,cursor}).await;
                         count(if result.is_ok(){Count::ReliableSent}else{Count::ReliableFailed});
+                        if let (Ok(()),Input::Scroll{x,y})=(&result,event){count(if x==0&&y==0{Count::ScrollZero}else{Count::ScrollSent});}
                         result?;
                     }},
                 }
