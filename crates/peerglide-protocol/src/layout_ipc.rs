@@ -21,11 +21,20 @@ enum Kind {
 
 impl LayoutUpdate {
     pub fn request(request: u32, edge: Edge) -> Self {
-        Self { version: 1, kind: Kind::Layout, request, edge, applied: None }
+        Self {
+            version: 1,
+            kind: Kind::Layout,
+            request,
+            edge,
+            applied: None,
+        }
     }
 
     pub fn reply(self, applied: bool) -> Self {
-        Self { applied: Some(applied), ..self }
+        Self {
+            applied: Some(applied),
+            ..self
+        }
     }
 
     pub fn parse(line: &str) -> Option<Self> {
@@ -49,10 +58,21 @@ mod tests {
     #[test]
     fn bounded_layout_messages_require_known_schema_and_nonzero_request() {
         let command = LayoutUpdate::request(1, Edge::Right);
-        assert!(LayoutUpdate::parse(&command.line()).unwrap().applied.is_none());
-        assert_eq!(LayoutUpdate::parse(&command.reply(false).line()).unwrap().applied, Some(false));
+        assert!(LayoutUpdate::parse(&command.line())
+            .unwrap()
+            .applied
+            .is_none());
+        assert_eq!(
+            LayoutUpdate::parse(&command.reply(false).line())
+                .unwrap()
+                .applied,
+            Some(false)
+        );
         assert!(LayoutUpdate::parse(&LayoutUpdate::request(0, Edge::Right).line()).is_none());
-        assert!(LayoutUpdate::parse(&command.line().replace("\"version\":1", "\"version\":2")).is_none());
+        assert!(
+            LayoutUpdate::parse(&command.line().replace("\"version\":1", "\"version\":2"))
+                .is_none()
+        );
         assert!(LayoutUpdate::parse(&command.line().replace("\"Right\"", "\"Unknown\"")).is_none());
         assert!(LayoutUpdate::parse(&"x".repeat(257)).is_none());
     }

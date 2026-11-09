@@ -41,9 +41,8 @@ mod tests {
         app.poll_layout();
         assert_eq!(app.config.edge, "left");
         assert_eq!(app.displayed_edge(), "left");
-        let stored: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(fixture.path.join("settings.json"))?
-        )?;
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture.path.join("settings.json"))?)?;
         assert!(stored.to_string().contains("left"));
         app.stop();
         *snapshot.5.lock().unwrap() = Some(LayoutUpdate::request(3, Edge::Right).reply(true));
@@ -90,8 +89,12 @@ mod tests {
         app.child = Some(crate::lifecycle_tests::managed_child()?);
         app.connected = true;
         app.worker_state = Some(Arc::new(WorkerSnapshot::default()));
-        for state in [WorkerInputState::ControllingRemote, WorkerInputState::ReceivingRemote,
-            WorkerInputState::Recovering, WorkerInputState::RecoveryUnconfirmed] {
+        for state in [
+            WorkerInputState::ControllingRemote,
+            WorkerInputState::ReceivingRemote,
+            WorkerInputState::Recovering,
+            WorkerInputState::RecoveryUnconfirmed,
+        ] {
             app.input_state = Some(state);
             assert!(!app.try_set_edge("left"));
             assert!(app.layout_request.is_none());
@@ -136,9 +139,14 @@ impl App {
         };
         self.layout_sequence = request;
         self.layout_request = Some(Pending {
-            request, edge, started: Instant::now(), warned: false,
+            request,
+            edge,
+            started: Instant::now(),
+            warned: false,
         });
-        let result = self.child.as_mut()
+        let result = self
+            .child
+            .as_mut()
             .and_then(|child| child.stdin.as_mut())
             .context("工作进程的配置通道不可用")
             .and_then(|stdin| {

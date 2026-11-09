@@ -455,7 +455,7 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
                             {
                                 layout.submit(update);
                             }
-                        },
+                        }
                         Ok(None) | Err(_) => break,
                     }
                 }

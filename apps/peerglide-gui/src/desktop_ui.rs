@@ -15,8 +15,12 @@ impl App {
         self.writable()
             && self.stopping.is_none()
             && self.layout_request.is_none()
-            && (self.child.is_none() || (self.connected
-                && matches!(self.input_state, Some(WorkerInputState::Local | WorkerInputState::Disabled))))
+            && (self.child.is_none()
+                || (self.connected
+                    && matches!(
+                        self.input_state,
+                        Some(WorkerInputState::Local | WorkerInputState::Disabled)
+                    )))
             && self.config.fingerprint.is_some()
             && !self.recovery_blocked
             && !self.pairing_pending()

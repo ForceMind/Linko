@@ -538,7 +538,16 @@ async fn run_with_status(
     stop: tokio::sync::watch::Receiver<bool>,
     reporter: &mut super::InputReporter,
 ) -> Result<()> {
-    run_with_diagnostics(c, tx, rx, policy, stop, reporter, SessionControls::default()).await
+    run_with_diagnostics(
+        c,
+        tx,
+        rx,
+        policy,
+        stop,
+        reporter,
+        SessionControls::default(),
+    )
+    .await
 }
 
 #[derive(Default)]
@@ -556,7 +565,10 @@ pub(super) async fn run_with_diagnostics(
     reporter: &mut super::InputReporter,
     controls: SessionControls<'_>,
 ) -> Result<()> {
-    let SessionControls { diagnostics, layout } = controls;
+    let SessionControls {
+        diagnostics,
+        layout,
+    } = controls;
     let Policy {
         allow,
         native,
@@ -583,7 +595,10 @@ pub(super) async fn run_with_diagnostics(
     };
     // Publish connection readiness only after its private configuration queue
     // exists, so an immediate GUI edit cannot disappear during session startup.
-    super::worker_event(input_status.reporter.managed, super::WorkerState::Authenticated);
+    super::worker_event(
+        input_status.reporter.managed,
+        super::WorkerState::Authenticated,
+    );
     input_status.reporter.peer_motion(peer.motion());
     let (itx, mut input) = mpsc::channel(128);
     let count = |kind| {

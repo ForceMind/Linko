@@ -20,15 +20,21 @@ pub struct Controller(Mutex<State>);
 pub struct Session<'a>(&'a Controller);
 impl Drop for Session<'_> {
     fn drop(&mut self) {
-        if let Ok(mut state) = self.0.0.lock() {
+        if let Ok(mut state) = self.0 .0.lock() {
             state.sender = None;
         }
     }
 }
 
 impl Controller {
-    pub fn open(&self, fallback: Edge) -> anyhow::Result<(Session<'_>, mpsc::Receiver<Request>, Edge)> {
-        let mut state = self.0.lock().map_err(|_| anyhow::anyhow!("layout controller unavailable"))?;
+    pub fn open(
+        &self,
+        fallback: Edge,
+    ) -> anyhow::Result<(Session<'_>, mpsc::Receiver<Request>, Edge)> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("layout controller unavailable"))?;
         anyhow::ensure!(state.sender.is_none(), "layout session already active");
         let (sender, receiver) = mpsc::channel(1);
         state.sender = Some(sender);
@@ -115,7 +121,10 @@ mod tests {
         let mut reader = std::io::Cursor::new(bytes);
         assert_eq!(read_command(&mut reader).unwrap(), Some(String::new()));
         assert_eq!(read_command(&mut reader).unwrap(), Some(String::new()));
-        assert_eq!(read_command(&mut reader).unwrap().as_deref(), Some("stop\n"));
+        assert_eq!(
+            read_command(&mut reader).unwrap().as_deref(),
+            Some("stop\n")
+        );
         assert_eq!(read_command(&mut reader).unwrap(), None);
     }
 }

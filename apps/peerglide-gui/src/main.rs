@@ -227,7 +227,11 @@ enum SettingsSection {
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
 struct WorkerSnapshot(
-    AtomicU16, AtomicU16, AtomicBool, AtomicBool, AtomicU16,
+    AtomicU16,
+    AtomicU16,
+    AtomicBool,
+    AtomicBool,
+    AtomicU16,
     std::sync::Mutex<Option<peerglide_protocol::layout_ipc::LayoutUpdate>>,
 );
 impl WorkerSnapshot {
