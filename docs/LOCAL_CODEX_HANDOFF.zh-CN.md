@@ -1605,3 +1605,14 @@ kvm-020-acceptance延续2ab0cd3，运行程序保持3c645c5／0.3.20-dev，不�
 同源 Windows artifact 13656489829，外层 SHA a7aefc42e7fd7fb2418cfd41eaf3ec42058ee07c31fa4c4492b9b1885a4b3961，内层 SHA 1b88c22ea5bd6f7038f6071e8cf94ecd54e24da4139453682fc85d3b9ec95fa6；Mac artifact 13656598909，外层 SHA e72dd745ddd250a9daecf9d67a58f0001d1bfcce17e4dbb3101f0a640b64d945，内层 SHA ffb656dc10ee552f2f89705f4346cf3735a39fd56a940b92b1228f7730f87d58。完整包官方摘要、ZIP/CRC/路径、MIT、394 项依赖和字体声明通过；Windows 两个 amd64 PE、Mac strict seal/元数据/worker23 通过。慢速下载部分保留，已停止本任务重复下载，不以部分文件替代包。
 
 本机从已验签 Mac 包执行 tools/layout_smoke.py、tools/smoke.py、tools/reconnect_smoke.py 全部 exit0：两实际 worker 的四向更新不重连，超长/无效命令正确排空，通信探针、正常停止、重连、替换证书拒绝和退避取消通过。仅使用临时身份与 loopback，无原生输入、系统剪贴板、现有配对或权限变更。隔离证据位于 ignored connected-layout-f8cce5d。运行包尚未安装，双机 Mac→Windows、真实布局和完整 C06 仍需复测。
+
+
+## 2026-11-09 同源 0.3.23 公开预览与当前实机阻碍
+
+运行包继续冻结 f8cce5d；PR93 文档头 5ffe9d1 的完整五项 42582000425 和资源两项 42582000294 全过，Rust 代码与冻结包一致。PR94 官网提交 772c35281df0f0c710baebc38eb1ea695ca5e68e 的完整五项 42583142554 与官网检查 42583142727 全过。0.3.23-dev 已按既有预览发布授权公开，保持 Pre-release 且不标稳定最新版；标签精确指向 f8cce5d，五个上传资源大小及 GitHub 官方摘要均与本地原始 CI 包／校验文件／公开来源 JSON 一致，未重打包或更改签名。
+
+匿名完整读取 gh-proxy.org 的 Mac 41374121 字节与 Windows 41709611 字节，便携 ZIP SHA-256 分别为 ffb656dc10ee552f2f89705f4346cf3735a39fd56a940b92b1228f7730f87d58、1b88c22ea5bd6f7038f6071e8cf94ecd54e24da4139453682fc85d3b9ec95fa6，全部匹配。GitHub 原链两 ZIP 的 Range206、两个校验文件及来源 JSON 的匿名精确内容读取均有成功证据；部分重试仍返回504，不推断为登录限制，也不保证持续可达。完整代理复核最终 exit0。没有添加自建下载 Function、存储或付费服务。
+
+官网 0.1.8 已部署 772c352，部署地址 https://2f4ca213.linko-63e.pages.dev，正式域名 https://linko-63e.pages.dev 的源码／版本／下载／摘要、安全头、MIME、中文404和两端各11份在线哈希回读通过。只上传网站静态白名单，浏览器未验证。Issue3/5已更新；main仍未合并。
+
+宿主通过应用菜单正常退出22，实际打开冻结23，原配对与右侧布局保留。真实GUI显示0.3.23，实际worker只读诊断确认辅助功能未授予、输入监控未授予，Secure Input未检测到；未改系统授权、未开启本轮原生键鼠。当前需要Windows更新并确认23已打开，以及用户对这个新代码身份的两项系统授权作当前确认；已分别提出最小操作／确认请求，尚未收到回复。系统认证由用户本人完成，不能把等待写成已授予或物理复测成功。当前仍无稳定开发者签名凭据，Windows未知发布者和Mac升级权限沿用没有修复，不能承诺再登记一次便永久解决。本迭代原生复测在这些外部条件前停止，冻结包不重新构建、改名或重签。
