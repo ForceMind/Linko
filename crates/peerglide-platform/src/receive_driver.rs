@@ -1343,7 +1343,10 @@ mod implementation {
                 0,
             );
             pump(&mut engine, &mut backend, COMMAND_MS + 1);
-            assert!(matches!(reply.try_recv().unwrap(), Err(ReceiveError::Stale)));
+            assert!(matches!(
+                reply.try_recv().unwrap(),
+                Err(ReceiveError::Stale)
+            ));
             assert_eq!(backend.guard_failures, vec![GuardFailure::Time]);
             assert_ne!(driver.snapshot(epoch), ReceiveSnapshot::Active);
             assert!(!backend.effects.contains(&Effect::Pointer));
