@@ -107,12 +107,23 @@ const KEYS: [&str; Count::GuardModifiers as usize + 1] = [
     "g_mods",
 ];
 
-#[derive(Default)]
 pub struct InputDiagnostics {
     stopped: AtomicBool,
     counts: [AtomicU32; KEYS.len()],
     #[cfg(windows)]
     next_cursor_sample: std::sync::atomic::AtomicU64,
+}
+
+// Arrays longer than 32 elements do not implement Default.
+impl Default for InputDiagnostics {
+    fn default() -> Self {
+        Self {
+            stopped: AtomicBool::new(false),
+            counts: std::array::from_fn(|_| AtomicU32::new(0)),
+            #[cfg(windows)]
+            next_cursor_sample: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
 }
 
 impl InputDiagnostics {
