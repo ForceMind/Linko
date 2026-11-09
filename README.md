@@ -4,17 +4,17 @@
 
 Linko 是使用 Rust 构建的局域网键鼠协作工具，面向 Windows 与 macOS。电脑各自运行应用、保留本地桌面，通过经过认证的连接协作。
 
-**[官网](https://linko-63e.pages.dev/) · [下载开发预览](https://github.com/ForceMind/Linko/releases/tag/v0.3.17-dev) · [快速开始](docs/GETTING_STARTED.zh-CN.md) · [问题反馈](https://github.com/ForceMind/Linko/issues)**
+**[官网](https://linko-63e.pages.dev/) · [下载开发预览](https://github.com/ForceMind/Linko/releases/tag/v0.3.22-dev) · [快速开始](docs/GETTING_STARTED.zh-CN.md) · [问题反馈](https://github.com/ForceMind/Linko/issues)**
 
-> **0.3.17-dev 开发预览**：真实 Windows ↔ macOS 双机键鼠验收尚未完成，暂不承诺日常主力使用。自动测试和通信探针不替代实机验收。
+> **0.3.22-dev 诊断预览**：真实 Windows ↔ macOS 双机键鼠验收尚未完成，暂不承诺日常主力使用。自动测试和通信探针不替代实机验收。
 
 ![Linko 中文屏幕布局界面](website/src/assets/app-preview.png)
 
-*0.3.20-dev 候选实际界面（8c6ecbb），隔离 NoNative 通信场景，未启用原生键鼠；公开下载仍为 0.3.17-dev。*
+*0.3.20-dev 候选实际界面（8c6ecbb），隔离 NoNative 通信场景，未启用原生键鼠；公开诊断包为 0.3.22-dev。*
 
 ## 当前进度
 
-**功能尚未全部完成。** 公开下载仍为 0.3.17-dev。Mac 0.3.20＋Windows 0.3.17 短测中，Mac 获准发送输入，Windows 实际无响应。最新 0.3.22-dev 候选提供两端短时诊断，待用同源包定位断点。新 V2 排版仍在后续范围。详见[功能与交付状态](docs/STATUS.zh-CN.md)。
+Mac 0.3.20＋Windows 0.3.17 短测中，Mac 获准发送输入，Windows 实际无响应。该版本提供两端短时诊断，待用同源包定位断点。新 V2 排版仍在后续范围。详见[功能与交付状态](docs/STATUS.zh-CN.md)。
 
 ## 当前能做什么
 

@@ -6,7 +6,7 @@
 
 | 入口 | 版本／提交 | 实际范围 |
 | --- | --- | --- |
-| [公开下载](https://github.com/ForceMind/Linko/releases/tag/v0.3.17-dev) | 0.3.17-dev／9797d60 | 免登录开发预览；真实试跑已连接但跨屏失败 |
+| [公开下载](https://github.com/ForceMind/Linko/releases/tag/v0.3.22-dev) | 0.3.22-dev／c2582cf | 免登录诊断预览，真实试跑待完成 |
 | [最新诊断候选](https://github.com/ForceMind/Linko/pull/89) | 0.3.22-dev／c2582cf | 两端短时输入诊断，同源包已核验，待实机试跑 |
 | 主分支 | 921ea70（核对时） | 候选仍在堆叠 PR 中；未合并不等于 main 已更新 |
 
