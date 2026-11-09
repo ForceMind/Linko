@@ -7,10 +7,10 @@
 | 入口 | 版本／提交 | 实际范围 |
 | --- | --- | --- |
 | [公开下载](https://github.com/ForceMind/Linko/releases/tag/v0.3.17-dev) | 0.3.17-dev／9797d60 | 免登录开发预览；真实试跑已连接但跨屏失败 |
-| [最新修复候选](https://github.com/ForceMind/Linko/pull/88) | 0.3.21-dev／8b6f256 | 含切换提交竞争修复、持键回程保护、A 品牌及 Mac 留白；尚未安装或发布至 Releases |
+| [最新诊断候选](https://github.com/ForceMind/Linko/pull/89) | 0.3.22-dev／c2582cf | 两端短时输入诊断，同源包已核验，待实机试跑 |
 | 主分支 | 921ea70（核对时） | 候选仍在堆叠 PR 中；未合并不等于 main 已更新 |
 
-候选 [五项平台 CI](https://github.com/ForceMind/Linko/actions/runs/42515136133) 与 [固定上游检查](https://github.com/ForceMind/Linko/actions/runs/42515136009) 通过。这不是双机物理验收或独立安全审查。
+候选的 [五项平台 CI](https://github.com/ForceMind/Linko/actions/runs/42557953020)、[两项 GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/42557953179) 与 [固定上游检查](https://github.com/ForceMind/Linko/actions/runs/42557953024) 通过。真实双机验收待运行。
 
 ## 已实现并有自动验证
 
@@ -18,6 +18,7 @@
 - Windows/macOS 原生捕获和接收、主显示器相对方向、键盘跟随与恢复模型。
 - 切换回执后的本机提交竞争修复：保留原期限，有界重试并在停止、权限、归属变化时取消。
 - 普通边缘返回与持键／回调在同一原子门仲裁，保留原恢复 fence 和按下／抬起归属；原会话 tick 在输入排空后可重试，停止／紧急恢复仍可强制收回。
+- 两端原生会话可显式启用 120 秒输入诊断。连接鉴权、许可交接、输入提交与光标观察分别记录，摘要仅含数值。
 - 中文 GUI、真实本机设备类型探测、未知对端的中性图标、固定启用确认区。
 - A 跃迁图标与中文主字标；macOS 专用透明外边距及资源回归。
 - 离线手势／规则预览、数据授权模型、离线剪贴板／文件存储基础。

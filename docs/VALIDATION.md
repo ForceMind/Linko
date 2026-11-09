@@ -2181,3 +2181,10 @@ Windows两个amd64 PE通过；Mac0.3.21 plist、图标原字节、bundle身份�
 一次试跑用 Mac 从屏幕中间向右移入边缘，然后继续移动。两端点击“复制本机输入诊断摘要”。先比较 grant/commit，再检查 cap/zero/full/deq/stale/no_lease、tx/tx_*、rx/decode/lease/replay、apply/apply_fail/retired。rel_* 记录有序离散输入传递的阶段。sdk 是原生光标提交计数，包含首次定位及其他光标提交。Windows 最多每 250 毫秒在接收执行器内对提交前后光标位置做一次比较，只保留 moved/unchanged/unknown。即时不变可能是系统提交尚未显现，变化也可能受到其他输入干扰，均不能作为单次提交的最终回执。后续根据首个未推进的计数修复，真实响应由用户观察确认。
 
 本机无 Rust。新候选需通过对应平台 CI 后再提供同源两端包。实际 0.3.22 输入、原生恢复和历史问题 #10 的根因仍待验证。
+
+
+0.3.22 运行代码冻结 c2582cff5300d00c45dbff46916f711165db09b6，PR #89。首轮 9f05b04 格式检查未过，按运行器格式修正后，五项 Rust CI 42557953020、两项资源检查 42557953179 和上游 42557953024 全部通过。无本机 Rust 安装。
+
+同源包经 GitHub artifact 摘要、内层 ZIP 摘要、CRC／安全路径、MIT 与 394 项依赖及字体声明核验。Windows artifact 13648378369 的内层 SHA-256 为 `9f331c544ab249e1f54cc61f07b624d8530b2b30ed7e433057c7cfcc9a1d2b96`，两个 amd64 PE 通过。macOS artifact 13648890478 的内层 SHA-256 为 `5c18857fe9236883e869c57381a116e73b7d1d1abae430e72db76004a7315666`，完整签名、bundle 和 helper 版本通过。已对打包后的 Mac helper 实测拒绝缺少 Native／managed、带 reconnect 和带 probe 的诊断启动组合，无身份或配置文件生成。目录为 ignored `input-diagnostics-c2582cf`。
+
+摘要入口实际位于 **设置 → 诊断与资料 → 高级诊断**，复制最新有效的 `KVM-DIAG/1` 一行。两端同版试跑及摘要待用户操作，尚未安装或公开发布候选。根因与 C06 结论未变。收尾记录为纯文档改动。
