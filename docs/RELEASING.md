@@ -14,6 +14,18 @@
 
 不上传私人路径、配置、身份或秘密，不自动申请系统权限、开启控制或部署后台服务。
 
+## Windows 发布者签名
+
+下一版公开 Windows 包的发布门槛包括两份 EXE 的可信 Authenticode 签名及 RFC 3161 时间戳。普通 CI 便携包用于开发验证。已发布的 0.3.22-dev 是未签名诊断包。
+
+在有既有受信任代码签名证书的授权 Windows 环境中，使用 Windows SDK 的 SignTool。按受测源码构建后运行：
+
+```powershell
+python tools/package.py --windows-signing-thumbprint <证书指纹> --windows-timestamp-url <HTTPS时间戳服务> --signtool <SignTool完整路径>
+```
+
+证书从当前用户的 My 证书存储按指纹选取。指纹可公开，私钥由原证书设施管理。打包只签名临时目录中的 `Linko.exe` 和 `peerglide.exe`。两份均通过 `signtool verify /pa /all /tw` 后才生成 ZIP 和新摘要。发布前另在干净的 Windows 上解压复验两份签名、发布者显示、同包 worker 和实际启动。记录签名后的包摘要及受测源码。SmartScreen 信誉提示另行验收。
+
 ## 首个预览的来源
 
 0.3.16-dev 程序来自 `cb27bce72ece205f138180fd1b6ef0c8cbf0764f`、CI `42382394527`。首个公开包仅替换 ZIP 根目录的 README／SECURITY，程序和 App 内成员保持原样。标签的 Rust 源码须与该基线一致。新 ZIP 有独立摘要，不能混用原始 CI artifact 外层摘要。
