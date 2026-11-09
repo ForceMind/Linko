@@ -1,0 +1,27 @@
+{
+  "version": "0.3.23-dev",
+  "runtimeSourceCommit": "f8cce5d895c04da76735fb582dedadc5b0da54d5",
+  "sourceRun": 42579669153,
+  "resourceRun": 42579669163,
+  "nativeAcceptance": "pending",
+  "packages": [
+    {
+      "platform": "macos",
+      "file": "Linko-0.3.23-dev-darwin-arm64.zip",
+      "sha256": "ffb656dc10ee552f2f89705f4346cf3735a39fd56a940b92b1228f7730f87d58",
+      "bytes": 41374121,
+      "artifactId": 13656598909,
+      "artifactSha256": "sha256:e72dd745ddd250a9daecf9d67a58f0001d1bfcce17e4dbb3101f0a640b64d945",
+      "unchangedCiPackage": true
+    },
+    {
+      "platform": "windows",
+      "file": "Linko-0.3.23-dev-windows-amd64.zip",
+      "sha256": "1b88c22ea5bd6f7038f6071e8cf94ecd54e24da4139453682fc85d3b9ec95fa6",
+      "bytes": 41709611,
+      "artifactId": 13656489829,
+      "artifactSha256": "sha256:a7aefc42e7fd7fb2418cfd41eaf3ec42058ee07c31fa4c4492b9b1885a4b3961",
+      "unchangedCiPackage": true
+    }
+  ]
+}

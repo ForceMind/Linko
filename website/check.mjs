@@ -36,7 +36,7 @@ for (const name of files) {
 }
 const homepage = await readFile(join(root, 'index.html'), 'utf8');
 assert.equal([...homepage.matchAll(/<h1\b/g)].length, 1);
-assert(homepage.includes('0.3.22') && /开发|预览/.test(homepage));
+assert(homepage.includes('0.3.23') && /开发|预览/.test(homepage));
 assert(/GitHub/.test(homepage));
 console.log(`PASS: ${files.length} public hashes, asset size, Chinese pages, local links/anchors, external targets and private-data checks`);
 

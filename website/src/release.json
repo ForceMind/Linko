@@ -1,22 +1,22 @@
 {
-  "version": "0.3.22-dev",
-  "sourceCommit": "c2582cff5300d00c45dbff46916f711165db09b6",
+  "version": "0.3.23-dev",
+  "sourceCommit": "f8cce5d895c04da76735fb582dedadc5b0da54d5",
   "releaseStatus": "experimental",
   "requiresGitHubLogin": false,
   "downloads": [
     {
       "platform": "macos",
-      "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.22-dev/Linko-0.3.22-dev-darwin-arm64.zip",
-      "sha256": "5c18857fe9236883e869c57381a116e73b7d1d1abae430e72db76004a7315666",
+      "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.23-dev/Linko-0.3.23-dev-darwin-arm64.zip",
+      "sha256": "ffb656dc10ee552f2f89705f4346cf3735a39fd56a940b92b1228f7730f87d58",
       "checksumScope": "Portable package ZIP",
-      "bytes": 41357961
+      "bytes": 41374121
     },
     {
       "platform": "windows",
-      "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.22-dev/Linko-0.3.22-dev-windows-amd64.zip",
-      "sha256": "9f331c544ab249e1f54cc61f07b624d8530b2b30ed7e433057c7cfcc9a1d2b96",
+      "url": "https://github.com/ForceMind/Linko/releases/download/v0.3.23-dev/Linko-0.3.23-dev-windows-amd64.zip",
+      "sha256": "1b88c22ea5bd6f7038f6071e8cf94ecd54e24da4139453682fc85d3b9ec95fa6",
       "checksumScope": "Portable package ZIP",
-      "bytes": 41700588
+      "bytes": 41709611
     }
   ]
 }
