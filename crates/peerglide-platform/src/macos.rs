@@ -277,6 +277,17 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
         return event;
     }
     if CGEventGetIntegerValueField(event, 42) == TAG {
+        if matches!(kind, 5..=7 | 27) {
+            STATE.with(|state| {
+                if let Ok(state) = state.try_borrow() {
+                    if let Some(diagnostics) =
+                        state.as_ref().and_then(|s| s.gate.0.diagnostics.get())
+                    {
+                    diagnostics.increment(input_diagnostics::Count::Filtered);
+                    }
+                }
+            });
+        }
         return event;
     }
     let block = STATE.with_borrow_mut(|s| {

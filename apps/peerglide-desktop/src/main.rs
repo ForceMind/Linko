@@ -1,3 +1,4 @@
+mod input_diagnostics;
 mod pairing_worker;
 mod reconnect;
 mod session;
@@ -162,6 +163,9 @@ struct Options {
     /// Enable real OS capture/injection; without this flag the endpoint provides connection diagnostics only.
     #[arg(long)]
     native: bool,
+    /// Emit bounded input pipeline counts for the first 120 seconds.
+    #[arg(long, requires_all = ["native", "managed"], conflicts_with = "reconnect")]
+    input_diagnostics: bool,
     /// Reconnect only the same enrolled peer with bounded backoff; disabled by default.
     #[arg(long)]
     reconnect: bool,
@@ -415,6 +419,7 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
 }
 
 async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
+    anyhow::ensure!(!probe || !o.input_diagnostics, "input diagnostics require a native session");
     anyhow::ensure!(
         o.wait_for_peer_secs.is_none()
             || (o.managed && address.is_some() && !probe && !o.reconnect),
@@ -680,7 +685,11 @@ async fn run_inner(
         e.wait_idle().await;
         return result;
     }
-    let result = session::run_with_status(
+    let diagnostics = o
+        .input_diagnostics
+        .then(input_diagnostics::DiagnosticWindow::start)
+        .transpose()?;
+    let result = session::run_with_diagnostics(
         c.clone(),
         tx,
         rx,
@@ -693,8 +702,12 @@ async fn run_inner(
         },
         stop,
         input_status,
+        diagnostics.as_ref().map(|window| &window.counters),
     )
     .await;
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.finish().await;
+    }
     worker_event(o.managed, WorkerState::Disconnected);
     let reason = c.close_reason();
     c.close(0u8.into(), b"session ended");

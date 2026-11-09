@@ -11,6 +11,7 @@ pub mod application_menu;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+pub mod input_diagnostics;
 mod receive_driver;
 pub mod tray;
 pub use receive_driver::{
@@ -124,6 +125,7 @@ struct GateState {
     healthy: std::sync::atomic::AtomicBool,
     receive: OnceLock<ReceiveControl>,
     return_pending: std::sync::atomic::AtomicBool,
+    diagnostics: OnceLock<Arc<input_diagnostics::InputDiagnostics>>,
 }
 #[derive(Clone)]
 pub struct CaptureGate(Arc<GateState>);
@@ -152,6 +154,7 @@ impl Default for CaptureGate {
             healthy: std::sync::atomic::AtomicBool::new(instance != 0),
             receive: OnceLock::new(),
             return_pending: std::sync::atomic::AtomicBool::new(false),
+            diagnostics: OnceLock::new(),
         }))
     }
 }
@@ -776,7 +779,29 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
         }
-        native::receive_pointer(point.x, point.y)
+        let diagnostics = self.gate.0.diagnostics.get();
+        #[cfg(windows)]
+        let before = diagnostics
+            .filter(|d| d.sample_cursor(now_ms()))
+            .map(|_| windows::diagnostic_cursor_position());
+        let result = native::receive_pointer(point.x, point.y);
+        if let Some(diagnostics) = diagnostics {
+            use input_diagnostics::Count;
+            diagnostics.increment(if result.is_ok() {
+                Count::NativeSubmitted
+            } else {
+                Count::NativeFailed
+            });
+            #[cfg(windows)]
+            if let Some(before) = before.filter(|_| result.is_ok()) {
+                diagnostics.increment(match (before, windows::diagnostic_cursor_position()) {
+                    (Some(a), Some(b)) if a != b => Count::CursorMoved,
+                    (Some(_), Some(_)) => Count::CursorUnchanged,
+                    _ => Count::CursorUnknown,
+                });
+            }
+        }
+        result
     }
     fn input(
         &mut self,
@@ -882,7 +907,17 @@ pub fn input_capabilities() -> InputCapabilities {
     }
 }
 pub fn capture(tx: mpsc::Sender<Captured>, target: InputCapabilities) -> Result<CaptureSession> {
+    capture_with_diagnostics(tx, target, None)
+}
+pub fn capture_with_diagnostics(
+    tx: mpsc::Sender<Captured>,
+    target: InputCapabilities,
+    diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
+) -> Result<CaptureSession> {
     let gate = CaptureGate::default();
+    if let Some(diagnostics) = diagnostics {
+        let _ = gate.0.diagnostics.set(diagnostics);
+    }
     #[cfg(any(windows, target_os = "macos"))]
     {
         let wake = Arc::new(native::ReceiveWake::default());
@@ -1248,6 +1283,16 @@ impl HookState {
         }) && route.remote()
     }
     fn movement(&mut self, event: Captured, route: CaptureRoute) -> bool {
+        use input_diagnostics::Count;
+        let remote_motion = matches!(event, Captured::Motion { .. });
+        if let (Some(diagnostics), Captured::Motion { dx, dy, .. }) =
+            (self.gate.0.diagnostics.get(), event)
+        {
+            diagnostics.increment(Count::Captured);
+            if dx == 0.0 && dy == 0.0 {
+                diagnostics.increment(Count::ZeroDelta);
+            }
+        }
         if matches!(route, CaptureRoute::Receiving(_)) {
             self.gate.request_takeover(route);
             return true;
@@ -1257,6 +1302,11 @@ impl HookState {
             return true;
         }
         let sent = self.emit(event);
+        if remote_motion && !sent {
+            if let Some(diagnostics) = self.gate.0.diagnostics.get() {
+                diagnostics.increment(Count::QueueFull);
+            }
+        }
         route.remote() && (sent || debt)
     }
     fn update_held(&self) {

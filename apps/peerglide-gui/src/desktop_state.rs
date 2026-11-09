@@ -251,8 +251,8 @@ pub(super) fn present(s: Snapshot) -> View {
     }
     match s.input {
         Some(WorkerInputState::ControllingRemote) => View::new(
-            "正在控制另一台电脑",
-            "键盘跟随当前目标。Ctrl+Alt+Esc 可紧急恢复本机控制。",
+            "已获准向另一台电脑发送输入",
+            "请观察对端是否响应。Ctrl+Alt+Esc 可紧急恢复本机控制。",
             Tone::Accent,
             Action::None,
         ),
@@ -478,7 +478,7 @@ mod tests {
             s.connected = true;
             s.mode = Some(SessionMode::Native);
             s.input = Some(WorkerInputState::ControllingRemote);
-            assert_eq!(present(s).title, "正在控制另一台电脑");
+            assert_eq!(present(s).title, "已获准向另一台电脑发送输入");
         }
     }
     #[test]
@@ -507,7 +507,7 @@ mod tests {
             s.mode = Some(SessionMode::Native);
             s.input = Some(WorkerInputState::ControllingRemote);
             s.switch_state = Some(switch);
-            assert_eq!(present(s).title, "正在控制另一台电脑");
+            assert_eq!(present(s).title, "已获准向另一台电脑发送输入");
             let mut s = snapshot();
             s.running = true;
             s.connected = true;

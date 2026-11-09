@@ -50,7 +50,7 @@ impl App {
         match self.input_state {
             Some(WorkerInputState::Disabled) => "键鼠未开启",
             Some(WorkerInputState::Local) => "本机控制（进程报告）",
-            Some(WorkerInputState::ControllingRemote) => "正在控制对端",
+            Some(WorkerInputState::ControllingRemote) => "已获准向对端发送输入",
             Some(WorkerInputState::ReceivingRemote) => "对端正在控制本机",
             Some(WorkerInputState::Recovering) => "正在恢复本机输入",
             Some(WorkerInputState::RecoveryUnconfirmed) => "输入恢复未确认",
@@ -753,6 +753,13 @@ impl App {
 
             ui.separator();
             ui.strong("会话记录 · 不含按键内容");
+            if let Some(summary) = self.logs.iter().rev().find(|line| {
+                peerglide_platform::input_diagnostics::is_summary(line)
+            }) {
+                if ui.button("复制本机输入诊断摘要").clicked() {
+                    ui.ctx().copy_text(summary.clone());
+                }
+            }
             for line in &self.logs { ui.monospace(line); }
         });
             }
@@ -1138,20 +1145,32 @@ impl App {
                         if ui.button("立即停止并恢复本机").clicked() {
                             self.stop();
                         }
-                        if ui
+                        let ready = cfg!(any(windows, target_os = "macos"))
+                            && self.writable()
+                            && self.worker_permissions.readiness()
+                                == worker_permissions::Readiness::Ready
+                            && self.native_confirmation
+                            && self.stopping.is_none()
+                            && !self.recovery_blocked;
+                        let start = ui
                             .add_enabled(
-                                cfg!(any(windows, target_os = "macos"))
-                                    && self.writable()
-                                    && self.worker_permissions.readiness()
-                                        == worker_permissions::Readiness::Ready
-                                    && self.native_confirmation
-                                    && self.stopping.is_none()
-                                    && !self.recovery_blocked,
+                                ready,
                                 egui::Button::new("确认并开启键鼠"),
                             )
-                            .clicked()
-                        {
-                            let result = self.request_native();
+                            .clicked();
+                        let diagnose = ui
+                            .add_enabled(
+                                ready && self.child.is_none(),
+                                egui::Button::new("开启并诊断"),
+                            )
+                            .on_hover_text("统计本机输入链路 120 秒，可复制不含输入内容的摘要")
+                            .clicked();
+                        if start || diagnose {
+                            let result = if diagnose {
+                                self.request_native_with_diagnostics(true)
+                            } else {
+                                self.request_native()
+                            };
                             let success = result.is_ok();
                             self.feedback(result, "正在准备真实键鼠会话，输入归属等待进程报告。");
                             if success {
