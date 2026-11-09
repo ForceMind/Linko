@@ -7,10 +7,10 @@
 | 入口 | 版本／提交 | 实际范围 |
 | --- | --- | --- |
 | [公开下载](https://github.com/ForceMind/Linko/releases/tag/v0.3.22-dev) | 0.3.22-dev／c2582cf | 免登录诊断预览，真实试跑待完成 |
-| [最新诊断候选](https://github.com/ForceMind/Linko/pull/89) | 0.3.22-dev／c2582cf | 两端短时输入诊断，同源包已核验，待实机试跑 |
+| [最新修复候选](https://github.com/ForceMind/Linko/pull/92) | 0.3.23-dev／0061bba | Mac 交接省略居中移动并增加回程计数，待实机复测 |
 | 主分支 | 921ea70（核对时） | 候选仍在堆叠 PR 中；未合并不等于 main 已更新 |
 
-候选的 [五项平台 CI](https://github.com/ForceMind/Linko/actions/runs/42557953020)、[两项 GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/42557953179) 与 [固定上游检查](https://github.com/ForceMind/Linko/actions/runs/42557953024) 通过。真实双机验收待运行。
+0.3.23 修复候选的 [五项平台 CI](https://github.com/ForceMind/Linko/actions/runs/42572655073) 与 [固定上游检查](https://github.com/ForceMind/Linko/actions/runs/42572654957) 通过。双机验收待完成。
 
 ## 已实现并有自动验证
 
@@ -27,6 +27,7 @@
 
 - **基础跨屏尚未通过**：0.3.17-dev 的 Mac→Windows 已认证连接，但物理右边缘和 Control＋Option＋右方向键均未进入 Windows；停止后 worker 正常退出。
 - 后续 Mac 0.3.20＋Windows 0.3.17 已认证连接，源端 Native worker 曾报告“正在控制对端”。用户确认 Windows 实际没有响应，跨屏短测失败。点击、滚轮及普通返回未单独验收。0.3.21 的持键回程修复尚未原生验收。
+- 同版 0.3.22 实测中，Windows 能控制 Mac，Mac 未能移动 Windows 光标。Mac 摘要的两次交接均没有后续移动发包。0.3.23 针对过早回程候选修复，实机尚未复测。
 - 四边、键盘／修饰键、滚轮、拖拽、DPI、紧急恢复、物理接管、断网、退出、睡眠与撤权矩阵仍未完成，见 [Issue #3](https://github.com/ForceMind/Linko/issues/3)。
 - Mac 图标修复已原位更新，Dock 与相邻应用的实际视觉大小仍待确认。新 V2 紧凑线稿尚未完整实现，不能称为设计还原完成。
 

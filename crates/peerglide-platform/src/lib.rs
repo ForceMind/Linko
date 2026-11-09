@@ -621,6 +621,9 @@ impl CaptureSession {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))? =
                 Some((return_x, return_y));
+            // Windows derives relative movement from hook coordinates and
+            // needs room beyond the edge. macOS reads native event deltas.
+            #[cfg(windows)]
             pointer(0.5, 0.5)?;
             Ok(Some(epoch))
         })();
@@ -667,6 +670,9 @@ impl CaptureSession {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))? =
                 Some((return_x, return_y));
+            // Do not post an absolute move when taking over macOS's relative
+            // motion stream. Its displacement can affect the next event.
+            #[cfg(windows)]
             pointer(0.5, 0.5)?;
             Ok(())
         })();

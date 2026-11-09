@@ -72,10 +72,10 @@ datagram cannot leave a click at the previous location. Snapshot anchors never
 lower the datagram replay watermark. Return across the entry edge is allowed on
 the first reverse motion; no artificial minimum travel distance is required.
 
-The source cursor is parked inside its display while forwarding; this avoids
-Windows clipping hook coordinates at the screen edge and losing outward motion.
-The saved source entry position is restored on release or session drop. The
-source cursor is currently visible while parked; cursor hiding remains UX work.
+Windows parks the source cursor inside its display while forwarding to preserve
+outward motion at the screen edge. macOS forwards native relative deltas and
+leaves the cursor in place at handoff to avoid injecting displacement into those
+deltas. The source entry position is restored on release or session drop.
 
 
 ### Ordered normal return (protocol v3)
