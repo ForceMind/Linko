@@ -2261,3 +2261,18 @@ Windows两个amd64 PE通过；Mac0.3.21 plist、图标原字节、bundle身份�
 用户随后重开Windows诊断；Mac仍用同一冻结包，正常退出并重新打开后重连。用户在立即跨屏提示后再次报告同一单向故障。第二轮也已通过应用菜单停止，进程核对只剩Mac GUI，没有原生worker。第二轮最新末尾摘要尚未导出，仍保留在当前Mac GUI会话记录中；交接前没有继续重启或清空它。请先读取该轮摘要及phase，核对动作是否在采样期，再决定是否需要新的同步双端采样；不要假定已拿到第二轮有效计数。
 
 用户现要求提供提示词给其他AI独立查看。当前停止新增修复，不换包、不重签、不再授予权限；保留现有身份和配对。下一位应从实际捕获→队列→Acquire/Grant→本机提交→移动发送→Windows接收/注入逐段定位第一个分歧，避免重复未经证实的猜测。GUI自动点击与键盘导航未稳定提交的现象不等同于跨设备输入根因；背景窗口截图可能残留旧帧，必须结合实际进程和当前界面。Mac辅助功能/输入监控已在冻结23的实际worker中验证通过，但长期签名和更新权限沿用仍未解决。
+
+
+## 2026-11-09 旧目录清理后的新会话交接（以此节为准）
+
+用户要求此后只使用移动硬盘上的新工作区，并清理旧目录。迁移已逐文件验证83292个原始文件/链接，四个Git工作区、完整Git对象、npm入口、网站构建/六项非浏览器回归及App签名检查通过。ExFAT的执行位差异用仓库本地core.filemode=false处理，本地排除._*；复制产生的AppleDouble元数据已另行归档。源代码没有因迁移改变。身份和配对所在的Application Support目录未移动。
+
+清理旧App前，已从实际Mac GUI读取并保存第二轮末尾累计摘要至 ignored target/local-validation/connected-layout-f8cce5d/native-023-second-expired.local.json：
+
+KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0 grant=1 commit=1 tx=96 tx_unsupported=0 tx_disabled=0 tx_oversize=0 tx_closed=0 rx=1231 decode=0 lease=12 replay=1 apply=1218 apply_fail=0 retired=0 sdk=1256 sdk_fail=0 moved=0 unchanged=0 unknown=0 rel_tx=0 rel_rx=25 rel_apply=25 rel_fail=0 return=1
+
+该数值来自Mac，不能把其中sdk/apply当成Windows的注入结果；moved/unchanged/unknown在Mac为0也不证明Windows光标状态。采样窗口内至少发生过捕获、出队、许可、本机提交及向QUIC提交移动，不能再把旧的tx=0推断作为本轮根因。但累计计数不能精确对应每次动作，tx=96不证明坐标内容正确、网络送达或Windows接收/注入，Windows对应计数仍缺失。用户两次同版实测仍报告Windows能控制Mac、Mac不能移动Windows光标；根因仍未确认，取消Mac切换居中投递并未解决问题。
+
+旧App随后已正常退出，并确认旧路径没有本项目进程。剩余App文件逐个与新工作区副本核对，迁移说明等残留另行备份后，旧工作区目录已删除。只使用新工作区中的冻结0.3.23/f8cce5d包；不要重新创建旧目录或使用旧绝对路径。新路径实际worker的系统权限是否沿用尚未复查，不能把迁移前授权或验签通过当成新路径输入权限已确认，更不要先反复要求用户重配对/授权。当前没有本轮原生worker运行；Windows当前进程状态需另行核对。
+
+用户接下来会新开主执行对话，并让Claude独立诊断。主执行负责集成/最小修复/验证/提交推送；Claude默认只读审查，避免两方并发改同一文件。优先检查首个真实分歧：Mac事件/坐标与能力协商→队列/epoch→Acquire/Grant→本机提交→发送→Windows接收/租约/注入owner→实际光标。不要把CI、系统API返回值或已连接当作物理验收通过，不引入新全局钩子、任意远程命令或安全防护绕过。
