@@ -188,6 +188,7 @@ mod tests {
 }
 
 pub mod worker;
+pub mod layout_ipc;
 
 pub mod capabilities;
 pub use capabilities::InputCapabilities;

@@ -12,7 +12,11 @@ impl App {
         self.writable() && self.child.is_none() && self.stopping.is_none() && !self.pairing_open
     }
     pub(super) fn layout_editable(&self) -> bool {
-        self.idle_writable()
+        self.writable()
+            && self.stopping.is_none()
+            && self.layout_request.is_none()
+            && (self.child.is_none() || (self.connected
+                && matches!(self.input_state, Some(WorkerInputState::Local | WorkerInputState::Disabled))))
             && self.config.fingerprint.is_some()
             && !self.recovery_blocked
             && !self.pairing_pending()
@@ -24,8 +28,11 @@ impl App {
             self.screen_drag = None;
             return false;
         }
-        if self.config.edge == edge {
+        if self.displayed_edge() == edge {
             return true;
+        }
+        if self.child.is_some() {
+            return self.request_edge(edge);
         }
         let previous = self.config.edge.clone();
         self.config.edge = edge.into();
@@ -338,13 +345,13 @@ impl App {
         let registered = self.config.fingerprint.is_some();
         let editable = self.layout_editable();
         let width = ui.available_width().max(1.0);
-        let height = if matches!(self.config.edge.as_str(), "top" | "bottom") {
+        let height = if matches!(self.displayed_edge(), "top" | "bottom") {
             230.0
         } else {
             180.0
         };
         let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
-        let (local, peer) = screen_rects(rect, &self.config.edge);
+        let (local, peer) = screen_rects(rect, self.displayed_edge());
         let interaction_canvas = rect.intersect(ui.clip_rect());
         if !editable
             || !ui.input(|i| i.focused)
@@ -429,7 +436,7 @@ impl App {
                 ui.label("另一台电脑在我的");
                 for side in ["left", "right", "top", "bottom"] {
                     if ui
-                        .selectable_label(self.config.edge == side, edge_label(side))
+                        .selectable_label(self.displayed_edge() == side, edge_label(side))
                         .clicked()
                     {
                         self.try_set_edge(side);
@@ -997,7 +1004,7 @@ impl App {
                         ui.label(format!(
                             "已登记 {}。当前方向：{}",
                             self.config.peer_name,
-                            edge_label(&self.config.edge)
+                            edge_label(self.displayed_edge())
                         ));
                         if ui.button("完成并查看屏幕布局").clicked() {
                             self.wizard = None;

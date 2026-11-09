@@ -538,7 +538,13 @@ async fn run_with_status(
     stop: tokio::sync::watch::Receiver<bool>,
     reporter: &mut super::InputReporter,
 ) -> Result<()> {
-    run_with_diagnostics(c, tx, rx, policy, stop, reporter, None).await
+    run_with_diagnostics(c, tx, rx, policy, stop, reporter, SessionControls::default()).await
+}
+
+#[derive(Default)]
+pub(super) struct SessionControls<'a> {
+    pub diagnostics: Option<&'a std::sync::Arc<InputDiagnostics>>,
+    pub layout: Option<&'a super::layout_control::Controller>,
 }
 
 pub(super) async fn run_with_diagnostics(
@@ -548,12 +554,13 @@ pub(super) async fn run_with_diagnostics(
     policy: Policy,
     mut stop: tokio::sync::watch::Receiver<bool>,
     reporter: &mut super::InputReporter,
-    diagnostics: Option<&std::sync::Arc<InputDiagnostics>>,
+    controls: SessionControls<'_>,
 ) -> Result<()> {
+    let SessionControls { diagnostics, layout } = controls;
     let Policy {
         allow,
         native,
-        edge,
+        mut edge,
         local,
         peer,
     } = policy;
@@ -562,11 +569,22 @@ pub(super) async fn run_with_diagnostics(
         "invalid session capabilities"
     );
     let mut input_status = InputStatus::new(native, reporter);
-    input_status.reporter.peer_motion(peer.motion());
     if *stop.borrow() {
         input_status.reporter.set(WorkerInputState::Disabled);
         return Ok(());
     }
+    let (layout_scope, mut layout_requests) = if let Some(layout) = layout {
+        let (scope, receiver, current_edge) = layout.open(edge)?;
+        edge = current_edge;
+        (Some(scope), receiver)
+    } else {
+        let (_sender, receiver) = mpsc::channel(1);
+        (None, receiver)
+    };
+    // Publish connection readiness only after its private configuration queue
+    // exists, so an immediate GUI edit cannot disappear during session startup.
+    super::worker_event(input_status.reporter.managed, super::WorkerState::Authenticated);
+    input_status.reporter.peer_motion(peer.motion());
     let (itx, mut input) = mpsc::channel(128);
     let count = |kind| {
         if let Some(diagnostics) = diagnostics {
@@ -693,6 +711,22 @@ pub(super) async fn run_with_diagnostics(
         let acquire_wake=pending.map(PendingAcquire::wake_at);
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
+            request=layout_requests.recv(),if layout_scope.is_some()=>{
+                if let Some(request)=request {
+                    let applied=now_ms()<request.deadline
+                        && !*stop.borrow()
+                        && pending.is_none() && outgoing.is_none()
+                        && recovery.receiver.active().is_none()
+                        && !recovery.protection_pending()
+                        && capture.as_ref().is_none_or(|cap|cap.gate.reconfigure_local());
+                    if applied {
+                        edge=request.update.edge;
+                        edge_gate.require_interior();
+                        if let Some(layout)=layout {layout.applied(edge);}
+                    }
+                    println!("{}",request.update.reply(applied).line());
+                }
+            },
             closed=c.closed()=>return if invalid_frame.load(std::sync::atomic::Ordering::Acquire) {
                 Err(transport::InvalidMessageFrame.into())
             } else { connection_end(closed) },

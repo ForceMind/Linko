@@ -1,5 +1,40 @@
 # C04 local worker state
 
+## Connected layout updates (0.3.23-dev candidate)
+
+The existing private stdin/stdout pipes accept a finite local record:
+`{"version":1,"kind":"layout","request":1,"edge":"Left"}`.
+Edges are Left/Right/Top/Bottom; request IDs are nonzero u32. The reply repeats
+the record with `applied: true` or `false`. This is local worker IPC only, with no
+network message/ALPN change, remote command, permission grant or added input hook.
+Matching GUI/worker packages are required; an older worker may ignore the command.
+
+Stdin retains at most 256 bytes per command and drains oversized/invalid records.
+The active session owns a one-request queue; requests expire after two seconds.
+Connection readiness is published after that queue exists. Stop/EOF retain their
+original direct cancellation path, and the reader never waits for a layout reply.
+Queued commands do not transfer to a successor session; the last applied direction
+survives a reconnect in the same worker.
+
+Only the session owner applies updates, outside native callbacks. It checks no
+pending acquire, outgoing or incoming lease, recovery protection or stop, then
+uses the existing capture-mode/physical-hold/callback CAS to retire the old local
+epoch. Held keys/buttons or an active callback reject the update. Old queued events
+become stale, and edge entry requires a fresh move into the screen interior.
+
+The GUI permits one outstanding request and updates its direction only after a
+matching current-child acknowledgement. A three-second missing-reply warning does
+not pretend failure or permit a second request; stop clears the pending request.
+Replies after stop/exit or from an old child cannot change settings. Persistence
+uses the existing conflict-aware store. If saving fails, the applied direction
+remains visible for that worker, while disk and the previous saved configuration
+remain intact. A fresh worker starts with the saved configuration.
+
+Unit regressions cover capture admission, stale/rejected/late replies, timeout,
+and conflicting saves. `tools/layout_smoke.py` uses two real authenticated workers
+and private pipes on loopback, without native input. Physical Windows/macOS layout
+and edge behavior remain C06 acceptance work.
+
 Local supervisor events have schema version 1 and a finite state enum. They are
 independent of network protocol (currently v5; originally v3). Only parsed stdout events may update GUI state;
 stderr/human logs are diagnostics. Unknown schemas/fields are ignored. There is
