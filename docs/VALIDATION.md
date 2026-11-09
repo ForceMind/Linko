@@ -2188,3 +2188,10 @@ Windows两个amd64 PE通过；Mac0.3.21 plist、图标原字节、bundle身份�
 同源包经 GitHub artifact 摘要、内层 ZIP 摘要、CRC／安全路径、MIT 与 394 项依赖及字体声明核验。Windows artifact 13648378369 的内层 SHA-256 为 `9f331c544ab249e1f54cc61f07b624d8530b2b30ed7e433057c7cfcc9a1d2b96`，两个 amd64 PE 通过。macOS artifact 13648890478 的内层 SHA-256 为 `5c18857fe9236883e869c57381a116e73b7d1d1abae430e72db76004a7315666`，完整签名、bundle 和 helper 版本通过。已对打包后的 Mac helper 实测拒绝缺少 Native／managed、带 reconnect 和带 probe 的诊断启动组合，无身份或配置文件生成。目录为 ignored `input-diagnostics-c2582cf`。
 
 摘要入口实际位于 **设置 → 诊断与资料 → 高级诊断**，复制最新有效的 `KVM-DIAG/1` 一行。两端同版试跑及摘要待用户操作，尚未安装或公开发布候选。根因与 C06 结论未变。收尾记录为纯文档改动。
+
+
+## 2026-11-09 公开诊断预览与官网入口
+
+用户要求直接从官网下载。v0.3.22-dev 为 GitHub Pre-release，标签指向已通过八项 CI 的 c2582cf。两端 ZIP 是同一 CI 的原始包。五个草稿资源的大小与摘要均和本机原件一致，发布后匿名读取的两份 .sha256 及 PROVENANCE.json 字节相同。两个 GitHub ZIP 原链匿名 Range 请求均返回 206，本机整包原链下载超时。经用户指定第三方加速链接完整下载两端 ZIP，大小和 SHA-256 均一致。
+
+官网 0.1.7 部署冻结 45b4ce7，Pages 快照 https://8f64737e.linko-63e.pages.dev/ 。生产和部署域名各 11 份内容的摘要、类型、安全响应头和中文 404 回读通过。静态构建及六项平台定位回归通过。官网与 Release 提供两端同版诊断短测步骤，公开说明 Windows 无响应的根因与 C06 仍待实机定位。未执行浏览器验收。仓库 PR #90，未合并 main。
