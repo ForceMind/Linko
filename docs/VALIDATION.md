@@ -2213,3 +2213,10 @@ Windows两个amd64 PE通过；Mac0.3.21 plist、图标原字节、bundle身份�
 分支 connected-layout-updates 基于 62ebff9／PR92。沿用未发布的 0.3.23-dev，增加受限私有管道方向请求、实际 worker 的租约／持键／回调检查、旧 epoch 退役、边缘重新进入和 GUI 确认后保存。输入网络 v5、单一捕获生命周期、逃生与停止路径不变。新增消息边界、队列隔离、捕获门、旧回执、超时和配置冲突回归；tools/layout_smoke.py 使用临时身份与 loopback 的两个真实 NoNative 进程。
 
 本机预检 preflight-20261109T071816745221Z-84718 在 fmt 因缺 Rust/Cargo 失败，后续未运行，遵用户要求未安装。Python 语法和 diff 检查通过；完整五项、进程 smoke 与 GUI 资源检查待精确提交 CI。没有安装候选、改系统权限或启动原生键鼠，双机实际布局与 Mac→Windows 修复尚未验收，官网仍为 0.3.22。
+
+
+连接中布局运行代码冻结 f8cce5d895c04da76735fb582dedadc5b0da54d5。完整五项 CI 42579669153 与两平台 GUI 资源检查 42579669163 全过；三平台 fmt、严格 Clippy、locked workspace build/test/release、布局/通信/重连/进程专项通过，Mac 20 轮并行 GUI 回归也通过。本轮为主智能体自查和自动验证，不是独立安全审计。首轮 9da082c 的格式失败与 f988fca 的测试模块 Clippy 失败均修复后重新检查，没有放宽规则。
+
+同源 Windows artifact 13656489829，外层 SHA a7aefc42e7fd7fb2418cfd41eaf3ec42058ee07c31fa4c4492b9b1885a4b3961，内层 SHA 1b88c22ea5bd6f7038f6071e8cf94ecd54e24da4139453682fc85d3b9ec95fa6；Mac artifact 13656598909，外层 SHA e72dd745ddd250a9daecf9d67a58f0001d1bfcce17e4dbb3101f0a640b64d945，内层 SHA ffb656dc10ee552f2f89705f4346cf3735a39fd56a940b92b1228f7730f87d58。完整包官方摘要、ZIP/CRC/路径、MIT、394 项依赖和字体声明通过；Windows 两个 amd64 PE、Mac strict seal/元数据/worker23 通过。慢速下载部分保留，已停止本任务重复下载，不以部分文件替代包。
+
+本机从已验签 Mac 包执行 tools/layout_smoke.py、tools/smoke.py、tools/reconnect_smoke.py 全部 exit0：两实际 worker 的四向更新不重连，超长/无效命令正确排空，通信探针、正常停止、重连、替换证书拒绝和退避取消通过。仅使用临时身份与 loopback，无原生输入、系统剪贴板、现有配对或权限变更。隔离证据位于 ignored connected-layout-f8cce5d。运行包尚未安装，双机 Mac→Windows、真实布局和完整 C06 仍需复测。

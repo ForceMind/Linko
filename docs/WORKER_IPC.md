@@ -35,6 +35,8 @@ and conflicting saves. `tools/layout_smoke.py` uses two real authenticated worke
 and private pipes on loopback, without native input. Physical Windows/macOS layout
 and edge behavior remain C06 acceptance work.
 
+## Lifecycle records
+
 Local supervisor events have schema version 1 and a finite state enum. They are
 independent of network protocol (currently v5; originally v3). Only parsed stdout events may update GUI state;
 stderr/human logs are diagnostics. Unknown schemas/fields are ignored. There is
