@@ -419,7 +419,10 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
 }
 
 async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
-    anyhow::ensure!(!probe || !o.input_diagnostics, "input diagnostics require a native session");
+    anyhow::ensure!(
+        !probe || !o.input_diagnostics,
+        "input diagnostics require a native session"
+    );
     anyhow::ensure!(
         o.wait_for_peer_secs.is_none()
             || (o.managed && address.is_some() && !probe && !o.reconnect),

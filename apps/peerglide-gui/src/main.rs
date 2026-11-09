@@ -793,11 +793,7 @@ impl App {
     fn start_mode(&mut self, mode: SessionMode) -> Result<()> {
         self.start_mode_with_diagnostics(mode, false)
     }
-    fn start_mode_with_diagnostics(
-        &mut self,
-        mode: SessionMode,
-        diagnostics: bool,
-    ) -> Result<()> {
+    fn start_mode_with_diagnostics(&mut self, mode: SessionMode, diagnostics: bool) -> Result<()> {
         if self.resource_check_mode {
             anyhow::ensure!(
                 mode == SessionMode::Communication

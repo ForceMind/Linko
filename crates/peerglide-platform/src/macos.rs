@@ -283,7 +283,7 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                     if let Some(diagnostics) =
                         state.as_ref().and_then(|s| s.gate.0.diagnostics.get())
                     {
-                    diagnostics.increment(input_diagnostics::Count::Filtered);
+                        diagnostics.increment(input_diagnostics::Count::Filtered);
                     }
                 }
             });

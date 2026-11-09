@@ -1153,10 +1153,7 @@ impl App {
                             && self.stopping.is_none()
                             && !self.recovery_blocked;
                         let start = ui
-                            .add_enabled(
-                                ready,
-                                egui::Button::new("确认并开启键鼠"),
-                            )
+                            .add_enabled(ready, egui::Button::new("确认并开启键鼠"))
                             .clicked();
                         let diagnose = ui
                             .add_enabled(
