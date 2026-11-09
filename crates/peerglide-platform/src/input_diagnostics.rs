@@ -34,9 +34,10 @@ pub enum Count {
     ReliableReceived,
     ReliableSubmitted,
     ReliableFailed,
+    EdgeReturn,
 }
 
-const KEYS: [&str; Count::ReliableFailed as usize + 1] = [
+const KEYS: [&str; Count::EdgeReturn as usize + 1] = [
     "cap",
     "zero",
     "filtered",
@@ -67,6 +68,7 @@ const KEYS: [&str; Count::ReliableFailed as usize + 1] = [
     "rel_rx",
     "rel_apply",
     "rel_fail",
+    "return",
 ];
 
 #[derive(Default)]
@@ -129,7 +131,7 @@ impl fmt::Display for Snapshot {
             Phase::Expired => "expired",
             Phase::End => "end",
         };
-        write!(f, "KVM-DIAG/1 {phase}")?;
+        write!(f, "KVM-DIAG/2 {phase}")?;
         for (key, value) in KEYS.iter().zip(self.counts) {
             write!(f, " {key}={value}")?;
         }
@@ -142,7 +144,7 @@ pub fn is_summary(line: &str) -> bool {
     let mut fields = line.split_ascii_whitespace();
     line.len() <= 600
         && !line.bytes().any(|b| b.is_ascii_control())
-        && fields.next() == Some("KVM-DIAG/1")
+        && fields.next() == Some("KVM-DIAG/2")
         && matches!(fields.next(), Some("sample" | "expired" | "end"))
         && KEYS.iter().all(|key| {
             fields

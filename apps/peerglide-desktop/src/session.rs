@@ -705,6 +705,7 @@ pub(super) async fn run_with_diagnostics(
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
                     }else if input.is_empty() && returned_to_source(edge,position.0,position.1) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
+                        count(Count::EdgeReturn);
                         // A motion can wake this task before its callback drops.
                         // Retry on the existing tick after older captured input
                         // drained, even if the user made no further movement.
@@ -856,6 +857,7 @@ pub(super) async fn run_with_diagnostics(
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
                         if returned_to_source(edge, position.0, position.1) && input_status.restore_at_boundary(capture.as_ref(),route)? {
+                            count(Count::EdgeReturn);
                             // Same reliable stream as earlier discrete input: motion cannot
                             // overtake those events and revoke their lease at the receiver.
                             outgoing=None;
