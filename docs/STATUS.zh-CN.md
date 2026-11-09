@@ -6,8 +6,8 @@
 
 | 入口 | 版本／提交 | 实际范围 |
 | --- | --- | --- |
-| [公开下载](https://github.com/ForceMind/Linko/releases/tag/v0.3.22-dev) | 0.3.22-dev／c2582cf | 免登录诊断预览，真实试跑待完成 |
-| [最新修复候选](https://github.com/ForceMind/Linko/pull/93) | 0.3.23-dev／f8cce5d | Mac 回程候选与连接中安全修改方向；未发布，待实机复测 |
+| [公开下载](https://github.com/ForceMind/Linko/releases/tag/v0.3.23-dev) | 0.3.23-dev／f8cce5d | 免登录开发预览，真实试跑待完成 |
+| [修复与验证](https://github.com/ForceMind/Linko/pull/93) | 0.3.23-dev／f8cce5d | Mac 回程候选与连接中安全修改方向，待实机复测 |
 | 主分支 | 921ea70（核对时） | 候选仍在堆叠 PR 中；未合并不等于 main 已更新 |
 
 0.3.23／f8cce5d 的 [五项平台 CI](https://github.com/ForceMind/Linko/actions/runs/42579669153) 与 [两项 GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/42579669163) 通过。三平台的真实 NoNative 进程检查覆盖连接中四方向更新、无效命令边界与正常停止。双机物理验收待完成。
