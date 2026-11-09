@@ -791,6 +791,9 @@ impl App {
         })
     }
     fn start_mode(&mut self, mode: SessionMode) -> Result<()> {
+        self.start_mode_with_diagnostics(mode, false)
+    }
+    fn start_mode_with_diagnostics(&mut self, mode: SessionMode, diagnostics: bool) -> Result<()> {
         if self.resource_check_mode {
             anyhow::ensure!(
                 mode == SessionMode::Communication
@@ -850,7 +853,7 @@ impl App {
             executable.is_file(),
             "缺少同目录的 peerglide 通信程序，请使用完整开发包"
         );
-        let mut cmd = self.worker_command(executable, cert, mode);
+        let mut cmd = self.worker_command(executable, cert, mode, diagnostics);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -904,8 +907,15 @@ impl App {
             )
             && !self.recovery_blocked
     }
-    fn worker_command(&self, executable: PathBuf, cert: PathBuf, mode: SessionMode) -> Command {
+    fn worker_command(
+        &self,
+        executable: PathBuf,
+        cert: PathBuf,
+        mode: SessionMode,
+        diagnostics: bool,
+    ) -> Command {
         let probe = mode == SessionMode::Probe;
+        let diagnostics = diagnostics && mode == SessionMode::Native;
         let mut cmd = Command::new(executable);
         if self.config.listen && !probe {
             cmd.arg("listen");
@@ -926,7 +936,7 @@ impl App {
             .arg("--edge")
             .arg(&self.config.edge)
             .arg("--managed");
-        if self.config.reconnect && !probe {
+        if self.config.reconnect && !probe && !diagnostics {
             cmd.arg("--reconnect");
         } else if !self.config.listen && !probe {
             cmd.args(["--wait-for-peer-secs", "60"]);
@@ -938,6 +948,9 @@ impl App {
                 cmd.arg("--allow-control");
             }
             cmd.arg("--native");
+            if diagnostics {
+                cmd.arg("--input-diagnostics");
+            }
         }
         cmd
     }
@@ -1000,6 +1013,9 @@ impl App {
         }
     }
     fn request_native(&mut self) -> Result<()> {
+        self.request_native_with_diagnostics(false)
+    }
+    fn request_native_with_diagnostics(&mut self, diagnostics: bool) -> Result<()> {
         if self.resource_check_mode {
             self.native_confirmation = false;
             anyhow::bail!("隔离资源检查绝不允许键鼠");
@@ -1022,6 +1038,10 @@ impl App {
             self.worker_permissions.readiness() == worker_permissions::Readiness::Ready,
             "请先重新检查本机键鼠权限，再明确确认本次开启"
         );
+        anyhow::ensure!(
+            !diagnostics || self.child.is_none(),
+            "请先停止当前会话，再开启短时输入诊断"
+        );
         self.config.native = true;
         self.save_config()?;
         if self.child.is_some() {
@@ -1033,7 +1053,7 @@ impl App {
             self.pending_start = Some(SessionMode::Native);
             Ok(())
         } else {
-            self.start_mode(SessionMode::Native)
+            self.start_mode_with_diagnostics(SessionMode::Native, diagnostics)
         }
     }
     fn revoke(&mut self) -> Result<()> {
@@ -1677,6 +1697,7 @@ mod tests {
                 PathBuf::from("not-executed-worker"),
                 PathBuf::from("public-test.crt"),
                 mode,
+                true,
             );
             let args: Vec<_> = command
                 .get_args()
@@ -1684,7 +1705,7 @@ mod tests {
                 .collect();
             assert!(!args
                 .iter()
-                .any(|s| s == "--native" || s == "--allow-control"));
+                .any(|s| s == "--native" || s == "--allow-control" || s == "--input-diagnostics"));
             assert_eq!(
                 args.iter().any(|s| s == "--probe"),
                 mode == SessionMode::Probe
@@ -1694,6 +1715,7 @@ mod tests {
             PathBuf::from("not-executed-worker"),
             PathBuf::from("public-test.crt"),
             SessionMode::Native,
+            false,
         );
         let args: Vec<_> = native
             .get_args()
@@ -3214,6 +3236,7 @@ mod lifecycle_tests {
                 PathBuf::from("not-executed"),
                 PathBuf::from("public-test.der"),
                 mode,
+                false,
             );
             let args: Vec<_> = command.get_args().collect();
             let position = args.iter().position(|arg| *arg == "--wait-for-peer-secs");

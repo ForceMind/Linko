@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
+use peerglide_platform::input_diagnostics::{Count, InputDiagnostics};
 use peerglide_platform::{
     self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute,
     Captured,
@@ -528,13 +529,26 @@ pub async fn run(
     run_with_status(c, tx, rx, policy, stopped, &mut reporter).await
 }
 
-pub(super) async fn run_with_status(
+#[cfg(test)]
+async fn run_with_status(
+    c: quinn::Connection,
+    tx: quinn::SendStream,
+    rx: quinn::RecvStream,
+    policy: Policy,
+    stop: tokio::sync::watch::Receiver<bool>,
+    reporter: &mut super::InputReporter,
+) -> Result<()> {
+    run_with_diagnostics(c, tx, rx, policy, stop, reporter, None).await
+}
+
+pub(super) async fn run_with_diagnostics(
     c: quinn::Connection,
     mut tx: quinn::SendStream,
     mut rx: quinn::RecvStream,
     policy: Policy,
     mut stop: tokio::sync::watch::Receiver<bool>,
     reporter: &mut super::InputReporter,
+    diagnostics: Option<&std::sync::Arc<InputDiagnostics>>,
 ) -> Result<()> {
     let Policy {
         allow,
@@ -554,8 +568,13 @@ pub(super) async fn run_with_status(
         return Ok(());
     }
     let (itx, mut input) = mpsc::channel(128);
+    let count = |kind| {
+        if let Some(diagnostics) = diagnostics {
+            diagnostics.increment(kind);
+        }
+    };
     let mut capture = if native {
-        match platform::capture(itx, peer.clone()) {
+        match platform::capture_with_diagnostics(itx, peer.clone(), diagnostics.cloned()) {
             Ok(capture) => Some(capture),
             Err(error) => {
                 input_status.reporter.set(WorkerInputState::Disabled);
@@ -655,6 +674,7 @@ pub(super) async fn run_with_status(
         match step {
             PendingStep::Waiting=>{},
             PendingStep::Committed{lease,epoch}=>{
+                count(Count::Committed);
                 input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now_ms();
                 if let Some(cap)=&capture{cap.gate.refresh();}
                 continue;
@@ -732,13 +752,20 @@ pub(super) async fn run_with_status(
                             // inert; a late/foreign Grant is explicitly released.
                             if !outgoing.is_some_and(|current|current.lease==lease){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                         }else if first_grant{
+                            count(Count::Granted);
                             eprintln!("Peer grant received; checking local capture admission.");
                         }
                     },
                     Message::Denied{lease}=>{if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
                     Message::Input{lease,event,cursor}=>{
+                        count(Count::ReliableReceived);
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
                         let result=recovery.input(lease,event,cursor,now).await;
+                        match &result {
+                            Ok(true)=>count(Count::ReliableSubmitted),
+                            Err(_)=>count(Count::ReliableFailed),
+                            Ok(false)=>{},
+                        }
                         if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                         input_status.checked(result)?;
                     },
@@ -755,18 +782,37 @@ pub(super) async fn run_with_status(
             },
             d=c.read_datagram()=>{
                 let d=match d {Ok(d)=>d,Err(_) if normal_close(&c)=>return Ok(()),Err(e)=>return Err(e.into())};
-                if let Ok(m)=decode::<Motion>(&d) {if recovery.receiver.motion(m,now_ms()) {
+                count(Count::Received);
+                let now=now_ms();
+                match decode::<Motion>(&d) {
+                    Ok(m) if m.valid()=>{
+                    if !recovery.receiver.accepts(m.lease,now) {
+                        count(Count::LeaseRejected);
+                    } else if recovery.receiver.motion(m,now) {
                     let result=recovery.pointer(m.x,m.y).await;
+                    count(match &result {
+                        Ok(true)=>Count::PointerAccepted,
+                        Ok(false)=>Count::PointerRetired,
+                        Err(_)=>Count::PointerFailed,
+                    });
                     if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                     input_status.checked(result)?;
-                }}
+                    } else {count(Count::ReplayRejected);}
+                    },
+                    _=>count(Count::DecodeRejected),
+                }
             },
             e=input.recv(),if native=>{
                 let Some(e)=e else{
                     if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                     bail!("native capture channel closed");
                 };
-                if let Some(route)=captured_route(e){if !capture.as_ref().is_some_and(|cap|cap.gate.is_current(route)){continue;}}
+                let motion=matches!(e,Captured::Motion{..});
+                if motion {count(Count::Dequeued);}
+                if let Some(route)=captured_route(e){if !capture.as_ref().is_some_and(|cap|cap.gate.is_current(route)){
+                    if motion {count(Count::StaleRoute);}
+                    continue;
+                }}
                 if let Some(lease)=local_takeover(e,recovery.receiver.active().zip(recovery.receive_epoch),&mut edge_gate) {
                     input_status.release(&mut recovery).await?;
                     input_status.reporter.switch(super::WorkerSwitchState::Idle);
@@ -816,13 +862,22 @@ pub(super) async fn run_with_status(
                             send(&mut tx,&Message::Release { lease, cursor: Some(m) }).await?;
                         } else {
                             // Datagram queue pressure may discard motion; the next absolute position repairs it.
-                            let _=c.send_datagram(encode(&m)?.into());
+                            use quinn::SendDatagramError::*;
+                            count(match c.send_datagram(encode(&m)?.into()) {
+                                Ok(())=>Count::SendOk,
+                                Err(UnsupportedByPeer)=>Count::SendUnsupported,
+                                Err(Disabled)=>Count::SendDisabled,
+                                Err(TooLarge)=>Count::SendOversize,
+                                Err(ConnectionLost(_))=>Count::SendClosed,
+                            });
                         }
-                    }},
+                    }else{count(Count::NoLease);}},
                     Captured::Input{event,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)){
                         if !peer.supports(event) { input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let cursor=Motion{lease,sequence,x:position.0,y:position.1};
-                        send(&mut tx,&Message::Input{lease,event,cursor}).await?;
+                        let result=send(&mut tx,&Message::Input{lease,event,cursor}).await;
+                        count(if result.is_ok(){Count::ReliableSent}else{Count::ReliableFailed});
+                        result?;
                     }},
                 }
             }

@@ -365,6 +365,13 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
             MouseOrigin::Recovery(false) => return CallNextHookEx(null_mut(), code, w, l),
             MouseOrigin::Injected => {
                 let block = STATE.with_borrow_mut(|state| {
+                    if w as u32 == WM_MOUSEMOVE {
+                        if let Some(diagnostics) =
+                            state.as_ref().and_then(|s| s.gate.0.diagnostics.get())
+                        {
+                            diagnostics.increment(input_diagnostics::Count::Filtered);
+                        }
+                    }
                     state
                         .as_mut()
                         .and_then(|s| s.local_gestures.as_mut())
@@ -622,6 +629,10 @@ fn submit_inputs(
 pub fn pointer(x: f64, y: f64) -> Result<()> {
     receive_pointer(x, y)
         .map_err(|error| anyhow::anyhow!("native pointer request failed: {error:?}"))
+}
+pub(super) fn diagnostic_cursor_position() -> Option<(i32, i32)> {
+    let mut point = POINT { x: 0, y: 0 };
+    (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
 }
 pub(super) fn receive_pointer(
     x: f64,
