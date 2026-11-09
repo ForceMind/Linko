@@ -1,4 +1,5 @@
 mod input_diagnostics;
+mod layout_control;
 mod pairing_worker;
 mod reconnect;
 mod session;
@@ -147,6 +148,8 @@ impl From<Side> for Edge {
 }
 #[derive(clap::Args)]
 struct Options {
+    #[arg(skip)]
+    layout: std::sync::Arc<layout_control::Controller>,
     /// Accept a stop command on stdin from the local GUI supervisor.
     #[arg(long, hide = true)]
     managed: bool,
@@ -439,13 +442,21 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
         if managed {
             let (request, requested) = tokio::sync::oneshot::channel();
             let direct_stop = stop.clone();
+            let layout = o.layout.clone();
             std::thread::spawn(move || {
-                use std::io::BufRead;
-                for line in std::io::stdin().lock().lines() {
-                    match line {
-                        Ok(s) if s.trim() == "stop" => break,
-                        Ok(_) => (),
-                        Err(_) => break,
+                let stdin = std::io::stdin();
+                let mut reader = stdin.lock();
+                loop {
+                    match layout_control::read_command(&mut reader) {
+                        Ok(Some(line)) if line.trim() == "stop" => break,
+                        Ok(Some(line)) => {
+                            if let Some(update) =
+                                peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line)
+                            {
+                                layout.submit(update);
+                            }
+                        }
+                        Ok(None) | Err(_) => break,
                     }
                 }
                 // This thread must also wake native recovery when the async
@@ -665,8 +676,8 @@ async fn run_inner(
     reconnect::verify_pins(&o.identity, &o.peer_cert, &id.certificate, peer)?;
     initial.negotiated()?;
     println!("Authenticated peer connected. Ctrl+C exits; Ctrl+Alt+Esc restores local input.");
-    worker_event(o.managed, WorkerState::Authenticated);
     if probe {
+        worker_event(o.managed, WorkerState::Authenticated);
         input_status.set(WorkerInputState::Disabled);
         let result = tokio::select! {
             result = async {
@@ -705,7 +716,10 @@ async fn run_inner(
         },
         stop,
         input_status,
-        diagnostics.as_ref().map(|window| &window.counters),
+        session::SessionControls {
+            diagnostics: diagnostics.as_ref().map(|window| &window.counters),
+            layout: Some(&o.layout),
+        },
     )
     .await;
     if let Some(diagnostics) = diagnostics {

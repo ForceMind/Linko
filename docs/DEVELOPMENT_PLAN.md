@@ -2,6 +2,8 @@
 
 当前状态（2026-11-09）见 [功能与交付状态](STATUS.zh-CN.md)。公开诊断预览为 0.3.22-dev。双机修复先从两端摘要定位断点，再修改发生故障的环节。下文保留历史任务。
 
+当前迭代 0.3.23-dev／f8cce5d：Mac 源端取消居中投递与连接中安全修改方向已接入同一候选。方向经原有私有管道发送，由实际 worker 检查输入归属和持键状态后确认，再更新界面和配置。新增回归、三平台真实 NoNative 进程检查、完整五项和两项 GUI 资源检查通过，仍待双机物理复测。可信发布者签名与新版视觉尚未验收，本轮不扩展数据协作或全局手势。
+
 1. Reproducible M0 tests and native CI; fix compile/link failures.
 2. Executable loopback probe and negative authentication checks.
 3. Native input sessions, extended HID and shortcut mappings, permissions UX.

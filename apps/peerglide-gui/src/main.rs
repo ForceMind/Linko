@@ -10,6 +10,7 @@ mod discovery_panel;
 mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
+mod layout_updates;
 mod pairing_discovery;
 mod pairing_panel;
 mod pairing_receipt;
@@ -225,7 +226,14 @@ enum SettingsSection {
 }
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
-struct WorkerSnapshot(AtomicU16, AtomicU16, AtomicBool, AtomicBool, AtomicU16);
+struct WorkerSnapshot(
+    AtomicU16,
+    AtomicU16,
+    AtomicBool,
+    AtomicBool,
+    AtomicU16,
+    std::sync::Mutex<Option<peerglide_protocol::layout_ipc::LayoutUpdate>>,
+);
 impl WorkerSnapshot {
     fn publish_switch(&self, state: WorkerSwitchState) {
         let value = match state {
@@ -365,6 +373,12 @@ fn read_worker_output(
             snapshot.publish_input(event.state, event.terminal);
         } else if let Some(event) = WorkerSwitchEvent::parse(&line) {
             snapshot.publish_switch(event.state);
+        } else if let Some(event) = peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line) {
+            if event.applied.is_some() {
+                if let Ok(mut reply) = snapshot.5.lock() {
+                    *reply = Some(event);
+                }
+            }
         } else {
             let _ = diagnostics.try_send(line.chars().take(600).collect());
         }
@@ -419,6 +433,9 @@ struct App {
     native_confirmation: bool,
     active_mode: Option<SessionMode>,
     pending_start: Option<SessionMode>,
+    layout_request: Option<layout_updates::Pending>,
+    layout_sequence: u32,
+    layout_active: Option<peerglide_protocol::Edge>,
     input_state: Option<WorkerInputState>,
     switch_state: Option<WorkerSwitchState>,
     input_terminal: bool,
@@ -547,6 +564,9 @@ impl App {
             native_confirmation: false,
             active_mode: None,
             pending_start: None,
+            layout_request: None,
+            layout_sequence: 0,
+            layout_active: None,
             input_state: None,
             switch_state: None,
             input_terminal: false,
@@ -878,6 +898,9 @@ impl App {
             read_worker_diagnostics(BufReader::new(stderr), tx, error_wake);
         });
         self.child = Some(child);
+        self.layout_active = None;
+        self.layout_request = None;
+        self.layout_sequence = 0;
         self.active_mode = Some(mode);
         self.waiting_for_peer = false;
         self.peer_wait_expired = false;
@@ -967,6 +990,7 @@ impl App {
         Ok(())
     }
     fn stop(&mut self) {
+        self.layout_request = None;
         self.pairing_panel.cancel();
         self.switch_state = None;
         self.waiting_for_peer = false;
@@ -1094,6 +1118,7 @@ impl App {
         Ok(())
     }
     fn poll(&mut self) {
+        self.poll_layout();
         self.worker_permissions.poll();
         self.discovery
             .poll(self.child.is_some() && self.stopping.is_none() && self.config.listen);
@@ -1261,6 +1286,8 @@ impl App {
                         self.notice = "工作进程已退出，输入恢复未确认。".into();
                     }
                     self.child = None;
+                    self.layout_request = None;
+                    self.layout_active = None;
                     self.active_mode = None;
                     self.stopping = None;
                     if clean && !self.recovery_blocked {
@@ -1325,6 +1352,7 @@ impl App {
                 && (self.child.is_some() || self.events.is_some()))
             || self.stopping.is_some()
             || self.pending_start.is_some()
+            || self.layout_request.is_some()
             || self.discovery.needs_poll()
             || self.worker_permissions.needs_poll()
             || self.gesture_lab.needs_tick()
@@ -2657,7 +2685,7 @@ mod lifecycle_tests {
             let _ = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
         }
     }
-    fn managed_child() -> Result<Child> {
+    pub(super) fn managed_child() -> Result<Child> {
         Ok(Command::new(std::env::current_exe()?)
             .args([
                 "--exact",

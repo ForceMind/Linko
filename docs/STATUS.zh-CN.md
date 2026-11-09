@@ -7,10 +7,10 @@
 | 入口 | 版本／提交 | 实际范围 |
 | --- | --- | --- |
 | [公开下载](https://github.com/ForceMind/Linko/releases/tag/v0.3.22-dev) | 0.3.22-dev／c2582cf | 免登录诊断预览，真实试跑待完成 |
-| [最新修复候选](https://github.com/ForceMind/Linko/pull/92) | 0.3.23-dev／0061bba | Mac 交接省略居中移动并增加回程计数，待实机复测 |
+| [最新修复候选](https://github.com/ForceMind/Linko/pull/93) | 0.3.23-dev／f8cce5d | Mac 回程候选与连接中安全修改方向；未发布，待实机复测 |
 | 主分支 | 921ea70（核对时） | 候选仍在堆叠 PR 中；未合并不等于 main 已更新 |
 
-0.3.23 修复候选的 [五项平台 CI](https://github.com/ForceMind/Linko/actions/runs/42572655073) 与 [固定上游检查](https://github.com/ForceMind/Linko/actions/runs/42572654957) 通过。双机验收待完成。
+0.3.23／f8cce5d 的 [五项平台 CI](https://github.com/ForceMind/Linko/actions/runs/42579669153) 与 [两项 GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/42579669163) 通过。三平台的真实 NoNative 进程检查覆盖连接中四方向更新、无效命令边界与正常停止。双机物理验收待完成。
 
 ## 已实现并有自动验证
 
@@ -21,6 +21,7 @@
 - 两端原生会话可显式启用 120 秒输入诊断。连接鉴权、许可交接、输入提交与光标观察分别记录，摘要仅含数值。
 - 中文 GUI、真实本机设备类型探测、未知对端的中性图标、固定启用确认区。
 - A 跃迁图标与中文主字标；macOS 专用透明外边距及资源回归。
+- 0.3.23 候选允许连接中、本机控制时修改主屏相对方向；worker 再次检查租约／持键／回调并确认，界面才显示生效。未确认与保存冲突保留提示，停止后旧请求失效；实机尚未验收。
 - 离线手势／规则预览、数据授权模型、离线剪贴板／文件存储基础。
 
 ## 已实现但实机未通过／未验收

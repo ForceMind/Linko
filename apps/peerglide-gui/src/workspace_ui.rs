@@ -150,7 +150,7 @@ impl App {
                     ui.small("对端方向");
                     for side in ["left", "right", "top", "bottom"] {
                         if ui
-                            .selectable_label(self.config.edge == side, edge_label(side))
+                            .selectable_label(self.displayed_edge() == side, edge_label(side))
                             .clicked()
                         {
                             self.try_set_edge(side);
@@ -164,7 +164,7 @@ impl App {
         self.workspace_device_cards(ui);
         ui.add_space(4.0);
         ui.small(if self.child.is_some() {
-            "会话中布局已锁定，停止后可以调整。"
+            "连接中可在本机控制时调整方向；新布局等待工作进程确认。"
         } else {
             "两台主屏的相对方向；另一端需设置相反方向。"
         });
@@ -305,7 +305,7 @@ impl App {
         );
         let (local, peer) = workspace_rects(
             canvas.shrink(20.0),
-            &self.config.edge,
+            self.displayed_edge(),
             registered,
             self.workspace_zoom,
         );

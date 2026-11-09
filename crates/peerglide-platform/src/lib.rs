@@ -420,6 +420,13 @@ impl CaptureGate {
     pub fn idle(&self) -> bool {
         self.0.control.load(Ordering::Acquire) & COUNT == 0
     }
+    /// Retire queued local events when applying a new edge. The same mode /
+    /// callback / physical-hold CAS used by capture admission remains in force.
+    pub fn reconfigure_local(&self) -> bool {
+        self.0.healthy.load(Ordering::Acquire)
+            && !self.0.return_pending.load(Ordering::Acquire)
+            && self.publish(false).is_some()
+    }
     fn finish_outgoing_if_idle(&self, epoch: CaptureEpoch) -> bool {
         let word = self.0.control.load(Ordering::Acquire);
         self.finish_outgoing_from(epoch, word, || {})
@@ -1454,6 +1461,28 @@ impl HookState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn layout_change_retires_local_events_and_preserves_active_or_held_contexts() {
+        let gate = CaptureGate::default();
+        let previous = gate.route().unwrap();
+        gate.set_held(1);
+        assert!(!gate.reconfigure_local());
+        assert_eq!(gate.route(), Some(previous));
+        gate.set_held(0);
+        let callback = gate.begin_event();
+        assert!(!gate.reconfigure_local());
+        drop(callback);
+        assert!(gate.reconfigure_local());
+        assert_ne!(gate.route(), Some(previous));
+        assert!(gate.try_activate());
+        assert!(!gate.reconfigure_local());
+        gate.disable();
+        gate.0.return_pending.store(true, Ordering::Release);
+        assert!(!gate.reconfigure_local());
+        gate.0.return_pending.store(false, Ordering::Release);
+        gate.source_lost();
+        assert!(!gate.reconfigure_local());
+    }
     #[test]
     fn boundary_return_reuses_and_preserves_the_original_restoration_fence() {
         let session = CaptureSession {
