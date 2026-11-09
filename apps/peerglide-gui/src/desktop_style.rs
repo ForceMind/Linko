@@ -611,3 +611,130 @@ pub(super) fn monitor(
         painter.circle_filled(glass.min + egui::vec2(10.0, 10.0), 3.0, colors.accent);
     }
 }
+
+/// Pure design tokens for the interface redesign: constants and side-effect free functions.
+/// Existing widgets keep their literal values until the slice that migrates them lands.
+// Slices after S0 consume these; until then the unused items would fail `-D warnings`.
+#[allow(dead_code)]
+pub(super) mod tokens {
+    use super::palette;
+    use eframe::egui::Color32;
+
+    /// Hover fill and outline fade (M1), seconds.
+    pub(crate) const HOVER_SECS: f32 = 0.08;
+    /// Selection fill, selection ring and focus ring fade (M2), seconds.
+    pub(crate) const SELECT_SECS: f32 = 0.12;
+    /// Disclosure expand and collapse, seconds.
+    pub(crate) const EXPAND_SECS: f32 = 0.16;
+    /// Sidebar width change (M3), seconds.
+    pub(crate) const SIDEBAR_SECS: f32 = 0.20;
+    /// Page and view switch slide plus fade (M4), seconds.
+    pub(crate) const VIEW_SWITCH_SECS: f32 = 0.16;
+    /// Title bar status capsule change (M5), seconds.
+    pub(crate) const CAPSULE_SECS: f32 = 0.18;
+    /// Status badge pop-in (M6), seconds.
+    pub(crate) const BADGE_POP_SECS: f32 = 0.20;
+    /// Display rebound after a drag is released (M7), seconds.
+    pub(crate) const REBOUND_SECS: f32 = 0.22;
+    /// Shake after a rejected code or address (M8), seconds.
+    pub(crate) const SHAKE_SECS: f32 = 0.36;
+    /// Check mark and cross stroke drawing (M9), seconds.
+    pub(crate) const STROKE_DRAW_SECS: f32 = 0.24;
+    /// Dialog height change (M10), seconds.
+    pub(crate) const RESIZE_SECS: f32 = 0.20;
+    /// List item entering or leaving (M12), seconds.
+    pub(crate) const LIST_PRESENCE_SECS: f32 = 0.18;
+    /// Upper bound for everything one interaction may play, seconds.
+    pub(crate) const MAX_INTERACTION_SECS: f32 = 0.36;
+    /// Spinner step (M11). Matches the existing 100 ms activity tick; it is not a timer.
+    pub(crate) const SPINNER_STEP_SECS: f32 = 0.1;
+    /// Number of cells in the discrete spinner (M11).
+    pub(crate) const SPINNER_CELLS: usize = 8;
+
+    pub(crate) const SIDEBAR_EXPANDED_W: f32 = 240.0;
+    pub(crate) const SIDEBAR_COLLAPSED_W: f32 = 64.0;
+    /// Horizontal travel of a view switch slide, in points.
+    pub(crate) const VIEW_SLIDE_PX: f32 = 12.0;
+
+    pub(crate) const ICON_SMALL: f32 = 16.0;
+    pub(crate) const ICON_MEDIUM: f32 = 20.0;
+    pub(crate) const ICON_STROKE: f32 = 1.4;
+
+    pub(crate) const RADIUS_CHIP: u8 = 8;
+    pub(crate) const RADIUS_CONTROL: u8 = 9;
+    pub(crate) const RADIUS_MENU: u8 = 10;
+    pub(crate) const RADIUS_PILL: u8 = 12;
+    pub(crate) const RADIUS_CARD: u8 = 14;
+
+    pub(crate) const SPACE_XS: f32 = 4.0;
+    pub(crate) const SPACE_SM: f32 = 8.0;
+    pub(crate) const SPACE_MD: f32 = 12.0;
+    pub(crate) const SPACE_LG: f32 = 18.0;
+
+    pub(crate) fn accent_color(dark: bool) -> Color32 {
+        palette(dark).accent
+    }
+
+    pub(crate) fn line_color(dark: bool) -> Color32 {
+        palette(dark).line
+    }
+
+    pub(crate) fn muted_color(dark: bool) -> Color32 {
+        palette(dark).muted
+    }
+
+    pub(crate) fn text_color(dark: bool) -> Color32 {
+        palette(dark).text
+    }
+
+    pub(crate) fn surface_color(dark: bool) -> Color32 {
+        palette(dark).surface
+    }
+
+    pub(crate) fn canvas_color(dark: bool) -> Color32 {
+        palette(dark).canvas
+    }
+
+    /// `color` faded by `alpha` (0 is invisible, 1 is unchanged).
+    pub(crate) fn faded(color: Color32, alpha: f32) -> Color32 {
+        color.gamma_multiply(alpha.clamp(0.0, 1.0))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn one_shot_durations_fit_the_interaction_budget() {
+            let durations = [
+                VIEW_SWITCH_SECS,
+                CAPSULE_SECS,
+                BADGE_POP_SECS,
+                REBOUND_SECS,
+                SHAKE_SECS,
+                STROKE_DRAW_SECS,
+                RESIZE_SECS,
+                LIST_PRESENCE_SECS,
+            ];
+            for secs in durations {
+                assert!(secs > 0.0 && secs <= MAX_INTERACTION_SECS, "{secs}");
+            }
+        }
+
+        #[test]
+        fn fading_scales_alpha_without_leaving_the_range() {
+            let color = Color32::from_rgb(10, 20, 30);
+            assert_eq!(faded(color, 1.0), color);
+            assert_eq!(faded(color, 2.0), color);
+            assert_eq!(faded(color, 0.0).a(), 0);
+            assert_eq!(faded(color, -1.0).a(), 0);
+        }
+
+        #[test]
+        fn palette_colors_follow_the_theme() {
+            assert_ne!(canvas_color(false), canvas_color(true));
+            assert_ne!(accent_color(false), accent_color(true));
+            assert_eq!(surface_color(false), Color32::WHITE);
+        }
+    }
+}
