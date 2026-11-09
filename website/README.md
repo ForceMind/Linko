@@ -1,6 +1,6 @@
 # Linko / 屏跃官网
 
-中文官网 **0.1.7**。现有 Cloudflare Pages 项目 `linko`：<https://linko-63e.pages.dev/>。
+中文官网 **0.1.8**。现有 Cloudflare Pages 项目 `linko`：<https://linko-63e.pages.dev/>。
 只上传 `website/dist` 白名单静态内容，不上传凭据、身份、target 或个人资料。不需要全局安装依赖或浏览器测试。
 
 ## 构建与部署
@@ -33,5 +33,5 @@ node verify-downloads.mjs
 
 - `assets/linko-mark.svg`：已确认A跃迁，源 `docs/design/linko-brand-v3/app-icon.svg`。
 - `assets/app-preview.png`：8c6ecbb6517b855f57f4d41ffb41092973cfbc25的原生CI隔离NoNative原图，SHA-256 `071f2760a97838a44457d87dbd0fcc03c62c4d71a76afc5e0ffa0f11b38481e9`。
-- 候选界面为0.3.20-dev；公开下载为0.3.22-dev，来源c2582cf。下载元数据在 `src/release.json`，摘要对应原始便携ZIP。
+- 候选界面为0.3.20-dev；公开下载为0.3.23-dev，来源f8cce5d。下载元数据在 `src/release.json`，摘要对应原始便携ZIP。
 - 真实双机跨屏尚未通过，新V2排版尚未完整落地。功能进度见[状态文档](../docs/STATUS.zh-CN.md)。
