@@ -2302,6 +2302,6 @@ KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0
 
 读数建议：先看 Windows 行 `rx`；`rx＝decode＋lease＋replay＋apply（＋retired＋apply_fail）` 应闭合。`rx` 近 0 查传输；`lease` 高查心跳／Pong；`retired` 高看 `g_*`；`apply`≈`sdk` 且 `sdk_fail`＝0 而 `moved`＝0、`unchanged`＞0 属系统层问题。滚轮先比较 Windows 的 `wh_phys`／`wh_inj`／`scr_tx`／`scr_zero` 与 Mac 的 `rel_rx`／`scr_apply`。
 
-代码核对（读代码，未运行）：滚轮路径 Windows 钩子→整格折算→可靠流 Input→Mac `CGEventCreateScrollWheelEvent`（Rust 以可变参数声明，调用约定正确）一路没有发现缺陷；Oink 参考实现使用 `CGEventCreateScrollWheelEvent2`、像素／行单位和阶段字段，本项目只发整格行单位。是否需要对齐取决于上述计数。Mac 位移取自 CGEvent 浮点字段，Oink 注释称其在部分帧不可靠并改读 IOHID 指针子事件，同样等计数后再判断，不预先更换。
+代码核对（读代码，未运行）：滚轮路径 Windows 钩子→整格折算→可靠流 Input→Mac `CGEventCreateScrollWheelEvent`（Rust 以可变参数声明，调用约定正确）一路没有发现缺陷；Oink 参考实现使用 `CGEventCreateScrollWheelEvent2`、像素／行单位和阶段字段，本项目只发整格行单位。是否需要对齐取决于上述计数。Mac 位移取自 CGEvent 浮点字段 4／5，Oink 同样读取这两个字段；其 `physical_motion.rs` 头注释只说明拖动帧没有可用的 HID 子事件、CG 浮点字段与 NSEvent 恢复不出拖动数据，改读 IOHID 指针子事件用于普通帧，不能据此认为本项目的位移取法不可靠。更换与否等计数再判断，不预先更换。（此前此处误写“Oink 称其在部分帧不可靠”，已更正。）
 
 摘要最长约 892 字节；`MAX_SUMMARY_BYTES`＝1200 同时约束摘要校验和 GUI 诊断行截断（原 600）。新增回归：最大摘要不超限、旧版本行被拒，以及过期数据命令按 `Time` 记录并仍然退役。本机无 Rust/Cargo，未编译；fmt、严格 Clippy、locked test/build 以精确提交 CI 为准。真实物理验收仍须同包双端在同一 120 秒窗口内复测并取两端摘要，不能以 CI、连接成功或 SendInput 返回当作通过。
