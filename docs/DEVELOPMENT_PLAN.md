@@ -1,6 +1,6 @@
 # Development plan
 
-当前状态（2026-11-09）见 [功能与交付状态](STATUS.zh-CN.md)。公开版本为 0.3.17-dev，诊断候选为 0.3.22-dev。双机修复先从两端摘要定位断点，再修改发生故障的环节。下文保留历史任务。
+当前状态（2026-11-09）见 [功能与交付状态](STATUS.zh-CN.md)。公开诊断预览为 0.3.22-dev。双机修复先从两端摘要定位断点，再修改发生故障的环节。下文保留历史任务。
 
 1. Reproducible M0 tests and native CI; fix compile/link failures.
 2. Executable loopback probe and negative authentication checks.
