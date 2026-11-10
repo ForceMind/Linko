@@ -1074,7 +1074,10 @@ mod tests {
         let mut code = String::new();
         let rect = cells_pass(&ctx, &mut code, vec![text("12")]);
         assert!(code.is_empty(), "unfocused cells must ignore typing");
-        assert!(!cells_ime_enabled(&ctx, &mut code), "no IME while unfocused");
+        assert!(
+            !cells_ime_enabled(&ctx, &mut code),
+            "no IME while unfocused"
+        );
         assert!((rect.width() - cells_width()).abs() < 0.5);
         let at = rect.center();
         for pressed in [true, false] {
@@ -1089,7 +1092,10 @@ mod tests {
             ];
             cells_pass(&ctx, &mut code, click);
         }
-        assert!(cells_ime_enabled(&ctx, &mut code), "focused cells enable IME");
+        assert!(
+            cells_ime_enabled(&ctx, &mut code),
+            "focused cells enable IME"
+        );
         cells_pass(&ctx, &mut code, vec![text("12")]);
         assert_eq!(code, "12");
         cells_pass(&ctx, &mut code, vec![key(egui::Key::Backspace, true)]);
