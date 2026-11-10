@@ -1941,7 +1941,9 @@ pub(super) mod safety_dialog_tests {
         match shape {
             egui::epaint::Shape::Text(text) => {
                 let bounds = text.visual_bounding_rect();
-                painted.texts.push((text.galley.job.text.clone(), bounds, clip));
+                painted
+                    .texts
+                    .push((text.galley.job.text.clone(), bounds, clip));
             }
             egui::epaint::Shape::Vec(shapes) => {
                 for shape in shapes {
@@ -2034,7 +2036,10 @@ pub(super) mod safety_dialog_tests {
                     assert!(has("实机兼容性、DPI、输入法与权限变化仍未完成验收。"));
                     assert!(has("接收端首次物理动作仅用于收回控制，不执行或回放。"));
                     assert_eq!(has("这不会开启断线自动重连。"), waits);
-                    assert_eq!(has("清理成功后再以键鼠模式重连；失败不自动继续。"), replaces);
+                    assert_eq!(
+                        has("清理成功后再以键鼠模式重连；失败不自动继续。"),
+                        replaces
+                    );
                     assert_eq!(has("本机接收偏好：允许已登记对端控制本机。"), allow);
                     assert_eq!(has("本机接收偏好：不允许对端控制本机。"), !allow);
                     assert_eq!(has("可请求控制已授权本机的对端。"), !allow);

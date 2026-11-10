@@ -770,10 +770,7 @@ mod tests {
     }
 
     fn checker(checking: bool, observation: Option<(Outcome, Instant)>) -> Checker {
-        let result = observation.map(|(outcome, finished)| Observation {
-            outcome,
-            finished,
-        });
+        let result = observation.map(|(outcome, finished)| Observation { outcome, finished });
         Checker {
             receiver: checking.then(|| mpsc::channel().1),
             cancel: None,
