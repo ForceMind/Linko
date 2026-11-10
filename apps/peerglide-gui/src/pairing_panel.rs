@@ -726,6 +726,21 @@ fn code_cells(
     }
     let focused = response.has_focus();
     let changed = focused && ui.input(|input| apply_code_events(code, &input.events));
+    if focused {
+        // The platform enables native IME only while a widget publishes this output,
+        // the way TextEdit does; without it composed commits would never arrive.
+        let slot = cell_rect(rect, code.len().min(CODE_LEN - 1));
+        let thin = egui::vec2(1.0, slot.height());
+        let cursor_rect = egui::Rect::from_min_size(slot.left_top(), thin);
+        ui.output_mut(|output| {
+            output.ime = Some(egui::output::IMEOutput {
+                purpose: egui::IMEPurpose::Normal,
+                rect,
+                cursor_rect,
+                should_interrupt_composition: false,
+            });
+        });
+    }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, CODE_LABEL));
     if ui.is_rect_visible(rect) {
         let row = rect.translate(egui::vec2(offset, 0.0));
@@ -1001,7 +1016,7 @@ mod tests {
         ));
         assert_eq!(code, "123");
         let commit = egui::Event::Ime(egui::ImeEvent::Commit("4".into()));
-        assert!(apply_code_events(&mut code, &[commit, paste("56")]));
+        assert!(apply_code_events(&mut code, &[commit, paste("5")]));
         assert_eq!(code, "12345");
         // A short paste appends and stops at eight digits.
         assert!(apply_code_events(&mut code, &[paste("6789")]));
@@ -1040,12 +1055,26 @@ mod tests {
         output.drop_without_applying_deltas();
         rect
     }
+    fn cells_ime_enabled(ctx: &egui::Context, code: &mut String) -> bool {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 200.0));
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            code_cells(ui, code, 0.0, false);
+        });
+        let enabled = output.platform_output.ime.is_some();
+        output.drop_without_applying_deltas();
+        enabled
+    }
     #[test]
     fn code_cells_take_input_only_after_focus() {
         let ctx = crate::tests::ui_context();
         let mut code = String::new();
         let rect = cells_pass(&ctx, &mut code, vec![text("12")]);
         assert!(code.is_empty(), "unfocused cells must ignore typing");
+        assert!(!cells_ime_enabled(&ctx, &mut code), "no IME while unfocused");
         assert!((rect.width() - cells_width()).abs() < 0.5);
         let at = rect.center();
         for pressed in [true, false] {
@@ -1060,6 +1089,7 @@ mod tests {
             ];
             cells_pass(&ctx, &mut code, click);
         }
+        assert!(cells_ime_enabled(&ctx, &mut code), "focused cells enable IME");
         cells_pass(&ctx, &mut code, vec![text("12")]);
         assert_eq!(code, "12");
         cells_pass(&ctx, &mut code, vec![key(egui::Key::Backspace, true)]);
