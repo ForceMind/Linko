@@ -68,13 +68,16 @@ pub enum Count {
     DenyLease,
     DenyBegin,
     DenyPlacement,
+    SlowPointer,
+    SlowInput,
+    LoopStall,
 }
 
 /// Longest line the worker, the GUI log and the copy action accept. The
 /// largest possible summary (every counter at u32::MAX) must fit below it.
 pub const MAX_SUMMARY_BYTES: usize = 1600;
 
-const KEYS: [&str; Count::DenyPlacement as usize + 1] = [
+const KEYS: [&str; Count::LoopStall as usize + 1] = [
     "cap",
     "zero",
     "filtered",
@@ -139,6 +142,9 @@ const KEYS: [&str; Count::DenyPlacement as usize + 1] = [
     "deny_lease",
     "deny_begin",
     "deny_place",
+    "slow_ptr",
+    "slow_inp",
+    "loop_stall",
 ];
 
 pub struct InputDiagnostics {
@@ -212,7 +218,7 @@ impl fmt::Display for Snapshot {
             Phase::Expired => "expired",
             Phase::End => "end",
         };
-        write!(f, "KVM-DIAG/4 {phase}")?;
+        write!(f, "KVM-DIAG/5 {phase}")?;
         for (key, value) in KEYS.iter().zip(self.counts) {
             write!(f, " {key}={value}")?;
         }
@@ -225,7 +231,7 @@ pub fn is_summary(line: &str) -> bool {
     let mut fields = line.split_ascii_whitespace();
     line.len() <= MAX_SUMMARY_BYTES
         && !line.bytes().any(|b| b.is_ascii_control())
-        && fields.next() == Some("KVM-DIAG/4")
+        && fields.next() == Some("KVM-DIAG/5")
         && matches!(fields.next(), Some("sample" | "expired" | "end"))
         && KEYS.iter().all(|key| {
             fields
@@ -258,7 +264,7 @@ mod tests {
         .to_string();
         assert!(summary.len() <= MAX_SUMMARY_BYTES);
         assert!(is_summary(&summary));
-        assert!(!is_summary(&summary.replace("KVM-DIAG/4", "KVM-DIAG/3")));
+        assert!(!is_summary(&summary.replace("KVM-DIAG/5", "KVM-DIAG/4")));
         assert!(!is_summary(&(summary.clone() + " path=/private")));
         assert!(!is_summary(&summary.replace("cap=", "address=")));
     }

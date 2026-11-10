@@ -215,7 +215,9 @@ pub(super) fn capture_receiving(
             };
             CGEventTapEnable(tap, true);
             let _ = ready.send(true);
+            let mut last_turn = std::time::Instant::now();
             loop {
+                super::note_loop_gap(&receive_gate, &mut last_turn);
                 let debt = STATE
                     .with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
                     || receive_gate.receiving_epoch().is_some();

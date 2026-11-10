@@ -2321,3 +2321,10 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 `/4` 新增字段（线上协议不变）：源端边缘判定 `edge_hit`（到达边缘）及首个阻挡原因 `blk_peer`（对端无移动能力）、`blk_gate`（捕获门非 Local 空闲）、`blk_busy`（已有发出中的请求或租约）、`blk_recv`（本机仍持有接收租约）、`blk_prot`（接收保护尚未撤销）；`acq_tx` 发出 Acquire、`denied_rx` 收到 Denied、`acq_to` 等待授予超时、`acq_cancel` 本机准入保护取消；接收端 `acq_rx` 收到 Acquire、`deny_arg` 参数无效、`deny_busy` 本机忙、`deny_auth` 未授权接收控制、`deny_lease` 租约被拒（已有租约或编号复用）、`deny_begin` 进入接收失败、`deny_place` 入口定位失败。macOS 的 `wh_inj` 现在统计回到 tap 的自注入滚轮，`wh_phys` 统计未带标记的滚轮；若 `scr_apply` 很大而 `wh_inj` 为 0、`wh_phys` 很大，说明注入的滚轮没有带上自有标记，被当成本机物理输入而吞掉并请求接管。摘要上限提高到 1600 字节，最长约 1237 字节。
 
 下次复测先看 Mac 行：`edge_hit` 是否大于 0；若是，`blk_*` 哪一项非零（本机没发出 Acquire），或 `acq_tx` 大于 0 而 `denied_rx` 非零（Windows 拒绝，再看 Windows 行的 `deny_*`），或 `acq_to` 非零（Windows 没回应）。
+
+
+## 2026-11-10 集成包实测：Windows→Mac 滚轮恢复；Mac→Windows 仍因 Windows 原生线程停滞而反复中断（/5 计时计数，待 CI）
+
+用户用集成包 e31a38a（PR97–PR100）双端实测：Windows→Mac 滚轮恢复正常（Windows `scr_tx＝188`，Mac `scr_apply＝188`，用户确认），确认 PR99 的调用约定修复在 Apple 芯片上生效。Mac→Windows 仍不正常：Windows `rel_rx＝60`、`rel_apply＝40`、`scr_apply＝34`，记录末尾仍为 `Error: native receive service: Timeout`；Mac `peer_rel＝4`，即 Windows 四次主动结束 Mac 的控制。PR100 已使输入超时不再断开连接，这次的超时出现在释放或进入接收阶段，说明 Windows 原生线程停滞的时间超过单条命令期限。用户同时看到 Mac 光标在控制 Windows 时仍跟着移动，PR98 的解耦在后台 worker 进程中未生效（与该 PR 中记录的风险一致）。
+
+为区分 Windows 停在系统注入调用还是线程别处，本批新增 `KVM-DIAG/5` 三个计时计数（只在原生循环内计时，不在回调中）：`slow_ptr` 单次光标注入超过 50 ms，`slow_inp` 单次输入注入超过 50 ms，`loop_stall` 原生循环两轮之间超过 200 ms。线上协议与输入行为不变。本机未编译。
