@@ -491,10 +491,8 @@ pub(super) mod tokens {
     /// Title bar status capsule change (M5), seconds.
     pub(crate) const CAPSULE_SECS: f32 = 0.18;
     /// Status badge pop-in (M6), seconds.
-    #[allow(dead_code)]
     pub(crate) const BADGE_POP_SECS: f32 = 0.20;
     /// Display rebound after a drag is released (M7), seconds.
-    #[allow(dead_code)]
     pub(crate) const REBOUND_SECS: f32 = 0.22;
     /// Shake after a rejected code or address (M8), seconds.
     #[allow(dead_code)]
