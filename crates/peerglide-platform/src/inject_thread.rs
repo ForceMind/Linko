@@ -565,7 +565,8 @@ mod tests {
             Err(NativeFailure::BeforeSubmission)
         ));
         assert!(matches!(
-            rig.thread.push(EPOCH, Item::Input(Input::Scroll { x: 1, y: 0 })),
+            rig.thread
+                .push(EPOCH, Item::Input(Input::Scroll { x: 1, y: 0 })),
             Err(NativeFailure::BeforeSubmission)
         ));
         rig.hold(false);
