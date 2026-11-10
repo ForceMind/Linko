@@ -286,7 +286,9 @@ pub(super) fn capture_receiving(
             };
             CGEventTapEnable(tap, true);
             let _ = ready.send(true);
+            let mut last_turn = std::time::Instant::now();
             loop {
+                super::note_loop_gap(&receive_gate, &mut last_turn);
                 // Fail-open path independent of the async session: a watchdog,
                 // Emergency, fault or stop that leaves Remote reconnects here.
                 reconcile_source_cursor(|| receive_gate.remote_live().is_some());

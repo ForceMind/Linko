@@ -766,6 +766,26 @@ impl CaptureSession {
         let _ = self.restore_checked();
     }
 }
+/// Native loop only: tallies an SDK call that held the single native owner too long.
+#[cfg(any(windows, target_os = "macos"))]
+fn note_slow_sdk(gate: &CaptureGate, started: std::time::Instant, kind: input_diagnostics::Count) {
+    if started.elapsed() >= std::time::Duration::from_millis(50) {
+        if let Some(diagnostics) = gate.0.diagnostics.get() {
+            diagnostics.increment(kind);
+        }
+    }
+}
+/// Native loop only: tallies a gap between loop turns long enough to delay commands.
+#[cfg(any(windows, target_os = "macos"))]
+fn note_loop_gap(gate: &CaptureGate, last: &mut std::time::Instant) {
+    let now = std::time::Instant::now();
+    if now.duration_since(*last) >= std::time::Duration::from_millis(200) {
+        if let Some(diagnostics) = gate.0.diagnostics.get() {
+            diagnostics.increment(input_diagnostics::Count::LoopStall);
+        }
+    }
+    *last = now;
+}
 #[cfg(any(windows, target_os = "macos"))]
 struct NativeReceiveBackend {
     gate: CaptureGate,
@@ -819,7 +839,9 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
         let before = diagnostics
             .filter(|d| d.sample_cursor(now_ms()))
             .map(|_| windows::diagnostic_cursor_position());
+        let started = std::time::Instant::now();
         let result = native::receive_pointer(point.x, point.y);
+        note_slow_sdk(&self.gate, started, input_diagnostics::Count::SlowPointer);
         if let Some(diagnostics) = diagnostics {
             use input_diagnostics::Count;
             diagnostics.increment(if result.is_ok() {
@@ -845,7 +867,10 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
         }
-        native::receive_inject(event)
+        let started = std::time::Instant::now();
+        let result = native::receive_inject(event);
+        note_slow_sdk(&self.gate, started, input_diagnostics::Count::SlowInput);
+        result
     }
     fn leave_receiving(
         &mut self,

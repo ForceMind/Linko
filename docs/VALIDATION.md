@@ -2356,3 +2356,10 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 同一轮 Windows 会话记录末尾为 `Error: native receive service: Timeout`，结束摘要 `rel_rx＝2`、`rel_apply＝1`、`rel_fail＝1`、`scr_apply＝1`、`wh_inj＝1`：Mac 发来的第一次滚轮在 Windows 注入成功，第二次的原生命令在 250 ms 内没有回复。超时会使取消守卫请求恢复，原生端随即把这次接收标为排空并清理已注入的按下（现有测试 `bounded_timeout_cancels_late_begin_and_down_even_without_any_native_pump_progress` 覆盖这一点），但会话层把 `Timeout` 当作致命错误，直接结束了整个连接，之后的滚轮与移动全部丢失。
 
 本批只改会话层：输入或光标命令超时且该接收已不再活动时，写一行诊断并按“未提交”处理；下一轮循环走既有路径释放租约、通知对端 Release，并照旧检查原生端确认清理完成，无法确认时仍按原逻辑报错结束。原生恢复与已注入按下的清理逻辑不变，线上协议不变。会话层这一分支没有新的自动测试；物理效果需要两端同包复测。为什么第二次命令会超过 250 ms 仍未查明，本批不修改超时时长。
+
+
+## 2026-11-10 集成包实测：Windows→Mac 滚轮恢复；Mac→Windows 仍因 Windows 原生线程停滞而反复中断（/5 计时计数，待 CI）
+
+用户用集成包 e31a38a（PR97–PR100）双端实测：Windows→Mac 滚轮恢复正常（Windows `scr_tx＝188`，Mac `scr_apply＝188`，用户确认），确认 PR99 的调用约定修复在 Apple 芯片上生效。Mac→Windows 仍不正常：Windows `rel_rx＝60`、`rel_apply＝40`、`scr_apply＝34`，记录末尾仍为 `Error: native receive service: Timeout`；Mac `peer_rel＝4`，即 Windows 四次主动结束 Mac 的控制。PR100 已使输入超时不再断开连接，这次的超时出现在释放或进入接收阶段，说明 Windows 原生线程停滞的时间超过单条命令期限。用户同时看到 Mac 光标在控制 Windows 时仍跟着移动，PR98 的解耦在后台 worker 进程中未生效（与该 PR 中记录的风险一致）。
+
+为区分 Windows 停在系统注入调用还是线程别处，本批新增 `KVM-DIAG/5` 三个计时计数（只在原生循环内计时，不在回调中）：`slow_ptr` 单次光标注入超过 50 ms，`slow_inp` 单次输入注入超过 50 ms，`loop_stall` 原生循环两轮之间超过 200 ms。线上协议与输入行为不变。本机未编译。
