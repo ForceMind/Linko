@@ -491,13 +491,13 @@ mod tests {
 
         fn drive(&mut self, ctx: &egui::Context, on: bool) {
             let now = ctx.input(|input| input.time);
-            self.hover = hover_mix(ctx, egui::Id::new("scene_hover"), on);
-            select_mix(ctx, egui::Id::new("scene_select"), on);
-            expand_amount(ctx, egui::Id::new("scene_expand"), on);
-            presence_amount(ctx, egui::Id::new("scene_presence"), on);
-            self.width = sidebar_width(ctx, egui::Id::new("scene_sidebar"), on);
+            self.hover = hover_mix(ctx, egui::Id::unique("scene_hover"), on);
+            select_mix(ctx, egui::Id::unique("scene_select"), on);
+            expand_amount(ctx, egui::Id::unique("scene_expand"), on);
+            presence_amount(ctx, egui::Id::unique("scene_presence"), on);
+            self.width = sidebar_width(ctx, egui::Id::unique("scene_sidebar"), on);
             let target = if on { 300.0 } else { 120.0 };
-            self.height = dialog_height(ctx, egui::Id::new("scene_height"), target);
+            self.height = dialog_height(ctx, egui::Id::unique("scene_height"), target);
             self.glide.tick(ctx);
             self.capsule.tick(ctx);
             self.shake.tick(ctx);
@@ -556,8 +556,8 @@ mod tests {
     #[test]
     fn zero_duration_jumps_to_the_end() {
         let mut clock = Clock::new();
-        let flag = egui::Id::new("zero_flag");
-        let scalar = egui::Id::new("zero_scalar");
+        let flag = egui::Id::unique("zero_flag");
+        let scalar = egui::Id::unique("zero_scalar");
         let mut got = (0.0_f32, 0.0_f32);
         clock.frames(5, |ctx| {
             got = (
