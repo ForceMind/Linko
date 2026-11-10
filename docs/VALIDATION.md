@@ -2349,3 +2349,10 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 原因（读代码与调用约定得出，未经实机验证）：C 原型为 `CGEventCreateScrollWheelEvent(source, units, wheelCount, int32_t wheel1, ...)`，`wheel1` 是具名参数；本项目把它声明为 `fn CGEventCreateScrollWheelEvent(source, unit, count, ...)`，把 `wheel1` 也作为可变参数传入。Apple arm64 调用约定把可变参数全部放在栈上、具名参数放在寄存器里，所以系统读到的纵向值是寄存器中的残留值，我们传的纵向值被当成横向值；x86_64 上两者恰好一致，因此只在 Apple 芯片上出现。修正改用定长的 `CGEventCreateScrollWheelEvent2(source, unit, 2, y, x, 0)`（Oink 参考实现同样使用该接口）。仓库内没有其他可变参数 FFI 声明。排除过的解释：滚轮被本机 tap 吞掉（`wh_inj＝44` 否定）、Windows 未发出或零增量（`scr_tx＝44`、`scr_zero＝0` 否定）。
 
 同一轮另见 Windows `rel_fail＝1`：一次来自 Mac 的可靠输入在 Windows 注入失败，按现有代码会使会话以错误结束（两端摘要均为 `end`）。具体错误需要 Windows 会话记录中的错误行，尚未取得，不在本批修改。
+
+
+## 2026-11-10 Mac→Windows 滚轮后会话因原生接收超时而结束（待 CI 与实机）
+
+同一轮 Windows 会话记录末尾为 `Error: native receive service: Timeout`，结束摘要 `rel_rx＝2`、`rel_apply＝1`、`rel_fail＝1`、`scr_apply＝1`、`wh_inj＝1`：Mac 发来的第一次滚轮在 Windows 注入成功，第二次的原生命令在 250 ms 内没有回复。超时会使取消守卫请求恢复，原生端随即把这次接收标为排空并清理已注入的按下（现有测试 `bounded_timeout_cancels_late_begin_and_down_even_without_any_native_pump_progress` 覆盖这一点），但会话层把 `Timeout` 当作致命错误，直接结束了整个连接，之后的滚轮与移动全部丢失。
+
+本批只改会话层：输入或光标命令超时且该接收已不再活动时，写一行诊断并按“未提交”处理；下一轮循环走既有路径释放租约、通知对端 Release，并照旧检查原生端确认清理完成，无法确认时仍按原逻辑报错结束。原生恢复与已注入按下的清理逻辑不变，线上协议不变。会话层这一分支没有新的自动测试；物理效果需要两端同包复测。为什么第二次命令会超过 250 ms 仍未查明，本批不修改超时时长。

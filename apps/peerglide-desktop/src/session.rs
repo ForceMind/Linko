@@ -178,6 +178,17 @@ impl Recovery {
             {
                 return Ok(false)
             }
+            Err(ReceiveError::Timeout)
+                if matches!(
+                    driver.snapshot(epoch),
+                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
+                ) =>
+            {
+                // The expired request already asked the Native owner to retire this
+                // epoch; the loop then releases the lease and confirms cleanup.
+                eprintln!("Native receive input timed out; ending remote control.");
+                return Ok(false);
+            }
             Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => {
                 return Ok(false)
             }
@@ -233,6 +244,15 @@ impl Recovery {
                 ) =>
             {
                 return Ok(false)
+            }
+            Err(ReceiveError::Timeout)
+                if matches!(
+                    driver.snapshot(epoch),
+                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
+                ) =>
+            {
+                eprintln!("Native receive pointer timed out; ending remote control.");
+                return Ok(false);
             }
             Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => {
                 return Ok(false)
