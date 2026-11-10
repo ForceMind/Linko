@@ -2305,3 +2305,19 @@ KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0
 代码核对（读代码，未运行）：滚轮路径 Windows 钩子→整格折算→可靠流 Input→Mac `CGEventCreateScrollWheelEvent`（Rust 以可变参数声明，调用约定正确）一路没有发现缺陷；Oink 参考实现使用 `CGEventCreateScrollWheelEvent2`、像素／行单位和阶段字段，本项目只发整格行单位。是否需要对齐取决于上述计数。Mac 位移取自 CGEvent 浮点字段 4／5，Oink 同样读取这两个字段；其 `physical_motion.rs` 头注释只说明拖动帧没有可用的 HID 子事件、CG 浮点字段与 NSEvent 恢复不出拖动数据，改读 IOHID 指针子事件用于普通帧，不能据此认为本项目的位移取法不可靠。更换与否等计数再判断，不预先更换。（此前此处误写“Oink 称其在部分帧不可靠”，已更正。）
 
 摘要最长约 892 字节；`MAX_SUMMARY_BYTES`＝1200 同时约束摘要校验和 GUI 诊断行截断（原 600）。新增回归：最大摘要不超限、旧版本行被拒，以及过期数据命令按 `Time` 记录并仍然退役。本机无 Rust/Cargo，未编译；fmt、严格 Clippy、locked test/build 以精确提交 CI 为准。真实物理验收仍须同包双端在同一 120 秒窗口内复测并取两端摘要，不能以 CI、连接成功或 SendInput 返回当作通过。
+
+
+## 2026-11-10 KVM-DIAG/3 首次双端实测与 /4 补充（待 CI）
+
+用户用 e0f75c6 的同源两端包（Rust CI 42666341955）做了 120 秒窗口内的短测：Windows 能控制 Mac 的鼠标和键盘，滚轮不工作；Mac 仍不能移动 Windows 光标。现象由用户本人回报；以下读数来自用户复制的 Windows 摘要，Mac 摘要尚未取得，不能据此下全链路结论。
+
+Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`grant＝commit＝3`，`pong＝478`，`peer_rel＝2`，`return＝0`，`mv_pos＝1056`／`mv_neg＝555`；滚轮 `wh_phys＝222`、`wh_inj＝0`、`scr_tx＝216`、`scr_zero＝0`，`rel_tx＝562`；接收侧 `rx＝decode＝lease＝replay＝apply＝retired＝sdk＝sdk_fail＝0`，`filtered＝5`，`g_*` 全 0。读法：
+
+- Windows 作为源端工作正常：物理滚轮被钩子看到（没有被驱动注入标志旁路），折成非零整格后经可靠流发出 216 次，没有零增量。Windows 一侧不是滚轮失效的位置，断点在 Mac 接收、注入或系统效果，需要 Mac 的 `rel_rx`／`rel_apply`／`scr_apply`／`wh_inj` 才能再分。
+- 三次远端阶段中两次由 Mac 的 Release 结束（`peer_rel＝2`），没有一次边缘返回，与 Mac 端物理输入接管 Windows 控制的设计一致，不是故障证据。
+- Mac→Windows：Windows 在窗口内 `rx＝0` 且 `sdk＝0`。Windows 授予 Acquire 前必须先成功放置一次光标，那会让 `sdk` 加一，因此该窗口内 Windows 没有授予过任何 Acquire（或 Mac 一次也没有发出）。断点在 Acquire／授予阶段，早于数据报与注入；这与第一次实测不同（当时 Mac 有 `grant＝1`、`tx＝96`）。`filtered＝5` 与三次 Windows 源端停车加两次回位的本机合成移动相符（推断）。
+- 现有计数没有覆盖 Acquire 阶段的拒绝原因，所以本批补 `KVM-DIAG/4`（本机无 Rust，未编译，待 CI）。
+
+`/4` 新增字段（线上协议不变）：源端边缘判定 `edge_hit`（到达边缘）及首个阻挡原因 `blk_peer`（对端无移动能力）、`blk_gate`（捕获门非 Local 空闲）、`blk_busy`（已有发出中的请求或租约）、`blk_recv`（本机仍持有接收租约）、`blk_prot`（接收保护尚未撤销）；`acq_tx` 发出 Acquire、`denied_rx` 收到 Denied、`acq_to` 等待授予超时、`acq_cancel` 本机准入保护取消；接收端 `acq_rx` 收到 Acquire、`deny_arg` 参数无效、`deny_busy` 本机忙、`deny_auth` 未授权接收控制、`deny_lease` 租约被拒（已有租约或编号复用）、`deny_begin` 进入接收失败、`deny_place` 入口定位失败。macOS 的 `wh_inj` 现在统计回到 tap 的自注入滚轮，`wh_phys` 统计未带标记的滚轮；若 `scr_apply` 很大而 `wh_inj` 为 0、`wh_phys` 很大，说明注入的滚轮没有带上自有标记，被当成本机物理输入而吞掉并请求接管。摘要上限提高到 1600 字节，最长约 1237 字节。
+
+下次复测先看 Mac 行：`edge_hit` 是否大于 0；若是，`blk_*` 哪一项非零（本机没发出 Acquire），或 `acq_tx` 大于 0 而 `denied_rx` 非零（Windows 拒绝，再看 Windows 行的 `deny_*`），或 `acq_to` 非零（Windows 没回应）。

@@ -713,6 +713,7 @@ pub(super) async fn run_with_diagnostics(
                 continue;
             },
             PendingStep::Cancelled{lease,timed_out}=>{
+                count(if timed_out {Count::AcquireTimeout} else {Count::AcquireCancelled});
                 eprintln!("{}", match (peer_granted,timed_out) {
                     (false,true)=>"Switch expired before peer grant.",
                     (true,true)=>"Switch expired after peer grant while committing locally.",
@@ -779,12 +780,20 @@ pub(super) async fn run_with_diagnostics(
                 let now=now_ms();
                 match m {
                     Message::Acquire{lease,edge:remote_edge,along}=>{
-                        let mut granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow && local.motion());
+                        count(Count::AcquireReceived);
+                        // Same short-circuit order as before; the pure checks are split out only to tally why a request is refused.
+                        let argument_ok=along.is_finite() && (0.0..=1.0).contains(&along);
+                        let idle=pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle());
+                        let authorized=allow && local.motion();
+                        let mut granted=argument_ok && idle && recovery.receiver.acquire(lease,now,authorized);
+                        if !granted {
+                            count(if !argument_ok {Count::DenyArgument} else if !idle {Count::DenyBusy} else if !authorized {Count::DenyAuthorization} else {Count::DenyLease});
+                        }
                         if granted {
                             let begin=recovery.begin_receive().await;
                             if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                             granted=input_status.checked(begin)?;
-                            if !granted{input_status.release(&mut recovery).await?;}
+                            if !granted{count(Count::DenyBegin);input_status.release(&mut recovery).await?;}
                         }
                         if granted {
                             edge_gate.require_interior();
@@ -792,7 +801,7 @@ pub(super) async fn run_with_diagnostics(
                             let placed=recovery.pointer(position.0,position.1).await;
                             if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                             if input_status.checked(placed)? {input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Granted{lease}).await?;}
-                            else{input_status.release(&mut recovery).await?;send(&mut tx,&Message::Denied{lease}).await?;}
+                            else{count(Count::DenyPlacement);input_status.release(&mut recovery).await?;send(&mut tx,&Message::Denied{lease}).await?;}
                         }else{send(&mut tx,&Message::Denied{lease}).await?;}
                     },
                     Message::Granted{lease}=>{
@@ -807,7 +816,7 @@ pub(super) async fn run_with_diagnostics(
                             eprintln!("Peer grant received; checking local capture admission.");
                         }
                     },
-                    Message::Denied{lease}=>{if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
+                    Message::Denied{lease}=>{if pending.is_some_and(|request|request.lease==lease){count(Count::DeniedReceived);pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
                     Message::Input{lease,event,cursor}=>{
                         count(Count::ReliableReceived);
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
@@ -890,12 +899,23 @@ pub(super) async fn run_with_diagnostics(
                         size=(width.max(1.0),height.max(1.0));
                         let nx=(x/(size.0-1.0).max(1.0)).clamp(0.0,1.0);let ny=(y/(size.1-1.0).max(1.0)).clamp(0.0,1.0);
                         let cross=edge_gate.update(distance(edge,nx,ny)<=0.001,now_ms());
-                        if cross && peer.motion() && capture.as_ref().is_some_and(|cap|cap.gate.idle()) && outgoing.is_none() && pending.is_none() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
+                        if cross {count(Count::EdgeHit);}
+                        // Same order as the original condition chain; only the first blocker is tallied.
+                        let gate_idle=capture.as_ref().is_some_and(|cap|cap.gate.idle());
+                        let blocker=if !cross {None}
+                            else if !peer.motion() {Some(Count::BlockPeer)}
+                            else if !gate_idle {Some(Count::BlockGate)}
+                            else if outgoing.is_some() || pending.is_some() {Some(Count::BlockBusy)}
+                            else if recovery.receiver.active().is_some() {Some(Count::BlockReceiving)}
+                            else if recovery.protection_pending() {Some(Count::BlockProtection)}
+                            else {None};
+                        if let Some(kind)=blocker {count(kind);}
+                        if cross && blocker.is_none(){
                             let CaptureRoute::Local(epoch)=route else{continue;};
                             let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let along=match edge{Edge::Left|Edge::Right=>ny,_=>nx};position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
-                            pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
+                            pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
                         }
                     },
                     Captured::Toggle{route}=>{
@@ -903,7 +923,7 @@ pub(super) async fn run_with_diagnostics(
                         else if let Some(request)=pending.take(){edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Release{lease:request.lease,cursor:None}).await?;}
                         else if let CaptureRoute::Local(epoch)=route {if peer.motion() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
                             let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
-                            next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
+                            next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
                         }}
                     },
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
