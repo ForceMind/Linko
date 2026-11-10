@@ -375,7 +375,7 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                     CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
                     CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
                     route,
-                )
+                );
             }
             _ => (),
         }
