@@ -2340,3 +2340,12 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 未验证：本机没有 Rust/Cargo，未编译、未运行任何测试；fmt、严格 Clippy、locked test/build 以精确提交 CI 为准。未做任何真机或 GUI 渲染检查。物理验收仍需用户在两端确认：方向不互补时哪一端出现提示、按钮文字是否清楚、点击后两端可以双向跨屏，以及方向互补时不出现提示。该验收属于 #3/C06，不能由 CI 或合成事件勾选。
 
 评审修正（同一 PR）：提示行改为“观察记录”，一致的组合在刚报告过不一致之后也会发出一次，用来撤回 GUI 里过时的提示；GUI 点击后不再立即清除提示，而是等 worker 确认新方向（显示方向改变后自然隐藏），被拒绝时保留以便重试，等待确认期间按钮禁用。另按 rustfmt 调整一处断言格式。仍未在本机编译。
+
+
+## 2026-11-10 Windows→Mac 滚轮：Apple 芯片上的可变参数调用约定错误（待 CI 与实机）
+
+用户第三次双端短测（Mac 为 `/4` 包，Windows 仍为 `/3` 包）：Windows `wh_phys＝44`、`scr_tx＝44`；Mac `scr_apply＝44`、`wh_inj＝44`、`sdk_fail＝0`。即 44 次滚轮全部到达 Mac、提交成功，并以本进程标记回到 tap 后被放行，没有被当成本机物理输入吞掉；用户仍看到 Mac 不滚动。
+
+原因（读代码与调用约定得出，未经实机验证）：C 原型为 `CGEventCreateScrollWheelEvent(source, units, wheelCount, int32_t wheel1, ...)`，`wheel1` 是具名参数；本项目把它声明为 `fn CGEventCreateScrollWheelEvent(source, unit, count, ...)`，把 `wheel1` 也作为可变参数传入。Apple arm64 调用约定把可变参数全部放在栈上、具名参数放在寄存器里，所以系统读到的纵向值是寄存器中的残留值，我们传的纵向值被当成横向值；x86_64 上两者恰好一致，因此只在 Apple 芯片上出现。修正改用定长的 `CGEventCreateScrollWheelEvent2(source, unit, 2, y, x, 0)`（Oink 参考实现同样使用该接口）。仓库内没有其他可变参数 FFI 声明。排除过的解释：滚轮被本机 tap 吞掉（`wh_inj＝44` 否定）、Windows 未发出或零增量（`scr_tx＝44`、`scr_zero＝0` 否定）。
+
+同一轮另见 Windows `rel_fail＝1`：一次来自 Mac 的可靠输入在 Windows 注入失败，按现有代码会使会话以错误结束（两端摘要均为 `end`）。具体错误需要 Windows 会话记录中的错误行，尚未取得，不在本批修改。
