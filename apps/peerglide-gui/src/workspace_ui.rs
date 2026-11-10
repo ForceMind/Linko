@@ -158,6 +158,7 @@ impl App {
                     }
                 });
             });
+            self.layout_hint_row(ui);
         });
         ui.add_space(8.0);
         ui.label(desktop_style::semibold("设备详情", 17.0));

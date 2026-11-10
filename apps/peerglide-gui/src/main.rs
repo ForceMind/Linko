@@ -233,6 +233,7 @@ struct WorkerSnapshot(
     AtomicBool,
     AtomicU16,
     std::sync::Mutex<Option<peerglide_protocol::layout_ipc::LayoutUpdate>>,
+    std::sync::Mutex<Option<peerglide_protocol::layout_ipc::LayoutHint>>,
 );
 impl WorkerSnapshot {
     fn publish_switch(&self, state: WorkerSwitchState) {
@@ -378,6 +379,10 @@ fn read_worker_output(
                 if let Ok(mut reply) = snapshot.5.lock() {
                     *reply = Some(event);
                 }
+            }
+        } else if let Some(hint) = peerglide_protocol::layout_ipc::LayoutHint::parse(&line) {
+            if let Ok(mut slot) = snapshot.6.lock() {
+                *slot = Some(hint);
             }
         } else {
             let _ = diagnostics.try_send(bounded_diagnostic(&line));

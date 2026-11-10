@@ -1,5 +1,8 @@
 use super::*;
-use peerglide_protocol::{layout_ipc::LayoutUpdate, Edge};
+use peerglide_protocol::{
+    layout_ipc::{LayoutHint, LayoutUpdate},
+    Edge,
+};
 
 pub(super) struct Pending {
     request: u32,
@@ -8,7 +11,62 @@ pub(super) struct Pending {
     warned: bool,
 }
 
+fn edge_name(edge: Edge) -> &'static str {
+    match edge {
+        Edge::Left => "left",
+        Edge::Right => "right",
+        Edge::Top => "top",
+        Edge::Bottom => "bottom",
+    }
+}
+
 impl App {
+    /// The worker's latest direction-mismatch observation. It applies only to the live,
+    /// connected child and only while the displayed direction is the one it compared.
+    pub(super) fn layout_hint(&self) -> Option<LayoutHint> {
+        if self.child.is_none() || !self.connected || self.stopping.is_some() {
+            return None;
+        }
+        let snapshot = self.worker_state.as_ref()?;
+        if snapshot.2.load(Ordering::Acquire) || snapshot.3.load(Ordering::Acquire) {
+            return None;
+        }
+        let hint = snapshot.6.lock().ok().and_then(|slot| *slot)?;
+        let current = edge_name(hint.local) == self.displayed_edge();
+        (hint.mismatched() && current).then_some(hint)
+    }
+
+    /// Uses the ordinary edit path, so the same capture and pending-request gates apply.
+    /// The offer stays until the worker confirms a new edge (which hides it) or the peer
+    /// reports a consistent pair; a rejected request leaves it available to retry.
+    pub(super) fn apply_layout_hint(&mut self) -> bool {
+        if self.layout_request.is_some() {
+            return false;
+        }
+        let Some(hint) = self.layout_hint() else {
+            return false;
+        };
+        self.try_set_edge(edge_name(hint.suggested()))
+    }
+
+    pub(super) fn layout_hint_row(&mut self, ui: &mut egui::Ui) {
+        let Some(hint) = self.layout_hint() else {
+            return;
+        };
+        let peer = edge_label(edge_name(hint.peer));
+        let button = format!("改为{}", edge_label(edge_name(hint.suggested())));
+        ui.horizontal_wrapped(|ui| {
+            ui.small(format!("两台电脑的位置不一致（对端认为本机在其{peer}）"));
+            let enabled = self.layout_editable() && self.layout_request.is_none();
+            if ui
+                .add_enabled(enabled, egui::Button::new(button).small())
+                .clicked()
+            {
+                self.apply_layout_hint();
+            }
+        });
+    }
+
     pub(super) fn displayed_edge(&self) -> &str {
         match self.layout_active {
             Some(Edge::Left) => "left",
@@ -137,6 +195,79 @@ mod tests {
         assert_eq!(app.config.edge, "left");
         drop(app);
         fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn hint_follows_the_connected_child_and_one_click_requests_the_mirror() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.config.fingerprint = Some("d".repeat(64));
+        app.save_config()?;
+        app.child = Some(crate::lifecycle_tests::managed_child()?);
+        app.connected = true;
+        app.input_state = Some(WorkerInputState::Local);
+        app.active_mode = Some(SessionMode::Native);
+        app.worker_state = Some(Arc::new(WorkerSnapshot::default()));
+        let snapshot = app.worker_state.as_ref().unwrap().clone();
+        assert!(app.layout_hint().is_none());
+        let hint = LayoutHint::observe(Edge::Right, Edge::Right);
+        *snapshot.6.lock().unwrap() = Some(hint);
+        assert_eq!(app.layout_hint(), Some(hint));
+        app.config.edge = "top".into();
+        assert!(app.layout_hint().is_none());
+        app.config.edge = "right".into();
+        app.connected = false;
+        assert!(app.layout_hint().is_none());
+        assert!(!app.apply_layout_hint());
+        app.connected = true;
+        assert!(app.apply_layout_hint());
+        let requested = app.layout_request.as_ref().map(|p| (p.request, p.edge));
+        assert_eq!(requested, Some((1, Edge::Left)));
+        // The offer survives until the worker answers; a second click is refused.
+        assert_eq!(app.layout_hint(), Some(hint));
+        assert!(!app.apply_layout_hint());
+        let rejected = LayoutUpdate::request(1, Edge::Left).reply(false);
+        *snapshot.5.lock().unwrap() = Some(rejected);
+        app.poll_layout();
+        assert_eq!(app.displayed_edge(), "right");
+        assert_eq!(app.layout_hint(), Some(hint));
+        assert!(app.apply_layout_hint());
+        let retried = app.layout_request.as_ref().map(|p| (p.request, p.edge));
+        assert_eq!(retried, Some((2, Edge::Left)));
+        let applied = LayoutUpdate::request(2, Edge::Left).reply(true);
+        *snapshot.5.lock().unwrap() = Some(applied);
+        app.poll_layout();
+        assert_eq!(app.displayed_edge(), "left");
+        assert!(app.layout_hint().is_none());
+        // A consistent observation from the peer withdraws a stale offer.
+        app.layout_active = Some(Edge::Right);
+        *snapshot.6.lock().unwrap() = Some(hint);
+        assert_eq!(app.layout_hint(), Some(hint));
+        let consistent = LayoutHint::observe(Edge::Right, Edge::Left);
+        *snapshot.6.lock().unwrap() = Some(consistent);
+        assert!(app.layout_hint().is_none());
+        app.stop();
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn hint_line_from_worker_output_reaches_the_slot_not_diagnostics() -> Result<()> {
+        let hint = LayoutHint::observe(Edge::Bottom, Edge::Bottom);
+        let text = format!("{}\nplain diagnostic\n", hint.line());
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let (tx, rx) = mpsc::sync_channel(4);
+        read_worker_output(
+            std::io::Cursor::new(text),
+            snapshot.clone(),
+            tx,
+            Arc::new(|| {}),
+        );
+        assert_eq!(*snapshot.6.lock().unwrap(), Some(hint));
+        assert_eq!(rx.try_recv()?, "plain diagnostic");
+        assert!(rx.try_recv().is_err());
         Ok(())
     }
 
