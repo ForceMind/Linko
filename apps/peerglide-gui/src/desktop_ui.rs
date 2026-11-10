@@ -1361,6 +1361,8 @@ impl App {
         pairing.ui(self, &ctx);
         self.pairing_open = pairing.blocks_actions();
         self.pairing_panel = pairing;
+        // Report ordinary geometry only while the sidebar rests, so scripted clicks land on
+        // controls that keep their place.
         let report = if self.layout_report.is_none() {
             None
         } else if self.recording_mode {
@@ -1368,7 +1370,8 @@ impl App {
                 let rect = |r: egui::Rect| [r.min.x, r.min.y, r.width(), r.height()];
                 serde_json::json!({"version":1,"canvas":rect(canvas),"save":rect(save),"scope":"isolated_gui_widget_geometry"})
             })
-        } else if self.layout_geometry.contains_key("nav_layout")
+        } else if (sidebar_mix <= 0.0 || sidebar_mix >= 1.0)
+            && self.layout_geometry.contains_key("nav_layout")
             && self.layout_geometry.contains_key("add_device")
             && self.layout_geometry.contains_key("primary_action")
         {
