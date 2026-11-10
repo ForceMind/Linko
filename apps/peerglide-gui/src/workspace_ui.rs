@@ -109,16 +109,16 @@ impl App {
                     }
                 });
             });
+            // Explains the selector directly above, so it stays in the first viewport.
+            ui.small(if self.child.is_some() {
+                "连接中可在本机控制时调整方向；新布局等待工作进程确认。"
+            } else {
+                "两台主屏的相对方向；另一端需设置相反方向。"
+            });
         });
         ui.add_space(8.0);
         ui.label(desktop_style::semibold("设备详情", 17.0));
         self.workspace_device_cards(ui);
-        ui.add_space(4.0);
-        ui.small(if self.child.is_some() {
-            "连接中可在本机控制时调整方向；新布局等待工作进程确认。"
-        } else {
-            "两台主屏的相对方向；另一端需设置相反方向。"
-        });
     }
 
     fn workspace_device_cards(&mut self, ui: &mut egui::Ui) {
