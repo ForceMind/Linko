@@ -737,12 +737,15 @@ impl CaptureSession {
         self.gate.disable();
         // Reconnecting is recovery, not a pointer request: it also runs after
         // source loss and before the receiving early return.
-        let cursor = release_source_cursor();
+        // A failed reconnect is retried by the capture loop while Local; it must
+        // not turn an otherwise clean return into a failed session.
+        if let Err(error) = release_source_cursor() {
+            eprintln!("{error:#}");
+        }
         anyhow::ensure!(
             self.gate.0.healthy.load(Ordering::Acquire),
             "native capture source lost; no further pointer request is permitted"
         );
-        cursor?;
         // A receiver's pointer/owned ledger belongs exclusively to its Native
         // loop. A source return cursor must never race that serialized owner.
         if self.gate.receiving_epoch().is_some() {

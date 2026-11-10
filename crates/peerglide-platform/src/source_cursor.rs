@@ -2,8 +2,9 @@
 //!
 //! Only the association request is modelled here; it never hides the cursor,
 //! warps it or changes any cursor image or user setting. Callers run outside
-//! native input callbacks. A rejected or unknown request is treated as still
-//! needing release, so every later local transition retries the association.
+//! native input callbacks. A disconnect the OS rejected changed nothing and is
+//! not owed. A reconnect that fails stays owed, so every later local transition
+//! retries it; that failure is reported but never ends the session.
 
 /// One native association request. `true` means the OS reported success.
 pub(crate) trait CursorBackend {
@@ -21,12 +22,11 @@ impl FreezeState {
         Self { owed: false }
     }
 
-    /// Disconnect only for the exact current remote phase; repeated calls do nothing.
+    /// Disconnect only for the exact current remote phase; once owed, repeated calls do
+    /// nothing. Only a disconnect the OS confirmed has to be undone.
     pub(crate) fn freeze(&mut self, current: bool, backend: &mut impl CursorBackend) {
         if current && !self.owed {
-            // A failed request may still have reached the OS: keep it owed.
-            let _ = backend.associate(false);
-            self.owed = true;
+            self.owed = backend.associate(false);
         }
     }
 
@@ -100,16 +100,15 @@ mod tests {
     }
 
     #[test]
-    fn rejected_disconnect_is_still_reconnected_on_return() {
+    fn rejected_disconnect_is_not_owed_and_needs_no_reconnect() {
         let mut backend = Fake::new(false);
         let mut state = FreezeState::new();
         state.freeze(true, &mut backend);
-        state.freeze(true, &mut backend);
         assert_eq!(backend.calls, [false]);
-        assert!(state.owed());
-        backend.accept = true;
+        assert!(!state.owed());
         assert!(state.release(&mut backend));
-        assert_eq!(backend.calls, [false, true]);
+        state.reconcile(false, &mut backend);
+        assert_eq!(backend.calls, [false], "nothing was disconnected");
     }
 
     #[test]
