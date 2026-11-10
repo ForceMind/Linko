@@ -78,6 +78,7 @@ mod implementation {
     const WATCHDOG_MS: u64 = 1000;
     const BUDGET: usize = 32;
     const RETRIES: u8 = 3;
+    const FENCE_MS: u64 = 1000;
     const IDLE: u8 = 0;
     const ACTIVE: u8 = 1;
     const DRAINING: u8 = 2;
@@ -494,6 +495,19 @@ mod implementation {
         }
         /// Aggregate-only hook; it must never block, log or touch input state.
         fn note_guard_failure(&mut self, _failure: GuardFailure) {}
+        /// Asynchronous backends: an earlier Ok effect has not returned from its
+        /// SDK call yet. Never blocks; synchronous backends are always settled.
+        fn effects_pending(&mut self) -> bool {
+            false
+        }
+        /// Consume one failure of an earlier Ok (queued) effect. Never blocks.
+        fn effects_failed(&mut self) -> bool {
+            false
+        }
+        /// A queued release whose SDK request later failed; its pair is owed again.
+        fn take_failed_release(&mut self) -> Option<Input> {
+            None
+        }
     }
 
     struct Ledger {
@@ -583,6 +597,7 @@ mod implementation {
         draining: bool,
         protected: bool,
         detached: bool,
+        fence_since: Option<u64>,
     }
     pub(crate) struct ReceiveEngine {
         inbox: Receiver<Command>,
@@ -841,6 +856,7 @@ mod implementation {
                                         draining: false,
                                         protected: true,
                                         detached: false,
+                                        fence_since: None,
                                     });
                                     if self
                                         .control
@@ -963,6 +979,7 @@ mod implementation {
             if self.control.shared.phase.load(Ordering::Acquire) != DRAINING {
                 return false;
             }
+            self.reclaim(backend);
             for _ in 0..BUDGET {
                 let Some(active) = &self.active else {
                     return false;
@@ -1002,10 +1019,33 @@ mod implementation {
                 }
                 return true;
             }
+            let epoch = active.epoch;
+            // Fence: every earlier asynchronous effect must have returned before
+            // protection ends. Poll only; the injector wakes the loop on completion.
+            if backend.effects_pending() {
+                let now = backend.now_ms();
+                if let Some(active) = &mut self.active {
+                    let since = *active.fence_since.get_or_insert(now);
+                    if now.saturating_sub(since) < FENCE_MS {
+                        return false;
+                    }
+                }
+                self.fail();
+                self.control.shared.phase.store(FAILED, Ordering::Release);
+                return false;
+            }
+            if let Some(active) = &mut self.active {
+                active.fence_since = None;
+            }
+            if backend.effects_failed() {
+                self.fail();
+            }
+            if self.reclaim(backend) {
+                return true;
+            }
             if backend.consumed_modifiers_held() {
                 return false;
             }
-            let epoch = active.epoch;
             if backend.leave_receiving(epoch).is_err() {
                 self.fail();
                 self.control.shared.phase.store(FAILED, Ordering::Release);
@@ -1025,6 +1065,28 @@ mod implementation {
                 self.active = None;
             }
             false
+        }
+        /// A queued release that failed after Ok is owned again and counts one
+        /// failed attempt, preserving the synchronous retry ledger.
+        fn reclaim(&mut self, backend: &mut impl ReceiveBackend) -> bool {
+            let mut reclaimed = false;
+            for _ in 0..BUDGET {
+                let Some(event) = backend.take_failed_release() else {
+                    break;
+                };
+                self.fail();
+                if let Some(active) = &mut self.active {
+                    active.ledger.mark(event, true);
+                    active.ledger.failed(event);
+                }
+                reclaimed = true;
+            }
+            reclaimed
+        }
+        /// Native shutdown could not confirm the injector stopped in time.
+        #[cfg(any(windows, test))]
+        pub(crate) fn mark_unconfirmed(&mut self) {
+            self.fail();
         }
         /// Returns true for immediately remaining bounded work. Native wiring must
         /// service again promptly and interleave its normal OS message/runloop pump.
@@ -1058,6 +1120,14 @@ mod implementation {
             }
             let clock = backend.now_ms().max(now);
             self.priority(backend, clock);
+            let live = self
+                .active
+                .as_ref()
+                .is_some_and(|active| active.protected && !active.detached);
+            if live && backend.effects_failed() {
+                self.fail();
+                self.retire();
+            }
             self.cleanup(backend) || handled == BUDGET
         }
     }
@@ -1106,6 +1176,11 @@ mod implementation {
             fail_key_up: Option<u16>,
             effects: Vec<Effect>,
             guard_failures: Vec<GuardFailure>,
+            // Asynchronous-backend simulation (injector thread semantics).
+            pending: bool,
+            async_failed: bool,
+            async_up_failures: usize,
+            failed_releases: Vec<Input>,
         }
         impl Fake {
             fn new() -> Self {
@@ -1127,6 +1202,10 @@ mod implementation {
                     fail_key_up: None,
                     effects: Vec::new(),
                     guard_failures: Vec::new(),
+                    pending: false,
+                    async_failed: false,
+                    async_up_failures: 0,
+                    failed_releases: Vec::new(),
                 }
             }
         }
@@ -1178,6 +1257,13 @@ mod implementation {
                 match event {
                     Input::Key { usage, down } => {
                         self.effects.push(Effect::Key(usage, down));
+                        if !down && self.async_up_failures != 0 {
+                            // Accepted now, fails later on the injector thread.
+                            self.async_up_failures -= 1;
+                            self.async_failed = true;
+                            self.failed_releases.push(event);
+                            return Ok(());
+                        }
                         if down {
                             if let Some(error) = self.fail_down {
                                 return Err(error);
@@ -1226,6 +1312,15 @@ mod implementation {
             }
             fn note_guard_failure(&mut self, failure: GuardFailure) {
                 self.guard_failures.push(failure);
+            }
+            fn effects_pending(&mut self) -> bool {
+                self.pending
+            }
+            fn effects_failed(&mut self) -> bool {
+                std::mem::take(&mut self.async_failed)
+            }
+            fn take_failed_release(&mut self) -> Option<Input> {
+                self.failed_releases.pop()
             }
         }
         fn setup(capacity: usize) -> (ReceiveDriver, ReceiveEngine, Fake, Arc<AtomicUsize>) {
@@ -2300,6 +2395,74 @@ mod implementation {
                     assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
                 }
             }
+        }
+        fn key_down() -> Input {
+            Input::Key {
+                usage: 4,
+                down: true,
+            }
+        }
+        #[test]
+        fn async_fence_keeps_protection_until_effects_return_or_times_out() {
+            for settles in [true, false] {
+                let (mut driver, mut engine, mut backend, _) = setup(8);
+                let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+                let down = key_down();
+                let result = input(&mut driver, &mut engine, &mut backend, epoch, down, 1);
+                assert_eq!(result, Ok(ReceiveAck::Submitted));
+                backend.pending = true;
+                let ack = release(&mut driver, &mut engine, &mut backend, epoch, 2);
+                assert_eq!(ack, ReceiveAck::Submitted);
+                assert!(backend.effects.contains(&Effect::Key(4, false)));
+                assert!(!backend.effects.contains(&Effect::Leave));
+                assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+                if settles {
+                    backend.pending = false;
+                    pump(&mut engine, &mut backend, 3);
+                    assert_eq!(backend.effects.last(), Some(&Effect::Leave));
+                    assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+                } else {
+                    pump(&mut engine, &mut backend, 2 + FENCE_MS);
+                    assert!(!backend.effects.contains(&Effect::Leave));
+                    assert_eq!(engine.outcome(), ReceiveAck::RecoveryRequired);
+                }
+            }
+        }
+        #[test]
+        fn an_asynchronously_failed_release_is_owned_again_and_retried() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+            let down = key_down();
+            let result = input(&mut driver, &mut engine, &mut backend, epoch, down, 1);
+            assert_eq!(result, Ok(ReceiveAck::Submitted));
+            backend.async_up_failures = 1;
+            let ack = release(&mut driver, &mut engine, &mut backend, epoch, 2);
+            assert_eq!(ack, ReceiveAck::Submitted);
+            let up = Effect::Key(4, false);
+            let ups = backend.effects.iter().filter(|e| **e == up).count();
+            assert_eq!(ups, 2);
+            assert_eq!(backend.effects.last(), Some(&Effect::Leave));
+            assert_eq!(engine.outcome(), ReceiveAck::RecoveryRequired);
+        }
+        #[test]
+        fn an_asynchronous_failure_retires_even_without_another_command() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+            let down = key_down();
+            let result = input(&mut driver, &mut engine, &mut backend, epoch, down, 1);
+            assert_eq!(result, Ok(ReceiveAck::Submitted));
+            backend.async_failed = true;
+            pump(&mut engine, &mut backend, 2);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
+            assert!(backend.effects.contains(&Effect::Key(4, false)));
+            assert_eq!(engine.outcome(), ReceiveAck::RecoveryRequired);
+        }
+        #[test]
+        fn unconfirmed_injector_shutdown_reports_recovery_required() {
+            let (_driver, mut engine, _backend, _) = setup(8);
+            assert_eq!(engine.outcome(), ReceiveAck::Retired);
+            engine.mark_unconfirmed();
+            assert_eq!(engine.outcome(), ReceiveAck::RecoveryRequired);
         }
         #[tokio::test]
         async fn actual_async_driver_gets_a_reply_without_fixed_per_event_sleep() {

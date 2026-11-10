@@ -11,6 +11,8 @@ pub mod application_menu;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+#[cfg(any(windows, test))]
+mod inject_thread;
 pub mod input_diagnostics;
 mod receive_driver;
 pub mod tray;
@@ -786,13 +788,122 @@ fn note_loop_gap(gate: &CaptureGate, last: &mut std::time::Instant) {
     }
     *last = now;
 }
+/// Native-owner SDK pointer request with its aggregate diagnostics. On Windows
+/// receiving this runs on the injection thread, never inside a hook callback.
+#[cfg(any(windows, target_os = "macos"))]
+fn submit_pointer(
+    gate: &CaptureGate,
+    point: ReceivePoint,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    let diagnostics = gate.0.diagnostics.get();
+    #[cfg(windows)]
+    let before = diagnostics
+        .filter(|d| d.sample_cursor(now_ms()))
+        .map(|_| windows::diagnostic_cursor_position());
+    let started = std::time::Instant::now();
+    let result = native::receive_pointer(point.x, point.y);
+    note_slow_sdk(gate, started, input_diagnostics::Count::SlowPointer);
+    if let Some(diagnostics) = diagnostics {
+        use input_diagnostics::Count;
+        diagnostics.increment(if result.is_ok() {
+            Count::NativeSubmitted
+        } else {
+            Count::NativeFailed
+        });
+        #[cfg(windows)]
+        if let Some(before) = before.filter(|_| result.is_ok()) {
+            diagnostics.increment(match (before, windows::diagnostic_cursor_position()) {
+                (Some(a), Some(b)) if a != b => Count::CursorMoved,
+                (Some(_), Some(_)) => Count::CursorUnchanged,
+                _ => Count::CursorUnknown,
+            });
+        }
+    }
+    result
+}
+#[cfg(any(windows, target_os = "macos"))]
+fn submit_input(
+    gate: &CaptureGate,
+    event: Input,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    let started = std::time::Instant::now();
+    let result = native::receive_inject(event);
+    note_slow_sdk(gate, started, input_diagnostics::Count::SlowInput);
+    result
+}
+/// Injection-thread side of the Windows receiver. Every item is rechecked
+/// against the same source observation rule before its SDK call.
+#[cfg(windows)]
+struct ReceiveSink {
+    gate: CaptureGate,
+    observation: Arc<std::sync::Mutex<SourceObservation>>,
+}
+#[cfg(windows)]
+impl inject_thread::Sink for ReceiveSink {
+    fn start(&mut self) {
+        native::prepare_inject_thread();
+    }
+    fn admit(&mut self, epoch: CaptureEpoch) -> bool {
+        let observed = self.observation.lock();
+        let observation = *observed.unwrap_or_else(std::sync::PoisonError::into_inner);
+        observation.fresh_at(now_ms(), std::time::SystemTime::now())
+            && self.gate.0.healthy.load(Ordering::Acquire)
+            && self.gate.receiving_epoch() == Some(epoch)
+    }
+    fn submit(
+        &mut self,
+        item: inject_thread::Item,
+    ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+        match item {
+            inject_thread::Item::Pointer(point) => submit_pointer(&self.gate, point),
+            inject_thread::Item::Input(event) => submit_input(&self.gate, event),
+        }
+    }
+}
 #[cfg(any(windows, target_os = "macos"))]
 struct NativeReceiveBackend {
     gate: CaptureGate,
     observation: SourceObservation,
+    /// Receiving capture only; owned and stopped by the Native loop.
+    #[cfg(windows)]
+    inject: Option<inject_thread::InjectThread>,
+    #[cfg(windows)]
+    published: Arc<std::sync::Mutex<SourceObservation>>,
 }
 #[cfg(any(windows, target_os = "macos"))]
 impl NativeReceiveBackend {
+    fn set_observation(&mut self, observation: SourceObservation) {
+        self.observation = observation;
+        #[cfg(windows)]
+        {
+            let published = self.published.lock();
+            *published.unwrap_or_else(std::sync::PoisonError::into_inner) = observation;
+        }
+    }
+    #[cfg(windows)]
+    fn queue(
+        &self,
+        item: inject_thread::Item,
+    ) -> Option<std::result::Result<(), peerglide_actions::execution::NativeFailure>> {
+        use peerglide_actions::execution::NativeFailure;
+        let inject = self.inject.as_ref()?;
+        Some(match self.gate.receiving_epoch() {
+            Some(epoch) => inject.push(epoch, item),
+            None => Err(NativeFailure::BeforeSubmission),
+        })
+    }
+    /// Discard unstarted work; no new SDK call starts afterwards. Non-blocking.
+    #[cfg(windows)]
+    fn request_inject_stop(&self) {
+        if let Some(inject) = &self.inject {
+            inject.request_stop();
+        }
+    }
+    /// Bounded wait for the in-flight SDK call; false means unconfirmed.
+    #[cfg(windows)]
+    fn join_inject(&mut self, timeout: std::time::Duration) -> bool {
+        self.inject.as_mut().is_none_or(|t| t.join(timeout))
+    }
     fn source_available(&self) -> bool {
         if !self
             .observation
@@ -834,31 +945,11 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
         }
-        let diagnostics = self.gate.0.diagnostics.get();
         #[cfg(windows)]
-        let before = diagnostics
-            .filter(|d| d.sample_cursor(now_ms()))
-            .map(|_| windows::diagnostic_cursor_position());
-        let started = std::time::Instant::now();
-        let result = native::receive_pointer(point.x, point.y);
-        note_slow_sdk(&self.gate, started, input_diagnostics::Count::SlowPointer);
-        if let Some(diagnostics) = diagnostics {
-            use input_diagnostics::Count;
-            diagnostics.increment(if result.is_ok() {
-                Count::NativeSubmitted
-            } else {
-                Count::NativeFailed
-            });
-            #[cfg(windows)]
-            if let Some(before) = before.filter(|_| result.is_ok()) {
-                diagnostics.increment(match (before, windows::diagnostic_cursor_position()) {
-                    (Some(a), Some(b)) if a != b => Count::CursorMoved,
-                    (Some(_), Some(_)) => Count::CursorUnchanged,
-                    _ => Count::CursorUnknown,
-                });
-            }
+        if let Some(result) = self.queue(inject_thread::Item::Pointer(point)) {
+            return result;
         }
-        result
+        submit_pointer(&self.gate, point)
     }
     fn input(
         &mut self,
@@ -867,10 +958,11 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
         }
-        let started = std::time::Instant::now();
-        let result = native::receive_inject(event);
-        note_slow_sdk(&self.gate, started, input_diagnostics::Count::SlowInput);
-        result
+        #[cfg(windows)]
+        if let Some(result) = self.queue(inject_thread::Item::Input(event)) {
+            return result;
+        }
+        submit_input(&self.gate, event)
     }
     fn leave_receiving(
         &mut self,
@@ -878,6 +970,11 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
     ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        // Second check behind the Engine fence: never retire with queued effects.
+        #[cfg(windows)]
+        if self.inject.as_ref().is_some_and(|t| t.pending()) {
+            return Err(peerglide_actions::execution::NativeFailure::UnknownOutcome);
         }
         self.gate
             .leave_receiving(epoch, false)
@@ -890,6 +987,12 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
     ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        // Forced return permits no further injection: drop unstarted work and
+        // keep protection until any in-flight SDK call has returned.
+        #[cfg(windows)]
+        if self.inject.as_ref().is_some_and(|t| !t.discard()) {
+            return Err(peerglide_actions::execution::NativeFailure::UnknownOutcome);
         }
         self.gate
             .leave_receiving(epoch, true)
@@ -908,6 +1011,18 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
                 GuardFailure::Modifiers => Count::GuardModifiers,
             });
         }
+    }
+    #[cfg(windows)]
+    fn effects_pending(&mut self) -> bool {
+        self.inject.as_ref().is_some_and(|t| t.pending())
+    }
+    #[cfg(windows)]
+    fn effects_failed(&mut self) -> bool {
+        self.inject.as_ref().is_some_and(|t| t.take_failure())
+    }
+    #[cfg(windows)]
+    fn take_failed_release(&mut self) -> Option<Input> {
+        self.inject.as_ref()?.take_failed_release()
     }
 }
 /// The loop's last observation, never a timestamp refreshed by an SDK return.
@@ -958,7 +1073,7 @@ impl SourceHealth {
         // Stamp before the health query. A slow query or later SDK call cannot
         // advance this baseline and hide a gap before subsequent owned Up.
         self.observation = SourceObservation::at(now, wall);
-        backend.observation = self.observation;
+        backend.set_observation(self.observation);
         if self.checked == u64::MAX || now.saturating_sub(self.checked) >= 100 {
             self.checked = now;
             if !context::capture_source_available() {
