@@ -46,18 +46,43 @@ pub(super) struct Snapshot {
 }
 pub(super) struct View {
     pub title: &'static str,
+    /// Title bar capsule text, at most six characters; `title` stays in its hover text.
+    pub short: &'static str,
     pub detail: &'static str,
     pub tone: Tone,
     pub action: Action,
 }
 impl View {
-    fn new(title: &'static str, detail: &'static str, tone: Tone, action: Action) -> Self {
+    fn new(
+        title: &'static str,
+        short: &'static str,
+        detail: &'static str,
+        tone: Tone,
+        action: Action,
+    ) -> Self {
         Self {
             title,
+            short,
             detail,
             tone,
             action,
         }
+    }
+    /// States that wait on a worker, the peer or a check. The capsule may step a spinner for
+    /// them, but only on an activity beat that already repaints the window.
+    pub(super) fn is_waiting(&self) -> bool {
+        matches!(
+            self.short,
+            "正在停止"
+                | "正在断开"
+                | "正在添加"
+                | "检查连接"
+                | "正在恢复"
+                | "等待另一台"
+                | "连接中"
+                | "切换中"
+                | "检查中"
+        )
     }
 }
 
@@ -65,6 +90,7 @@ pub(super) fn present(s: Snapshot) -> View {
     if s.recovery_blocked || s.input == Some(WorkerInputState::RecoveryUnconfirmed) {
         return View::new(
             "输入恢复需要确认",
+            "恢复未确认",
             "先松开两端的按键和鼠标按钮，再查看恢复指引。确认前不开始新的键鼠会话。",
             Tone::Danger,
             Action::Recovery,
@@ -73,6 +99,7 @@ pub(super) fn present(s: Snapshot) -> View {
     if s.stopping || s.running && s.terminal {
         return View::new(
             "正在结束协同",
+            "正在停止",
             "正在等待输入清理和连接结束，请保留窗口。",
             Tone::Warning,
             Action::Recovery,
@@ -81,6 +108,7 @@ pub(super) fn present(s: Snapshot) -> View {
     if s.running && !s.registered {
         return View::new(
             "正在断开旧设备",
+            "正在断开",
             "旧连接结束后可以重新添加电脑。",
             Tone::Warning,
             Action::Recovery,
@@ -90,6 +118,7 @@ pub(super) fn present(s: Snapshot) -> View {
         if !s.writable {
             return View::new(
                 "这个窗口只读",
+                "只读",
                 "你的资料已保留。请到设置查看原因；停止和恢复仍可使用。",
                 Tone::Warning,
                 Action::None,
@@ -98,6 +127,7 @@ pub(super) fn present(s: Snapshot) -> View {
         if s.pairing {
             return View::new(
                 "正在添加电脑",
+                "正在添加",
                 "请在配对窗口核验身份；不会开启键鼠或数据同步。",
                 Tone::Accent,
                 Action::None,
@@ -106,6 +136,7 @@ pub(super) fn present(s: Snapshot) -> View {
         if s.pairing_pending {
             return View::new(
                 "登记等待对端回执",
+                "待回执",
                 "本机记录已保留，尚不能开始协同。请重新核验或撤销待确认登记。",
                 Tone::Warning,
                 Action::AddDevice,
@@ -114,6 +145,7 @@ pub(super) fn present(s: Snapshot) -> View {
         if !s.registered {
             return View::new(
                 "连接你的另一台电脑",
+                "未添加",
                 "添加并核验一次，之后会记住这台电脑。",
                 Tone::Accent,
                 Action::AddDevice,
@@ -122,6 +154,7 @@ pub(super) fn present(s: Snapshot) -> View {
         if s.peer_wait_expired {
             return View::new(
                 "等待另一台电脑已超时",
+                "等待超时",
                 "配对已保留。请在另一台也开启协同，再重新发起；不会自动重试或恢复旧控制。",
                 Tone::Warning,
                 if s.native_supported {
@@ -140,6 +173,7 @@ pub(super) fn present(s: Snapshot) -> View {
             } else {
                 "设备已记住，尚未连接"
             },
+            if s.failed { "未完成" } else { "未连接" },
             if s.native_supported && s.readiness != Readiness::Ready {
                 s.readiness.detail()
             } else if s.failed {
@@ -162,6 +196,7 @@ pub(super) fn present(s: Snapshot) -> View {
     if s.mode == Some(SessionMode::Probe) {
         return View::new(
             "正在检查连接",
+            "检查连接",
             "只检测两台电脑能否通信，不读取或控制键鼠。",
             Tone::Accent,
             Action::None,
@@ -170,6 +205,7 @@ pub(super) fn present(s: Snapshot) -> View {
     if s.mode == Some(SessionMode::Native) && s.input == Some(WorkerInputState::Recovering) {
         return View::new(
             "正在恢复本机控制",
+            "正在恢复",
             "请先松开按键和鼠标按钮，等待清理结果。",
             Tone::Warning,
             Action::Recovery,
@@ -193,6 +229,7 @@ pub(super) fn present(s: Snapshot) -> View {
         if s.failed {
             return View::new(
                 "连接未完成，正在结束",
+                "未完成",
                 "保留当前窗口，等连接结束后再检查权限或重试。",
                 Tone::Warning,
                 Action::None,
@@ -201,6 +238,7 @@ pub(super) fn present(s: Snapshot) -> View {
         if s.waiting_for_peer {
             return View::new(
                 "等待另一台电脑就绪",
+                "等待另一台",
                 "请在另一台也开启协同。本次等待约一分钟，可随时停止；连接前不会捕获或转发输入。",
                 Tone::Accent,
                 Action::None,
@@ -208,6 +246,7 @@ pub(super) fn present(s: Snapshot) -> View {
         }
         return View::new(
             "正在等待两台电脑连接",
+            "连接中",
             "请保持另一台电脑的屏跃已打开。连接中断时不会继续转发旧输入。",
             Tone::Accent,
             next,
@@ -216,6 +255,7 @@ pub(super) fn present(s: Snapshot) -> View {
     if s.mode != Some(SessionMode::Native) {
         return View::new(
             "已连接，键鼠尚未开启",
+            "已连接",
             "连接不会自动授权控制。下一步可单独开启键鼠协同。",
             Tone::Good,
             next,
@@ -225,51 +265,59 @@ pub(super) fn present(s: Snapshot) -> View {
         let feedback = match s.switch_state {
             Some(WorkerSwitchState::Pending) => Some((
                 "正在请求切到另一台电脑",
+                "切换中",
                 "当前仍在本机，等待本次切换确认。",
                 Tone::Accent,
             )),
             Some(WorkerSwitchState::Denied) => Some((
                 "上次切换未被对端接受",
+                "切换被拒",
                 "请在另一台检查接收控制、键鼠开启和恢复提示；鼠标移回屏幕内再重试。",
                 Tone::Warning,
             )),
             Some(WorkerSwitchState::TimedOut) => Some((
                 "上次切换没有完成",
+                "切换超时",
                 "本机未在期限内完成切换。先松开按键和鼠标按钮，将鼠标移回屏幕内再重试。",
                 Tone::Warning,
             )),
             Some(WorkerSwitchState::PeerUnavailable) => Some((
                 "对端未提供鼠标能力",
+                "对端不可用",
                 "请在另一台检查键鼠是否已开启及平台支持情况。提供能力不等于允许接收控制。",
                 Tone::Warning,
             )),
             _ => None,
         };
-        if let Some((title, detail, tone)) = feedback {
-            return View::new(title, detail, tone, Action::None);
+        if let Some((title, short, detail, tone)) = feedback {
+            return View::new(title, short, detail, tone, Action::None);
         }
     }
     match s.input {
         Some(WorkerInputState::ControllingRemote) => View::new(
             "已获准向另一台电脑发送输入",
+            "控制另一台",
             "请观察对端是否响应。Ctrl+Alt+Esc 可紧急恢复本机控制。",
             Tone::Accent,
             Action::None,
         ),
         Some(WorkerInputState::ReceivingRemote) => View::new(
             "另一台电脑正在控制本机",
+            "被控制中",
             "本机首次物理动作只用于收回控制；松开按键和鼠标按钮后再继续操作。",
             Tone::Accent,
             Action::None,
         ),
         Some(WorkerInputState::Local) => View::new(
             "键鼠已开启 · 当前在本机",
+            "本机控制",
             "移到设置的屏幕边缘可请求切换；是否允许控制由另一台电脑决定。",
             Tone::Good,
             Action::None,
         ),
         _ => View::new(
             "已连接，正在准备键鼠",
+            "准备键鼠",
             "输入程序仍需确认权限与当前归属，尚未报告可以切换。",
             Tone::Warning,
             Action::None,
@@ -291,6 +339,11 @@ fn permission_view(readiness: Readiness, connected: bool) -> View {
             "已连接，键鼠权限需要检查"
         } else {
             "开始前，先检查本机键鼠权限"
+        },
+        match readiness {
+            Readiness::Checking => "检查中",
+            Readiness::Unchecked => "需检查",
+            _ => "需处理",
         },
         readiness.detail(),
         if matches!(readiness, Readiness::Unchecked | Readiness::Checking) {
@@ -516,6 +569,91 @@ mod tests {
             s.switch_state = Some(switch);
             assert_eq!(present(s).action, Action::Recovery);
         }
+    }
+    #[test]
+    fn every_capsule_label_is_short_text_and_warnings_keep_their_full_title() {
+        let mut views = Vec::new();
+        for readiness in [
+            Readiness::Unchecked,
+            Readiness::Checking,
+            Readiness::Ready,
+            Readiness::SecureInput,
+            Readiness::Failed,
+        ] {
+            for (running, connected, failed) in [
+                (false, false, false),
+                (false, false, true),
+                (true, false, false),
+                (true, false, true),
+                (true, true, false),
+            ] {
+                for mode in [
+                    None,
+                    Some(SessionMode::Communication),
+                    Some(SessionMode::Native),
+                    Some(SessionMode::Probe),
+                ] {
+                    for input in [
+                        None,
+                        Some(WorkerInputState::Local),
+                        Some(WorkerInputState::ControllingRemote),
+                        Some(WorkerInputState::ReceivingRemote),
+                        Some(WorkerInputState::Recovering),
+                        Some(WorkerInputState::Unavailable),
+                    ] {
+                        let mut s = snapshot();
+                        s.readiness = readiness;
+                        s.running = running;
+                        s.connected = connected;
+                        s.failed = failed;
+                        s.mode = mode;
+                        s.input = input;
+                        views.push(present(s));
+                    }
+                }
+            }
+        }
+        for switch in [
+            WorkerSwitchState::Pending,
+            WorkerSwitchState::Denied,
+            WorkerSwitchState::TimedOut,
+            WorkerSwitchState::PeerUnavailable,
+        ] {
+            let mut s = snapshot();
+            s.running = true;
+            s.connected = true;
+            s.mode = Some(SessionMode::Native);
+            s.input = Some(WorkerInputState::Local);
+            s.switch_state = Some(switch);
+            views.push(present(s));
+        }
+        let mut flags = Vec::new();
+        for flag in 0..8 {
+            let mut s = snapshot();
+            match flag {
+                0 => s.recovery_blocked = true,
+                1 => s.stopping = true,
+                2 => s.writable = false,
+                3 => s.pairing = true,
+                4 => s.pairing_pending = true,
+                5 => s.registered = false,
+                6 => s.peer_wait_expired = true,
+                _ => {
+                    s.running = true;
+                    s.waiting_for_peer = true;
+                }
+            }
+            flags.push(present(s));
+        }
+        views.extend(flags);
+        for view in &views {
+            let count = view.short.chars().count();
+            assert!((1..=6).contains(&count), "{} -> {}", view.title, view.short);
+            assert!(!view.title.is_empty() && !view.detail.is_empty());
+        }
+        let recovery = views.iter().find(|view| view.action == Action::Recovery);
+        let recovery = recovery.expect("recovery state not covered");
+        assert!(!recovery.short.is_empty() && recovery.title != recovery.short);
     }
     #[test]
     fn first_wait_and_expiry_are_not_authentication_or_recovery() {
