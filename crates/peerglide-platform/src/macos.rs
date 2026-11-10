@@ -208,13 +208,15 @@ pub(super) fn release_source_cursor() -> Result<()> {
     Ok(())
 }
 /// Capture loop only, between run-loop slices. Never waits for the session.
-fn reconcile_source_cursor(remote: bool) {
+/// `remote` is read under the same lock as freeze, so a phase committed and frozen
+/// between an early read and this lock can never be reconnected by a stale answer.
+fn reconcile_source_cursor(remote: impl FnOnce() -> bool) {
     let mut state = match SOURCE_CURSOR.try_lock() {
         Ok(state) => state,
         Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
         Err(std::sync::TryLockError::WouldBlock) => return,
     };
-    state.reconcile(remote, &mut NativeCursor);
+    state.reconcile(remote(), &mut NativeCursor);
 }
 thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)};}
 static MODIFIERS: Mutex<u64> = Mutex::new(0);
@@ -277,7 +279,7 @@ pub(super) fn capture_receiving(
             loop {
                 // Fail-open path independent of the async session: a watchdog,
                 // Emergency, fault or stop that leaves Remote reconnects here.
-                reconcile_source_cursor(receive_gate.remote_live().is_some());
+                reconcile_source_cursor(|| receive_gate.remote_live().is_some());
                 let debt = STATE
                     .with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
                     || receive_gate.receiving_epoch().is_some();
