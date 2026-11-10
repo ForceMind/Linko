@@ -8,8 +8,8 @@
 //! for a later reduce-motion switch. No timers, threads, I/O or native queries live here.
 //!
 //! The shell (slice S1) uses hover, selection, sidebar, view switch, capsule and spinner
-//! motion. Items marked `allow(dead_code)` are consumed by the later canvas, context bar,
-//! pairing and dialog slices.
+//! motion; the canvas (slice S2) adds the rebound (M7) and badge pops (M6). Items marked
+//! `allow(dead_code)` are consumed by the later context bar, pairing and dialog slices.
 
 use crate::desktop_style::tokens;
 use eframe::egui;
@@ -17,7 +17,6 @@ use eframe::egui;
 /// Capsule scale at the start of the M5 change.
 const CAPSULE_FROM_SCALE: f32 = 0.92;
 /// Badge scale at the start of the M6 pop.
-#[allow(dead_code)]
 const BADGE_FROM_SCALE: f32 = 0.3;
 /// Shake displacement in points at 20%, 40%, 60%, 80% and 100% of M8; it starts at 0.
 #[allow(dead_code)]
@@ -49,7 +48,6 @@ pub(super) fn cubic_out(t: f32) -> f32 {
 }
 
 /// Ease out with a small overshoot (peak about 1.037). Used by M6.
-#[allow(dead_code)]
 pub(super) fn pop_out(t: f32) -> f32 {
     let f = unit(t) - 1.0;
     1.0 + 2.0 * f * f * f + f * f
@@ -310,7 +308,6 @@ pub(super) fn capsule_scale(progress: f32) -> f32 {
 }
 
 /// M6: scale of a status badge while it pops in, 0.3 to 1 with a small overshoot.
-#[allow(dead_code)]
 pub(super) fn badge_scale(progress: f32) -> f32 {
     lerp(BADGE_FROM_SCALE, 1.0, pop_out(progress))
 }
