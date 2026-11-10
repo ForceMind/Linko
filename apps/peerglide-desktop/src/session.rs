@@ -1069,22 +1069,20 @@ fn local_takeover(
 fn is_zero_scroll(event: Input) -> bool {
     matches!(event, Input::Scroll { x: 0, y: 0 })
 }
-/// Reports a direction mismatch once per distinct (local, peer) pair. A consistent pair
-/// clears the memory, so the same mismatch can be reported again after it was fixed.
+/// Reports each new (local, peer) observation once: every mismatch, and a consistent
+/// pair only when it follows a reported mismatch, so the GUI can withdraw a stale offer.
 fn layout_hint_once(
     local: Edge,
     peer: Edge,
     reported: &mut Option<(Edge, Edge)>,
 ) -> Option<LayoutHint> {
-    let Some(hint) = LayoutHint::new(local, peer) else {
-        *reported = None;
-        return None;
-    };
-    if *reported == Some((local, peer)) {
+    let previous = reported.replace((local, peer));
+    if previous == Some((local, peer)) {
         return None;
     }
-    *reported = Some((local, peer));
-    Some(hint)
+    let hint = LayoutHint::observe(local, peer);
+    let withdraws = previous.is_some_and(|(l, p)| p != l.opposite());
+    (hint.mismatched() || withdraws).then_some(hint)
 }
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
     distance(source_edge.opposite(), x, y) <= 0.001
@@ -1136,11 +1134,10 @@ mod tests {
         assert!(!is_zero_scroll(button));
     }
     #[test]
-    fn layout_hint_is_reported_once_per_mismatch_and_rearms_after_a_consistent_pair() {
+    fn layout_hint_is_reported_once_per_mismatch_and_withdrawn_when_consistent() {
         let mut reported = None;
         let mirrored = layout_hint_once(Edge::Left, Edge::Right, &mut reported);
         assert!(mirrored.is_none());
-        assert!(reported.is_none());
         let first = layout_hint_once(Edge::Right, Edge::Right, &mut reported);
         assert_eq!(first.map(LayoutHint::suggested), Some(Edge::Left));
         let repeated = layout_hint_once(Edge::Right, Edge::Right, &mut reported);
@@ -1149,10 +1146,13 @@ mod tests {
         assert_eq!(local_changed.map(|hint| hint.local), Some(Edge::Top));
         let peer_changed = layout_hint_once(Edge::Top, Edge::Top, &mut reported);
         assert_eq!(peer_changed.map(|hint| hint.peer), Some(Edge::Top));
+        // The peer fixed its side: one consistent record withdraws the GUI offer.
         let fixed = layout_hint_once(Edge::Top, Edge::Bottom, &mut reported);
-        assert!(fixed.is_none());
+        assert!(fixed.is_some_and(|hint| !hint.mismatched()));
+        let still_fixed = layout_hint_once(Edge::Top, Edge::Bottom, &mut reported);
+        assert!(still_fixed.is_none());
         let again = layout_hint_once(Edge::Top, Edge::Top, &mut reported);
-        assert!(again.is_some());
+        assert!(again.is_some_and(LayoutHint::mismatched));
     }
     #[test]
     fn granted_callback_retry_commits_once_with_the_original_request_and_budget() -> Result<()> {

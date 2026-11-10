@@ -41,12 +41,16 @@ When a peer `Acquire` carries an edge that is not the opposite of the worker's
 current edge, the session emits one stdout record:
 `{"version":1,"kind":"layout_hint","local":"Right","peer":"Right"}`.
 `local` is this worker's direction, `peer` the direction in the peer's request;
-the GUI suggests `peer.opposite()`. Records are capped at 256 bytes, reject unknown
-fields/versions and consistent pairs, and are emitted once per distinct pair (a
-consistent pair re-arms it). The hint does not change granting, routing or settings
-and adds no network message. The GUI keeps it per child, shows it only while that
-child is connected and the displayed direction still equals `local`, and applies it
-through the ordinary layout edit path. Old GUIs treat the line as a diagnostic.
+the GUI suggests `peer.opposite()`. Records are capped at 256 bytes and reject unknown
+fields/versions. Each distinct observed pair is emitted once: every mismatch, and a
+consistent pair only right after a reported mismatch, which withdraws the GUI offer.
+The hint does not change granting, routing or settings and adds no network message.
+The GUI keeps the latest record per child and shows an offer only while that child is
+connected, the record is a mismatch and the displayed direction still equals `local`.
+It applies the offer through the ordinary layout edit path and keeps it until the
+worker confirms (the new displayed direction hides it); a rejected request leaves it
+available, and a second click is refused while one is pending. Old GUIs treat the
+line as a diagnostic.
 
 ## Lifecycle records
 

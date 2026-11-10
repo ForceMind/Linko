@@ -32,23 +32,21 @@ impl App {
             return None;
         }
         let hint = snapshot.6.lock().ok().and_then(|slot| *slot)?;
-        (edge_name(hint.local) == self.displayed_edge()).then_some(hint)
+        let current = edge_name(hint.local) == self.displayed_edge();
+        (hint.mismatched() && current).then_some(hint)
     }
 
     /// Uses the ordinary edit path, so the same capture and pending-request gates apply.
+    /// The offer stays until the worker confirms a new edge (which hides it) or the peer
+    /// reports a consistent pair; a rejected request leaves it available to retry.
     pub(super) fn apply_layout_hint(&mut self) -> bool {
+        if self.layout_request.is_some() {
+            return false;
+        }
         let Some(hint) = self.layout_hint() else {
             return false;
         };
-        let requested = self.try_set_edge(edge_name(hint.suggested()));
-        if requested {
-            if let Some(snapshot) = &self.worker_state {
-                if let Ok(mut slot) = snapshot.6.lock() {
-                    *slot = None;
-                }
-            }
-        }
-        requested
+        self.try_set_edge(edge_name(hint.suggested()))
     }
 
     pub(super) fn layout_hint_row(&mut self, ui: &mut egui::Ui) {
@@ -59,7 +57,7 @@ impl App {
         let button = format!("改为{}", edge_label(edge_name(hint.suggested())));
         ui.horizontal_wrapped(|ui| {
             ui.small(format!("两台电脑的位置不一致（对端认为本机在其{peer}）"));
-            let enabled = self.layout_editable();
+            let enabled = self.layout_editable() && self.layout_request.is_none();
             if ui
                 .add_enabled(enabled, egui::Button::new(button).small())
                 .clicked()
@@ -213,7 +211,7 @@ mod tests {
         app.worker_state = Some(Arc::new(WorkerSnapshot::default()));
         let snapshot = app.worker_state.as_ref().unwrap().clone();
         assert!(app.layout_hint().is_none());
-        let hint = LayoutHint::new(Edge::Right, Edge::Right).unwrap();
+        let hint = LayoutHint::observe(Edge::Right, Edge::Right);
         *snapshot.6.lock().unwrap() = Some(hint);
         assert_eq!(app.layout_hint(), Some(hint));
         app.config.edge = "top".into();
@@ -224,13 +222,30 @@ mod tests {
         assert!(!app.apply_layout_hint());
         app.connected = true;
         assert!(app.apply_layout_hint());
-        assert_eq!(app.layout_request.as_ref().map(|p| p.request), Some(1));
-        assert_eq!(app.layout_request.as_ref().map(|p| p.edge), Some(Edge::Left));
-        assert!(app.layout_hint().is_none());
-        *snapshot.5.lock().unwrap() = Some(LayoutUpdate::request(1, Edge::Left).reply(true));
+        let requested = app.layout_request.as_ref().map(|p| (p.request, p.edge));
+        assert_eq!(requested, Some((1, Edge::Left)));
+        // The offer survives until the worker answers; a second click is refused.
+        assert_eq!(app.layout_hint(), Some(hint));
+        assert!(!app.apply_layout_hint());
+        let rejected = LayoutUpdate::request(1, Edge::Left).reply(false);
+        *snapshot.5.lock().unwrap() = Some(rejected);
+        app.poll_layout();
+        assert_eq!(app.displayed_edge(), "right");
+        assert_eq!(app.layout_hint(), Some(hint));
+        assert!(app.apply_layout_hint());
+        let retried = app.layout_request.as_ref().map(|p| (p.request, p.edge));
+        assert_eq!(retried, Some((2, Edge::Left)));
+        let applied = LayoutUpdate::request(2, Edge::Left).reply(true);
+        *snapshot.5.lock().unwrap() = Some(applied);
         app.poll_layout();
         assert_eq!(app.displayed_edge(), "left");
+        assert!(app.layout_hint().is_none());
+        // A consistent observation from the peer withdraws a stale offer.
+        app.layout_active = Some(Edge::Right);
         *snapshot.6.lock().unwrap() = Some(hint);
+        assert_eq!(app.layout_hint(), Some(hint));
+        let consistent = LayoutHint::observe(Edge::Right, Edge::Left);
+        *snapshot.6.lock().unwrap() = Some(consistent);
         assert!(app.layout_hint().is_none());
         app.stop();
         drop(app);
@@ -240,7 +255,7 @@ mod tests {
 
     #[test]
     fn hint_line_from_worker_output_reaches_the_slot_not_diagnostics() -> Result<()> {
-        let hint = LayoutHint::new(Edge::Bottom, Edge::Bottom).unwrap();
+        let hint = LayoutHint::observe(Edge::Bottom, Edge::Bottom);
         let text = format!("{}\nplain diagnostic\n", hint.line());
         let snapshot = Arc::new(WorkerSnapshot::default());
         let (tx, rx) = mpsc::sync_channel(4);
