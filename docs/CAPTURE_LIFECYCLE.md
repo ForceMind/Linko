@@ -268,3 +268,87 @@ X/Y 位移更新，因此现有 tap 读取的 `MouseEventDeltaX/Y`（字段 4/5�
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showcursor
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcursorpos
+
+## Windows 接收注入独立线程（实现未经实机验证）
+
+问题：Mac 控制 Windows 时，接收端 Native loop 既安装 WH_MOUSE_LL/WH_KEYBOARD_LL，又在
+同一线程里同步 `SendInput`。SendInput 返回前，本线程不取消息，排在它后面的低级钩子回调
+也就无人处理；若 SendInput 本身变慢（其他进程的钩子、受保护桌面、系统负载），本线程停滞
+可接近系统 `LowLevelHooksTimeout`（约 300 ms），而命令截止只有 250 ms，于是出现 `rel_rx`
+多于 `rel_apply` 和 `native receive service: Timeout`。是否正是实测停滞的唯一原因尚未在实机
+确认；本改动消除的是"钩子线程被 SDK 调用占住"这一个已知风险。
+
+参考：Oink 的注入独占一个线程，理由是原生注入可能阻塞；输入线程通过有界队列交接，
+确认类操作用原子栅栏，生产者只轮询结果、从不在回调里等待注入方。来源与差异见
+[REFERENCE_RESEARCH.md](REFERENCE_RESEARCH.md) 的对应小节。
+
+### 所有权与生命周期
+
+- 注入线程不是钩子，不安装任何钩子，不读物理输入。它只执行 `ReceiveBackend::pointer` /
+  `input` 交来的固定小包。只有接收用的 capture（`capture_receiving`）创建它；KVM 源端与
+  G1 本机路径不变。
+- 由 Native loop 在安装钩子之前创建，创建失败等同钩子安装失败（capture 启动失败）。
+  `NativeReceiveBackend` 独占唯一句柄，没有第二个生产者。
+- 退出顺序：Engine 最后一次 `pump(stop)` → 请求注入线程停止（丢弃尚未执行的条目，
+  不再开始新的 SDK 调用）→ 卸载两个钩子 → 有界等待（500 ms）在途调用返回并 join。
+  超时：把接收 owner 标为 RecoveryRequired（`shutdown` 报告"cleanup remains unconfirmed"），
+  然后仍阻塞 join，使注入线程不会比 capture 线程活得更久；原有 reservation/reaper 规则
+  照旧阻止新的 capture。被丢弃的条目从不在 capture 结束后执行。
+
+### 交接队列
+
+- 一个预分配的有界 FIFO（256 项），`Mutex` 只在入队/出队时短暂持有，SDK 调用期间不持锁。
+  生产者（Native loop）从不等待注入线程；注入线程空闲时阻塞在条件变量上。
+- 光标移动可合并：若队尾尚未开始执行的条目是同一 epoch 的光标移动，新位置直接覆盖它，
+  不占新槽位。只合并相邻的移动，所以"先移动到快照位置再按键"的顺序不变；键、按钮、
+  滚轮从不合并、从不丢弃。这消除了 F01 描述的"每个数据报一次往返、先进先出累积延迟"：
+  积压时只执行最新位置。
+- 队列满：键/按钮/滚轮以及无法合并的移动返回 `BeforeSubmission`，Engine 走既有
+  fail/retire 保护路径（按下仍按"先记可能的 Down"规则处理，见下）。
+
+### 失败回报与结果语义
+
+- 入队成功即 `Ok`，`Submitted` 仍只表示"已提交 SDK 请求"，不是 OS/应用收据。
+- 注入线程上 SendInput 失败、部分成功、或执行前复查不通过，都记为失败（不区分为
+  BeforeSubmission，按未知处理）：
+  - 下一次 `pointer`/`input` 调用返回 `UnknownOutcome`；Engine 每轮 `pump` 也会主动查询，
+    即使没有新命令也会 fail + retire。
+  - 失败的松开（键/按钮 Up）记入固定位图，由 Engine 在 cleanup 中取回：重新记为仍按下并
+    计一次失败尝试，沿用原来的 3 次重试与"重试用尽即 FAILED"规则。
+  - 失败之后，队列里排在后面的按下/移动/滚轮不再执行（同步实现在失败后也不会再发出它们）；
+    松开仍执行，因为 Engine 账本已按已提交计。
+- 每个条目在 SDK 调用前于注入线程上复查：capture 健康、同一 Receiving epoch 仍是当前、
+  Native loop 最近一次来源观测（同一 1.5 s 单调+墙钟规则）仍新鲜。不通过则不调用 SDK，
+  因此 SourceLost/换代之后排队的 Up 不会盲发。
+- 已知差异：引擎的时间/状态/修饰键检查仍在入队时做；从入队到执行之间（通常亚毫秒）新出现的
+  本机修饰键不会让已排队的效果撤回。
+
+### 栅栏
+
+- `leave_receiving` 之前：Engine 的 cleanup 先发出所有 Up，再要求注入队列为空且最后一次 SDK
+  调用已返回；未完成时本轮返回、等注入线程完成后的唤醒（PostThreadMessage 到 Native loop；
+  50 ms 空闲等待兜底），绝不在 Native loop 上阻塞等待。随后取回失败的 Up，若有则继续重试，
+  不移除保护。等待超过 1000 ms 仍未完成：fail 并进入 FAILED（RecoveryRequired），不假报干净。
+- `force_return`：先丢弃尚未执行的条目（强制返回本就禁止任何后续注入），若仍有在途调用则
+  本次返回失败，Engine 下一轮重试；在途调用返回前不清除保护。
+- Native 后端的 `leave_receiving` 也自行复核队列已空，作为第二道检查。
+- macOS 与测试 Fake 仍是同步后端：默认实现"永不挂起、永不异步失败"，行为与之前一致。
+
+### 钩子与诊断计数
+
+- `mouse_hook`/`key_hook` 对 TAG/LLMHF_INJECTED 事件的放行逻辑不变。注入改由另一线程发出后，
+  这些事件会经过本进程的低级钩子（Oink 注释记录：Windows 11 不对线程自身的 SendInput 调用
+  该线程的 LL 钩子），因此 `filtered`、`wh_inj` 现在也会计入本机接收注入的移动/滚轮。
+- `sdk`/`sdk_fail`/`moved`/`unchanged`/`unknown`/`slow_ptr`/`slow_inp` 改在注入线程上、
+  围绕实际 SendInput 递增，语义仍是"实际 SDK 调用"；被合并的移动没有 SDK 调用，不计入
+  `sdk`，所以 `apply` 可以大于 `sdk`。`loop_stall` 仍在 Native loop 上计。
+  `apply`/`rel_apply` 等会话层计数不变。
+
+### 测试与未验证项
+
+`inject_thread` 的纯软件测试（Fake sink，不调用 OS）：顺序保持、光标合并、栅栏等待与唤醒、
+失败传播与失败 Up 回收、执行前复查拒绝、队列满、丢弃与停止时线程退出（含在途阻塞时的有界
+超时）。`receive_driver` 增加 Fake 异步后端测试：栅栏未完成不 Leave、超时进入
+RecoveryRequired、异步失败的 Up 被重试、无新命令时也会发现异步失败。
+真实 SendInput 是否仍可能阻塞（例如受保护安装、UAC/安全桌面、其他进程慢钩子）、实际延迟
+与 Timeout 是否消失，都需要 Windows 实机 #3/C06 验证。
