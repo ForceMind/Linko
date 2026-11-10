@@ -6,7 +6,8 @@ use peerglide_platform::{
     Captured,
 };
 use peerglide_protocol::{
-    decode, encode, worker::WorkerInputState, Edge, Input, InputCapabilities, Message, Motion,
+    decode, encode, layout_ipc::LayoutHint, worker::WorkerInputState, Edge, Input,
+    InputCapabilities, Message, Motion,
 };
 use peerglide_transport as transport;
 use platform::{ReceiveAck, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot};
@@ -668,6 +669,7 @@ pub(super) async fn run_with_diagnostics(
     let mut size = (1920.0, 1080.0);
     let mut last_pong = 0u64;
     let mut edge_gate = EdgeGate::default();
+    let mut hint_reported: Option<(Edge, Edge)> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(200));
     let result: Result<()> = async {
     if let Some(error)=driver_error{return Err(error);}
@@ -781,6 +783,7 @@ pub(super) async fn run_with_diagnostics(
                 match m {
                     Message::Acquire{lease,edge:remote_edge,along}=>{
                         count(Count::AcquireReceived);
+                        if let Some(hint)=layout_hint_once(edge,remote_edge,&mut hint_reported){if input_status.reporter.managed{println!("{}",hint.line());}}
                         // Same short-circuit order as before; the pure checks are split out only to tally why a request is refused.
                         let argument_ok=along.is_finite() && (0.0..=1.0).contains(&along);
                         let idle=pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle());
@@ -950,11 +953,12 @@ pub(super) async fn run_with_diagnostics(
                         }
                     }else{count(Count::NoLease);}},
                     Captured::Input{event,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)){
+                        if is_zero_scroll(event){count(Count::ScrollZero);continue;}
                         if !peer.supports(event) { count(Count::CapabilityStop);input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let cursor=Motion{lease,sequence,x:position.0,y:position.1};
                         let result=send(&mut tx,&Message::Input{lease,event,cursor}).await;
                         count(if result.is_ok(){Count::ReliableSent}else{Count::ReliableFailed});
-                        if let (Ok(()),Input::Scroll{x,y})=(&result,event){count(if x==0&&y==0{Count::ScrollZero}else{Count::ScrollSent});}
+                        if let (Ok(()),Input::Scroll{..})=(&result,event){count(Count::ScrollSent);}
                         result?;
                     }},
                 }
@@ -1061,6 +1065,27 @@ fn local_takeover(
     edge_gate.require_interior();
     Some(lease)
 }
+/// A scroll that rounded to nothing was already swallowed locally; sending it is waste.
+fn is_zero_scroll(event: Input) -> bool {
+    matches!(event, Input::Scroll { x: 0, y: 0 })
+}
+/// Reports a direction mismatch once per distinct (local, peer) pair. A consistent pair
+/// clears the memory, so the same mismatch can be reported again after it was fixed.
+fn layout_hint_once(
+    local: Edge,
+    peer: Edge,
+    reported: &mut Option<(Edge, Edge)>,
+) -> Option<LayoutHint> {
+    let Some(hint) = LayoutHint::new(local, peer) else {
+        *reported = None;
+        return None;
+    };
+    if *reported == Some((local, peer)) {
+        return None;
+    }
+    *reported = Some((local, peer));
+    Some(hint)
+}
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
     distance(source_edge.opposite(), x, y) <= 0.001
 }
@@ -1093,6 +1118,41 @@ mod tests {
         };
         let token = gate.prepare_commit(epoch).unwrap();
         (PendingAcquire::new(lease, token, started), epoch)
+    }
+    #[test]
+    fn only_zero_by_zero_scroll_is_skipped_before_sending() {
+        assert!(is_zero_scroll(Input::Scroll { x: 0, y: 0 }));
+        assert!(!is_zero_scroll(Input::Scroll { x: 0, y: 1 }));
+        assert!(!is_zero_scroll(Input::Scroll { x: -1, y: 0 }));
+        let key = Input::Key {
+            usage: 4,
+            down: true,
+        };
+        let button = Input::Button {
+            button: 1,
+            down: true,
+        };
+        assert!(!is_zero_scroll(key));
+        assert!(!is_zero_scroll(button));
+    }
+    #[test]
+    fn layout_hint_is_reported_once_per_mismatch_and_rearms_after_a_consistent_pair() {
+        let mut reported = None;
+        let mirrored = layout_hint_once(Edge::Left, Edge::Right, &mut reported);
+        assert!(mirrored.is_none());
+        assert!(reported.is_none());
+        let first = layout_hint_once(Edge::Right, Edge::Right, &mut reported);
+        assert_eq!(first.map(LayoutHint::suggested), Some(Edge::Left));
+        let repeated = layout_hint_once(Edge::Right, Edge::Right, &mut reported);
+        assert!(repeated.is_none());
+        let local_changed = layout_hint_once(Edge::Top, Edge::Right, &mut reported);
+        assert_eq!(local_changed.map(|hint| hint.local), Some(Edge::Top));
+        let peer_changed = layout_hint_once(Edge::Top, Edge::Top, &mut reported);
+        assert_eq!(peer_changed.map(|hint| hint.peer), Some(Edge::Top));
+        let fixed = layout_hint_once(Edge::Top, Edge::Bottom, &mut reported);
+        assert!(fixed.is_none());
+        let again = layout_hint_once(Edge::Top, Edge::Top, &mut reported);
+        assert!(again.is_some());
     }
     #[test]
     fn granted_callback_retry_commits_once_with_the_original_request_and_budget() -> Result<()> {

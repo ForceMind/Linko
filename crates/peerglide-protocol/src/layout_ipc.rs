@@ -51,6 +51,55 @@ impl LayoutUpdate {
     }
 }
 
+/// Worker-to-GUI observation that the peer's configured direction is not the mirror of
+/// this worker's. It changes no routing, grant or setting; the GUI may only offer an edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayoutHint {
+    version: u8,
+    kind: HintKind,
+    pub local: Edge,
+    pub peer: Edge,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+enum HintKind {
+    #[serde(rename = "layout_hint")]
+    LayoutHint,
+}
+
+impl LayoutHint {
+    /// `None` when the two directions already mirror each other.
+    pub fn new(local: Edge, peer: Edge) -> Option<Self> {
+        if peer == local.opposite() {
+            return None;
+        }
+        Some(Self {
+            version: 1,
+            kind: HintKind::LayoutHint,
+            local,
+            peer,
+        })
+    }
+
+    pub fn suggested(self) -> Edge {
+        self.peer.opposite()
+    }
+
+    pub fn parse(line: &str) -> Option<Self> {
+        if line.len() > 256 {
+            return None;
+        }
+        serde_json::from_str::<Self>(line)
+            .ok()
+            .filter(|value| value.version == 1 && value.peer != value.local.opposite())
+    }
+
+    pub fn line(self) -> String {
+        serde_json::to_string(&self).expect("finite layout hint IPC")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +124,37 @@ mod tests {
         );
         assert!(LayoutUpdate::parse(&command.line().replace("\"Right\"", "\"Unknown\"")).is_none());
         assert!(LayoutUpdate::parse(&"x".repeat(257)).is_none());
+    }
+
+    #[test]
+    fn layout_hint_round_trips_and_suggests_the_mirror_of_the_peer_edge() {
+        let hint = LayoutHint::new(Edge::Right, Edge::Right).unwrap();
+        assert_eq!(hint.suggested(), Edge::Left);
+        assert_eq!(LayoutHint::parse(&hint.line()), Some(hint));
+        assert_eq!(
+            hint.line(),
+            r#"{"version":1,"kind":"layout_hint","local":"Right","peer":"Right"}"#
+        );
+        assert!(LayoutHint::new(Edge::Right, Edge::Left).is_none());
+        assert!(LayoutHint::new(Edge::Top, Edge::Bottom).is_none());
+        let vertical = LayoutHint::new(Edge::Top, Edge::Left).unwrap();
+        assert_eq!(vertical.suggested(), Edge::Right);
+    }
+
+    #[test]
+    fn layout_hint_rejects_malformed_oversized_and_consistent_records() {
+        let line = LayoutHint::new(Edge::Right, Edge::Right).unwrap().line();
+        let consistent = line.replace(r#""peer":"Right""#, r#""peer":"Left""#);
+        assert!(LayoutHint::parse(&consistent).is_none());
+        assert!(LayoutHint::parse(&line.replace("\"version\":1", "\"version\":2")).is_none());
+        assert!(LayoutHint::parse(&line.replace("layout_hint", "layout")).is_none());
+        assert!(LayoutHint::parse(&line.replace("\"Right\"", "\"Unknown\"")).is_none());
+        assert!(LayoutHint::parse(&line.replace('}', ",\"extra\":1}")).is_none());
+        assert!(LayoutHint::parse(&line[..line.len() - 1]).is_none());
+        assert!(LayoutHint::parse(&format!("{line}{}", " ".repeat(256))).is_none());
+        assert!(LayoutHint::parse(&"x".repeat(257)).is_none());
+        let update = LayoutUpdate::request(1, Edge::Left).line();
+        assert!(LayoutHint::parse(&update).is_none());
+        assert!(LayoutUpdate::parse(&line).is_none());
     }
 }

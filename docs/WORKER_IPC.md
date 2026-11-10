@@ -35,6 +35,19 @@ and conflicting saves. `tools/layout_smoke.py` uses two real authenticated worke
 and private pipes on loopback, without native input. Physical Windows/macOS layout
 and edge behavior remain C06 acceptance work.
 
+## Layout mismatch hint (worker to GUI)
+
+When a peer `Acquire` carries an edge that is not the opposite of the worker's
+current edge, the session emits one stdout record:
+`{"version":1,"kind":"layout_hint","local":"Right","peer":"Right"}`.
+`local` is this worker's direction, `peer` the direction in the peer's request;
+the GUI suggests `peer.opposite()`. Records are capped at 256 bytes, reject unknown
+fields/versions and consistent pairs, and are emitted once per distinct pair (a
+consistent pair re-arms it). The hint does not change granting, routing or settings
+and adds no network message. The GUI keeps it per child, shows it only while that
+child is connected and the displayed direction still equals `local`, and applies it
+through the ordinary layout edit path. Old GUIs treat the line as a diagnostic.
+
 ## Lifecycle records
 
 Local supervisor events have schema version 1 and a finite state enum. They are
