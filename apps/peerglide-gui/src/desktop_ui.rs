@@ -2029,7 +2029,7 @@ pub(super) mod safety_dialog_tests {
                     let points = native_start_points(allow, waits, replaces);
                     assert_short_sentences(&points);
                     let texts = texts_of(&points);
-                    let has = |text: &str| texts.iter().any(|item| *item == text);
+                    let has = |text: &str| texts.iter().copied().any(|item| item == text);
                     assert!(has("这会启动真实原生键鼠捕获与注入。"));
                     assert!(has("连接/认证不代表对端允许本机控制。"));
                     assert!(has("Ctrl+Alt+Esc 紧急恢复。"));
