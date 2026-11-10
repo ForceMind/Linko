@@ -45,7 +45,17 @@ extern "C" {
     fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
     fn CGEventCreateKeyboardEvent(source: Ref, key: u16, down: bool) -> Ref;
     fn CGEventCreateMouseEvent(source: Ref, kind: u32, point: Point, button: u32) -> Ref;
-    fn CGEventCreateScrollWheelEvent(source: Ref, unit: u32, count: u32, ...) -> Ref;
+    // Fixed-arity variant. The variadic CGEventCreateScrollWheelEvent names wheel1, and
+    // on Apple arm64 a named argument travels in a register but a variadic one on the
+    // stack, so declaring wheel1 as variadic delivered a garbage vertical delta.
+    fn CGEventCreateScrollWheelEvent2(
+        source: Ref,
+        unit: u32,
+        count: u32,
+        wheel1: i32,
+        wheel2: i32,
+        wheel3: i32,
+    ) -> Ref;
     fn CGEventCreate(source: Ref) -> Ref;
     fn CGEventPost(tap: u32, event: Ref);
 }
@@ -528,12 +538,13 @@ pub(super) fn receive_inject(
                 event.submit(modifier_flags(*modifiers));
             }
             Input::Scroll { x, y } => {
-                let event = OwnedEvent::created(CGEventCreateScrollWheelEvent(
+                let event = OwnedEvent::created(CGEventCreateScrollWheelEvent2(
                     null_mut(),
                     1,
                     2,
                     i32::from(y),
                     i32::from(x),
+                    0,
                 ))?;
                 let modifiers = MODIFIERS
                     .lock()
