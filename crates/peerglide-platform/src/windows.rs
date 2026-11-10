@@ -365,11 +365,18 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
             MouseOrigin::Recovery(false) => return CallNextHookEx(null_mut(), code, w, l),
             MouseOrigin::Injected => {
                 let block = STATE.with_borrow_mut(|state| {
-                    if w as u32 == WM_MOUSEMOVE {
+                    // Atomic tallies only. Injected wheel events (smooth-scroll
+                    // drivers) bypass forwarding, so they are counted apart.
+                    let wheel = matches!(w as u32, WM_MOUSEWHEEL | WM_MOUSEHWHEEL);
+                    if w as u32 == WM_MOUSEMOVE || wheel {
                         if let Some(diagnostics) =
                             state.as_ref().and_then(|s| s.gate.0.diagnostics.get())
                         {
-                            diagnostics.increment(input_diagnostics::Count::Filtered);
+                            diagnostics.increment(if wheel {
+                                input_diagnostics::Count::WheelInjected
+                            } else {
+                                input_diagnostics::Count::Filtered
+                            });
                         }
                     }
                     state
@@ -395,6 +402,11 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                 let Some(s) = s else {
                     return false;
                 };
+                if matches!(w as u32, WM_MOUSEWHEEL | WM_MOUSEHWHEEL) {
+                    if let Some(diagnostics) = s.gate.0.diagnostics.get() {
+                        diagnostics.increment(input_diagnostics::Count::WheelPhysical);
+                    }
+                }
                 if let Some(broker) = s.local_gestures.as_mut() {
                     let remote = s.gate.active();
                     // Fixed native short path only: no legacy BTreeSet, tokio

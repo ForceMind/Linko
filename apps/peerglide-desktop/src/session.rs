@@ -713,6 +713,7 @@ pub(super) async fn run_with_diagnostics(
                 continue;
             },
             PendingStep::Cancelled{lease,timed_out}=>{
+                count(if timed_out {Count::AcquireTimeout} else {Count::AcquireCancelled});
                 eprintln!("{}", match (peer_granted,timed_out) {
                     (false,true)=>"Switch expired before peer grant.",
                     (true,true)=>"Switch expired after peer grant while committing locally.",
@@ -751,6 +752,7 @@ pub(super) async fn run_with_diagnostics(
                 if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
                 if let Some(Outgoing {lease,epoch})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
+                        count(Count::PongTimeout);
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
                     }else if input.is_empty() && returned_to_source(edge,position.0,position.1) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
@@ -778,12 +780,20 @@ pub(super) async fn run_with_diagnostics(
                 let now=now_ms();
                 match m {
                     Message::Acquire{lease,edge:remote_edge,along}=>{
-                        let mut granted=along.is_finite() && (0.0..=1.0).contains(&along) && pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle()) && recovery.receiver.acquire(lease,now,allow && local.motion());
+                        count(Count::AcquireReceived);
+                        // Same short-circuit order as before; the pure checks are split out only to tally why a request is refused.
+                        let argument_ok=along.is_finite() && (0.0..=1.0).contains(&along);
+                        let idle=pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle());
+                        let authorized=allow && local.motion();
+                        let mut granted=argument_ok && idle && recovery.receiver.acquire(lease,now,authorized);
+                        if !granted {
+                            count(if !argument_ok {Count::DenyArgument} else if !idle {Count::DenyBusy} else if !authorized {Count::DenyAuthorization} else {Count::DenyLease});
+                        }
                         if granted {
                             let begin=recovery.begin_receive().await;
                             if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                             granted=input_status.checked(begin)?;
-                            if !granted{input_status.release(&mut recovery).await?;}
+                            if !granted{count(Count::DenyBegin);input_status.release(&mut recovery).await?;}
                         }
                         if granted {
                             edge_gate.require_interior();
@@ -791,7 +801,7 @@ pub(super) async fn run_with_diagnostics(
                             let placed=recovery.pointer(position.0,position.1).await;
                             if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                             if input_status.checked(placed)? {input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Granted{lease}).await?;}
-                            else{input_status.release(&mut recovery).await?;send(&mut tx,&Message::Denied{lease}).await?;}
+                            else{count(Count::DenyPlacement);input_status.release(&mut recovery).await?;send(&mut tx,&Message::Denied{lease}).await?;}
                         }else{send(&mut tx,&Message::Denied{lease}).await?;}
                     },
                     Message::Granted{lease}=>{
@@ -806,13 +816,16 @@ pub(super) async fn run_with_diagnostics(
                             eprintln!("Peer grant received; checking local capture admission.");
                         }
                     },
-                    Message::Denied{lease}=>{if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
+                    Message::Denied{lease}=>{if pending.is_some_and(|request|request.lease==lease){count(Count::DeniedReceived);pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Denied);}},
                     Message::Input{lease,event,cursor}=>{
                         count(Count::ReliableReceived);
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
                         let result=recovery.input(lease,event,cursor,now).await;
                         match &result {
-                            Ok(true)=>count(Count::ReliableSubmitted),
+                            Ok(true)=>{
+                                count(Count::ReliableSubmitted);
+                                if matches!(event,Input::Scroll{..}){count(Count::ScrollApplied);}
+                            },
                             Err(_)=>count(Count::ReliableFailed),
                             Ok(false)=>{},
                         }
@@ -823,10 +836,10 @@ pub(super) async fn run_with_diagnostics(
                         if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);}
                         if recovery.receiver.active()==Some(lease){input_status.recovering();}
                         input_status.checked(recovery.finish(lease,cursor,now).await)?;
-                        if outgoing.is_some_and(|current|current.lease==lease){outgoing=None;input_status.restore(capture.as_ref())?;}
+                        if outgoing.is_some_and(|current|current.lease==lease){count(Count::PeerRelease);outgoing=None;input_status.restore(capture.as_ref())?;}
                     },
                     Message::Ping{lease}=>{if lease==0 || recovery.heartbeat(lease,now){send(&mut tx,&Message::Pong{lease}).await?;}},
-                    Message::Pong{lease}=>{if outgoing.is_some_and(|current|current.lease==lease){last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}},
+                    Message::Pong{lease}=>{if outgoing.is_some_and(|current|current.lease==lease){count(Count::PongReceived);last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}},
                     Message::Hello{..}=>bail!("unexpected repeated handshake"),
                 }
             },
@@ -886,12 +899,23 @@ pub(super) async fn run_with_diagnostics(
                         size=(width.max(1.0),height.max(1.0));
                         let nx=(x/(size.0-1.0).max(1.0)).clamp(0.0,1.0);let ny=(y/(size.1-1.0).max(1.0)).clamp(0.0,1.0);
                         let cross=edge_gate.update(distance(edge,nx,ny)<=0.001,now_ms());
-                        if cross && peer.motion() && capture.as_ref().is_some_and(|cap|cap.gate.idle()) && outgoing.is_none() && pending.is_none() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
+                        if cross {count(Count::EdgeHit);}
+                        // Same order as the original condition chain; only the first blocker is tallied.
+                        let gate_idle=capture.as_ref().is_some_and(|cap|cap.gate.idle());
+                        let blocker=if !cross {None}
+                            else if !peer.motion() {Some(Count::BlockPeer)}
+                            else if !gate_idle {Some(Count::BlockGate)}
+                            else if outgoing.is_some() || pending.is_some() {Some(Count::BlockBusy)}
+                            else if recovery.receiver.active().is_some() {Some(Count::BlockReceiving)}
+                            else if recovery.protection_pending() {Some(Count::BlockProtection)}
+                            else {None};
+                        if let Some(kind)=blocker {count(kind);}
+                        if cross && blocker.is_none(){
                             let CaptureRoute::Local(epoch)=route else{continue;};
                             let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let along=match edge{Edge::Left|Edge::Right=>ny,_=>nx};position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
-                            pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
+                            pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
                         }
                     },
                     Captured::Toggle{route}=>{
@@ -899,10 +923,12 @@ pub(super) async fn run_with_diagnostics(
                         else if let Some(request)=pending.take(){edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Release{lease:request.lease,cursor:None}).await?;}
                         else if let CaptureRoute::Local(epoch)=route {if peer.motion() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
                             let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
-                            next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
+                            next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
                         }}
                     },
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
+                        // Sign tallies only; displacement values are never recorded.
+                        if dx>0.0 {count(Count::MovePositive);} else if dx<0.0 {count(Count::MoveNegative);}
                         position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
                         if returned_to_source(edge, position.0, position.1) && input_status.restore_at_boundary(capture.as_ref(),route)? {
@@ -924,10 +950,11 @@ pub(super) async fn run_with_diagnostics(
                         }
                     }else{count(Count::NoLease);}},
                     Captured::Input{event,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)){
-                        if !peer.supports(event) { input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
+                        if !peer.supports(event) { count(Count::CapabilityStop);input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let cursor=Motion{lease,sequence,x:position.0,y:position.1};
                         let result=send(&mut tx,&Message::Input{lease,event,cursor}).await;
                         count(if result.is_ok(){Count::ReliableSent}else{Count::ReliableFailed});
+                        if let (Ok(()),Input::Scroll{x,y})=(&result,event){count(if x==0&&y==0{Count::ScrollZero}else{Count::ScrollSent});}
                         result?;
                     }},
                 }

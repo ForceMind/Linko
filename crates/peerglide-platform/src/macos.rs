@@ -277,13 +277,19 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
         return event;
     }
     if CGEventGetIntegerValueField(event, 42) == TAG {
-        if matches!(kind, 5..=7 | 27) {
+        if matches!(kind, 5..=7 | 22 | 27) {
             STATE.with(|state| {
                 if let Ok(state) = state.try_borrow() {
                     if let Some(diagnostics) =
                         state.as_ref().and_then(|s| s.gate.0.diagnostics.get())
                     {
-                        diagnostics.increment(input_diagnostics::Count::Filtered);
+                        // Our own tagged scroll comes back through the tap as well;
+                        // an untagged one would be treated as local physical input.
+                        diagnostics.increment(if kind == 22 {
+                            input_diagnostics::Count::WheelInjected
+                        } else {
+                            input_diagnostics::Count::Filtered
+                        });
                     }
                 }
             });
@@ -362,11 +368,14 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 return s.button_routed(button, down, route);
             }
             22 => {
+                if let Some(diagnostics) = s.gate.0.diagnostics.get() {
+                    diagnostics.increment(input_diagnostics::Count::WheelPhysical);
+                }
                 return s.scroll_routed(
                     CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
                     CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
                     route,
-                )
+                );
             }
             _ => (),
         }

@@ -35,9 +35,46 @@ pub enum Count {
     ReliableSubmitted,
     ReliableFailed,
     EdgeReturn,
+    PongReceived,
+    PongTimeout,
+    PeerRelease,
+    CapabilityStop,
+    MovePositive,
+    MoveNegative,
+    WheelPhysical,
+    WheelInjected,
+    ScrollSent,
+    ScrollZero,
+    ScrollApplied,
+    GuardTime,
+    GuardState,
+    GuardSource,
+    GuardEpoch,
+    GuardModifiers,
+    EdgeHit,
+    BlockPeer,
+    BlockGate,
+    BlockBusy,
+    BlockReceiving,
+    BlockProtection,
+    AcquireSent,
+    AcquireReceived,
+    DeniedReceived,
+    AcquireTimeout,
+    AcquireCancelled,
+    DenyArgument,
+    DenyBusy,
+    DenyAuthorization,
+    DenyLease,
+    DenyBegin,
+    DenyPlacement,
 }
 
-const KEYS: [&str; Count::EdgeReturn as usize + 1] = [
+/// Longest line the worker, the GUI log and the copy action accept. The
+/// largest possible summary (every counter at u32::MAX) must fit below it.
+pub const MAX_SUMMARY_BYTES: usize = 1600;
+
+const KEYS: [&str; Count::DenyPlacement as usize + 1] = [
     "cap",
     "zero",
     "filtered",
@@ -69,14 +106,58 @@ const KEYS: [&str; Count::EdgeReturn as usize + 1] = [
     "rel_apply",
     "rel_fail",
     "return",
+    "pong",
+    "pong_to",
+    "peer_rel",
+    "cap_stop",
+    "mv_pos",
+    "mv_neg",
+    "wh_phys",
+    "wh_inj",
+    "scr_tx",
+    "scr_zero",
+    "scr_apply",
+    "g_time",
+    "g_state",
+    "g_source",
+    "g_epoch",
+    "g_mods",
+    "edge_hit",
+    "blk_peer",
+    "blk_gate",
+    "blk_busy",
+    "blk_recv",
+    "blk_prot",
+    "acq_tx",
+    "acq_rx",
+    "denied_rx",
+    "acq_to",
+    "acq_cancel",
+    "deny_arg",
+    "deny_busy",
+    "deny_auth",
+    "deny_lease",
+    "deny_begin",
+    "deny_place",
 ];
 
-#[derive(Default)]
 pub struct InputDiagnostics {
     stopped: AtomicBool,
     counts: [AtomicU32; KEYS.len()],
     #[cfg(windows)]
     next_cursor_sample: std::sync::atomic::AtomicU64,
+}
+
+// Arrays longer than 32 elements do not implement Default.
+impl Default for InputDiagnostics {
+    fn default() -> Self {
+        Self {
+            stopped: AtomicBool::new(false),
+            counts: std::array::from_fn(|_| AtomicU32::new(0)),
+            #[cfg(windows)]
+            next_cursor_sample: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
 }
 
 impl InputDiagnostics {
@@ -131,7 +212,7 @@ impl fmt::Display for Snapshot {
             Phase::Expired => "expired",
             Phase::End => "end",
         };
-        write!(f, "KVM-DIAG/2 {phase}")?;
+        write!(f, "KVM-DIAG/4 {phase}")?;
         for (key, value) in KEYS.iter().zip(self.counts) {
             write!(f, " {key}={value}")?;
         }
@@ -142,9 +223,9 @@ impl fmt::Display for Snapshot {
 /// Only bounded, numeric summaries are eligible for the GUI copy action.
 pub fn is_summary(line: &str) -> bool {
     let mut fields = line.split_ascii_whitespace();
-    line.len() <= 600
+    line.len() <= MAX_SUMMARY_BYTES
         && !line.bytes().any(|b| b.is_ascii_control())
-        && fields.next() == Some("KVM-DIAG/2")
+        && fields.next() == Some("KVM-DIAG/4")
         && matches!(fields.next(), Some("sample" | "expired" | "end"))
         && KEYS.iter().all(|key| {
             fields
@@ -175,7 +256,9 @@ mod tests {
             counts: [u32::MAX; KEYS.len()],
         }
         .to_string();
+        assert!(summary.len() <= MAX_SUMMARY_BYTES);
         assert!(is_summary(&summary));
+        assert!(!is_summary(&summary.replace("KVM-DIAG/4", "KVM-DIAG/3")));
         assert!(!is_summary(&(summary.clone() + " path=/private")));
         assert!(!is_summary(&summary.replace("cap=", "address=")));
     }

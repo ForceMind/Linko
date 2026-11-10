@@ -2231,3 +2231,93 @@ Windows两个amd64 PE通过；Mac0.3.21 plist、图标原字节、bundle身份�
 官网 0.1.8 已部署 772c352，部署地址 https://2f4ca213.linko-63e.pages.dev，正式域名 https://linko-63e.pages.dev 的源码／版本／下载／摘要、安全头、MIME、中文404和两端各11份在线哈希回读通过。只上传网站静态白名单，浏览器未验证。Issue3/5已更新；main仍未合并。
 
 宿主通过应用菜单正常退出22，实际打开冻结23，原配对与右侧布局保留。真实GUI显示0.3.23，实际worker只读诊断确认辅助功能未授予、输入监控未授予，Secure Input未检测到；未改系统授权、未开启本轮原生键鼠。当前需要Windows更新并确认23已打开，以及用户对这个新代码身份的两项系统授权作当前确认；已分别提出最小操作／确认请求，尚未收到回复。系统认证由用户本人完成，不能把等待写成已授予或物理复测成功。当前仍无稳定开发者签名凭据，Windows未知发布者和Mac升级权限沿用没有修复，不能承诺再登记一次便永久解决。本迭代原生复测在这些外部条件前停止，冻结包不重新构建、改名或重签。
+
+
+## 2026-11-09 冻结 0.3.23 实际 worker 权限复查通过
+
+用户确认 Windows 已打开0.3.23，并明确允许为当前冻结Mac23重新登记辅助功能／输入监控。通过系统设置仅移除屏跃旧条目，两页均用完整路径选择同一冻结应用，文件框预览版本0.3.23／34.9MB。输入监控按系统提示退出并重新打开；本轮没有弹出密码认证，未输入或处理任何凭据。设置列表显示名仍为PeerGlide.app，不能用该名称推断版本，当前已由所选路径／版本和实际worker复查确认。
+
+重启后的真实GUI显示0.3.23，原配对与右侧布局保留。GUI发起的实际worker只读检查确认辅助功能已授予、输入监控已授予、未检测到Secure Input，刷新后的结果没有过期提示。坐标点击未稳定触发后使用Tab／空格在实际GUI中完成检查；不据自动点击问题推断原生输入故障。没有重签、重建、移动应用、覆盖身份或配置，也没有扩大其他应用权限。运行包仍为f8cce5d，长期稳定签名与升级权限沿用仍未解决。
+
+本轮原生会话尚未开启、物理跨屏尚未运行。已集中请求Windows开启其独立接收控制并选择“开启并诊断”；其准备完成回复同时确认Mac本次真实键鼠诊断短测，先测Mac→Windows。等待该回复期间不启动Native worker。既有受测代码和预览包保持冻结，文档变更用diff检查，复用已通过的精确提交平台证据。
+
+
+本轮后续：用户已确认Windows开启接收控制与“开启并诊断”，并明确同意Mac本次真实键鼠诊断短测。Mac确认框可以打开，权限检查通过，但自动鼠标/键盘操作未能稳定提交最终启动；只读进程核对仍仅有GUI，没有原生worker。观察到Tab可以进入弹窗背后的导航，且30秒观察过期会清除确认；未据此认定全部自动提交失败的根因，更未把未启动算成跨屏故障复测。
+
+当前Mac已留在“开启键鼠协同”弹窗，已请用户只操作“检查键鼠权限”→本次同意→“开启并诊断”，无需系统密码或重新配对。此处是实际GUI操作交接，等待用户报告已连接或等待/失败后再读当前状态；不在交接中继续发送界面输入。尚未观察到本轮认证、Native输入或物理跨屏。冻结f8cce5d程序、已有身份和配对均保留。
+
+
+本轮连接复查：用户完成Mac当前确认框并报告已连接。随后只读读取实际GUI，确认0.3.23显示“已连接／本机控制（进程报告）”，对端方向右侧。只读进程核对确认冻结f8cce5d的包内worker由该GUI管理，实际带有--native、--managed、--input-diagnostics；不是仅通信或仅界面状态。没有再次改权限、重配对或启动第二条输入捕获路径。
+
+读取时worker已运行2分53秒，120秒诊断采样窗口已结束；后续新动作不能用这段旧快照作为计数证据。已请求用户松开所有物理键/按钮，以Mac物理鼠标从屏幕内部向右越过边缘，继续移动两秒，先不点击；异常用Control＋Option＋Esc恢复。这次物理结果仍在等待，不把已认证／本机控制或原生模式启动记为Windows光标已响应。当前会话保持用户已明确同意的试跑，不向对端发送模拟动作替代验收。
+
+
+## 2026-11-09 转交独立诊断：0.3.23 单向故障仍复现
+
+用户在两端0.3.23、Mac实际原生连接与权限检查通过后明确报告：Windows光标仍不随Mac移动；随后再次确认Windows能控制Mac，Mac不能控制Windows。取消Mac切换时居中投递的候选并未解决本次实测问题。不能把先前过早回程推断、平台CI或认证连接写成根因已确认／物理修复成功。
+
+第一轮已正常停止，实际worker退出。Mac GUI末尾可见KVM-DIAG/2 expired：cap=0、grant=0、commit=0、tx=0、filtered=1797、rx=1798、lease=27、apply=1771、sdk=1797、sdk_fail=0、return=0；其后出现“Peer grant received; checking local capture admission.”。该汇总仅覆盖早先120秒，后来的物理试验不在此采样内，不能拿它判定本次完整链路。固定数值与范围已保存至ignored connected-layout-f8cce5d/native-023-first-expired.local.json。
+
+用户随后重开Windows诊断；Mac仍用同一冻结包，正常退出并重新打开后重连。用户在立即跨屏提示后再次报告同一单向故障。第二轮也已通过应用菜单停止，进程核对只剩Mac GUI，没有原生worker。第二轮最新末尾摘要尚未导出，仍保留在当前Mac GUI会话记录中；交接前没有继续重启或清空它。请先读取该轮摘要及phase，核对动作是否在采样期，再决定是否需要新的同步双端采样；不要假定已拿到第二轮有效计数。
+
+用户现要求提供提示词给其他AI独立查看。当前停止新增修复，不换包、不重签、不再授予权限；保留现有身份和配对。下一位应从实际捕获→队列→Acquire/Grant→本机提交→移动发送→Windows接收/注入逐段定位第一个分歧，避免重复未经证实的猜测。GUI自动点击与键盘导航未稳定提交的现象不等同于跨设备输入根因；背景窗口截图可能残留旧帧，必须结合实际进程和当前界面。Mac辅助功能/输入监控已在冻结23的实际worker中验证通过，但长期签名和更新权限沿用仍未解决。
+
+
+## 2026-11-09 旧目录清理后的新会话交接（以此节为准）
+
+用户要求此后只使用移动硬盘上的新工作区，并清理旧目录。迁移已逐文件验证83292个原始文件/链接，四个Git工作区、完整Git对象、npm入口、网站构建/六项非浏览器回归及App签名检查通过。ExFAT的执行位差异用仓库本地core.filemode=false处理，本地排除._*；复制产生的AppleDouble元数据已另行归档。源代码没有因迁移改变。身份和配对所在的Application Support目录未移动。
+
+清理旧App前，已从实际Mac GUI读取并保存第二轮末尾累计摘要至 ignored target/local-validation/connected-layout-f8cce5d/native-023-second-expired.local.json：
+
+KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0 grant=1 commit=1 tx=96 tx_unsupported=0 tx_disabled=0 tx_oversize=0 tx_closed=0 rx=1231 decode=0 lease=12 replay=1 apply=1218 apply_fail=0 retired=0 sdk=1256 sdk_fail=0 moved=0 unchanged=0 unknown=0 rel_tx=0 rel_rx=25 rel_apply=25 rel_fail=0 return=1
+
+该数值来自Mac，不能把其中sdk/apply当成Windows的注入结果；moved/unchanged/unknown在Mac为0也不证明Windows光标状态。采样窗口内至少发生过捕获、出队、许可、本机提交及向QUIC提交移动，不能再把旧的tx=0推断作为本轮根因。但累计计数不能精确对应每次动作，tx=96不证明坐标内容正确、网络送达或Windows接收/注入，Windows对应计数仍缺失。用户两次同版实测仍报告Windows能控制Mac、Mac不能移动Windows光标；根因仍未确认，取消Mac切换居中投递并未解决问题。
+
+旧App随后已正常退出，并确认旧路径没有本项目进程。剩余App文件逐个与新工作区副本核对，迁移说明等残留另行备份后，旧工作区目录已删除。只使用新工作区中的冻结0.3.23/f8cce5d包；不要重新创建旧目录或使用旧绝对路径。新路径实际worker的系统权限是否沿用尚未复查，不能把迁移前授权或验签通过当成新路径输入权限已确认，更不要先反复要求用户重配对/授权。当前没有本轮原生worker运行；Windows当前进程状态需另行核对。
+
+用户接下来会新开主执行对话，并让Claude独立诊断。主执行负责集成/最小修复/验证/提交推送；Claude默认只读审查，避免两方并发改同一文件。优先检查首个真实分歧：Mac事件/坐标与能力协商→队列/epoch→Acquire/Grant→本机提交→发送→Windows接收/租约/注入owner→实际光标。不要把CI、系统API返回值或已连接当作物理验收通过，不引入新全局钩子、任意远程命令或安全防护绕过。
+
+
+## 2026-11-09 新工作区接管：单向故障证据核验
+
+接管起点为干净的 `kvm-023-native-validation` / `0ad92c04940946de246b1d2521c4f5925fe109e8`；远端分支同 SHA，main 为 `921ea7075b0f14d7f697e2198b2bb709cf2d07c4`。PR95 仍开放，base 为 `preview-023-downloads`，没有退回 main 或合并堆栈。该精确 HEAD 的 [Rust CI 42607340092](https://github.com/ForceMind/Linko/actions/runs/42607340092) 已完成：三平台 fmt、严格 locked workspace Clippy、locked build/test/release、原有进程专项，以及最低 Rust1.95和依赖审计五项全过。运行源码仍冻结 f8cce5d，不以文档 HEAD 替换已冻结运行包。
+
+重新读取第二轮本地摘要，cap97/deq97/grant1/commit1/tx96及其限制与最新交接一致。源码核对：Hello 的 motion 是接收支持能力，不协商相对移动帧；Mac callback 读取事件字段4/5的相对位移，session 以本机主屏尺寸累加并限制为0..1的绝对坐标，v5 Motion 经 QUIC datagram 发送。Windows 接收先检查解码、lease、sequence，再由现有 Native owner 提交带 TAG 的绝对 SendInput；注入事件绕过物理接管路径。这些是代码事实，不证明实际坐标、Windows收包或系统响应正确。尚未定位本次物理故障的首个分歧，不修改输入行为。
+
+新路径冻结 Mac App 的 `codesign --verify --deep --strict` exit0。通过正常应用入口打开后，GUI显示0.3.23、原Windows登记和右侧布局、本机允许接收、尚未连接；只读进程核对仅该包GUI，没有原生worker。直接从工具宿主启动同包 `diagnose-context` exit0，报告AX/IM denied、SecureInput inactive、no_foreground；该启动上下文不同，不能作为GUI托管worker权限结论。实际GUI触发只读检查后最后可见状态仍为“正在检查”，未读到最终报告；没有重配对、变更TCC、开启Native或发送模拟跨屏输入。自动界面输入/截图的延迟或检查显示不推进不作为单向故障根因。
+
+已集中请求Windows系统版本/缩放、对端方向、当前会话状态和原KVM-DIAG/2摘要。收到后先比较对应窗口的Mac tx与Windows rx/decode/lease/replay/apply/sdk/光标观察；旧摘要缺失时再组织一次同步120秒内物理短测。Mac新路径权限仍需实际GUI托管检查最终结果。Windows端状态/采样窗口未知，根因与C06仍未确认。本机仍无Rust/Cargo且未安装；本批仅记录，自查diff，不新增浏览器测试、发布或机器配置变更。
+
+
+## 2026-11-10 KVM-DIAG/3：补齐单向故障与滚轮的计数盲区（待 CI）
+
+起点 `617158f`，运行包仍冻结 f8cce5d／0.3.23-dev，本批没有改任何输入行为、线上协议、v5／ALPN、捕获生命周期或安全门，只增加会话内聚合计数。第二轮 Mac 摘要只能确认发送链到 QUIC 入队：`deq` 等于 `tx`＋一次边缘返回，说明唯一一次远端阶段由 Mac 的第 97 个移动事件结束；Pong 超时、对端 Release、能力不支持三条结束路径、位移方向、滚轮和 Windows 接收退役原因此前没有计数，所以不能据 Mac 一端判定首个分歧。
+
+新增字段（摘要版本 `KVM-DIAG/3`，旧 `/2` 行不再被 GUI 复制入口接受，诊断需两端同包）：
+
+- 发送端阶段结束：`pong` 收到当前租约的 Pong；`pong_to` 因 1 秒无 Pong 恢复本机；`peer_rel` 对端 Release 结束远端阶段；`cap_stop` 因对端不支持某输入而停止。
+- 位移方向：`mv_pos`／`mv_neg` 为 dx 大于／小于 0 的已转发移动事件个数，只计数，不记录数值。可与 `return` 对照实际轨迹是否回拉。
+- 滚轮：`wh_phys` Windows 钩子看到的物理滚轮事件；`wh_inj` 带注入标记而被放行不转发的滚轮事件（平滑滚动驱动可能如此）；`scr_tx` 发出非零滚轮；`scr_zero` 发出 0／0 滚轮（亚格累加未满一格）；`scr_apply` 接收端提交滚轮。`wh_*` 只在 Windows 钩子计数，Mac 恒为 0。
+- 接收端数据面被退役的首个原因：`g_time` 命令超期或被取消；`g_state` epoch 已不在 Active；`g_source` 输入源观测失效；`g_epoch` 捕获门已属于另一接收 epoch；`g_mods` 仍有被吞修饰键。此前合并在 `retired` 里无法区分。原判定顺序与短路不变，只在失败时多记一笔。
+
+读数建议：先看 Windows 行 `rx`；`rx＝decode＋lease＋replay＋apply（＋retired＋apply_fail）` 应闭合。`rx` 近 0 查传输；`lease` 高查心跳／Pong；`retired` 高看 `g_*`；`apply`≈`sdk` 且 `sdk_fail`＝0 而 `moved`＝0、`unchanged`＞0 属系统层问题。滚轮先比较 Windows 的 `wh_phys`／`wh_inj`／`scr_tx`／`scr_zero` 与 Mac 的 `rel_rx`／`scr_apply`。
+
+代码核对（读代码，未运行）：滚轮路径 Windows 钩子→整格折算→可靠流 Input→Mac `CGEventCreateScrollWheelEvent`（Rust 以可变参数声明，调用约定正确）一路没有发现缺陷；Oink 参考实现使用 `CGEventCreateScrollWheelEvent2`、像素／行单位和阶段字段，本项目只发整格行单位。是否需要对齐取决于上述计数。Mac 位移取自 CGEvent 浮点字段 4／5，Oink 同样读取这两个字段；其 `physical_motion.rs` 头注释只说明拖动帧没有可用的 HID 子事件、CG 浮点字段与 NSEvent 恢复不出拖动数据，改读 IOHID 指针子事件用于普通帧，不能据此认为本项目的位移取法不可靠。更换与否等计数再判断，不预先更换。（此前此处误写“Oink 称其在部分帧不可靠”，已更正。）
+
+摘要最长约 892 字节；`MAX_SUMMARY_BYTES`＝1200 同时约束摘要校验和 GUI 诊断行截断（原 600）。新增回归：最大摘要不超限、旧版本行被拒，以及过期数据命令按 `Time` 记录并仍然退役。本机无 Rust/Cargo，未编译；fmt、严格 Clippy、locked test/build 以精确提交 CI 为准。真实物理验收仍须同包双端在同一 120 秒窗口内复测并取两端摘要，不能以 CI、连接成功或 SendInput 返回当作通过。
+
+
+## 2026-11-10 KVM-DIAG/3 首次双端实测与 /4 补充（待 CI）
+
+用户用 e0f75c6 的同源两端包（Rust CI 42666341955）做了 120 秒窗口内的短测：Windows 能控制 Mac 的鼠标和键盘，滚轮不工作；Mac 仍不能移动 Windows 光标。现象由用户本人回报；以下读数来自用户复制的 Windows 摘要，Mac 摘要尚未取得，不能据此下全链路结论。
+
+Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`grant＝commit＝3`，`pong＝478`，`peer_rel＝2`，`return＝0`，`mv_pos＝1056`／`mv_neg＝555`；滚轮 `wh_phys＝222`、`wh_inj＝0`、`scr_tx＝216`、`scr_zero＝0`，`rel_tx＝562`；接收侧 `rx＝decode＝lease＝replay＝apply＝retired＝sdk＝sdk_fail＝0`，`filtered＝5`，`g_*` 全 0。读法：
+
+- Windows 作为源端工作正常：物理滚轮被钩子看到（没有被驱动注入标志旁路），折成非零整格后经可靠流发出 216 次，没有零增量。Windows 一侧不是滚轮失效的位置，断点在 Mac 接收、注入或系统效果，需要 Mac 的 `rel_rx`／`rel_apply`／`scr_apply`／`wh_inj` 才能再分。
+- 三次远端阶段中两次由 Mac 的 Release 结束（`peer_rel＝2`），没有一次边缘返回，与 Mac 端物理输入接管 Windows 控制的设计一致，不是故障证据。
+- Mac→Windows：Windows 在窗口内 `rx＝0` 且 `sdk＝0`。Windows 授予 Acquire 前必须先成功放置一次光标，那会让 `sdk` 加一，因此该窗口内 Windows 没有授予过任何 Acquire（或 Mac 一次也没有发出）。断点在 Acquire／授予阶段，早于数据报与注入；这与第一次实测不同（当时 Mac 有 `grant＝1`、`tx＝96`）。`filtered＝5` 与三次 Windows 源端停车加两次回位的本机合成移动相符（推断）。
+- 现有计数没有覆盖 Acquire 阶段的拒绝原因，所以本批补 `KVM-DIAG/4`（本机无 Rust，未编译，待 CI）。
+
+`/4` 新增字段（线上协议不变）：源端边缘判定 `edge_hit`（到达边缘）及首个阻挡原因 `blk_peer`（对端无移动能力）、`blk_gate`（捕获门非 Local 空闲）、`blk_busy`（已有发出中的请求或租约）、`blk_recv`（本机仍持有接收租约）、`blk_prot`（接收保护尚未撤销）；`acq_tx` 发出 Acquire、`denied_rx` 收到 Denied、`acq_to` 等待授予超时、`acq_cancel` 本机准入保护取消；接收端 `acq_rx` 收到 Acquire、`deny_arg` 参数无效、`deny_busy` 本机忙、`deny_auth` 未授权接收控制、`deny_lease` 租约被拒（已有租约或编号复用）、`deny_begin` 进入接收失败、`deny_place` 入口定位失败。macOS 的 `wh_inj` 现在统计回到 tap 的自注入滚轮，`wh_phys` 统计未带标记的滚轮；若 `scr_apply` 很大而 `wh_inj` 为 0、`wh_phys` 很大，说明注入的滚轮没有带上自有标记，被当成本机物理输入而吞掉并请求接管。摘要上限提高到 1600 字节，最长约 1237 字节。
+
+下次复测先看 Mac 行：`edge_hit` 是否大于 0；若是，`blk_*` 哪一项非零（本机没发出 Acquire），或 `acq_tx` 大于 0 而 `denied_rx` 非零（Windows 拒绝，再看 Windows 行的 `deny_*`），或 `acq_to` 非零（Windows 没回应）。

@@ -849,6 +849,19 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
             .then_some(())
             .ok_or(peerglide_actions::execution::NativeFailure::TargetLost)
     }
+    fn note_guard_failure(&mut self, failure: receive_driver::GuardFailure) {
+        use input_diagnostics::Count;
+        use receive_driver::GuardFailure;
+        if let Some(diagnostics) = self.gate.0.diagnostics.get() {
+            diagnostics.increment(match failure {
+                GuardFailure::Time => Count::GuardTime,
+                GuardFailure::State => Count::GuardState,
+                GuardFailure::Source => Count::GuardSource,
+                GuardFailure::Epoch => Count::GuardEpoch,
+                GuardFailure::Modifiers => Count::GuardModifiers,
+            });
+        }
+    }
 }
 /// The loop's last observation, never a timestamp refreshed by an SDK return.
 /// Both clocks are checked: wall time includes sleep on hosts whose monotonic
