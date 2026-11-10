@@ -2321,3 +2321,12 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 `/4` 新增字段（线上协议不变）：源端边缘判定 `edge_hit`（到达边缘）及首个阻挡原因 `blk_peer`（对端无移动能力）、`blk_gate`（捕获门非 Local 空闲）、`blk_busy`（已有发出中的请求或租约）、`blk_recv`（本机仍持有接收租约）、`blk_prot`（接收保护尚未撤销）；`acq_tx` 发出 Acquire、`denied_rx` 收到 Denied、`acq_to` 等待授予超时、`acq_cancel` 本机准入保护取消；接收端 `acq_rx` 收到 Acquire、`deny_arg` 参数无效、`deny_busy` 本机忙、`deny_auth` 未授权接收控制、`deny_lease` 租约被拒（已有租约或编号复用）、`deny_begin` 进入接收失败、`deny_place` 入口定位失败。macOS 的 `wh_inj` 现在统计回到 tap 的自注入滚轮，`wh_phys` 统计未带标记的滚轮；若 `scr_apply` 很大而 `wh_inj` 为 0、`wh_phys` 很大，说明注入的滚轮没有带上自有标记，被当成本机物理输入而吞掉并请求接管。摘要上限提高到 1600 字节，最长约 1237 字节。
 
 下次复测先看 Mac 行：`edge_hit` 是否大于 0；若是，`blk_*` 哪一项非零（本机没发出 Acquire），或 `acq_tx` 大于 0 而 `denied_rx` 非零（Windows 拒绝，再看 Windows 行的 `deny_*`），或 `acq_to` 非零（Windows 没回应）。
+
+
+## 2026-11-10 Windows→Mac 滚轮：Apple 芯片上的可变参数调用约定错误（待 CI 与实机）
+
+用户第三次双端短测（Mac 为 `/4` 包，Windows 仍为 `/3` 包）：Windows `wh_phys＝44`、`scr_tx＝44`；Mac `scr_apply＝44`、`wh_inj＝44`、`sdk_fail＝0`。即 44 次滚轮全部到达 Mac、提交成功，并以本进程标记回到 tap 后被放行，没有被当成本机物理输入吞掉；用户仍看到 Mac 不滚动。
+
+原因（读代码与调用约定得出，未经实机验证）：C 原型为 `CGEventCreateScrollWheelEvent(source, units, wheelCount, int32_t wheel1, ...)`，`wheel1` 是具名参数；本项目把它声明为 `fn CGEventCreateScrollWheelEvent(source, unit, count, ...)`，把 `wheel1` 也作为可变参数传入。Apple arm64 调用约定把可变参数全部放在栈上、具名参数放在寄存器里，所以系统读到的纵向值是寄存器中的残留值，我们传的纵向值被当成横向值；x86_64 上两者恰好一致，因此只在 Apple 芯片上出现。修正改用定长的 `CGEventCreateScrollWheelEvent2(source, unit, 2, y, x, 0)`（Oink 参考实现同样使用该接口）。仓库内没有其他可变参数 FFI 声明。排除过的解释：滚轮被本机 tap 吞掉（`wh_inj＝44` 否定）、Windows 未发出或零增量（`scr_tx＝44`、`scr_zero＝0` 否定）。
+
+同一轮另见 Windows `rel_fail＝1`：一次来自 Mac 的可靠输入在 Windows 注入失败，按现有代码会使会话以错误结束（两端摘要均为 `end`）。具体错误需要 Windows 会话记录中的错误行，尚未取得，不在本批修改。
