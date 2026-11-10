@@ -13,6 +13,30 @@ use std::{
     sync::Arc,
 };
 
+use crate::desktop_style::{self, tokens, Tone};
+use crate::icons::{self, Icon};
+use crate::motion;
+use peerglide_protocol::pairing_worker::{Failure, StopReason};
+
+/// Digits in a pairing code; the worker accepts exactly eight ASCII digits.
+const CODE_LEN: usize = 8;
+/// Cells before the wider gap that splits the code into two groups.
+const HALF: usize = 4;
+const CODE_LABEL: &str = "八位数字配对码";
+const CODE_CELLS_ID: &str = "pairing_code_cells";
+const CELL_W: f32 = 34.0;
+const CELL_H: f32 = 42.0;
+const CELL_GAP: f32 = 6.0;
+const GROUP_GAP: f32 = 16.0;
+const CARD_H: f32 = 78.0;
+const CARD_MIN_W: f32 = 140.0;
+/// Pairing stages shown as dots. Each name stays visible beneath its dot.
+const STAGES: [&str; 5] = ["准备", "连接", "核验", "记住", "回执"];
+const DOTS_H: f32 = 36.0;
+const DOT_TOP: f32 = 8.0;
+const LABEL_TOP: f32 = 18.0;
+const DOT_RADIUS: f32 = 4.5;
+
 #[derive(Clone)]
 struct Origin {
     generation: u64,
@@ -90,6 +114,7 @@ pub(super) struct Panel {
     code: String,
     message: String,
     discovery: super::pairing_discovery::Panel,
+    feedback: Feedback,
 }
 impl Drop for Panel {
     fn drop(&mut self) {
@@ -104,6 +129,7 @@ impl Panel {
                 return;
             }
             self.origin = None;
+            self.feedback = Feedback::default();
         }
         self.open = true;
         self.join_entry = false;
@@ -122,6 +148,7 @@ impl Panel {
             self.discovery.stop();
             peerglide_protocol::pairing_worker::clear_code(&mut self.code);
             self.message.clear();
+            self.feedback.code_error = false;
             self.join_entry = join;
         }
     }
@@ -342,23 +369,20 @@ impl Panel {
             return;
         }
         let mut open = true;
-        let requested_height: f32 = if app.local_fingerprint().is_none() {
-            500.0
-        } else if self.join_entry {
-            560.0
-        } else {
-            520.0
-        };
+        let now = ctx.input(|input| input.time);
+        let phase = self.supervisor.phase();
+        self.feedback.observe(phase, self.join_entry, now);
+        // M10: the fixed-size window glides between content heights instead of jumping.
+        let target = self.target_height(app);
+        let height_id = egui::Id::unique("pairing_window_height");
+        let requested_height = motion::dialog_height(ctx, height_id, target);
         let height = requested_height.min((ctx.viewport_rect().height() - 48.0).max(1.0));
         egui::Window::new("添加电脑").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).fixed_size(egui::vec2(510.0,height)).vscroll(true).show(ctx,|ui|{
-            ui.label(super::desktop_style::semibold("把另一台电脑加入工作区",21.0));
+            ui.label(desktop_style::semibold("把另一台电脑加入工作区",21.0));
             ui.label("两台电脑连到同一 Wi-Fi 或局域网。任选一台显示配对码，另一台输入；双方确认后会记住彼此。键鼠与数据权限仍单独选择。");
             ui.add_space(12.0);
             if !self.supervisor.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(!self.join_entry,"我来显示配对码").clicked(){self.select_entry(false);}
-                    if ui.selectable_label(self.join_entry,"我来输入配对码").clicked(){self.select_entry(true);}
-                });
+                if let Some(join)=entry_cards(ui,self.join_entry){self.select_entry(join);}
                 ui.add_space(10.0);
                 if app.local_fingerprint().is_none() {
                     ui.label("首次使用，先为这台电脑准备独立安全身份。不会因此开始协同。");
@@ -371,7 +395,7 @@ impl Panel {
                     ui.add_space(10.0);
                     if !self.join_entry {
                     ui.label("点击显示后，在另一台屏跃中选择“我来输入配对码”。");
-                    if ui.add(super::desktop_style::primary("显示我的配对码")).clicked(){
+                    if ui.add(desktop_style::primary("显示我的配对码")).clicked(){
                         let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))),None,&worker));
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
@@ -379,13 +403,21 @@ impl Panel {
                     ui.strong("找到另一台电脑，输入它显示的短码");
                     if let Some(address)=self.discovery.ui(ui,app.local_fingerprint(),None,true){self.select_address(address);}
                     ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IPv4 或 IPv4:24871"));
-                    ui.add(egui::TextEdit::singleline(&mut self.code).hint_text("八位数字配对码"));
-                    if ui.add(super::desktop_style::primary("开始核验这台电脑")).clicked(){
-                        let result=(||->Result<()>{
+                    ui.label(CODE_LABEL);
+                    let offset=self.feedback.shake_offset(ui.ctx());
+                    let (_,edited)=code_cells(ui,&mut self.code,offset,self.feedback.code_error);
+                    if edited{self.feedback.code_error=false;}
+                    if ui.add(desktop_style::primary("开始核验这台电脑")).clicked(){
+                        // Only a malformed address or code shakes the cells (M8); other refusals keep still.
+                        let input=(||->Result<(SocketAddr,Mode)>{
                             let address=parse_address(&self.address)?;
                             let mode=Mode::connect(address,std::mem::take(&mut self.code))?;
-                            self.start(app,ctx,mode,Some(address),&Self::worker()?)
+                            Ok((address,mode))
                         })();
+                        let result=match input{
+                            Err(error)=>{self.feedback.reject(now);Err(error)}
+                            Ok((address,mode))=>Self::worker().and_then(|worker|self.start(app,ctx,mode,Some(address),&worker)),
+                        };
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
                     }
@@ -394,8 +426,8 @@ impl Panel {
                 }
             }
             if let Some((code,address))=self.supervisor.displayed_code(){
-                ui.heading(code);
-                ui.label("请在另一台输入这个短码；不要发到公开群聊。");
+                if is_cells_code(code){shown_code(ui,code);}else{ui.heading(code);}
+                warning_line(ui,"请在另一台输入这个短码；不要发到公开群聊。");
                 for interface in if_addrs::get_if_addrs().unwrap_or_default(){
                     if let IpAddr::V4(ip)=interface.ip(){if !ip.is_loopback()&&!ip.is_unspecified()&&(ip.is_private()||ip.is_link_local()){ui.label(format!("本机地址：{ip}:{}",address.port()));}}
                 }
@@ -404,29 +436,29 @@ impl Panel {
                     self.discovery.ui(ui,own,Some(offer),false);
                 }
             }
-            ui.label(match self.supervisor.phase(){
-                Phase::Idle=>"尚未开始",Phase::Starting=>"正在准备核验",Phase::Listening=>"等待另一台电脑",
-                Phase::Verifying=>"正在核验身份",Phase::Verified=>"身份已核验，尚未记住设备",
-                Phase::WaitingPeer=>"等待两边分别确认记住设备",Phase::SaveReady=>"正在检查并保存本机登记",
-                Phase::AwaitingPeerSaved=>"本机已记住，等待对端保存回执",Phase::ReceiptReady=>"正在保存完成回执",
-                Phase::Finishing=>"本机回执已保存，正在结束核验",Phase::Completed=>"本机已记住，并已收到对端保存回执",
-                Phase::Stopping=>"正在停止核验",Phase::Stopped(_)=>"核验已停止；已写入的记录会保留",Phase::Failed(_)=>"核验未完成，请检查两端状态",
-            });
-            if self.supervisor.phase()==Phase::Verified{
+            let current=self.supervisor.phase();
+            // Dots add a shape for progress; the phase sentence below always stays.
+            if app.local_fingerprint().is_some(){stage_dots(ui,self.feedback.stage,stage_of(current).is_none());}
+            let glyph=self.feedback.glyph(ui.ctx(),self.supervisor.needs_poll());
+            status_row(ui,glyph,phase_text(current));
+            if current==Phase::Verified{
                 ui.label("两台电脑都要点击一次。记住设备后，本机接收、键鼠和自动重连仍关闭。");
                 if app.config.fingerprint.is_some(){ui.weak("若身份不同，这会替换原设备登记。");}
-                if ui.button("记住这台设备").clicked(){if let Err(error)=self.approve(app){self.cancel();self.message=format!("未确认：{error:#}");}}
+                if ui.add(desktop_style::primary("记住这台设备")).clicked(){if let Err(error)=self.approve(app){self.cancel();self.message=format!("未确认：{error:#}");}}
             }
             if app.pairing_pending(){ui.colored_label(egui::Color32::from_rgb(185,110,25),"本机保存了待回执登记，暂不能连接。断线或退出后请重新核验或撤销，不会恢复旧授权。");}
             if app.pairing_pending() && !self.needs_poll() && ui.button("撤销待确认登记").clicked(){
                 self.cancel();let result=app.revoke();self.message=match result{Ok(())=>"待确认登记已撤销，本机身份保留。".into(),Err(error)=>format!("撤销未确认：{error:#}")};
             }
             if !self.message.is_empty(){ui.separator();ui.label(&self.message);}
-            if self.supervisor.phase()==Phase::Completed&&ui.button("下一步：摆好屏幕位置").clicked(){
-                app.page=super::Page::Devices;app.device_tab=super::DeviceTab::Layout;self.open=false;
-            }
-            if self.supervisor.needs_poll()&&ui.button("停止核验").clicked(){self.cancel();}
-            if ui.button("关闭").clicked(){self.open=false;self.cancel();}
+            ui.add_space(8.0);
+            ui.horizontal(|ui|{
+                if self.supervisor.phase()==Phase::Completed&&ui.add(desktop_style::primary("下一步：摆好屏幕位置")).clicked(){
+                    app.page=super::Page::Devices;app.device_tab=super::DeviceTab::Layout;self.open=false;
+                }
+                if self.supervisor.needs_poll()&&ui.button("停止核验").clicked(){self.cancel();}
+                if ui.button("关闭").clicked(){self.open=false;self.cancel();}
+            });
         });
         if !open {
             self.open = false;
@@ -438,11 +470,762 @@ impl Panel {
         peerglide_protocol::pairing_worker::clear_code(&mut self.code);
         self.message = "已填写地址，请输入这台电脑当前显示的配对码；发现结果不代表已核验。".into();
     }
+    /// Window height for the current content; M10 glides between these values.
+    fn target_height(&self, app: &App) -> f32 {
+        if app.local_fingerprint().is_none() {
+            return 520.0;
+        }
+        if self.supervisor.displayed_code().is_some() {
+            return 600.0;
+        }
+        if self.join_entry {
+            return 620.0;
+        }
+        540.0
+    }
+}
+
+/// Result shown by the M9 stroke beside the phase sentence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    Success,
+    Failure,
+}
+
+/// Glyph beside the phase sentence: nothing, the discrete spinner, or a check or cross with
+/// its drawing progress.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Glyph {
+    Blank,
+    Spinner,
+    Check(f32),
+    Cross(f32),
+}
+
+/// State of one stage dot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Dot {
+    Done,
+    Current,
+    Halted,
+    Pending,
+}
+
+/// Presentation memory of the pairing window: the last observed phase, the last stage it
+/// reached and the one-shot M8 and M9 animations. Nothing here feeds pairing decisions.
+#[derive(Default)]
+struct Feedback {
+    phase: Option<Phase>,
+    stage: usize,
+    outcome: Option<(Outcome, motion::OneShot)>,
+    shake: Option<motion::OneShot>,
+    code_error: bool,
+}
+
+impl Feedback {
+    /// Records the supervisor phase once per frame. A change into a final phase starts one
+    /// check or cross drawing, and a rejected code on the entering side shakes once. The
+    /// first observation only records, so reopening the window never replays old feedback.
+    fn observe(&mut self, phase: Phase, join: bool, now: f64) {
+        if let Some(stage) = stage_of(phase) {
+            self.stage = stage;
+        }
+        let Some(previous) = self.phase.replace(phase) else {
+            let finished = motion::OneShot::finished();
+            self.outcome = outcome_of(phase).map(|outcome| (outcome, finished));
+            return;
+        };
+        if previous == phase {
+            return;
+        }
+        let shot = motion::OneShot::start(now, tokens::STROKE_DRAW_SECS);
+        self.outcome = outcome_of(phase).map(|outcome| (outcome, shot));
+        if join && phase == Phase::Failed(Failure::Authentication) {
+            self.reject(now);
+        }
+    }
+
+    /// A rejected code or address: shake the code cells once and mark them until edited.
+    fn reject(&mut self, now: f64) {
+        self.shake = Some(motion::OneShot::start(now, tokens::SHAKE_SECS));
+        self.code_error = true;
+    }
+
+    /// Horizontal M8 offset. Asks for frames only while the shake runs.
+    fn shake_offset(&self, ctx: &egui::Context) -> f32 {
+        match &self.shake {
+            Some(shake) => motion::shake_offset(shake.tick(ctx)),
+            None => 0.0,
+        }
+    }
+
+    /// The final check or cross wins over the spinner; the spinner shows while the pairing
+    /// child is polled, which is when the existing 100 ms activity beat repaints.
+    fn glyph(&self, ctx: &egui::Context, waiting: bool) -> Glyph {
+        match &self.outcome {
+            Some((Outcome::Success, shot)) => Glyph::Check(shot.tick(ctx)),
+            Some((Outcome::Failure, shot)) => Glyph::Cross(shot.tick(ctx)),
+            None if waiting => Glyph::Spinner,
+            None => Glyph::Blank,
+        }
+    }
+}
+
+/// Stage index of a phase; `STAGES.len()` once complete. Stop and failure phases have none,
+/// so the dots keep the last stage reached and mark it halted.
+fn stage_of(phase: Phase) -> Option<usize> {
+    match phase {
+        Phase::Idle | Phase::Starting => Some(0),
+        Phase::Listening => Some(1),
+        Phase::Verifying => Some(2),
+        Phase::Verified | Phase::WaitingPeer | Phase::SaveReady => Some(3),
+        Phase::AwaitingPeerSaved | Phase::ReceiptReady | Phase::Finishing => Some(4),
+        Phase::Completed => Some(STAGES.len()),
+        Phase::Stopping | Phase::Stopped(_) | Phase::Failed(_) => None,
+    }
+}
+
+/// Final result of a phase. A stop the user asked for is not a failure.
+fn outcome_of(phase: Phase) -> Option<Outcome> {
+    match phase {
+        Phase::Completed => Some(Outcome::Success),
+        Phase::Failed(_) => Some(Outcome::Failure),
+        Phase::Stopped(reason) if reason != StopReason::Cancelled => Some(Outcome::Failure),
+        _ => None,
+    }
+}
+
+/// Sentence for each phase. Stop, failure, save and receipt states keep full sentences.
+fn phase_text(phase: Phase) -> &'static str {
+    match phase {
+        Phase::Idle => "尚未开始",
+        Phase::Starting => "正在准备核验",
+        Phase::Listening => "等待另一台电脑",
+        Phase::Verifying => "正在核验身份",
+        Phase::Verified => "身份已核验，尚未记住设备",
+        Phase::WaitingPeer => "等待两边分别确认记住设备",
+        Phase::SaveReady => "正在检查并保存本机登记",
+        Phase::AwaitingPeerSaved => "本机已记住，等待另一台保存回执",
+        Phase::ReceiptReady => "正在保存完成回执",
+        Phase::Finishing => "本机回执已保存，正在结束核验",
+        Phase::Completed => "本机已记住，并已收到另一台的保存回执",
+        Phase::Stopping => "正在停止核验",
+        Phase::Stopped(_) => "核验已停止；已写入的记录会保留",
+        Phase::Failed(_) => "核验未完成，请检查两端状态",
+    }
+}
+
+fn dot_state(index: usize, stage: usize, halted: bool) -> Dot {
+    if index < stage {
+        Dot::Done
+    } else if index > stage {
+        Dot::Pending
+    } else if halted {
+        Dot::Halted
+    } else {
+        Dot::Current
+    }
+}
+
+/// ASCII digit for an ASCII or full-width digit; anything else is dropped.
+fn code_digit(c: char) -> Option<char> {
+    if c.is_ascii_digit() {
+        return Some(c);
+    }
+    let offset = u32::from(c).checked_sub(u32::from('０'))?;
+    if offset < 10 {
+        return char::from_digit(offset, 10);
+    }
+    None
+}
+
+/// Reserves the whole code up front, so typing never reallocates and strands digits.
+fn reserve_code(code: &mut String) {
+    if code.capacity() < CODE_LEN {
+        code.reserve_exact(CODE_LEN.saturating_sub(code.len()));
+    }
+}
+
+/// Appends the digits of `text` until the code is full. Returns true when it changed.
+fn push_digits(code: &mut String, text: &str) -> bool {
+    let before = code.len();
+    for digit in text.chars().filter_map(code_digit) {
+        if code.len() >= CODE_LEN {
+            break;
+        }
+        code.push(digit);
+    }
+    code.len() != before
+}
+
+/// A paste holding a whole code replaces the buffer with its first eight digits; a shorter
+/// paste appends like typing.
+fn paste_code(code: &mut String, text: &str) -> bool {
+    let digits = text.chars().filter_map(code_digit).count();
+    if digits < CODE_LEN {
+        return push_digits(code, text);
+    }
+    peerglide_protocol::pairing_worker::clear_code(code);
+    push_digits(code, text);
+    true
+}
+
+/// Applies typed text, IME commits, pastes and backspace presses to the code buffer.
+fn apply_code_events(code: &mut String, events: &[egui::Event]) -> bool {
+    use egui::{Event, ImeEvent, Key};
+    reserve_code(code);
+    let mut changed = false;
+    for event in events {
+        match event {
+            Event::Text(text) | Event::Ime(ImeEvent::Commit(text)) => {
+                changed |= push_digits(code, text);
+            }
+            Event::Paste(text) => changed |= paste_code(code, text),
+            Event::Key {
+                key: Key::Backspace,
+                pressed: true,
+                ..
+            } => changed |= code.pop().is_some(),
+            _ => {}
+        }
+    }
+    changed
+}
+
+fn is_cells_code(code: &str) -> bool {
+    code.len() == CODE_LEN && code.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn cells_width() -> f32 {
+    let cells = CODE_LEN as f32;
+    cells * CELL_W + (cells - 1.0) * CELL_GAP + GROUP_GAP
+}
+
+fn cell_rect(row: egui::Rect, index: usize) -> egui::Rect {
+    let group = if index >= HALF { GROUP_GAP } else { 0.0 };
+    let x = row.left() + index as f32 * (CELL_W + CELL_GAP) + group;
+    egui::Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(CELL_W, CELL_H))
+}
+
+/// Eight code cells in two groups of four. A click focuses them; digits, IME commits,
+/// pastes and backspace then edit `code` directly, with no blinking caret. `offset` moves
+/// only the painted row for the M8 shake, never the click target. Returns whether `code`
+/// changed this frame.
+fn code_cells(
+    ui: &mut egui::Ui,
+    code: &mut String,
+    offset: f32,
+    error: bool,
+) -> (egui::Response, bool) {
+    let size = egui::vec2(cells_width(), CELL_H);
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let id = egui::Id::unique(CODE_CELLS_ID);
+    let response = ui.interact(rect, id, egui::Sense::click());
+    if response.clicked() {
+        response.request_focus();
+    }
+    let focused = response.has_focus();
+    let changed = focused && ui.input(|input| apply_code_events(code, &input.events));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, CODE_LABEL));
+    if ui.is_rect_visible(rect) {
+        let row = rect.translate(egui::vec2(offset, 0.0));
+        let caret = focused.then_some(code.len());
+        paint_cells(ui, row, code.as_bytes(), caret, error);
+    }
+    (response, changed)
+}
+
+/// The code this computer offers, in the same cells, read only.
+fn shown_code(ui: &mut egui::Ui, code: &str) {
+    let size = egui::vec2(cells_width(), CELL_H);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let label = format!("本次配对码 {code}");
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &label));
+    if ui.is_rect_visible(rect) {
+        paint_cells(ui, rect, code.as_bytes(), None, false);
+    }
+}
+
+/// Cells and their digits; `caret_cell` outlines the next cell to fill while focused.
+fn paint_cells(
+    ui: &egui::Ui,
+    row: egui::Rect,
+    digits: &[u8],
+    caret_cell: Option<usize>,
+    has_error: bool,
+) {
+    let dark = ui.visuals().dark_mode;
+    let accent = tokens::accent_color(dark);
+    let danger = desktop_style::status_colors(dark, Tone::Danger).1;
+    let line = tokens::line_color(dark);
+    let edge = if has_error { danger } else { line };
+    let ink = ui.visuals().text_color();
+    let fill = ui.visuals().extreme_bg_color;
+    let radius = f32::from(tokens::RADIUS_CONTROL);
+    let font = egui::FontId::monospace(20.0);
+    let painter = ui.painter();
+    for index in 0..CODE_LEN {
+        let cell = cell_rect(row, index);
+        painter.rect_filled(cell, radius, fill);
+        let active = caret_cell.map(|caret| caret.min(CODE_LEN - 1)) == Some(index);
+        let stroke = if active {
+            egui::Stroke::new(2.0, accent)
+        } else {
+            egui::Stroke::new(1.0, edge)
+        };
+        painter.rect_stroke(cell, radius, stroke, egui::StrokeKind::Inside);
+        let Some(&digit) = digits.get(index) else {
+            continue;
+        };
+        let galley = painter.layout_no_wrap(char::from(digit).to_string(), font.clone(), ink);
+        let at = cell.center() - galley.size() / 2.0;
+        painter.galley(at, galley, ink);
+    }
+}
+
+/// One of the two entry paths, painted as a large card.
+struct EntryCard {
+    icon: Icon,
+    title: &'static str,
+    detail: &'static str,
+}
+
+const SHOW_CARD: EntryCard = EntryCard {
+    icon: Icon::Device,
+    title: "我来显示配对码",
+    detail: "本机生成短码",
+};
+
+const ENTER_CARD: EntryCard = EntryCard {
+    icon: Icon::Keyboard,
+    title: "我来输入配对码",
+    detail: "输入另一台的短码",
+};
+
+/// The two entry paths side by side. Returns `Some(join)` when a card is clicked.
+fn entry_cards(ui: &mut egui::Ui, join: bool) -> Option<bool> {
+    let gap = tokens::SPACE_MD;
+    let width = ((ui.available_width() - gap) / 2.0).max(CARD_MIN_W);
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        for (value, card) in [(false, SHOW_CARD), (true, ENTER_CARD)] {
+            if entry_card(ui, &card, value == join, width).clicked() {
+                chosen = Some(value);
+            }
+        }
+    });
+    chosen
+}
+
+/// Card with hover (M1), selection ring (M2) and a focus ring for keyboard users.
+fn entry_card(ui: &mut egui::Ui, card: &EntryCard, on: bool, width: f32) -> egui::Response {
+    let size = egui::vec2(width, CARD_H);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let enabled = ui.is_enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, card.title));
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let ctx = ui.ctx();
+    let hover = motion::hover_mix(ctx, response.id.with("hover"), response.hovered());
+    let select = motion::select_mix(ctx, response.id.with("select"), on);
+    let dark = ui.visuals().dark_mode;
+    let accent = tokens::accent_color(dark);
+    let soft = desktop_style::selection_colors(ui).0;
+    let radius = f32::from(tokens::RADIUS_CARD);
+    let inside = egui::StrokeKind::Inside;
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, tokens::surface_color(dark));
+    painter.rect_filled(rect, radius, tokens::faded(soft, hover.max(select)));
+    let edge = egui::Stroke::new(1.0, tokens::line_color(dark));
+    painter.rect_stroke(rect, radius, edge, inside);
+    let ring = egui::Stroke::new(2.0, tokens::faded(accent, select));
+    painter.rect_stroke(rect, radius, ring, inside);
+    if response.has_focus() {
+        let focus = egui::Stroke::new(1.5, accent);
+        painter.rect_stroke(rect.expand(3.0), radius + 3.0, focus, inside);
+    }
+    let text = ui.visuals().text_color();
+    let ink = if on { accent } else { text };
+    let icon_center = egui::pos2(rect.left() + 30.0, rect.center().y);
+    let icon_rect = egui::Rect::from_center_size(icon_center, egui::Vec2::splat(28.0));
+    card.icon.paint(painter, icon_rect, ink);
+    let title_font = egui::FontId::proportional(15.0);
+    let title = painter.layout_no_wrap(card.title.to_owned(), title_font, ink);
+    let muted = tokens::muted_color(dark);
+    let detail_font = egui::FontId::proportional(12.0);
+    let detail = painter.layout_no_wrap(card.detail.to_owned(), detail_font, muted);
+    let x = rect.left() + 56.0;
+    let title_top = rect.center().y - title.size().y;
+    painter.galley(egui::pos2(x, title_top), title, ink);
+    painter.galley(egui::pos2(x, rect.center().y + 2.0), detail, muted);
+    response
+}
+
+fn dot_center(rect: egui::Rect, index: usize) -> egui::Pos2 {
+    let step = rect.width() / STAGES.len() as f32;
+    let x = rect.left() + step * (index as f32 + 0.5);
+    egui::pos2(x, rect.top() + DOT_TOP)
+}
+
+/// Stage dots: done stages filled, the current one ringed and a halted one in the warning
+/// tone. Every dot keeps its name beneath, so color is never the only cue.
+fn stage_dots(ui: &mut egui::Ui, stage: usize, halted: bool) {
+    let size = egui::vec2(ui.available_width(), DOTS_H);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let current = STAGES.get(stage).copied().unwrap_or("完成");
+    let stage_label = format!("配对阶段：{current}");
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, &stage_label)
+    });
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let dark = ui.visuals().dark_mode;
+    let accent = tokens::accent_color(dark);
+    let line = tokens::line_color(dark);
+    let muted = tokens::muted_color(dark);
+    let text = ui.visuals().text_color();
+    let warning = desktop_style::status_colors(dark, Tone::Warning).1;
+    let fill = ui.visuals().window_fill;
+    let painter = ui.painter();
+    for index in 1..STAGES.len() {
+        let color = if index <= stage { accent } else { line };
+        let span = [dot_center(rect, index - 1), dot_center(rect, index)];
+        painter.line_segment(span, egui::Stroke::new(1.5, color));
+    }
+    let font = egui::FontId::proportional(11.0);
+    for (index, name) in STAGES.into_iter().enumerate() {
+        let center = dot_center(rect, index);
+        let state = dot_state(index, stage, halted);
+        let color = match state {
+            Dot::Done | Dot::Current => accent,
+            Dot::Halted => warning,
+            Dot::Pending => line,
+        };
+        painter.circle_filled(center, DOT_RADIUS, fill);
+        if state == Dot::Pending {
+            painter.circle_stroke(center, DOT_RADIUS, egui::Stroke::new(1.5, color));
+        } else {
+            painter.circle_filled(center, DOT_RADIUS, color);
+        }
+        if matches!(state, Dot::Current | Dot::Halted) {
+            painter.circle_stroke(center, DOT_RADIUS + 3.0, egui::Stroke::new(1.5, color));
+        }
+        let ink = if state == Dot::Pending { muted } else { text };
+        let galley = painter.layout_no_wrap(name.to_owned(), font.clone(), ink);
+        let at = egui::pos2(center.x - galley.size().x / 2.0, rect.top() + LABEL_TOP);
+        painter.galley(at, galley, ink);
+    }
+}
+
+/// Spinner, check or cross beside the phase sentence, which always stays visible.
+fn status_row(ui: &mut egui::Ui, glyph: Glyph, text: &str) {
+    ui.horizontal(|ui| {
+        let size = egui::Vec2::splat(tokens::ICON_MEDIUM);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        paint_glyph(ui, rect, glyph);
+        ui.label(text);
+    });
+}
+
+/// Paints a glyph. The spinner reads time only and never schedules a repaint (M11).
+fn paint_glyph(ui: &egui::Ui, rect: egui::Rect, glyph: Glyph) {
+    let dark = ui.visuals().dark_mode;
+    let painter = ui.painter();
+    match glyph {
+        Glyph::Blank => {}
+        Glyph::Spinner => {
+            let now = ui.input(|input| input.time);
+            let ink = tokens::accent_color(dark);
+            icons::paint_spinner(painter, rect, ink, motion::spinner_head_at(now));
+        }
+        Glyph::Check(progress) => {
+            let ink = desktop_style::status_colors(dark, Tone::Good).1;
+            icons::paint_check_progress(painter, rect, ink, progress);
+        }
+        Glyph::Cross(progress) => {
+            let ink = desktop_style::status_colors(dark, Tone::Danger).1;
+            icons::paint_cross_progress(painter, rect, ink, progress);
+        }
+    }
+}
+
+/// A caution sentence led by the warning icon; the sentence carries the meaning.
+fn warning_line(ui: &mut egui::Ui, text: &str) {
+    ui.horizontal(|ui| {
+        let size = egui::Vec2::splat(tokens::ICON_SMALL);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let dark = ui.visuals().dark_mode;
+        let ink = desktop_style::status_colors(dark, Tone::Warning).1;
+        Icon::Warning.paint(ui.painter(), rect, ink);
+        ui.label(text);
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    fn key(key: egui::Key, pressed: bool) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+    fn text(text: &str) -> egui::Event {
+        egui::Event::Text(text.into())
+    }
+    fn paste(text: &str) -> egui::Event {
+        egui::Event::Paste(text.into())
+    }
+    // Every code below is a synthetic UI buffer, never authentication.
+    #[test]
+    fn code_events_keep_eight_digits_and_handle_backspace_and_paste_edges() {
+        let mut code = String::new();
+        assert!(apply_code_events(&mut code, &[text("1a2 3"), text("４")]));
+        assert_eq!(code, "1234");
+        assert!(!apply_code_events(&mut code, &[text("-x"), paste("abc")]));
+        assert!(!apply_code_events(&mut code, &[key(egui::Key::Backspace, false)]));
+        assert_eq!(code, "1234");
+        assert!(apply_code_events(&mut code, &[key(egui::Key::Backspace, true)]));
+        assert_eq!(code, "123");
+        let commit = egui::Event::Ime(egui::ImeEvent::Commit("4".into()));
+        assert!(apply_code_events(&mut code, &[commit, paste("56")]));
+        assert_eq!(code, "12345");
+        // A short paste appends and stops at eight digits.
+        assert!(apply_code_events(&mut code, &[paste("6789")]));
+        assert_eq!(code, "12345678");
+        assert!(!apply_code_events(&mut code, &[text("9")]));
+        assert_eq!(code, "12345678");
+        // A whole code replaces the buffer; extra digits after the eighth are dropped.
+        assert!(apply_code_events(&mut code, &[paste(" 8765-4321 ")]));
+        assert_eq!(code, "87654321");
+        assert!(apply_code_events(&mut code, &[paste("123456789")]));
+        assert_eq!(code, "12345678");
+        let clear = vec![key(egui::Key::Backspace, true); CODE_LEN + 2];
+        assert!(apply_code_events(&mut code, &clear));
+        assert!(code.is_empty());
+        assert!(!apply_code_events(&mut code, &[key(egui::Key::Backspace, true)]));
+        assert!(code.capacity() >= CODE_LEN);
+        assert!(is_cells_code("01234567") && !is_cells_code("0123456"));
+        assert!(!is_cells_code("0123456a") && !is_cells_code("０１２３４５６７"));
+    }
+    fn cells_pass(
+        ctx: &egui::Context,
+        code: &mut String,
+        cell_events: Vec<egui::Event>,
+    ) -> egui::Rect {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 200.0));
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events: cell_events,
+            ..Default::default()
+        };
+        let mut rect = egui::Rect::NOTHING;
+        let output = ctx.run_ui(input, |ui| rect = code_cells(ui, code, 0.0, false).0.rect);
+        output.drop_without_applying_deltas();
+        rect
+    }
+    #[test]
+    fn code_cells_take_input_only_after_focus() {
+        let ctx = crate::tests::ui_context();
+        let mut code = String::new();
+        let rect = cells_pass(&ctx, &mut code, vec![text("12")]);
+        assert!(code.is_empty(), "unfocused cells must ignore typing");
+        assert!((rect.width() - cells_width()).abs() < 0.5);
+        let at = rect.center();
+        for pressed in [true, false] {
+            let click = vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+            cells_pass(&ctx, &mut code, click);
+        }
+        cells_pass(&ctx, &mut code, vec![text("12")]);
+        assert_eq!(code, "12");
+        cells_pass(&ctx, &mut code, vec![key(egui::Key::Backspace, true)]);
+        assert_eq!(code, "1");
+        cells_pass(&ctx, &mut code, vec![paste("1234 5678")]);
+        assert_eq!(code, "12345678");
+        cells_pass(&ctx, &mut code, vec![text("9")]);
+        assert_eq!(code, "12345678");
+    }
+    #[test]
+    fn rejected_code_shakes_once_and_then_stops_repainting() {
+        let rejected = Phase::Failed(Failure::Authentication);
+        let mut feedback = Feedback::default();
+        feedback.observe(Phase::Idle, true, 0.0);
+        feedback.observe(Phase::Verifying, true, 0.1);
+        assert!(feedback.shake.is_none() && !feedback.code_error);
+        feedback.observe(rejected, true, 0.2);
+        let first = feedback.shake;
+        assert!(first.is_some() && feedback.code_error);
+        assert!(matches!(feedback.outcome, Some((Outcome::Failure, _))));
+        for step in 1..30 {
+            feedback.observe(rejected, true, 0.2 + f64::from(step) * 0.05);
+        }
+        assert_eq!(feedback.shake, first, "a lasting failure must not shake again");
+        let ctx = egui::Context::default();
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&requests);
+        ctx.set_request_repaint_callback(move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+        let mut offsets = Vec::new();
+        let mut time = 0.2;
+        let mut settled = None;
+        while time < 1.4 {
+            let input = egui::RawInput {
+                time: Some(time),
+                ..Default::default()
+            };
+            let output = ctx.run_ui(input, |ui| offsets.push(feedback.shake_offset(ui.ctx())));
+            output.drop_without_applying_deltas();
+            if settled.is_none() && time > 0.8 {
+                settled = Some(requests.load(Ordering::SeqCst));
+            }
+            time += 1.0 / 60.0;
+        }
+        // Sensitivity: the shake moved and asked for frames while it ran.
+        assert!(offsets.iter().any(|offset| offset.abs() > 1.0));
+        assert!(settled.is_some_and(|count| count > 0));
+        assert_eq!(offsets.last().copied(), Some(0.0));
+        assert_eq!(Some(requests.load(Ordering::SeqCst)), settled);
+        // The offering side sees the same failure as a cross, never a shake.
+        let mut offering = Feedback::default();
+        offering.observe(Phase::Listening, false, 0.0);
+        offering.observe(rejected, false, 0.1);
+        assert!(offering.shake.is_none() && !offering.code_error);
+        assert!(matches!(offering.outcome, Some((Outcome::Failure, _))));
+    }
+    #[test]
+    fn stage_dots_and_result_marks_follow_the_supervisor_phase() {
+        let expected = [
+            (Phase::Idle, Some(0)),
+            (Phase::Starting, Some(0)),
+            (Phase::Listening, Some(1)),
+            (Phase::Verifying, Some(2)),
+            (Phase::Verified, Some(3)),
+            (Phase::WaitingPeer, Some(3)),
+            (Phase::SaveReady, Some(3)),
+            (Phase::AwaitingPeerSaved, Some(4)),
+            (Phase::ReceiptReady, Some(4)),
+            (Phase::Finishing, Some(4)),
+            (Phase::Completed, Some(STAGES.len())),
+            (Phase::Stopping, None),
+            (Phase::Stopped(StopReason::Expired), None),
+            (Phase::Failed(Failure::Protocol), None),
+        ];
+        for (phase, stage) in expected {
+            assert_eq!(stage_of(phase), stage, "{}", phase_text(phase));
+            assert!(!phase_text(phase).is_empty());
+        }
+        assert_eq!(dot_state(0, 2, false), Dot::Done);
+        assert_eq!(dot_state(2, 2, false), Dot::Current);
+        assert_eq!(dot_state(2, 2, true), Dot::Halted);
+        assert_eq!(dot_state(3, 2, true), Dot::Pending);
+        for index in 0..STAGES.len() {
+            assert_eq!(dot_state(index, STAGES.len(), false), Dot::Done);
+        }
+        // A failure keeps the stage it reached and marks it halted.
+        let mut feedback = Feedback::default();
+        feedback.observe(Phase::Starting, true, 0.0);
+        feedback.observe(Phase::Verifying, true, 0.1);
+        feedback.observe(Phase::Stopped(StopReason::Expired), true, 0.2);
+        assert_eq!(feedback.stage, 2);
+        assert!(matches!(feedback.outcome, Some((Outcome::Failure, _))));
+        assert!(feedback.shake.is_none(), "only a rejected code shakes");
+        feedback.observe(Phase::Idle, true, 0.3);
+        assert!(feedback.outcome.is_none() && feedback.stage == 0);
+        // A stop the user asked for is not drawn as a failure.
+        feedback.observe(Phase::Stopped(StopReason::Cancelled), true, 0.4);
+        assert!(feedback.outcome.is_none());
+        // Success draws once; reopening on a finished phase shows it already drawn.
+        feedback.observe(Phase::Finishing, true, 0.5);
+        feedback.observe(Phase::Completed, true, 0.6);
+        let Some((Outcome::Success, shot)) = feedback.outcome else {
+            panic!("completion must draw a check");
+        };
+        assert!(shot.progress(0.6) < 1.0);
+        assert_eq!(shot.progress(1.0), 1.0);
+        assert_eq!(feedback.stage, STAGES.len());
+        let mut reopened = Feedback::default();
+        reopened.observe(Phase::Completed, false, 9.0);
+        let Some((Outcome::Success, shot)) = reopened.outcome else {
+            panic!("a finished phase keeps its check");
+        };
+        assert_eq!(shot.progress(9.0), 1.0);
+    }
+    fn text_center(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                Some(text.visual_bounding_rect().center())
+            }
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(|s| text_center(s, label)),
+            _ => None,
+        }
+    }
+    fn window_pass(
+        app: &mut App,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        ctx.run_ui(input, |root| app.desktop(root))
+    }
+    #[test]
+    fn entry_cards_switch_paths_without_starting_pairing_or_creating_identity() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        app.open_setup();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        for (label, join) in [("我来输入配对码", true), ("我来显示配对码", false)] {
+            let mut at = None;
+            for _ in 0..2 {
+                let output = window_pass(&mut app, &ctx, vec![]);
+                let shapes = &output.shapes;
+                at = shapes.iter().find_map(|s| text_center(&s.shape, label));
+                output.drop_without_applying_deltas();
+            }
+            let at = at.with_context(|| format!("{label} absent"))?;
+            for pressed in [true, false] {
+                let click = vec![
+                    egui::Event::PointerMoved(at),
+                    egui::Event::PointerButton {
+                        pos: at,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ];
+                window_pass(&mut app, &ctx, click).drop_without_applying_deltas();
+            }
+            assert_eq!(app.pairing_panel.join_entry, join, "{label}");
+            assert!(app.pairing_panel.open && !app.pairing_panel.needs_poll());
+            assert!(app.config == before && app.child.is_none() && !app.native_confirmation);
+            assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        }
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
     #[test]
     fn first_pairing_window_keeps_prepare_and_close_visible_in_both_entry_modes() -> Result<()> {
         fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
