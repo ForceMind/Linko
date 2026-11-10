@@ -38,7 +38,11 @@ impl App {
             Vec2::new(ui.available_width(), 40.0),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                let label = if expanded { "收起侧栏" } else { "展开侧栏" };
+                let label = if expanded {
+                    "收起侧栏"
+                } else {
+                    "展开侧栏"
+                };
                 let toggle = icon_button(ui, Icon::Sidebar, label, false);
                 self.record_layout_control("nav_sidebar", &toggle, ui.clip_rect());
                 if toggle.clicked() {
@@ -148,7 +152,11 @@ impl App {
             }
         }
         ui.add_space(tokens::SPACE_SM);
-        let add_label = if registered { "重新核验" } else { "添加电脑" };
+        let add_label = if registered {
+            "重新核验"
+        } else {
+            "添加电脑"
+        };
         let add = ui.add_enabled(self.idle_writable(), |ui: &mut egui::Ui| {
             icon_button(ui, Icon::Plus, add_label, expanded)
         });

@@ -538,7 +538,8 @@ impl App {
         };
         self.subpage_header(ui, "文件与剪贴板", Page::Displays);
         ui.horizontal(|ui| {
-            for (page, label) in [(Page::Transfers, "文件传输"), (Page::Clipboard, "剪贴板")] {
+            for (page, label) in [(Page::Transfers, "文件传输"), (Page::Clipboard, "剪贴板")]
+            {
                 if ui.selectable_label(self.page == page, label).clicked() {
                     self.navigate_to(page);
                 }
