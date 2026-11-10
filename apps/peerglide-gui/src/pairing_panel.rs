@@ -990,9 +990,15 @@ mod tests {
         assert!(apply_code_events(&mut code, &[text("1a2 3"), text("４")]));
         assert_eq!(code, "1234");
         assert!(!apply_code_events(&mut code, &[text("-x"), paste("abc")]));
-        assert!(!apply_code_events(&mut code, &[key(egui::Key::Backspace, false)]));
+        assert!(!apply_code_events(
+            &mut code,
+            &[key(egui::Key::Backspace, false)]
+        ));
         assert_eq!(code, "1234");
-        assert!(apply_code_events(&mut code, &[key(egui::Key::Backspace, true)]));
+        assert!(apply_code_events(
+            &mut code,
+            &[key(egui::Key::Backspace, true)]
+        ));
         assert_eq!(code, "123");
         let commit = egui::Event::Ime(egui::ImeEvent::Commit("4".into()));
         assert!(apply_code_events(&mut code, &[commit, paste("56")]));
@@ -1010,7 +1016,10 @@ mod tests {
         let clear = vec![key(egui::Key::Backspace, true); CODE_LEN + 2];
         assert!(apply_code_events(&mut code, &clear));
         assert!(code.is_empty());
-        assert!(!apply_code_events(&mut code, &[key(egui::Key::Backspace, true)]));
+        assert!(!apply_code_events(
+            &mut code,
+            &[key(egui::Key::Backspace, true)]
+        ));
         assert!(code.capacity() >= CODE_LEN);
         assert!(is_cells_code("01234567") && !is_cells_code("0123456"));
         assert!(!is_cells_code("0123456a") && !is_cells_code("０１２３４５６７"));
@@ -1074,7 +1083,10 @@ mod tests {
         for step in 1..30 {
             feedback.observe(rejected, true, 0.2 + f64::from(step) * 0.05);
         }
-        assert_eq!(feedback.shake, first, "a lasting failure must not shake again");
+        assert_eq!(
+            feedback.shake, first,
+            "a lasting failure must not shake again"
+        );
         let ctx = egui::Context::default();
         let requests = Arc::new(AtomicUsize::new(0));
         let observed = Arc::clone(&requests);
