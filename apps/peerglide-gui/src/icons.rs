@@ -4,11 +4,9 @@
 //! one stroke width. Geometry lives on a 16 unit grid, so the 16 and 20 point sizes of the
 //! design share the same shapes. Icons keep one unit of empty margin inside their square.
 //! Holding no state, nothing here schedules a repaint.
-// Later slices paint these icons; until they do, unused items would fail `-D warnings`.
-#![allow(dead_code)]
 
 use crate::desktop_style::tokens;
-use crate::motion::{cubic_out, polyline_prefix, staged_progress};
+use crate::motion::{cubic_out, polyline_prefix, spinner_cell_strength, staged_progress};
 use eframe::egui::{self, Color32, Painter, Pos2, Rect, Stroke};
 use std::f32::consts::{PI, TAU};
 
@@ -17,12 +15,15 @@ pub(super) const STROKE_WIDTH: f32 = tokens::ICON_STROKE;
 /// Number of grid units along one side of the icon square.
 pub(super) const GRID_UNITS: f32 = 16.0;
 /// Empty margin inside the icon square, in grid units.
+#[cfg(test)]
 pub(super) const INSET_UNITS: f32 = 1.0;
 /// Rectangles with a shorter side than this are not painted, in points.
 pub(super) const MIN_SIDE: f32 = 6.0;
 
 /// Direction of an arrow icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// The shell uses Left for "back"; the layout direction buttons (slice S2) use the others.
+#[allow(dead_code)]
 pub(super) enum Direction {
     Left,
     Right,
@@ -30,9 +31,10 @@ pub(super) enum Direction {
     Down,
 }
 
-/// The icon set of this slice. The other icons of the design join as the slices that use
-/// them land.
+/// The icon set of the design. Icons join as the slices that paint them land.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Lock and Cross are painted by the context bar and pairing slices (S3, S4).
+#[allow(dead_code)]
 pub(super) enum Icon {
     /// Display on a stand.
     Device,
@@ -44,6 +46,14 @@ pub(super) enum Icon {
     /// Two sliders, for settings.
     Sliders,
     Plus,
+    /// Panel outline with a divider, for showing or hiding the sidebar.
+    Sidebar,
+    /// Key caps, for shortcuts.
+    Keyboard,
+    /// Square, for stopping a session.
+    Stop,
+    /// Circular arrow, for emergency recovery.
+    Recover,
 }
 
 impl Icon {
@@ -63,11 +73,32 @@ impl Icon {
             Icon::Arrow(direction) => paint_arrow(painter, grid, color, direction),
             Icon::Sliders => paint_sliders(painter, grid, color),
             Icon::Plus => paint_plus(painter, grid, color),
+            Icon::Sidebar => paint_sidebar(painter, grid, color),
+            Icon::Keyboard => paint_keyboard(painter, grid, color),
+            Icon::Stop => paint_stop(painter, grid, color),
+            Icon::Recover => paint_recover(painter, grid, color),
         }
     }
 }
 
+/// M11: eight dots on a ring; the dot at `head` is full strength and the ones behind it fade.
+/// `head` comes from `motion::spinner_head_at`, so this never asks for a repaint itself.
+pub(super) fn paint_spinner(painter: &Painter, rect: Rect, color: Color32, head: usize) {
+    if !is_paintable(rect) {
+        return;
+    }
+    let grid = Grid::new(rect);
+    let cells = tokens::SPINNER_CELLS;
+    let radius = 0.9 * grid.unit;
+    for (cell, center) in spinner_dots(grid).into_iter().enumerate() {
+        let strength = spinner_cell_strength(cell, head, cells);
+        painter.circle_filled(center, radius, tokens::faded(color, strength));
+    }
+}
+
 /// A check mark that draws itself, `progress` from 0 to 1 (M9).
+// Painted by the permission and pairing slices (S3, S4).
+#[allow(dead_code)]
 pub(super) fn paint_check_progress(painter: &Painter, rect: Rect, color: Color32, progress: f32) {
     if is_paintable(rect) {
         paint_check(painter, Grid::new(rect), color, progress);
@@ -75,6 +106,8 @@ pub(super) fn paint_check_progress(painter: &Painter, rect: Rect, color: Color32
 }
 
 /// A cross whose two strokes draw one after the other, `progress` from 0 to 1 (M9).
+// Painted by the pairing slice (S4).
+#[allow(dead_code)]
 pub(super) fn paint_cross_progress(painter: &Painter, rect: Rect, color: Color32, progress: f32) {
     if is_paintable(rect) {
         paint_cross(painter, Grid::new(rect), color, progress);
@@ -188,6 +221,78 @@ fn paint_plus(painter: &Painter, grid: Grid, color: Color32) {
     painter.line_segment([grid.at(3.0, 8.0), grid.at(13.0, 8.0)], stroke);
 }
 
+fn paint_sidebar(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    let frame = Rect::from_min_max(grid.at(1.5, 2.5), grid.at(14.5, 13.5));
+    painter.rect_stroke(frame, 1.5, stroke, egui::StrokeKind::Inside);
+    painter.line_segment([grid.at(6.0, 2.5), grid.at(6.0, 13.5)], stroke);
+}
+
+fn paint_keyboard(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    let body = Rect::from_min_max(grid.at(1.5, 3.5), grid.at(14.5, 12.5));
+    painter.rect_stroke(body, 1.5, stroke, egui::StrokeKind::Inside);
+    let radius = 0.6 * grid.unit;
+    for point in keyboard_keys(grid) {
+        painter.circle_filled(point, radius, color);
+    }
+    painter.line_segment([grid.at(5.0, 10.0), grid.at(11.0, 10.0)], stroke);
+}
+
+fn paint_stop(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    let square = Rect::from_min_max(grid.at(4.0, 4.0), grid.at(12.0, 12.0));
+    painter.rect_stroke(square, 1.5, stroke, egui::StrokeKind::Inside);
+}
+
+fn paint_recover(painter: &Painter, grid: Grid, color: Color32) {
+    let (arc, head) = recover_geometry(grid);
+    paint_path(painter, arc, color);
+    paint_path(painter, head.to_vec(), color);
+}
+
+/// Upper two rows of key caps.
+fn keyboard_keys(grid: Grid) -> Vec<Pos2> {
+    let mut keys = Vec::with_capacity(8);
+    for row in 0..2 {
+        for column in 0..4 {
+            let x = 4.0 + column as f32 * 2.7;
+            let y = 6.0 + row as f32 * 2.0;
+            keys.push(grid.at(x, y));
+        }
+    }
+    keys
+}
+
+/// Open ring around the center and the arrow head at its end.
+fn recover_geometry(grid: Grid) -> (Vec<Pos2>, [Pos2; 3]) {
+    let center = grid.at(8.0, 8.0);
+    let radius = 5.0 * grid.unit;
+    let start = -PI / 2.0 + 0.5;
+    let end = start + TAU * 0.8;
+    let arc = arc_points(center, radius, start, end, 16);
+    let tip = arc[0];
+    let head = [
+        tip + egui::vec2(-2.5, -0.8) * grid.unit,
+        tip,
+        tip + egui::vec2(-0.6, 2.4) * grid.unit,
+    ];
+    (arc, head)
+}
+
+/// Centers of the eight spinner dots, clockwise from the top.
+fn spinner_dots(grid: Grid) -> Vec<Pos2> {
+    let center = grid.at(8.0, 8.0);
+    let radius = 5.0 * grid.unit;
+    let cells = tokens::SPINNER_CELLS;
+    let mut dots = Vec::with_capacity(cells);
+    for cell in 0..cells {
+        let angle = -PI / 2.0 + TAU * cell as f32 / cells as f32;
+        dots.push(center + egui::vec2(angle.cos(), angle.sin()) * radius);
+    }
+    dots
+}
+
 /// Points on a circular arc from angle `start` to `end` (radians, screen coordinates).
 fn arc_points(center: Pos2, radius: f32, start: f32, end: f32, segments: usize) -> Vec<Pos2> {
     let steps = segments.max(1);
@@ -277,7 +382,7 @@ mod tests {
         count
     }
 
-    fn every_icon() -> [Icon; 11] {
+    fn every_icon() -> [Icon; 15] {
         [
             Icon::Device,
             Icon::Lock,
@@ -290,7 +395,27 @@ mod tests {
             Icon::Arrow(Direction::Down),
             Icon::Sliders,
             Icon::Plus,
+            Icon::Sidebar,
+            Icon::Keyboard,
+            Icon::Stop,
+            Icon::Recover,
         ]
+    }
+
+    #[test]
+    fn spinner_paints_eight_dots_and_only_the_head_at_full_strength() {
+        let baseline = shapes_painted(|_| ());
+        let painted = shapes_painted(|painter| paint_spinner(painter, square(), INK, 3));
+        assert_eq!(painted, baseline + tokens::SPINNER_CELLS);
+        let tiny = Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(3.0, 3.0));
+        let skipped = shapes_painted(|painter| paint_spinner(painter, tiny, INK, 3));
+        assert_eq!(skipped, baseline);
+        let grid = Grid::new(square());
+        let dots = spinner_dots(grid);
+        assert_eq!(dots.len(), tokens::SPINNER_CELLS);
+        for dot in &dots {
+            assert!(inset_bounds().contains(*dot), "{dot:?} leaves the margin");
+        }
     }
 
     #[test]
@@ -306,6 +431,10 @@ mod tests {
         for stroke_points in cross_strokes(grid) {
             paths.push(stroke_points.to_vec());
         }
+        let (arc, recover_head) = recover_geometry(grid);
+        paths.push(arc);
+        paths.push(recover_head.to_vec());
+        paths.push(keyboard_keys(grid));
         for path in paths {
             assert_inside(&path);
             for point in path {

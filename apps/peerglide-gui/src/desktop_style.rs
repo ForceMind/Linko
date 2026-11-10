@@ -329,148 +329,6 @@ pub(super) fn detail_icon(ui: &mut egui::Ui, permission: bool) {
     painter.add(egui::Shape::line(points, Stroke::new(1.3, color)));
 }
 
-pub(super) fn navigation(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let (fill, text) = selection_colors(ui);
-    let color = if selected {
-        text
-    } else {
-        ui.visuals().text_color()
-    };
-    let response = ui
-        .scope(|ui| {
-            ui.spacing_mut().button_padding.x = 42.0;
-            let button = egui::Button::new("")
-                .left_text(semibold(label, 15.0).color(color))
-                .selected(selected)
-                .frame(true)
-                .fill(if selected { fill } else { Color32::TRANSPARENT })
-                .stroke(Stroke::NONE);
-            ui.add_sized([ui.available_width(), 40.0], button)
-        })
-        .inner;
-    let painter = ui.painter_at(response.rect);
-    let icon = egui::Rect::from_center_size(
-        egui::pos2(response.rect.left() + 22.0, response.rect.center().y),
-        egui::vec2(18.0, 16.0),
-    );
-    let stroke = Stroke::new(1.4, color);
-    if response.hovered() || response.has_focus() {
-        painter.rect_stroke(
-            response.rect.shrink(0.5),
-            9.0,
-            Stroke::new(
-                if response.has_focus() { 1.5 } else { 1.0 },
-                if response.has_focus() {
-                    palette(ui.visuals().dark_mode).accent
-                } else {
-                    palette(ui.visuals().dark_mode).line
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
-    }
-    match label {
-        "设备" => {
-            painter.rect_stroke(
-                icon.shrink2(egui::vec2(1.0, 1.0)),
-                2.0,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-            painter.line_segment(
-                [
-                    icon.center_bottom(),
-                    icon.center_bottom() + egui::vec2(0.0, 2.0),
-                ],
-                stroke,
-            );
-        }
-        "屏幕布局" => {
-            for (offset, size) in [
-                (egui::vec2(0.0, 1.0), egui::vec2(9.0, 11.0)),
-                (egui::vec2(11.0, 4.0), egui::vec2(8.0, 8.0)),
-            ] {
-                let monitor = egui::Rect::from_min_size(icon.min + offset, size);
-                painter.rect_stroke(monitor, 1.0, stroke, egui::StrokeKind::Inside);
-                painter.line_segment(
-                    [
-                        monitor.center_bottom(),
-                        monitor.center_bottom() + egui::vec2(0.0, 3.0),
-                    ],
-                    stroke,
-                );
-            }
-        }
-        "文件传输" => {
-            painter.arrow(
-                icon.center() - egui::vec2(5.0, 5.0),
-                egui::vec2(0.0, 11.0),
-                stroke,
-            );
-            painter.arrow(
-                icon.center() + egui::vec2(5.0, 5.0),
-                egui::vec2(0.0, -11.0),
-                stroke,
-            );
-        }
-        "剪贴板" => {
-            let paper = icon.shrink2(egui::vec2(2.0, 0.0));
-            painter.rect_stroke(paper, 2.0, stroke, egui::StrokeKind::Inside);
-            let clip = egui::Rect::from_center_size(paper.center_top(), egui::vec2(7.0, 4.0));
-            painter.rect_filled(clip, 1.0, ui.visuals().panel_fill);
-            painter.rect_stroke(clip, 1.0, stroke, egui::StrokeKind::Inside);
-        }
-        "快捷键" => {
-            painter.rect_stroke(icon, 2.0, stroke, egui::StrokeKind::Inside);
-            for row in 0..2 {
-                for column in 0..4 {
-                    let position =
-                        icon.min + egui::vec2(4.0 + column as f32 * 3.4, 4.0 + row as f32 * 3.8);
-                    painter.rect_filled(
-                        egui::Rect::from_center_size(position, egui::vec2(1.5, 1.5)),
-                        0.3,
-                        color,
-                    );
-                }
-            }
-            painter.line_segment(
-                [
-                    icon.center() + egui::vec2(-4.0, 4.0),
-                    icon.center() + egui::vec2(4.0, 4.0),
-                ],
-                stroke,
-            );
-        }
-        "设置" => {
-            painter.circle_stroke(icon.center(), 5.5, stroke);
-            painter.circle_stroke(icon.center(), 2.0, stroke);
-            for index in 0..8 {
-                let angle = index as f32 * std::f32::consts::TAU / 8.0;
-                let direction = egui::vec2(angle.cos(), angle.sin());
-                painter.line_segment(
-                    [
-                        icon.center() + direction * 6.5,
-                        icon.center() + direction * 8.5,
-                    ],
-                    stroke,
-                );
-            }
-        }
-        _ => (),
-    }
-    if selected {
-        painter.rect_filled(
-            egui::Rect::from_min_size(
-                response.rect.min + egui::vec2(0.0, 7.0),
-                egui::vec2(3.0, 26.0),
-            ),
-            1.5,
-            palette(ui.visuals().dark_mode).accent,
-        );
-    }
-    response
-}
-
 /// Draw one illustrative main monitor inside `rect`, including its stand.
 /// Geometry is decorative, never measured display size, connectivity or consent.
 pub(super) fn monitor(
@@ -614,8 +472,8 @@ pub(super) fn monitor(
 
 /// Pure design tokens for the interface redesign: constants and side-effect free functions.
 /// Existing widgets keep their literal values until the slice that migrates them lands.
-// Slices after S0 consume these; until then the unused items would fail `-D warnings`.
-#[allow(dead_code)]
+/// The shell (S1) consumes the motion, sidebar, icon, control radius and spacing tokens;
+/// items marked `allow(dead_code)` wait for the canvas, pairing and dialog slices.
 pub(super) mod tokens {
     use super::palette;
     use eframe::egui::Color32;
@@ -633,18 +491,23 @@ pub(super) mod tokens {
     /// Title bar status capsule change (M5), seconds.
     pub(crate) const CAPSULE_SECS: f32 = 0.18;
     /// Status badge pop-in (M6), seconds.
+    #[allow(dead_code)]
     pub(crate) const BADGE_POP_SECS: f32 = 0.20;
     /// Display rebound after a drag is released (M7), seconds.
+    #[allow(dead_code)]
     pub(crate) const REBOUND_SECS: f32 = 0.22;
     /// Shake after a rejected code or address (M8), seconds.
+    #[allow(dead_code)]
     pub(crate) const SHAKE_SECS: f32 = 0.36;
     /// Check mark and cross stroke drawing (M9), seconds.
+    #[allow(dead_code)]
     pub(crate) const STROKE_DRAW_SECS: f32 = 0.24;
     /// Dialog height change (M10), seconds.
     pub(crate) const RESIZE_SECS: f32 = 0.20;
     /// List item entering or leaving (M12), seconds.
     pub(crate) const LIST_PRESENCE_SECS: f32 = 0.18;
     /// Upper bound for everything one interaction may play, seconds.
+    #[allow(dead_code)]
     pub(crate) const MAX_INTERACTION_SECS: f32 = 0.36;
     /// Spinner step (M11). Matches the existing 100 ms activity tick; it is not a timer.
     pub(crate) const SPINNER_STEP_SECS: f32 = 0.1;
@@ -660,10 +523,14 @@ pub(super) mod tokens {
     pub(crate) const ICON_MEDIUM: f32 = 20.0;
     pub(crate) const ICON_STROKE: f32 = 1.4;
 
+    #[allow(dead_code)]
     pub(crate) const RADIUS_CHIP: u8 = 8;
     pub(crate) const RADIUS_CONTROL: u8 = 9;
+    #[allow(dead_code)]
     pub(crate) const RADIUS_MENU: u8 = 10;
+    #[allow(dead_code)]
     pub(crate) const RADIUS_PILL: u8 = 12;
+    #[allow(dead_code)]
     pub(crate) const RADIUS_CARD: u8 = 14;
 
     pub(crate) const SPACE_XS: f32 = 4.0;
@@ -683,14 +550,17 @@ pub(super) mod tokens {
         palette(dark).muted
     }
 
+    #[allow(dead_code)]
     pub(crate) fn text_color(dark: bool) -> Color32 {
         palette(dark).text
     }
 
+    #[allow(dead_code)]
     pub(crate) fn surface_color(dark: bool) -> Color32 {
         palette(dark).surface
     }
 
+    #[allow(dead_code)]
     pub(crate) fn canvas_color(dark: bool) -> Color32 {
         palette(dark).canvas
     }

@@ -1,5 +1,6 @@
 //! Actual desktop interactions. No example devices or simulated permissions.
 use super::*;
+use icons::Icon;
 impl App {
     pub(super) fn writable(&self) -> bool {
         !self.quit_check_mode
@@ -68,12 +69,6 @@ impl App {
             Some(WorkerInputState::Unavailable) => "输入归属尚未确认",
             None => "尚未开启键鼠会话",
         }
-    }
-    pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-        ui.heading(desktop_style::heading_text(title));
-        ui.add_space(7.0);
-        ui.weak(subtitle);
-        ui.add_space(20.0);
     }
     fn unavailable(ui: &mut egui::Ui, title: &str, description: &str) {
         egui::Frame::group(ui.style())
@@ -223,11 +218,7 @@ impl App {
         ui.weak(view.detail);
     }
     pub(super) fn home(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "你的协作空间",
-            "两台电脑，一套键鼠。先连接，再自然地跨过屏幕边缘。",
-        );
+        self.subpage_header(ui, "协作总览", Page::Shortcuts);
         desktop_style::card(ui).show(ui, |ui| {
             let view = self.workspace_view();
             ui.heading(view.title);
@@ -238,8 +229,6 @@ impl App {
             }
         });
         ui.add_space(20.0);
-        ui.heading("也可以只用这台电脑");
-        ui.add_space(8.0);
         desktop_style::card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
@@ -463,14 +452,9 @@ impl App {
             self.use_recorded_gesture(ui);
             return;
         }
-        if ui.button("‹ 返回快捷键").clicked() {
-            self.navigate_to(Page::Shortcuts);
-        }
-        Self::heading(
-            ui,
-            "本机鼠标",
-            "录制轨迹、选择动作、测试并保存。当前为离线配置，不执行系统动作。",
-        );
+        self.subpage_header(ui, "本机鼠标", Page::Shortcuts);
+        ui.weak("录制轨迹、选择动作、测试并保存。当前为离线配置，不执行系统动作。");
+        ui.add_space(14.0);
         egui::Frame::group(ui.style())
             .inner_margin(14.0)
             .show(ui, |ui| {
@@ -517,7 +501,7 @@ impl App {
         }
     }
     fn shortcuts(&mut self, ui: &mut egui::Ui) {
-        Self::heading(ui, "快捷键", "随时切回本机，也可以离线配置本机鼠标。");
+        self.subpage_header(ui, "快捷键", Page::Displays);
         desktop_style::card(ui).show(ui, |ui| {
             ui.strong("键鼠协同");
             ui.add_space(10.0);
@@ -552,15 +536,17 @@ impl App {
         } else {
             CollaborationTab::Files
         };
-        Self::heading(
-            ui,
-            if self.page == Page::Clipboard {
-                "剪贴板"
-            } else {
-                "文件传输"
-            },
-            "内容共享与键鼠控制分别授权。",
-        );
+        self.subpage_header(ui, "文件与剪贴板", Page::Displays);
+        ui.horizontal(|ui| {
+            for (page, label) in [(Page::Transfers, "文件传输"), (Page::Clipboard, "剪贴板")]
+            {
+                if ui.selectable_label(self.page == page, label).clicked() {
+                    self.navigate_to(page);
+                }
+            }
+        });
+        ui.weak("内容共享与键鼠控制分别授权。");
+        ui.add_space(14.0);
         desktop_style::card(ui).show(ui, |ui| {
             desktop_style::pill(ui, "尚未接通", desktop_style::Tone::Neutral);
             ui.add_space(12.0);
@@ -581,7 +567,7 @@ impl App {
         ui.weak("连接成功不包含内容共享许可。离线数据模块不是已可用的系统共享功能。");
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        Self::heading(ui, "设置", "让屏跃按你的习惯工作。");
+        self.subpage_header(ui, "设置", Page::Displays);
         if self.application_menu_error.is_some() {
             desktop_style::card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width().min(680.0));
@@ -1254,31 +1240,26 @@ impl App {
             self.dialog = None;
         }
     }
-    fn safety_controls(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .button("紧急恢复本机")
+    /// Laid out right to left: emergency recovery stays in the top-right corner.
+    pub(super) fn safety_controls(&mut self, ui: &mut egui::Ui) {
+        if shell_ui::icon_button(ui, Icon::Recover, "紧急恢复本机", true)
             .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
             .clicked()
         {
             self.stop();
             self.gesture_lab.cancel();
         }
-        if ui
-            .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
-            .clicked()
-        {
+        let stop = ui.add_enabled(self.child.is_some(), |ui: &mut egui::Ui| {
+            shell_ui::icon_button(ui, Icon::Stop, "停止协同", true)
+        });
+        if stop.clicked() {
             self.stop();
         }
-        if self.stopping.is_some() || self.recovery_blocked {
-            if ui.button("查看恢复状态").clicked() {
-                self.dialog = Some(Dialog::Recovery);
-            }
-            let view = self.workspace_view();
-            ui.label(desktop_style::status_text(
-                view.title,
-                self.config.dark,
-                view.tone,
-            ));
+        // The capsule carries the recovery state; this entry opens the full guidance.
+        if (self.stopping.is_some() || self.recovery_blocked)
+            && shell_ui::icon_button(ui, Icon::Warning, "查看恢复状态", true).clicked()
+        {
+            self.dialog = Some(Dialog::Recovery);
         }
     }
     pub(super) fn desktop(&mut self, root: &mut egui::Ui) {
@@ -1292,134 +1273,18 @@ impl App {
             self.stop();
             self.gesture_lab.cancel();
         }
-        egui::Panel::left("navigation")
-            .exact_size(196.0)
-            .show(root, |ui| {
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    desktop_style::brand_mark(ui);
-                    ui.vertical(|ui| {
-                        ui.label(desktop_style::semibold("屏跃", 22.0));
-                        ui.label(egui::RichText::new("LINKO").size(10.0).weak());
-                    });
-                });
-                ui.add_space(28.0);
-                for (page, label) in [
-                    (Page::Devices, "设备"),
-                    (Page::Displays, "屏幕布局"),
-                    (Page::Transfers, "文件传输"),
-                    (Page::Clipboard, "剪贴板"),
-                    (Page::Shortcuts, "快捷键"),
-                    (Page::Settings, "设置"),
-                ] {
-                    if page == Page::Settings {
-                        ui.separator();
-                        ui.add_space(12.0);
-                    }
-                    let selected = self.page == page
-                        || (page == Page::Shortcuts
-                            && matches!(
-                                self.page,
-                                Page::Home | Page::GestureLab | Page::GestureRules
-                            ));
-                    let response = desktop_style::navigation(ui, label, selected);
-                    let key = match page {
-                        Page::Devices => "nav_devices",
-                        Page::Displays => "nav_layout",
-                        Page::Shortcuts => "nav_shortcuts",
-                        Page::Settings => "nav_settings",
-                        Page::Transfers => "nav_files",
-                        Page::Clipboard => "nav_clipboard",
-                        _ => unreachable!("only product navigation entries are rendered here"),
-                    };
-                    self.record_layout_control(key, &response, ui.clip_rect());
-                    if response.clicked() {
-                        self.navigate_to(page);
-                        self.device_tab = DeviceTab::Device;
-                    }
-                    ui.add_space(2.0);
-                }
-                ui.allocate_ui_with_layout(
-                    ui.available_size(),
-                    egui::Layout::bottom_up(egui::Align::LEFT),
-                    |ui| {
-                        ui.small("简体中文 · 主屏协作");
-                        ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
-                        ui.separator();
-                    },
-                );
-            });
-        let workspace_header = matches!(self.page, Page::Devices | Page::Displays);
+        let window_width = ctx.viewport_rect().width();
+        // The title bar spans the window, so the safety controls never move with the sidebar.
         egui::Panel::top("global-actions")
-            .exact_size(if workspace_header { 96.0 } else { 52.0 })
+            .exact_size(52.0)
             .resizable(false)
             .show_separator_line(false)
             .frame(
                 egui::Frame::NONE
                     .fill(root.visuals().panel_fill)
-                    .inner_margin(egui::Margin::symmetric(
-                        24,
-                        if workspace_header { 12 } else { 6 },
-                    )),
+                    .inner_margin(egui::Margin::symmetric(16, 6)),
             )
-            .show(root, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.allocate_ui_with_layout(
-                    Vec2::new(ui.available_width(), 40.0),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        if workspace_header {
-                            ui.heading(desktop_style::heading_text(
-                                if self.page == Page::Devices {
-                                    "设备"
-                                } else {
-                                    "屏幕布局"
-                                },
-                            ));
-                        }
-                        ui.allocate_ui_with_layout(
-                            Vec2::new(ui.available_width(), 40.0),
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| self.safety_controls(ui),
-                        );
-                    },
-                );
-                if workspace_header {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), 24.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let subtitle = if self.page == Page::Devices {
-                                "管理已记住的电脑与独立协作许可。"
-                            } else {
-                                "按桌面位置摆放主屏，设置键鼠的跨屏方向。"
-                            };
-                            let width = (ui.available_width() - 152.0).max(1.0);
-                            left_text_slot(
-                                ui,
-                                width,
-                                24.0,
-                                egui::RichText::new(subtitle).size(14.0).weak(),
-                            )
-                            .on_hover_text(subtitle);
-                            if ui
-                                .add_sized(
-                                    [140.0, 24.0],
-                                    egui::Button::new(if self.connection_details_open {
-                                        "收起连接详情"
-                                    } else {
-                                        "连接与身份详情"
-                                    })
-                                    .small(),
-                                )
-                                .clicked()
-                            {
-                                self.connection_details_open = !self.connection_details_open;
-                            }
-                        },
-                    );
-                }
-            });
+            .show(root, |ui| self.title_bar(ui, window_width));
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.small("Linko / 屏跃");
@@ -1436,19 +1301,43 @@ impl App {
                 }
             });
         });
+        let expanded = self.sidebar_expanded(window_width);
+        let sidebar_mix = motion::sidebar_mix(&ctx, egui::Id::unique("linko-sidebar"), expanded);
+        egui::Panel::left("navigation")
+            .exact_size(motion::sidebar_width_for(sidebar_mix))
+            .resizable(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(root.visuals().panel_fill)
+                    .inner_margin(egui::Margin::symmetric(shell_ui::SIDEBAR_MARGIN, 8)),
+            )
+            .show(root, |ui| self.sidebar(ui, sidebar_mix));
         if self.page != Page::GestureLab && self.page != Page::GestureRules
             || self.child.is_some()
             || self.mouse_tab != MouseTab::Practice
         {
             self.gesture_lab.cancel();
         }
+        // M4: the arriving view slides in from the right and fades in. Margins move in
+        // opposite directions, so the content width and its wrapping stay constant.
+        let now = ctx.input(|input| input.time);
+        let view = shell_ui::view_key(self.page);
+        self.page_motion
+            .observe(view, now, desktop_style::tokens::VIEW_SWITCH_SECS);
+        let progress = self.page_motion.tick(&ctx);
+        let slide = motion::slide_offset(progress, desktop_style::tokens::VIEW_SLIDE_PX);
+        let slide = slide.round() as i8;
+        let mut margin = egui::Margin::symmetric(24, 16);
+        margin.left += slide;
+        margin.right -= slide;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .inner_margin(egui::Margin::symmetric(24, 16))
+                    .inner_margin(margin)
                     .fill(root.visuals().panel_fill),
             )
             .show(root, |ui| {
+                ui.multiply_opacity(shell_ui::view_alpha(progress));
                 egui::ScrollArea::vertical().show(ui, |ui| match self.page {
                     Page::Home => self.home(ui),
                     Page::Devices => self.devices(ui),
@@ -1473,6 +1362,8 @@ impl App {
         pairing.ui(self, &ctx);
         self.pairing_open = pairing.blocks_actions();
         self.pairing_panel = pairing;
+        // Report ordinary geometry only while the sidebar rests, so scripted clicks land on
+        // controls that keep their place.
         let report = if self.layout_report.is_none() {
             None
         } else if self.recording_mode {
@@ -1480,7 +1371,8 @@ impl App {
                 let rect = |r: egui::Rect| [r.min.x, r.min.y, r.width(), r.height()];
                 serde_json::json!({"version":1,"canvas":rect(canvas),"save":rect(save),"scope":"isolated_gui_widget_geometry"})
             })
-        } else if self.layout_geometry.contains_key("nav_layout")
+        } else if (sidebar_mix <= 0.0 || sidebar_mix >= 1.0)
+            && self.layout_geometry.contains_key("nav_layout")
             && self.layout_geometry.contains_key("add_device")
             && self.layout_geometry.contains_key("primary_action")
         {

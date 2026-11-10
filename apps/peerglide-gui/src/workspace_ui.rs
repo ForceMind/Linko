@@ -1,61 +1,16 @@
-//! Device-first desktop: actual roster, spatial canvas and contextual controls.
+//! Device-first desktop: spatial canvas and contextual controls; the roster is in the shell.
 //! Presentation only; existing permission, enrollment and worker gates own actions.
 use super::*;
 use desktop_style::{card, Tone};
+use icons::{Direction, Icon};
 
 impl App {
-    pub(super) fn device_roster(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(18.0);
-        ui.small("我的电脑");
-        ui.add_space(8.0);
-        let local = desktop_ui::local_device_name();
-        if roster_item(ui, local, "这台电脑", !self.workspace_peer_selected, true).clicked() {
-            self.workspace_peer_selected = false;
-            self.device_tab = DeviceTab::Device;
-            self.navigate_to(Page::Devices);
-        }
-        if self.config.fingerprint.is_some() {
-            let status = if self.pairing_pending() {
-                "核验尚未完成"
-            } else if self.connected && self.child.is_some() {
-                "已连接"
-            } else {
-                "未连接"
-            };
-            if roster_item(
-                ui,
-                &self.config.peer_name,
-                status,
-                self.workspace_peer_selected,
-                false,
-            )
-            .clicked()
-            {
-                self.workspace_peer_selected = true;
-                self.device_tab = DeviceTab::Device;
-                self.navigate_to(Page::Devices);
-            }
-        }
-        ui.add_space(8.0);
-        if ui
-            .add_enabled(
-                self.idle_writable(),
-                egui::Button::new(if self.config.fingerprint.is_some() {
-                    "＋ 重新核验电脑"
-                } else {
-                    "＋ 添加另一台电脑"
-                }),
-            )
-            .clicked()
-        {
-            self.open_setup();
-        }
-        ui.add_space(14.0);
-    }
-
+    /// Home view: the screen canvas with the device context column. The device list lives
+    /// in the sidebar, so the former device and layout pages share this one view.
     pub(super) fn device_workspace(&mut self, ui: &mut egui::Ui) {
+        let back = Icon::Arrow(Direction::Left);
         if self.device_tab == DeviceTab::Permissions {
-            if ui.button("‹ 返回屏幕布局").clicked() {
+            if shell_ui::icon_button(ui, back, "返回首页", true).clicked() {
                 self.device_tab = DeviceTab::Device;
             }
             ui.add_space(12.0);
@@ -63,7 +18,7 @@ impl App {
             return;
         }
         if self.device_tab == DeviceTab::Layout {
-            if ui.button("‹ 返回设备工作区").clicked() {
+            if shell_ui::icon_button(ui, back, "返回首页", true).clicked() {
                 self.device_tab = DeviceTab::Device;
             }
             card(ui).show(ui, |ui| self.displays(ui));
@@ -82,15 +37,7 @@ impl App {
                 ui.spacing_mut().item_spacing.x = gap;
                 ui.vertical(|ui| {
                     ui.set_width(width - details - gap);
-                    if self.page == Page::Devices {
-                        card(ui).show(ui, |ui| self.device_roster(ui));
-                        ui.add_space(12.0);
-                        if ui.button("调整屏幕位置 →").clicked() {
-                            self.navigate_to(Page::Displays);
-                        }
-                    } else {
-                        self.workspace_screen_card(ui);
-                    }
+                    self.workspace_screen_card(ui);
                 });
                 ui.vertical(|ui| {
                     ui.set_width(details);
@@ -98,11 +45,7 @@ impl App {
                 });
             });
         } else {
-            if self.page == Page::Devices {
-                card(ui).show(ui, |ui| self.device_roster(ui));
-            } else {
-                self.workspace_screen_card(ui);
-            }
+            self.workspace_screen_card(ui);
             ui.add_space(12.0);
             self.workspace_device_detail(ui);
         }
@@ -142,6 +85,14 @@ impl App {
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.small("主屏示意");
+                    let details = if self.connection_details_open {
+                        "收起连接详情"
+                    } else {
+                        "连接与身份详情"
+                    };
+                    if ui.small_button(details).clicked() {
+                        self.connection_details_open = !self.connection_details_open;
+                    }
                 });
             });
             self.workspace_canvas(ui);
@@ -158,16 +109,16 @@ impl App {
                     }
                 });
             });
+            // Explains the selector directly above, so it stays in the first viewport.
+            ui.small(if self.child.is_some() {
+                "连接中可在本机控制时调整方向；新布局等待工作进程确认。"
+            } else {
+                "两台主屏的相对方向；另一端需设置相反方向。"
+            });
         });
         ui.add_space(8.0);
         ui.label(desktop_style::semibold("设备详情", 17.0));
         self.workspace_device_cards(ui);
-        ui.add_space(4.0);
-        ui.small(if self.child.is_some() {
-            "连接中可在本机控制时调整方向；新布局等待工作进程确认。"
-        } else {
-            "两台主屏的相对方向；另一端需设置相反方向。"
-        });
     }
 
     fn workspace_device_cards(&mut self, ui: &mut egui::Ui) {
@@ -535,18 +486,12 @@ impl App {
             ui.small("开启键鼠仍需本次明确确认。");
         });
         ui.add_space(gap);
-        card(ui).inner_margin(margin).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.spacing_mut().item_spacing.y = 4.0;
-            ui.horizontal_wrapped(|ui| {
-                ui.label(desktop_style::semibold("协作能力", 16.0));
-                ui.small("内容共享");
-                if ui.small_button("说明").clicked() {
-                    self.navigate_to(Page::Transfers);
-                }
-            });
-            ui.small("文件、系统剪贴板 · 尚未接通");
+        // Not connected capabilities stay labelled (decision 2); the page explains them.
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("文件 · 剪贴板 未接通").small().weak());
+            if ui.small_button("说明").clicked() {
+                self.navigate_to(Page::Transfers);
+            }
         });
     }
 }
@@ -795,44 +740,6 @@ fn draw_workspace_device(
     }
 }
 
-fn roster_item(
-    ui: &mut egui::Ui,
-    name: &str,
-    status: &str,
-    selected: bool,
-    local: bool,
-) -> egui::Response {
-    let title: String = name.chars().take(12).collect();
-    let (fill, text) = desktop_style::selection_colors(ui);
-    let color = if selected {
-        text
-    } else {
-        ui.visuals().text_color()
-    };
-    let background = if selected {
-        fill
-    } else {
-        ui.visuals().window_fill
-    };
-    let icon = if local { "●" } else { "○" };
-    let label = desktop_style::semibold(format!("{icon}  {title}\n{status}"), 14.0).color(color);
-    let response = ui.add_sized(
-        [ui.available_width(), 62.0],
-        egui::Button::new(label)
-            .selected(selected)
-            .fill(background)
-            .stroke(egui::Stroke::new(
-                1.0,
-                if selected {
-                    ui.visuals().selection.bg_fill
-                } else {
-                    ui.visuals().widgets.noninteractive.bg_stroke.color
-                },
-            )),
-    );
-    response.on_hover_text(name)
-}
-
 fn workspace_rects(
     canvas: egui::Rect,
     edge: &str,
@@ -886,6 +793,7 @@ mod tests {
         app.theme(&ctx);
         for paired in [false, true] {
             app.config.fingerprint = paired.then(|| "view-only-not-authentication".into());
+            let short = app.workspace_view().short;
             for size in [
                 Vec2::new(920.0, 700.0),
                 Vec2::new(1180.0, 820.0),
@@ -901,7 +809,7 @@ mod tests {
                 let controls: Vec<_> = [
                     "快捷操作",
                     "所选设备",
-                    "内容共享",
+                    "文件 · 剪贴板 未接通",
                     "连接与身份详情",
                     "两台主屏的相对方向；另一端需设置相反方向。",
                 ]
@@ -914,17 +822,20 @@ mod tests {
                     (label, bounds)
                 })
                 .collect();
-                let heading = output
+                // The topmost occurrence of the short status is the title bar capsule.
+                let capsule = output
                     .shapes
                     .iter()
-                    .filter_map(|s| {
-                        text_rect(&s.shape, "屏幕布局").filter(|rect| rect.min.x >= 196.0)
-                    })
+                    .filter_map(|s| text_rect(&s.shape, short))
                     .min_by(|a, b| a.min.y.total_cmp(&b.min.y));
-                let subtitle = output
+                let stop = output
                     .shapes
                     .iter()
-                    .find_map(|s| text_rect(&s.shape, "按桌面位置摆放主屏，设置键鼠的跨屏方向。"));
+                    .find_map(|s| text_rect(&s.shape, "停止协同"));
+                let toolbar = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| text_rect(&s.shape, "适配视图"));
                 let mut card_alignment = Vec::new();
                 for (name, metadata) in [
                     (desktop_ui::local_device_name(), "系统"),
@@ -946,11 +857,12 @@ mod tests {
                     card_alignment.push((name.to_owned(), name_rect, metadata_rect));
                 }
                 output.drop_without_applying_deltas();
-                let heading = heading.context("workspace heading absent")?;
-                let subtitle = subtitle.context("workspace subtitle absent")?;
+                let capsule = capsule.context("title bar status capsule absent")?;
+                let stop = stop.context("stop control absent")?;
+                let toolbar = toolbar.context("canvas toolbar absent")?;
                 assert!(
-                    (subtitle.min.x - heading.min.x).abs() <= 3.0,
-                    "workspace subtitle is not left-aligned with title at {size:?}"
+                    capsule.min.x >= 0.0 && capsule.max.x < stop.min.x,
+                    "status capsule collides with the safety controls at {size:?}"
                 );
                 for (name, name_rect, metadata_rect) in card_alignment {
                     let name_rect = name_rect.with_context(|| format!("{name} card absent"))?;
@@ -962,8 +874,12 @@ mod tests {
                     );
                 }
                 assert!(
-                    heading.min.y <= 32.0,
-                    "workspace title was pushed below the shared header"
+                    capsule.max.y <= 52.0,
+                    "status capsule left the bounded title bar row at {size:?}"
+                );
+                assert!(
+                    (52.0..=120.0).contains(&toolbar.min.y),
+                    "workspace canvas was pushed below the shared title bar"
                 );
                 for (label, bounds) in controls {
                     let (clip, rect) = bounds
@@ -1160,7 +1076,7 @@ mod tests {
         assert_eq!(report["version"], 2);
         assert_eq!(report["scope"], "isolated_gui_widget_geometry");
         for key in [
-            "nav_devices",
+            "nav_sidebar",
             "nav_layout",
             "nav_shortcuts",
             "nav_settings",
@@ -1189,19 +1105,31 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn navigation_reaches_six_pages_and_keeps_real_safety_controls_without_side_effects(
+    fn navigation_reaches_every_entry_and_keeps_real_safety_controls_without_side_effects(
     ) -> Result<()> {
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
+        // Sidebar entries, subpage back arrows and in-page links, in the order a person
+        // could click them; together they reach every page of the shell.
         for (page, label) in [
-            (Page::Devices, "设备"),
-            (Page::Displays, "屏幕布局"),
-            (Page::Transfers, "文件传输"),
-            (Page::Clipboard, "剪贴板"),
-            (Page::Shortcuts, "快捷键"),
             (Page::Settings, "设置"),
+            (Page::Displays, "返回"),
+            (Page::Shortcuts, "快捷键"),
+            (Page::Home, "查看协作总览"),
+            (Page::Shortcuts, "返回"),
+            (Page::GestureLab, "手势实验室"),
+            (Page::Shortcuts, "返回"),
+            (Page::GestureRules, "规则与应用"),
+            (Page::Shortcuts, "返回"),
+            (Page::Displays, "返回"),
+            (Page::Transfers, "说明"),
+            (Page::Clipboard, "剪贴板"),
+            (Page::Transfers, "文件传输"),
+            (Page::Displays, "返回"),
+            (Page::Settings, "设置"),
+            (Page::Displays, desktop_ui::local_device_name()),
         ] {
             let output = frame(&mut app, &ctx, vec![]);
             let at = output
@@ -1309,11 +1237,13 @@ mod tests {
         app.page = Page::Devices;
         let ctx = crate::tests::ui_context();
         let output = frame(&mut app, &ctx, vec![]);
-        let label = format!("○  {}\n未连接", app.config.peer_name);
+        // The roster now lives in the sidebar: the peer name painted inside its column.
+        let label = app.config.peer_name.clone();
         let at = output
             .shapes
             .iter()
-            .find_map(|s| text_center(&s.shape, &label))
+            .filter_map(|s| text_center(&s.shape, &label))
+            .find(|at| at.x < desktop_style::tokens::SIDEBAR_EXPANDED_W)
             .context("roster peer absent")?;
         output.drop_without_applying_deltas();
         click(&mut app, &ctx, at);

@@ -6,8 +6,10 @@
 //! only while progress is below 1. The discrete spinner never asks for a repaint: it follows
 //! beats that already exist. A duration of 0 jumps straight to the end state, which is the hook
 //! for a later reduce-motion switch. No timers, threads, I/O or native queries live here.
-// Later slices call these helpers; until they do, unused items would fail `-D warnings`.
-#![allow(dead_code)]
+//!
+//! The shell (slice S1) uses hover, selection, sidebar, view switch, capsule and spinner
+//! motion. Items marked `allow(dead_code)` are consumed by the later canvas, context bar,
+//! pairing and dialog slices.
 
 use crate::desktop_style::tokens;
 use eframe::egui;
@@ -15,11 +17,14 @@ use eframe::egui;
 /// Capsule scale at the start of the M5 change.
 const CAPSULE_FROM_SCALE: f32 = 0.92;
 /// Badge scale at the start of the M6 pop.
+#[allow(dead_code)]
 const BADGE_FROM_SCALE: f32 = 0.3;
 /// Shake displacement in points at 20%, 40%, 60%, 80% and 100% of M8; it starts at 0.
+#[allow(dead_code)]
 const SHAKE_KNOTS_PX: [f32; 6] = [0.0, -7.0, 6.0, -4.0, 2.0, 0.0];
 
 /// Identity easing.
+#[allow(dead_code)]
 pub(super) fn linear(t: f32) -> f32 {
     unit(t)
 }
@@ -44,6 +49,7 @@ pub(super) fn cubic_out(t: f32) -> f32 {
 }
 
 /// Ease out with a small overshoot (peak about 1.037). Used by M6.
+#[allow(dead_code)]
 pub(super) fn pop_out(t: f32) -> f32 {
     let f = unit(t) - 1.0;
     1.0 + 2.0 * f * f * f + f * f
@@ -100,6 +106,7 @@ impl OneShot {
         unit((elapsed / f64::from(self.secs)) as f32)
     }
 
+    #[allow(dead_code)]
     pub(super) fn is_active(&self, now: f64) -> bool {
         self.progress(now) < 1.0
     }
@@ -145,6 +152,7 @@ impl<K: PartialEq> Retrigger<K> {
         changed
     }
 
+    #[allow(dead_code)]
     pub(super) fn progress(&self, now: f64) -> f32 {
         self.shot.progress(now)
     }
@@ -157,12 +165,14 @@ impl<K: PartialEq> Retrigger<K> {
 /// A scalar that glides toward a moving target with `cubic_out` (M7, M10). Retargeting in
 /// flight starts from the current value, so nothing jumps.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)]
 pub(super) struct Glide {
     from: f32,
     to: f32,
     shot: OneShot,
 }
 
+#[allow(dead_code)]
 impl Glide {
     /// Rest at `value`.
     pub(super) fn at(value: f32) -> Self {
@@ -218,6 +228,7 @@ pub(super) fn animate_flag(ctx: &egui::Context, id: egui::Id, on: bool, secs: f3
 /// target change restarts from the current value; egui repaints only while it differs from
 /// the target. With `secs` of 0 the result is `target` at once. Non-finite targets pass through
 /// untouched, because a NaN target would never compare equal and would repaint forever.
+#[allow(dead_code)]
 pub(super) fn animate_scalar(ctx: &egui::Context, id: egui::Id, target: f32, secs: f32) -> f32 {
     if !target.is_finite() {
         return target;
@@ -241,11 +252,13 @@ pub(super) fn select_mix(ctx: &egui::Context, id: egui::Id, selected: bool) -> f
 }
 
 /// Disclosure open amount, 160 ms.
+#[allow(dead_code)]
 pub(super) fn expand_amount(ctx: &egui::Context, id: egui::Id, open: bool) -> f32 {
     animate_flag(ctx, id, open, tokens::EXPAND_SECS)
 }
 
 /// M12: list item presence, 180 ms. Callers keep a leaving item alive until this reaches 0.
+#[allow(dead_code)]
 pub(super) fn presence_amount(ctx: &egui::Context, id: egui::Id, present: bool) -> f32 {
     animate_flag(ctx, id, present, tokens::LIST_PRESENCE_SECS)
 }
@@ -270,11 +283,13 @@ pub(super) fn sidebar_label_alpha(mix: f32) -> f32 {
 }
 
 /// M3: animated sidebar width in points.
+#[allow(dead_code)]
 pub(super) fn sidebar_width(ctx: &egui::Context, id: egui::Id, expanded: bool) -> f32 {
     sidebar_width_for(sidebar_mix(ctx, id, expanded))
 }
 
 /// M10: animated dialog height. Fixed-size dialogs do not use it.
+#[allow(dead_code)]
 pub(super) fn dialog_height(ctx: &egui::Context, id: egui::Id, target: f32) -> f32 {
     animate_scalar(ctx, id, target, tokens::RESIZE_SECS)
 }
@@ -295,11 +310,13 @@ pub(super) fn capsule_scale(progress: f32) -> f32 {
 }
 
 /// M6: scale of a status badge while it pops in, 0.3 to 1 with a small overshoot.
+#[allow(dead_code)]
 pub(super) fn badge_scale(progress: f32) -> f32 {
     lerp(BADGE_FROM_SCALE, 1.0, pop_out(progress))
 }
 
 /// M8: horizontal shake in points. Five decaying points -7, +6, -4, +2, 0, joined linearly.
+#[allow(dead_code)]
 pub(super) fn shake_offset(progress: f32) -> f32 {
     let scaled = unit(progress) * 5.0;
     let index = (scaled.floor() as usize).min(4);
@@ -310,6 +327,7 @@ pub(super) fn shake_offset(progress: f32) -> f32 {
 }
 
 /// M9: eased drawing progress of a stroke.
+#[allow(dead_code)]
 pub(super) fn stroke_progress(progress: f32) -> f32 {
     cubic_out(progress)
 }
