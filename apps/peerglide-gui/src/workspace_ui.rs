@@ -455,7 +455,14 @@ impl App {
         ctx.data_mut(|data| data.insert_temp(motion_id, state));
         let corner = Vec2::splat(CHIP_INSET);
         let sketch = canvas.left_top() + corner;
-        canvas_chip(ui, sketch, egui::Align2::LEFT_TOP, None, "示意", SKETCH_HINT);
+        canvas_chip(
+            ui,
+            sketch,
+            egui::Align2::LEFT_TOP,
+            None,
+            "示意",
+            SKETCH_HINT,
+        );
         if locked {
             let at = canvas.right_top() + egui::vec2(-CHIP_INSET, CHIP_INSET);
             let lock = Some(Icon::Lock);
@@ -1446,7 +1453,12 @@ mod tests {
         let left = control(&ctx, "left")?;
         assert!(left.enabled());
         let at = left.rect.center();
-        step(&mut app, &ctx, 0.1, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        step(
+            &mut app,
+            &ctx,
+            0.1,
+            vec![egui::Event::PointerMoved(at), pointer(at, true)],
+        );
         step(&mut app, &ctx, 0.2, vec![pointer(at, false)]);
         assert_eq!(app.config.edge, "left");
         let stored: serde_json::Value =
@@ -1493,7 +1505,12 @@ mod tests {
         }
         // A locked arrow ignores the press; memory and disk keep the old direction.
         let at = control(&ctx, "left")?.rect.center();
-        step(&mut app, &ctx, 1.1, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        step(
+            &mut app,
+            &ctx,
+            1.1,
+            vec![egui::Event::PointerMoved(at), pointer(at, true)],
+        );
         step(&mut app, &ctx, 1.2, vec![pointer(at, false)]);
         assert_eq!(app.config.edge, "right");
         assert_eq!(std::fs::read(&path)?, original);
@@ -1524,7 +1541,10 @@ mod tests {
         step(&mut app, &ctx, time, press);
         time += FRAME_SECS;
         step(&mut app, &ctx, time, vec![egui::Event::PointerMoved(end)]);
-        assert!(app.screen_drag.is_some(), "drag did not acquire the peer screen");
+        assert!(
+            app.screen_drag.is_some(),
+            "drag did not acquire the peer screen"
+        );
         let requests = std::sync::Arc::new(AtomicUsize::new(0));
         let observed = std::sync::Arc::clone(&requests);
         ctx.set_request_repaint_callback(move |request| {
@@ -1540,7 +1560,10 @@ mod tests {
         step(&mut app, &ctx, time, vec![egui::Event::PointerGone]);
         time += FRAME_SECS;
         let early = label_at(&mut app, &ctx, time, "B")?;
-        assert!(requests.load(Ordering::SeqCst) > 0, "rebound never asked for a frame");
+        assert!(
+            requests.load(Ordering::SeqCst) > 0,
+            "rebound never asked for a frame"
+        );
         for _ in 0..30 {
             time += FRAME_SECS;
             step(&mut app, &ctx, time, vec![]);
@@ -1552,7 +1575,11 @@ mod tests {
             time += FRAME_SECS;
             step(&mut app, &ctx, time, vec![]);
         }
-        assert_eq!(requests.load(Ordering::SeqCst), settled, "motion kept repainting");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            settled,
+            "motion kept repainting"
+        );
         // Released left of its new place, the screen glides right instead of jumping.
         assert!(rested.x - early.x > 10.0, "{early:?} -> {rested:?}");
         let stored: serde_json::Value =

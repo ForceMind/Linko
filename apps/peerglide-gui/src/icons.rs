@@ -269,7 +269,11 @@ fn fit_corners(grid: Grid) -> [[Pos2; 3]; 4] {
     [
         [grid.at(2.5, 6.0), grid.at(2.5, 2.5), grid.at(6.0, 2.5)],
         [grid.at(10.0, 2.5), grid.at(13.5, 2.5), grid.at(13.5, 6.0)],
-        [grid.at(13.5, 10.0), grid.at(13.5, 13.5), grid.at(10.0, 13.5)],
+        [
+            grid.at(13.5, 10.0),
+            grid.at(13.5, 13.5),
+            grid.at(10.0, 13.5),
+        ],
         [grid.at(6.0, 13.5), grid.at(2.5, 13.5), grid.at(2.5, 10.0)],
     ]
 }
