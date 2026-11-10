@@ -20,6 +20,10 @@ const BADGE_RADIUS: f32 = 10.0;
 /// Height of the canvas chips and their distance from the canvas corner, in points.
 const CHIP_HEIGHT: f32 = 24.0;
 const CHIP_INSET: f32 = 10.0;
+/// Design width that two side-by-side screens are scaled into. A drop only commits outside
+/// the local screen plus 10 points (`dropped_edge`), so the screens must leave a real drop
+/// zone beside it: at 530 a 920 point window kept about 33 points, now about 79.
+const SIDE_BY_SIDE_W: f32 = 700.0;
 /// Offsets shorter than this snap instead of rebounding, so a plain click never animates.
 const REBOUND_MIN_PX: f32 = 0.5;
 /// Segments of the filled half of the pending badge.
@@ -1188,7 +1192,7 @@ fn workspace_rects(
     zoom: f32,
 ) -> (egui::Rect, egui::Rect) {
     let vertical = paired && matches!(edge, "top" | "bottom");
-    let scale = (canvas.width() / if vertical { 270.0 } else { 530.0 })
+    let scale = (canvas.width() / if vertical { 270.0 } else { SIDE_BY_SIDE_W })
         .min(canvas.height() / if vertical { 500.0 } else { 240.0 })
         .clamp(0.0, 1.35);
     let zoom = if zoom.is_finite() {
@@ -1378,9 +1382,31 @@ mod tests {
             .drop_without_applying_deltas();
         }
     }
-    fn control(ctx: &egui::Context, key: &str) -> Result<egui::Response> {
-        let response = ctx.read_response(canvas_control_id(key));
-        response.context("canvas control absent")
+    /// One frame whose canvas control `key` is read inside the pass. egui swaps its widget
+    /// tables when a pass ends, so `read_response` after a frame returns the frame before it.
+    fn frame_with_control(
+        app: &mut App,
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        key: &str,
+    ) -> (egui::FullOutput, Result<egui::Response>) {
+        let id = canvas_control_id(key);
+        let mut response = None;
+        let output = ctx.run_ui(input, |root| {
+            app.desktop(root);
+            response = root.ctx().read_response(id);
+        });
+        (output, response.context("canvas control absent"))
+    }
+    /// The 1180x820 window of `frame`.
+    fn wide_input() -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(1180.0, 820.0),
+            )),
+            ..Default::default()
+        }
     }
     fn pointer(pos: egui::Pos2, pressed: bool) -> egui::Event {
         egui::Event::PointerButton {
@@ -1406,25 +1432,25 @@ mod tests {
             .any(|s| text_center(&s.shape, label).is_some())
     }
     /// A focused 920x700 window at an explicit time, because the motion budget is in time.
+    fn timed_input(time: f64, events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            time: Some(time),
+            events,
+            focused: true,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(920.0, 700.0),
+            )),
+            ..Default::default()
+        }
+    }
     fn timed_frame(
         app: &mut App,
         ctx: &egui::Context,
         time: f64,
         events: Vec<egui::Event>,
     ) -> egui::FullOutput {
-        ctx.run_ui(
-            egui::RawInput {
-                time: Some(time),
-                events,
-                focused: true,
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    Vec2::new(920.0, 700.0),
-                )),
-                ..Default::default()
-            },
-            |root| app.desktop(root),
-        )
+        ctx.run_ui(timed_input(time, events), |root| app.desktop(root))
     }
     fn step(app: &mut App, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) {
         let output = timed_frame(app, ctx, time, events);
@@ -1449,8 +1475,10 @@ mod tests {
         app.save_config()?;
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
-        step(&mut app, &ctx, 0.0, vec![]);
-        let left = control(&ctx, "left")?;
+        let input = timed_input(0.0, vec![]);
+        let (output, left) = frame_with_control(&mut app, &ctx, input, "left");
+        output.drop_without_applying_deltas();
+        let left = left?;
         assert!(left.enabled());
         let at = left.rect.center();
         step(
@@ -1493,18 +1521,21 @@ mod tests {
         let original = std::fs::read(&path)?;
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
+        let mut at = egui::Pos2::ZERO;
         for (time, locked) in [(0.0, false), (1.0, true)] {
             app.recovery_blocked = locked;
-            let output = timed_frame(&mut app, &ctx, time, vec![]);
+            let input = timed_input(time, vec![]);
+            let (output, left) = frame_with_control(&mut app, &ctx, input, "left");
             let lock = painted(&output, "已锁定");
             let note = painted(&output, LOCKED_NOTE);
             output.drop_without_applying_deltas();
             assert_eq!(lock, locked, "lock chip");
             assert_eq!(note, locked, "locked note");
-            assert_eq!(control(&ctx, "left")?.enabled(), !locked);
+            let left = left?;
+            assert_eq!(left.enabled(), !locked, "arrow enabled state");
+            at = left.rect.center();
         }
         // A locked arrow ignores the press; memory and disk keep the old direction.
-        let at = control(&ctx, "left")?.rect.center();
         step(
             &mut app,
             &ctx,
@@ -1834,14 +1865,14 @@ mod tests {
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
         // The zoom buttons are icons now; their fixed ids carry the former text's role.
-        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
-        let at = control(&ctx, "zoom-out")?.rect.center();
-        click(&mut app, &ctx, at);
+        let (output, zoom_out) = frame_with_control(&mut app, &ctx, wide_input(), "zoom-out");
+        output.drop_without_applying_deltas();
+        click(&mut app, &ctx, zoom_out?.rect.center());
         assert!(app.workspace_zoom < 1.0 && app.workspace_zoom >= 0.6);
         assert!(app.config == original && app.child.is_none() && app.screen_drag.is_none());
-        frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
-        let at = control(&ctx, "zoom-fit")?.rect.center();
-        click(&mut app, &ctx, at);
+        let (output, fit) = frame_with_control(&mut app, &ctx, wide_input(), "zoom-fit");
+        output.drop_without_applying_deltas();
+        click(&mut app, &ctx, fit?.rect.center());
         assert_eq!(app.workspace_zoom, 1.0);
         assert!(
             !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
