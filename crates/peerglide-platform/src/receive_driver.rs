@@ -536,7 +536,27 @@ mod implementation {
                 Input::Scroll { .. } => false,
             }
         }
+        /// Retry counts only matter while an input is held. A fresh Down starts at zero;
+        /// releasing never clears the count, because on an asynchronous backend an
+        /// accepted Up may still fail and be re-owned with its attempts preserved.
         fn mark(&mut self, event: Input, held: bool) {
+            if held && !self.held(event) {
+                self.reset_attempts(event);
+            }
+            self.set_held(event, held);
+        }
+        /// Ownership returns for a release that failed after it was accepted.
+        fn reown(&mut self, event: Input) {
+            self.set_held(event, true);
+        }
+        fn reset_attempts(&mut self, event: Input) {
+            match event {
+                Input::Key { usage, .. } => self.key_attempts[usize::from(usage)] = 0,
+                Input::Button { button, .. } => self.button_attempts[usize::from(button)] = 0,
+                Input::Scroll { .. } => (),
+            }
+        }
+        fn set_held(&mut self, event: Input, held: bool) {
             match event {
                 Input::Key { usage, .. } => {
                     let bit = 1 << (usage % 64);
@@ -545,7 +565,6 @@ mod implementation {
                         *word |= bit;
                     } else {
                         *word &= !bit;
-                        self.key_attempts[usize::from(usage)] = 0;
                     }
                 }
                 Input::Button { button, .. } => {
@@ -553,7 +572,6 @@ mod implementation {
                         self.buttons |= 1 << button;
                     } else {
                         self.buttons &= !(1 << button);
-                        self.button_attempts[usize::from(button)] = 0;
                     }
                 }
                 Input::Scroll { .. } => (),
@@ -1076,7 +1094,7 @@ mod implementation {
                 };
                 self.fail();
                 if let Some(active) = &mut self.active {
-                    active.ledger.mark(event, true);
+                    active.ledger.reown(event);
                     active.ledger.failed(event);
                 }
                 reclaimed = true;
@@ -2443,6 +2461,38 @@ mod implementation {
             assert_eq!(ups, 2);
             assert_eq!(backend.effects.last(), Some(&Effect::Leave));
             assert_eq!(engine.outcome(), ReceiveAck::RecoveryRequired);
+        }
+        #[test]
+        fn repeated_asynchronous_release_failures_stop_at_the_retry_limit() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, 0);
+            let down = key_down();
+            let result = input(&mut driver, &mut engine, &mut backend, epoch, down, 1);
+            assert_eq!(result, Ok(ReceiveAck::Submitted));
+            backend.async_up_failures = 10;
+            release(&mut driver, &mut engine, &mut backend, epoch, 2);
+            pump(&mut engine, &mut backend, 3);
+            let up = Effect::Key(4, false);
+            let ups = backend.effects.iter().filter(|e| **e == up).count();
+            assert_eq!(ups, usize::from(RETRIES), "retries must not restart");
+            assert!(!backend.effects.contains(&Effect::Leave));
+            assert_eq!(engine.outcome(), ReceiveAck::RecoveryRequired);
+            assert!(engine.active.as_ref().unwrap().ledger.held(key_down()));
+        }
+        #[test]
+        fn a_fresh_down_after_a_clean_release_starts_with_full_retries() {
+            let mut ledger = Ledger::default();
+            let down = key_down();
+            ledger.mark(down, true);
+            ledger.failed(down);
+            ledger.failed(down);
+            ledger.mark(down, false);
+            ledger.mark(down, true);
+            assert_eq!(ledger.attempts(down), 0);
+            ledger.failed(down);
+            ledger.reown(down);
+            assert_eq!(ledger.attempts(down), 1);
+            assert!(ledger.held(down));
         }
         #[test]
         fn an_asynchronous_failure_retires_even_without_another_command() {
