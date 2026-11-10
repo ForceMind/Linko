@@ -1,4 +1,7 @@
 //! Read-only observations from the actual sibling worker, never input authority.
+use super::desktop_ui::{icon_row, safety_point, SafetyPoint};
+use super::icons::{self, Icon};
+use super::{desktop_style, motion};
 use eframe::egui;
 use peerglide_platform::context::{PermissionReport, PermissionStatus, SecureInput};
 use serde::Deserialize;
@@ -16,6 +19,41 @@ use std::{
 const MAX_REPORT: usize = 8192;
 const FRESHNESS: Duration = Duration::from_secs(30);
 type Outcome = Result<PermissionReport, &'static str>;
+
+/// W3 header status once the last observation is older than `FRESHNESS`.
+const EXPIRED_SUMMARY: &str =
+    "上次结果已过期，开启前请重新检查。检查通过也不代表对端许可或实际输入效果。";
+/// W3 header: what the check itself never does.
+pub(super) const HEADER_NOTE: SafetyPoint = SafetyPoint {
+    icon: Icon::Lock,
+    text: "检查不联网、不捕获输入，也不申请系统权限。",
+};
+/// W3 details before the last report: who checks and what the result is.
+pub(super) const DETAIL_SOURCE: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "由实际输入程序检查。这里显示上次检查结果。",
+    },
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "开启键鼠时会再次确认。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "界面自身的许可不能代替实际输入程序的许可。",
+    },
+];
+/// W3 details after the last report. The number matches `FRESHNESS` (pinned by a test).
+pub(super) const DETAIL_FRESHNESS: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "权限观察仅30秒有效，过期后需重新检查。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "检查通过也不代表对端许可或实际输入效果。",
+    },
+];
 
 /// Short-lived presentation only; not consent or proof that injection works.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -390,44 +428,63 @@ impl Checker {
         let state = self.readiness();
         let expired = self.result.is_some() && state == Readiness::Unchecked;
         let summary = if expired {
-            "上次结果已过期，开启前请重新检查。检查通过也不代表对端许可或实际输入效果。"
+            EXPIRED_SUMMARY
         } else {
             state.detail()
         };
+        let neutral = matches!(state, Readiness::Checking | Readiness::Unchecked) && !expired;
         let tone = if state == Readiness::Ready {
-            super::desktop_style::Tone::Good
-        } else if matches!(state, Readiness::Checking | Readiness::Unchecked) && !expired {
-            super::desktop_style::Tone::Neutral
+            desktop_style::Tone::Good
+        } else if neutral {
+            desktop_style::Tone::Neutral
         } else {
-            super::desktop_style::Tone::Warning
+            desktop_style::Tone::Warning
         };
+        let dark = ui.visuals().dark_mode;
+        let ink = desktop_style::status_colors(dark, tone).1;
+        // M9: the check mark draws once when a fresh report arrives, then stops repainting.
+        let drawn = motion::animate_flag(
+            ui.ctx(),
+            egui::Id::unique("native-start-ready-check"),
+            state == Readiness::Ready,
+            desktop_style::tokens::STROKE_DRAW_SECS,
+        );
+        let now = ui.input(|input| input.time);
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), 64.0),
             egui::Layout::top_down(egui::Align::LEFT),
             |ui| {
                 ui.set_min_height(64.0);
-                ui.label(
-                    super::desktop_style::status_text(summary, ui.visuals().dark_mode, tone)
-                        .size(13.0),
-                );
-                ui.label(
-                    egui::RichText::new("检查不联网、不捕获输入，也不申请系统权限。")
-                        .size(12.0)
-                        .weak(),
-                );
+                let summary = desktop_style::status_text(summary, dark, tone).size(13.0);
+                icon_row(ui, summary, |painter, rect| match state {
+                    Readiness::Ready => icons::paint_check_progress(painter, rect, ink, drawn),
+                    // Steps only on the existing permission poll beat; it never schedules one.
+                    Readiness::Checking => {
+                        let head = motion::spinner_head_at(now);
+                        icons::paint_spinner(painter, rect, ink, head);
+                    }
+                    _ if neutral => Icon::Lock.paint(painter, rect, ink),
+                    _ => Icon::Warning.paint(painter, rect, ink),
+                });
+                let note = egui::RichText::new(HEADER_NOTE.text).size(12.0).weak();
+                let muted = desktop_style::tokens::muted_color(dark);
+                icon_row(ui, note, |painter, rect| {
+                    HEADER_NOTE.icon.paint(painter, rect, muted);
+                });
             },
         );
     }
 
     /// Historical observations stay in the scroll body when freshness expires.
     pub(super) fn native_start_details(&self, ui: &mut egui::Ui) {
-        ui.label(super::desktop_style::semibold("检查详情", 15.0));
-        ui.weak("由实际输入程序检查。这里显示上次检查结果，开启键鼠时会再次确认；界面自身的许可不能代替实际输入程序的许可。");
+        ui.label(desktop_style::semibold("检查详情", 15.0));
+        for point in DETAIL_SOURCE {
+            safety_point(ui, point);
+        }
         self.report_ui(ui);
-        ui.weak(format!(
-            "权限观察仅{}秒有效，过期后需重新检查。检查通过也不代表对端许可或实际输入效果。",
-            FRESHNESS.as_secs()
-        ));
+        for point in DETAIL_FRESHNESS {
+            safety_point(ui, point);
+        }
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, idle: bool) {
@@ -707,6 +764,187 @@ mod tests {
             assert!(!app.worker_permissions.needs_poll());
             assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
         }
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    fn checker(checking: bool, observation: Option<(Outcome, Instant)>) -> Checker {
+        let result = observation.map(|(outcome, finished)| Observation { outcome, finished });
+        Checker {
+            receiver: checking.then(|| mpsc::channel().1),
+            cancel: None,
+            task: None,
+            result,
+        }
+    }
+
+    /// Unchecked, checking, ready, denied, failed and expired, without any worker.
+    fn header_states() -> Vec<Checker> {
+        let now = Instant::now();
+        let denied = PermissionReport {
+            accessibility: PermissionStatus::Denied,
+            ..ready()
+        };
+        vec![
+            checker(false, None),
+            checker(true, None),
+            checker(false, Some((Ok(ready()), now))),
+            checker(false, Some((Ok(denied), now))),
+            checker(false, Some((Err("synthetic diagnostic failure"), now))),
+            checker(false, Some((Ok(ready()), now - FRESHNESS))),
+        ]
+    }
+
+    /// The status sentence the header shows for `checker`.
+    fn header_summary(checker: &Checker) -> &'static str {
+        let state = checker.readiness();
+        if checker.result.is_some() && state == Readiness::Unchecked {
+            EXPIRED_SUMMARY
+        } else {
+            state.detail()
+        }
+    }
+
+    #[test]
+    fn native_header_and_details_pair_every_sentence_with_an_icon() {
+        use crate::desktop_ui::safety_dialog_tests::{assert_short_sentences, texts_of, Painted};
+        assert_short_sentences(&[HEADER_NOTE]);
+        assert_short_sentences(&DETAIL_SOURCE);
+        assert_short_sentences(&DETAIL_FRESHNESS);
+        let seconds = format!("权限观察仅{}秒有效", FRESHNESS.as_secs());
+        assert!(DETAIL_FRESHNESS[0].text.starts_with(&seconds));
+        for mut checker in header_states() {
+            // A fresh context per state: the ready check mark starts fully drawn.
+            let ctx = crate::tests::ui_context();
+            let mut labels = vec![header_summary(&checker), HEADER_NOTE.text];
+            labels.extend(texts_of(&DETAIL_SOURCE));
+            labels.extend(texts_of(&DETAIL_FRESHNESS));
+            let mut frame = || {
+                let size = egui::vec2(580.0, 1200.0);
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                };
+                ctx.run_ui(input, |ui| {
+                    checker.native_start_header(ui, true);
+                    checker.native_start_details(ui);
+                })
+            };
+            frame().drop_without_applying_deltas();
+            Painted::of(frame()).assert_points(&labels);
+        }
+    }
+
+    #[test]
+    fn native_dialog_points_stay_inside_the_fixed_window() -> anyhow::Result<()> {
+        use crate::desktop_ui::{native_start_points, safety_dialog_tests::texts_of};
+        use anyhow::Context as _;
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = crate::App::load(fixture.path.clone());
+        let before = app.config.clone();
+        let waits = !app.config.listen && !app.config.reconnect;
+        let mut labels = texts_of(&native_start_points(app.config.allow, waits, false));
+        labels.extend(texts_of(&DETAIL_SOURCE));
+        labels.extend(texts_of(&DETAIL_FRESHNESS));
+        for size in [egui::vec2(1280.0, 800.0), egui::vec2(920.0, 700.0)] {
+            let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            for state in header_states() {
+                let ctx = crate::tests::ui_context();
+                app.theme(&ctx);
+                app.dialog = Some(crate::Dialog::NativeStart);
+                app.worker_permissions = state;
+                let summary = header_summary(&app.worker_permissions);
+                native_dialog_frame(&mut app, &ctx, size, vec![]).drop_without_applying_deltas();
+                let output = native_dialog_frame(&mut app, &ctx, size, vec![]);
+                let painted = crate::desktop_ui::safety_dialog_tests::Painted::of(output);
+                let consent = painted.text("我明确同意本次使用真实键鼠协同");
+                let (consent, _) = consent.context("consent absent")?;
+                for label in [summary, HEADER_NOTE.text] {
+                    let (bounds, clip) = painted.text(label).context("header text absent")?;
+                    assert!(clip.contains_rect(bounds), "{label} clipped at {size:?}");
+                    assert!(viewport.contains_rect(bounds), "{label} left the window");
+                    assert!(bounds.max.y < consent.min.y, "{label} reaches the footer");
+                }
+                let mut shown = 0;
+                for label in &labels {
+                    let Some((bounds, clip)) = painted.text(label) else {
+                        continue;
+                    };
+                    shown += 1;
+                    let inside = bounds.min.x >= clip.min.x && bounds.max.x <= clip.max.x;
+                    assert!(inside, "{label} overflows sideways at {size:?}");
+                    assert!(bounds.min.x >= viewport.min.x && bounds.max.x <= viewport.max.x);
+                }
+                assert!(shown >= 3, "only {shown} points visible at {size:?}");
+            }
+        }
+        assert!(app.config == before && app.child.is_none());
+        assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_and_recovery_dialog_motion_settles_after_open_and_close() -> anyhow::Result<()> {
+        use std::sync::atomic::AtomicUsize;
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = crate::App::load(fixture.path.clone());
+        let before = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        let mut time = 0.0;
+        let mut frames = |app: &mut crate::App, count: usize| {
+            for _ in 0..count {
+                let input = egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1280.0, 800.0),
+                    )),
+                    focused: true,
+                    ..Default::default()
+                };
+                ctx.run_ui(input, |root| app.desktop(root))
+                    .drop_without_applying_deltas();
+                time += 1.0 / 60.0;
+            }
+        };
+        frames(&mut app, 20);
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&requests);
+        ctx.set_request_repaint_callback(move |request| {
+            if request.delay < Duration::from_secs(1) {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let count = || requests.load(Ordering::SeqCst);
+        frames(&mut app, 60);
+        assert_eq!(count(), 0, "the idle window asked for frames");
+        app.dialog = Some(crate::Dialog::NativeStart);
+        frames(&mut app, 60);
+        // A fresh report while the dialog is open draws the check mark once (M9).
+        let drawn = count();
+        app.worker_permissions.result = Some(Observation {
+            outcome: Ok(ready()),
+            finished: Instant::now(),
+        });
+        frames(&mut app, 30);
+        assert!(count() > drawn, "the check mark never animated");
+        for next in [None, Some(crate::Dialog::Recovery), None] {
+            frames(&mut app, 40);
+            let settled = count();
+            frames(&mut app, 120);
+            assert_eq!(count(), settled, "{:?} kept repainting", app.dialog);
+            app.dialog = next;
+        }
+        frames(&mut app, 40);
+        let settled = count();
+        frames(&mut app, 120);
+        assert_eq!(count(), settled, "the closed dialog kept repainting");
+        assert!(app.config == before && app.child.is_none());
+        assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
         drop(app);
         fixture.close()?;
         Ok(())
