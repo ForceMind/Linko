@@ -51,6 +51,7 @@ fn main() {
     for path in ["assets/brand/Linko.ico", "assets/brand/linko.rc"] {
         println!("cargo:rerun-if-changed={path}");
     }
+    println!("cargo:rerun-if-env-changed=LINKO_VERSION");
     for name in [
         "RC",
         "WindowsSdkDir",

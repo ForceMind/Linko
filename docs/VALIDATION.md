@@ -2363,3 +2363,8 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 用户用集成包 e31a38a（PR97–PR100）双端实测：Windows→Mac 滚轮恢复正常（Windows `scr_tx＝188`，Mac `scr_apply＝188`，用户确认），确认 PR99 的调用约定修复在 Apple 芯片上生效。Mac→Windows 仍不正常：Windows `rel_rx＝60`、`rel_apply＝40`、`scr_apply＝34`，记录末尾仍为 `Error: native receive service: Timeout`；Mac `peer_rel＝4`，即 Windows 四次主动结束 Mac 的控制。PR100 已使输入超时不再断开连接，这次的超时出现在释放或进入接收阶段，说明 Windows 原生线程停滞的时间超过单条命令期限。用户同时看到 Mac 光标在控制 Windows 时仍跟着移动，PR98 的解耦在后台 worker 进程中未生效（与该 PR 中记录的风险一致）。
 
 为区分 Windows 停在系统注入调用还是线程别处，本批新增 `KVM-DIAG/5` 三个计时计数（只在原生循环内计时，不在回调中）：`slow_ptr` 单次光标注入超过 50 ms，`slow_inp` 单次输入注入超过 50 ms，`loop_stall` 原生循环两轮之间超过 200 ms。线上协议与输入行为不变。本机未编译。
+
+
+## 2026-11-10 构建版本改为提交时间（待 CI）
+
+版本改为按提交时间（北京时间）生成：`tools/build_version.py`、`tools/package.py`、CI 在构建前写入 `LINKO_VERSION`，GUI 侧栏优先显示该编译期值，规则见 docs/RELEASING.md。本机 Python 3 运行 `test_build_version.py` 与 `test_package.py` 通过；本机无 Rust/Cargo，GUI 与 build.rs 的改动未编译，fmt、严格 Clippy、locked test/build 及 Windows/macOS 打包以精确提交 CI 为准。未做任何物理验收，也不影响 #3/C06 的状态。
