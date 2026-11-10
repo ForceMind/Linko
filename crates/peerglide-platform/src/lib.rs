@@ -22,6 +22,8 @@ pub use receive_driver::{
 pub mod gesture_capture;
 #[cfg(any(windows, test))]
 mod gesture_queue;
+#[cfg(any(target_os = "macos", test))]
+mod source_cursor;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
 
@@ -270,6 +272,16 @@ impl CaptureGate {
     fn commit_from(&self, token: CaptureCommitToken, deadline: u64, now: u64) -> CaptureCommit {
         let word = self.0.control.load(Ordering::Acquire);
         self.commit_from_word(token, deadline, now, word, || {})
+    }
+    /// Pure read for source cursor reconciliation outside callbacks. An expired
+    /// watchdog deadline already means Local, even before an event disables it.
+    #[cfg(any(target_os = "macos", test))]
+    fn remote_live(&self) -> Option<CaptureEpoch> {
+        let word = self.0.control.load(Ordering::Acquire);
+        let live = self.0.healthy.load(Ordering::Acquire)
+            && word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED) == ACTIVE
+            && self.0.deadline.load(Ordering::Acquire) > now_ms();
+        live.then(|| self.epoch_from(word))
     }
     fn source_commit_current(&self, epoch: CaptureEpoch) -> bool {
         let word = self.0.control.load(Ordering::Acquire);
@@ -632,6 +644,7 @@ impl CaptureSession {
             // needs room beyond the edge. macOS reads native event deltas.
             #[cfg(windows)]
             pointer(0.5, 0.5)?;
+            freeze_source_cursor(&self.gate, epoch);
             Ok(Some(epoch))
         })();
         if result.is_err() {
@@ -679,8 +692,10 @@ impl CaptureSession {
                 Some((return_x, return_y));
             // Do not post an absolute move when taking over macOS's relative
             // motion stream. Its displacement can affect the next event.
+            // macOS instead disconnects the cursor; event deltas stay valid.
             #[cfg(windows)]
             pointer(0.5, 0.5)?;
+            freeze_source_cursor(&self.gate, epoch);
             Ok(())
         })();
         if effect.is_err() {
@@ -720,10 +735,14 @@ impl CaptureSession {
     }
     pub fn restore_checked(&self) -> Result<()> {
         self.gate.disable();
+        // Reconnecting is recovery, not a pointer request: it also runs after
+        // source loss and before the receiving early return.
+        let cursor = release_source_cursor();
         anyhow::ensure!(
             self.gate.0.healthy.load(Ordering::Acquire),
             "native capture source lost; no further pointer request is permitted"
         );
+        cursor?;
         // A receiver's pointer/owned ledger belongs exclusively to its Native
         // loop. A source return cursor must never race that serialized owner.
         if self.gate.receiving_epoch().is_some() {
@@ -987,6 +1006,23 @@ pub fn pointer(x: f64, y: f64) -> Result<()> {
     {
         let _ = (x, y);
         anyhow::bail!("native injection unavailable")
+    }
+}
+/// Outside callbacks only. Windows keeps its existing parked cursor instead.
+fn freeze_source_cursor(gate: &CaptureGate, epoch: CaptureEpoch) {
+    #[cfg(target_os = "macos")]
+    native::freeze_source_cursor(|| gate.remote_live() == Some(epoch));
+    #[cfg(not(target_os = "macos"))]
+    let _ = (gate, epoch);
+}
+fn release_source_cursor() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        native::release_source_cursor()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
     }
 }
 #[cfg(any(windows, target_os = "macos"))]
@@ -1896,6 +1932,48 @@ mod tests {
         assert!(session.restore_checked().is_err());
         assert!(!session.gate.active());
         assert_eq!(*session.return_position.lock().unwrap(), Some((0.2, 0.3)));
+    }
+    #[test]
+    fn source_cursor_freeze_follows_only_the_exact_live_remote_phase() {
+        use crate::source_cursor::{CursorBackend, FreezeState};
+        struct Requests(Vec<bool>);
+        impl CursorBackend for Requests {
+            fn associate(&mut self, connected: bool) -> bool {
+                self.0.push(connected);
+                true
+            }
+        }
+        let gate = CaptureGate::default();
+        let mut native = Requests(Vec::new());
+        let mut cursor = FreezeState::new();
+        assert_eq!(gate.remote_live(), None);
+        // Stop/Emergency/fault disable, watchdog expiry and source loss (last: terminal).
+        let endings: [fn(&CaptureGate); 3] = [
+            CaptureGate::disable,
+            |gate| gate.0.deadline.store(0, Ordering::Release),
+            CaptureGate::source_lost,
+        ];
+        for end in endings {
+            assert!(gate.try_activate());
+            let epoch = gate.remote_live().unwrap();
+            cursor.freeze(gate.remote_live() == Some(epoch), &mut native);
+            cursor.freeze(gate.remote_live() == Some(epoch), &mut native);
+            cursor.reconcile(gate.remote_live().is_some(), &mut native);
+            assert_eq!(native.0, [false]);
+            end(&gate);
+            assert_eq!(gate.remote_live(), None);
+            // Independent loop check and the later session restore both run.
+            cursor.reconcile(gate.remote_live().is_some(), &mut native);
+            cursor.reconcile(gate.remote_live().is_some(), &mut native);
+            assert!(cursor.release(&mut native));
+            assert_eq!(native.0, [false, true], "exactly one reconnect per phase");
+            gate.disable();
+            // A late handoff effect from the finished epoch never disconnects.
+            cursor.freeze(gate.remote_live() == Some(epoch), &mut native);
+            assert_eq!(native.0, [false, true]);
+            native.0.clear();
+        }
+        assert!(!gate.try_activate(), "source loss is terminal");
     }
     #[cfg(any(windows, target_os = "macos"))]
     #[test]

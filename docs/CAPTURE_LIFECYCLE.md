@@ -185,3 +185,82 @@ This is not a new hook or a wait inside a callback. Source cursor restoration
 retains the existing return-pending fence. Explicit stop, emergency, source loss
 and failed-session recovery remain unconditional and may release held inputs.
 Deterministic gate/pair tests do not constitute physical drag or DPI acceptance.
+
+
+## 源端远端阶段的光标冻结与隐藏（实现未经实机验证）
+
+目标：本机控制另一台期间，源端光标不再可见地移动；能隐藏时隐藏。任何结束路径
+都恢复。本节记录实现到哪一级、为什么停在那里。代码只在 CI 编译与测试，物理效果、
+后台进程是否生效、崩溃后的系统行为均待 #3/C06 实机确认。
+
+### macOS：第一级已实现（解耦），第二级不实现（隐藏）
+
+机制：进入远端阶段时调用 `CGAssociateMouseAndMouseCursorPosition(false)`，让鼠标
+移动不再改变光标位置；返回本机前调用 `(true)` 恢复关联。不 warp、不投递绝对移动、
+不改光标图像或任何用户设置。Apple 文档说明解耦后应用收到的事件位置恒定、但仍带
+X/Y 位移更新，因此现有 tap 读取的 `MouseEventDeltaX/Y`（字段 4/5）应继续有效，
+远端位移计算不需要改；本机阶段只在恢复关联之后才读取绝对位置。
+
+线程与锁：所有调用都在 tap 回调之外。冻结在会话线程的 `begin_routed_from` /
+`begin_routed` 提交成功之后执行；判断"当前仍是同一远端代次、未过看门狗截止、源
+健康"在同一把进程级锁内完成，所以已结束的旧代次不可能迟到解耦。恢复有三个入口：
+会话线程 `restore_checked`（阻塞取锁）、捕获线程每个运行循环切片（`try_lock`，
+取不到就留给下一片，绝不在 tap 仍启用时等待会话线程），以及捕获线程退出时（tap
+已停用后阻塞取锁）。请求被拒或结果未知都按"仍需恢复"记账，之后每个本机切片重试。
+
+结束路径与恢复点：
+- 普通边缘返回：`restore_at_boundary` → `restore_checked`。
+- 显式停止、会话断开、`CaptureSession` drop：`shutdown_wait` → `restore_checked`。
+- 紧急逃生、看门狗过期、队列满、不支持的输入等使门控离开 Remote 的故障：捕获
+  线程下一个运行循环切片（≤50ms，独立于异步会话）恢复；会话随后的 restore 是第二
+  道。
+- 失去来源：`restore_checked` 在健康检查之前先恢复关联；捕获循环退出后再恢复一次。
+- 进程正常退出（含 Ctrl+C 走优雅停止、`std::process::exit`、main 返回）：首次冻结
+  时登记一次 `atexit`，若仍欠恢复则重新关联。
+- SIGKILL（例如 GUI 的强制结束）、崩溃、abort：无法运行任何本进程代码。Apple
+  文档没有说明进程退出后 WindowServer 是否自动恢复关联，本项为**未知**，需要实机
+  确认。
+
+已知限制：Apple 文档把该函数描述为"应用在前台时"生效。worker 是没有 AppKit 事件
+循环的 tokio 命令行进程，通常不在前台；后台调用是否生效没有官方说明，只能实机验证。
+若不生效，行为退回到此前的"光标跟随但事件被吞"，不影响位移转发。
+
+第二级（隐藏）不实现。`CGDisplayHideCursor` 文档写明多数情况下调用方必须是前台
+应用；后台隐藏通常需要非公开的连接属性和主线程 AppKit 透明窗口来接管光标所有权，
+而 worker 没有主线程事件循环，非公开接口也无法给出"所有结束路径与崩溃后都能恢复"
+的依据。替代方案：未来若由 GUI 进程（有 AppKit 主线程）承担一个透明非激活窗口，需
+另立设计并实机验证。
+
+### Windows：第一级已满足（停车），第二级不实现（隐藏）
+
+现有机制保持不变：提交远端后把光标停在主屏中央，钩子用 `MSLLHOOKSTRUCT.pt` 与
+当前光标位置之差计算位移，并吞掉移动事件，所以远端期间光标不移动但可见。停车仍然
+必需：从现有代码注释看，光标停在边缘时钩子坐标没有越过边缘的余地，向外的位移会
+丢失（未实机测量）。
+
+第二级不实现，原因：
+- `SetSystemCursor` 替换的是整个会话的系统光标；文档只给出用
+  `SystemParametersInfo(SPI_SETCURSORS)` 重新加载系统光标的办法，没有说明进程退出
+  后自动恢复。进程被强制结束后用户会留下透明光标，而 `SPI_SETCURSORS` 重新加载还
+  会覆盖其他程序或辅助功能做的光标定制，违反"不改用户光标方案"。
+- `ShowCursor` 只维护一个内部显示计数，文档没有说明它能隐藏其他进程窗口上方的
+  光标；后台 worker 调用预计无效（未验证）。
+替代方案：在捕获线程（已有消息泵）上为停车点创建一个透明、置顶、不激活的小窗口，
+在 `WM_SETCURSOR` 中把光标设为空。窗口随线程结束由系统销毁，崩溃后可自动恢复，
+但能否在被吞掉的移动下持续生效、对全屏/提权窗口的表现都需要实机验证，留待后续。
+
+### 测试
+
+`source_cursor` 状态机与门控 `remote_live` 有纯软件测试：每个远端阶段只解耦一次；
+停止/紧急/故障、看门狗过期、失去来源后各只恢复一次；已结束的代次不会再解耦；被拒
+的解耦仍会恢复；失败的恢复在远端期间不重试、回到本机后重试到成功。它们不调用任何
+OS 接口，不代表物理效果。
+
+依据：
+- https://developer.apple.com/documentation/coregraphics/cgassociatemouseandmousecursorposition(_:)
+- https://developer.apple.com/documentation/coregraphics/cgdisplayhidecursor(_:)
+- https://developer.apple.com/library/archive/documentation/GraphicsImaging/Conceptual/QuartzDisplayServicesConceptual/Articles/MouseCursor.html
+- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setsystemcursor
+- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow
+- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showcursor
+- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setcursorpos

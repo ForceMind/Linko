@@ -48,6 +48,11 @@ extern "C" {
     fn CGEventCreateScrollWheelEvent(source: Ref, unit: u32, count: u32, ...) -> Ref;
     fn CGEventCreate(source: Ref) -> Ref;
     fn CGEventPost(tap: u32, event: Ref);
+    // boolean_t is a 32-bit integer on every supported macOS target; CGError is int32_t.
+    fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
+}
+extern "C" {
+    fn atexit(callback: extern "C" fn()) -> i32;
 }
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
@@ -157,6 +162,60 @@ impl Drop for WakeRegistration {
 pub(super) fn suppressed_modifiers_held() -> bool {
     STATE.with_borrow(|state| state.as_ref().is_none_or(HookState::suppressed_modifiers))
 }
+struct NativeCursor;
+impl source_cursor::CursorBackend for NativeCursor {
+    fn associate(&mut self, connected: bool) -> bool {
+        // Synchronous WindowServer request: never called from the tap callback.
+        unsafe { CGAssociateMouseAndMouseCursorPosition(i32::from(connected)) == 0 }
+    }
+}
+static SOURCE_CURSOR: Mutex<source_cursor::FreezeState> =
+    Mutex::new(source_cursor::FreezeState::new());
+extern "C" fn release_source_cursor_at_exit() {
+    match SOURCE_CURSOR.try_lock() {
+        Ok(mut state) => {
+            state.release(&mut NativeCursor);
+        }
+        Err(std::sync::TryLockError::Poisoned(error)) => {
+            error.into_inner().release(&mut NativeCursor);
+        }
+        // Another thread is mid-request; reconnecting is the only safe exit state.
+        Err(std::sync::TryLockError::WouldBlock) => {
+            source_cursor::CursorBackend::associate(&mut NativeCursor, true);
+        }
+    }
+}
+/// Session-side handoff path, outside callbacks. `current` is evaluated under
+/// the same lock as every release, so a stale phase can never disconnect late.
+pub(super) fn freeze_source_cursor(current: impl FnOnce() -> bool) {
+    static EXIT_HOOK: std::sync::Once = std::sync::Once::new();
+    EXIT_HOOK.call_once(|| unsafe {
+        let _ = atexit(release_source_cursor_at_exit);
+    });
+    let mut state = SOURCE_CURSOR
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    state.freeze(current(), &mut NativeCursor);
+}
+pub(super) fn release_source_cursor() -> Result<()> {
+    let mut state = SOURCE_CURSOR
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    ensure!(
+        state.release(&mut NativeCursor),
+        "source cursor association could not be restored"
+    );
+    Ok(())
+}
+/// Capture loop only, between run-loop slices. Never waits for the session.
+fn reconcile_source_cursor(remote: bool) {
+    let mut state = match SOURCE_CURSOR.try_lock() {
+        Ok(state) => state,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    state.reconcile(remote, &mut NativeCursor);
+}
 thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)};}
 static MODIFIERS: Mutex<u64> = Mutex::new(0);
 static BUTTONS: AtomicU64 = AtomicU64::new(0);
@@ -216,6 +275,9 @@ pub(super) fn capture_receiving(
             CGEventTapEnable(tap, true);
             let _ = ready.send(true);
             loop {
+                // Fail-open path independent of the async session: a watchdog,
+                // Emergency, fault or stop that leaves Remote reconnects here.
+                reconcile_source_cursor(receive_gate.remote_live().is_some());
                 let debt = STATE
                     .with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
                     || receive_gate.receiving_epoch().is_some();
@@ -250,6 +312,8 @@ pub(super) fn capture_receiving(
                     s.gate.disable();
                 }
             });
+            // The tap is disabled: waiting for an in-flight session request is safe.
+            let _ = release_source_cursor();
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             CFRelease(source);
             CFRelease(tap);
