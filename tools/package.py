@@ -6,6 +6,7 @@ publisher identity or notarization. No signing credentials, custom requirements,
 private entitlements, OS protection changes or TCC edits are used.
 """
 import hashlib
+import os
 import pathlib
 import platform
 import plistlib
@@ -16,6 +17,8 @@ import sys
 import tempfile
 import zipfile
 
+import build_version
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PRODUCT_NAME = "Linko"
 APP_BUNDLE_NAME = PRODUCT_NAME + ".app"
@@ -25,10 +28,37 @@ APP_IDENTIFIER = "com.peerglide.PeerGlide"
 WORKER_IDENTIFIER = APP_IDENTIFIER + ".worker"
 
 
+def bundle_versions(version):
+    """Date-time builds give (YYYY.M.D, YYYYMMDD.HMM); other strings keep the legacy form."""
+    try:
+        return build_version.bundle_versions_from_display(version)
+    except ValueError:
+        return version.split("-")[0], version.split("-")[0]
+
+
+def resolve_version(root):
+    """LINKO_VERSION wins (validated); else git commit time; else the Cargo.toml fallback."""
+    configured = os.environ.get("LINKO_VERSION")
+    if configured:
+        try:
+            return build_version.validate_display_version(configured)
+        except ValueError:
+            raise ValueError("LINKO_VERSION must look like YYYY.M.D-HHMM") from None
+    try:
+        return build_version.display_version(build_version.commit_timestamp(root))
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        pass
+    match = re.search(r'(?m)^version = "([^"\n]+)"', (root / "Cargo.toml").read_text())
+    if match is None:
+        raise ValueError("workspace version is missing")
+    return match.group(1)
+
+
 def bundle_info(version):
+    short_version, build_number = bundle_versions(version)
     return {"CFBundleName": PRODUCT_NAME, "CFBundleDisplayName": APP_DISPLAY_NAME,
-            "CFBundleIdentifier": APP_IDENTIFIER, "CFBundleVersion": version.split("-")[0],
-            "CFBundleShortVersionString": version.split("-")[0], "CFBundlePackageType": "APPL",
+            "CFBundleIdentifier": APP_IDENTIFIER, "CFBundleVersion": build_number,
+            "CFBundleShortVersionString": short_version, "CFBundlePackageType": "APPL",
             "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,
             "CFBundleIconFile": APP_ICON_FILE,
             "LSMinimumSystemVersion": "13.0", "NSBonjourServices": ["_peerglide._udp", "_peerglide-pair._tcp"],
@@ -147,10 +177,7 @@ def build_package(root=ROOT, system=None, machine=None, run=None):
     system = system or platform.system()
     machine = machine or platform.machine()
     run = run or subprocess.run
-    match = re.search(r'(?m)^version = "([^"\n]+)"', (root / "Cargo.toml").read_text())
-    if match is None:
-        raise ValueError("workspace version is missing")
-    version = match.group(1)
+    version = resolve_version(root)
     label = f"{PRODUCT_NAME}-{version}-{system.lower()}-{machine.lower()}"
     dist = root / "dist"
     archive = dist / (label + ".zip")

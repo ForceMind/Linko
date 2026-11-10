@@ -1,5 +1,10 @@
 //! Actual desktop interactions. No example devices or simulated permissions.
 use super::*;
+/// CI sets LINKO_VERSION (commit time, UTC+08:00); local builds fall back to the crate version.
+const DISPLAY_VERSION: &str = match option_env!("LINKO_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 impl App {
     pub(super) fn writable(&self) -> bool {
         !self.quit_check_mode
@@ -1344,7 +1349,7 @@ impl App {
                     egui::Layout::bottom_up(egui::Align::LEFT),
                     |ui| {
                         ui.small("简体中文 · 主屏协作");
-                        ui.small(format!("{} · 开发预览", env!("CARGO_PKG_VERSION")));
+                        ui.small(format!("{DISPLAY_VERSION} · 开发预览"));
                         ui.separator();
                     },
                 );
