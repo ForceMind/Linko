@@ -2321,3 +2321,10 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 `/4` 新增字段（线上协议不变）：源端边缘判定 `edge_hit`（到达边缘）及首个阻挡原因 `blk_peer`（对端无移动能力）、`blk_gate`（捕获门非 Local 空闲）、`blk_busy`（已有发出中的请求或租约）、`blk_recv`（本机仍持有接收租约）、`blk_prot`（接收保护尚未撤销）；`acq_tx` 发出 Acquire、`denied_rx` 收到 Denied、`acq_to` 等待授予超时、`acq_cancel` 本机准入保护取消；接收端 `acq_rx` 收到 Acquire、`deny_arg` 参数无效、`deny_busy` 本机忙、`deny_auth` 未授权接收控制、`deny_lease` 租约被拒（已有租约或编号复用）、`deny_begin` 进入接收失败、`deny_place` 入口定位失败。macOS 的 `wh_inj` 现在统计回到 tap 的自注入滚轮，`wh_phys` 统计未带标记的滚轮；若 `scr_apply` 很大而 `wh_inj` 为 0、`wh_phys` 很大，说明注入的滚轮没有带上自有标记，被当成本机物理输入而吞掉并请求接管。摘要上限提高到 1600 字节，最长约 1237 字节。
 
 下次复测先看 Mac 行：`edge_hit` 是否大于 0；若是，`blk_*` 哪一项非零（本机没发出 Acquire），或 `acq_tx` 大于 0 而 `denied_rx` 非零（Windows 拒绝，再看 Windows 行的 `deny_*`），或 `acq_to` 非零（Windows 没回应）。
+
+
+## 2026-11-10 Mac→Windows 滚轮后会话因原生接收超时而结束（待 CI 与实机）
+
+同一轮 Windows 会话记录末尾为 `Error: native receive service: Timeout`，结束摘要 `rel_rx＝2`、`rel_apply＝1`、`rel_fail＝1`、`scr_apply＝1`、`wh_inj＝1`：Mac 发来的第一次滚轮在 Windows 注入成功，第二次的原生命令在 250 ms 内没有回复。超时会使取消守卫请求恢复，原生端随即把这次接收标为排空并清理已注入的按下（现有测试 `bounded_timeout_cancels_late_begin_and_down_even_without_any_native_pump_progress` 覆盖这一点），但会话层把 `Timeout` 当作致命错误，直接结束了整个连接，之后的滚轮与移动全部丢失。
+
+本批只改会话层：输入或光标命令超时且该接收已不再活动时，写一行诊断并按“未提交”处理；下一轮循环走既有路径释放租约、通知对端 Release，并照旧检查原生端确认清理完成，无法确认时仍按原逻辑报错结束。原生恢复与已注入按下的清理逻辑不变，线上协议不变。会话层这一分支没有新的自动测试；物理效果需要两端同包复测。为什么第二次命令会超过 250 ms 仍未查明，本批不修改超时时长。
