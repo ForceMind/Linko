@@ -205,7 +205,9 @@ fn capture_impl(
             }
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
+            let mut last_turn = std::time::Instant::now();
             let unexpected = loop {
+                super::note_loop_gap(&receive_gate, &mut last_turn);
                 if receive.is_some() {
                     let debt = STATE
                         .with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
