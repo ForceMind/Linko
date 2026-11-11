@@ -7,9 +7,10 @@
 //! beats that already exist. A duration of 0 jumps straight to the end state, which is the hook
 //! for a later reduce-motion switch. No timers, threads, I/O or native queries live here.
 //!
-//! The shell (slice S1) uses hover, selection, sidebar, view switch, capsule and spinner
-//! motion; the canvas (slice S2) adds the rebound (M7) and badge pops (M6). Items marked
-//! `allow(dead_code)` are consumed by the later context bar, pairing and dialog slices.
+//! Callers: the shell uses hover, selection, sidebar, view switch, capsule and spinner motion;
+//! the canvas adds the rebound (M7) and badge pops (M6); the context column the drawer; the
+//! pairing window the shake (M8), strokes (M9), height (M10) and list rows (M12). The few items
+//! still marked `allow(dead_code)` have no caller outside tests; each says why it stays.
 
 use crate::desktop_style::tokens;
 use eframe::egui;
@@ -19,10 +20,10 @@ const CAPSULE_FROM_SCALE: f32 = 0.92;
 /// Badge scale at the start of the M6 pop.
 const BADGE_FROM_SCALE: f32 = 0.3;
 /// Shake displacement in points at 20%, 40%, 60%, 80% and 100% of M8; it starts at 0.
-#[allow(dead_code)]
 const SHAKE_KNOTS_PX: [f32; 6] = [0.0, -7.0, 6.0, -4.0, 2.0, 0.0];
 
 /// Identity easing.
+// Kept as the linear reference of the easing tests; no screen eases linearly.
 #[allow(dead_code)]
 pub(super) fn linear(t: f32) -> f32 {
     unit(t)
@@ -104,7 +105,6 @@ impl OneShot {
         unit((elapsed / f64::from(self.secs)) as f32)
     }
 
-    #[allow(dead_code)]
     pub(super) fn is_active(&self, now: f64) -> bool {
         self.progress(now) < 1.0
     }
@@ -150,6 +150,7 @@ impl<K: PartialEq> Retrigger<K> {
         changed
     }
 
+    // Screens read progress through `tick`; tests read it without a context.
     #[allow(dead_code)]
     pub(super) fn progress(&self, now: f64) -> f32 {
         self.shot.progress(now)
@@ -163,6 +164,8 @@ impl<K: PartialEq> Retrigger<K> {
 /// A scalar that glides toward a moving target with `cubic_out` (M7, M10). Retargeting in
 /// flight starts from the current value, so nothing jumps.
 #[derive(Clone, Copy, Debug, PartialEq)]
+// The canvas rebound shrinks a two-axis offset with `OneShot` instead; this scalar form stays
+// for a later single-value glide and is covered by the tests below.
 #[allow(dead_code)]
 pub(super) struct Glide {
     from: f32,
@@ -226,7 +229,6 @@ pub(super) fn animate_flag(ctx: &egui::Context, id: egui::Id, on: bool, secs: f3
 /// target change restarts from the current value; egui repaints only while it differs from
 /// the target. With `secs` of 0 the result is `target` at once. Non-finite targets pass through
 /// untouched, because a NaN target would never compare equal and would repaint forever.
-#[allow(dead_code)]
 pub(super) fn animate_scalar(ctx: &egui::Context, id: egui::Id, target: f32, secs: f32) -> f32 {
     if !target.is_finite() {
         return target;
@@ -250,12 +252,13 @@ pub(super) fn select_mix(ctx: &egui::Context, id: egui::Id, selected: bool) -> f
 }
 
 /// Disclosure open amount, 160 ms.
-#[allow(dead_code)]
 pub(super) fn expand_amount(ctx: &egui::Context, id: egui::Id, open: bool) -> f32 {
     animate_flag(ctx, id, open, tokens::EXPAND_SECS)
 }
 
 /// M12: list item presence, 180 ms. Callers keep a leaving item alive until this reaches 0.
+// The pairing hint rows time M12 with their own `OneShot`, because a leaving row must stay
+// listed until it has faded; this table-driven form has no caller outside tests yet.
 #[allow(dead_code)]
 pub(super) fn presence_amount(ctx: &egui::Context, id: egui::Id, present: bool) -> f32 {
     animate_flag(ctx, id, present, tokens::LIST_PRESENCE_SECS)
@@ -281,13 +284,14 @@ pub(super) fn sidebar_label_alpha(mix: f32) -> f32 {
 }
 
 /// M3: animated sidebar width in points.
+// The shell needs the mix itself for the label fade, so it calls `sidebar_mix` and
+// `sidebar_width_for`; this shortcut is exercised by the settle test only.
 #[allow(dead_code)]
 pub(super) fn sidebar_width(ctx: &egui::Context, id: egui::Id, expanded: bool) -> f32 {
     sidebar_width_for(sidebar_mix(ctx, id, expanded))
 }
 
 /// M10: animated dialog height. Fixed-size dialogs do not use it.
-#[allow(dead_code)]
 pub(super) fn dialog_height(ctx: &egui::Context, id: egui::Id, target: f32) -> f32 {
     animate_scalar(ctx, id, target, tokens::RESIZE_SECS)
 }
@@ -313,7 +317,6 @@ pub(super) fn badge_scale(progress: f32) -> f32 {
 }
 
 /// M8: horizontal shake in points. Five decaying points -7, +6, -4, +2, 0, joined linearly.
-#[allow(dead_code)]
 pub(super) fn shake_offset(progress: f32) -> f32 {
     let scaled = unit(progress) * 5.0;
     let index = (scaled.floor() as usize).min(4);
@@ -324,6 +327,7 @@ pub(super) fn shake_offset(progress: f32) -> f32 {
 }
 
 /// M9: eased drawing progress of a stroke.
+// `icons` eases the strokes itself; this stays as the documented M9 curve for the tests.
 #[allow(dead_code)]
 pub(super) fn stroke_progress(progress: f32) -> f32 {
     cubic_out(progress)
@@ -802,5 +806,340 @@ mod tests {
             let strength = spinner_cell_strength(cell, 5, 8);
             assert!(strength > 0.0 && strength <= 1.0);
         }
+    }
+}
+
+/// Budget checks on the whole window: the real shell driven frame by frame through the same
+/// logic, paint and activity-beat path that eframe runs, at an explicit 60 Hz clock.
+#[cfg(test)]
+mod shell_budget_tests {
+    use crate::{App, Dialog, SessionMode, WorkerSnapshot};
+
+    use anyhow::{Context, Result};
+    use eframe::egui;
+    use peerglide_protocol::worker::WorkerState;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const FRAME_SECS: f64 = 1.0 / 60.0;
+    const CONSENT: &str = "我明确同意本次使用真实键鼠协同";
+
+    fn compact() -> egui::Vec2 {
+        egui::vec2(920.0, 700.0)
+    }
+
+    fn wide() -> egui::Vec2 {
+        egui::vec2(1180.0, 820.0)
+    }
+
+    fn pointer(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn text_center(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Pos2> {
+        match shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                Some(text.visual_bounding_rect().center())
+            }
+            egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(|s| text_center(s, label)),
+            _ => None,
+        }
+    }
+
+    /// Every painted occurrence of `label`, in paint order.
+    fn painted(output: &egui::FullOutput, label: &str) -> Vec<egui::Pos2> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| text_center(&clipped.shape, label))
+            .collect()
+    }
+
+    /// A focused window with a fixed size and its own clock.
+    struct Window {
+        ctx: egui::Context,
+        size: egui::Vec2,
+        time: f64,
+    }
+
+    impl Window {
+        /// `animation_time` replaces egui's default for both themes when given.
+        fn new(app: &App, size: egui::Vec2, animation_time: Option<f32>) -> Self {
+            let ctx = crate::tests::ui_context();
+            app.theme(&ctx);
+            if let Some(secs) = animation_time {
+                for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                    ctx.style_mut_of(theme, |style| style.animation_time = secs);
+                }
+            }
+            Self {
+                ctx,
+                size,
+                time: 0.0,
+            }
+        }
+
+        /// One frame as eframe runs it: logic, then the window, then the activity beat.
+        fn frame(&mut self, app: &mut App, events: Vec<egui::Event>) -> egui::FullOutput {
+            let input = egui::RawInput {
+                time: Some(self.time),
+                events,
+                focused: true,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
+                ..Default::default()
+            };
+            let output = self.ctx.run_ui(input, |root| {
+                let ctx = root.ctx().clone();
+                app.logic_tick(&ctx);
+                app.desktop(root);
+                app.request_activity_tick(&ctx);
+            });
+            self.time += FRAME_SECS;
+            output
+        }
+
+        fn step(&mut self, app: &mut App, events: Vec<egui::Event>) {
+            self.frame(app, events).drop_without_applying_deltas();
+        }
+
+        fn frames(&mut self, app: &mut App, count: usize) {
+            for _ in 0..count {
+                self.step(app, Vec::new());
+            }
+        }
+
+        /// Painted occurrences of `label` in one more frame without input.
+        fn find_all(&mut self, app: &mut App, label: &str) -> Vec<egui::Pos2> {
+            let output = self.frame(app, Vec::new());
+            let found = painted(&output, label);
+            output.drop_without_applying_deltas();
+            found
+        }
+
+        /// First painted occurrence of `label`.
+        fn find(&mut self, app: &mut App, label: &str) -> Result<egui::Pos2> {
+            let found = self.find_all(app, label);
+            found
+                .first()
+                .copied()
+                .with_context(|| format!("{label} not painted"))
+        }
+
+        fn click(&mut self, app: &mut App, at: egui::Pos2) {
+            for pressed in [true, false] {
+                let events = vec![egui::Event::PointerMoved(at), pointer(at, pressed)];
+                self.step(app, events);
+            }
+        }
+
+        /// Counts repaint requests that ask for a frame sooner than `limit`.
+        fn count_requests(&self, limit: Duration) -> Arc<AtomicUsize> {
+            let requests = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&requests);
+            self.ctx.set_request_repaint_callback(move |request| {
+                if request.delay < limit {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+            requests
+        }
+    }
+
+    /// Requests sooner than one second during 100 frames without input, after one second of
+    /// settling in which first-paint and state-change motion may finish.
+    fn fast_requests_while_idle(app: &mut App, window: &mut Window) -> usize {
+        window.frames(app, 60);
+        let requests = window.count_requests(Duration::from_secs(1));
+        window.frames(app, 100);
+        requests.load(Ordering::SeqCst)
+    }
+
+    /// Presentation fixture only: no identity, certificate or worker exists for this peer.
+    fn registered(app: &mut App) {
+        app.config.fingerprint = Some("motion-budget-presentation-only".into());
+        app.config.peer_name = "B".into();
+    }
+
+    #[test]
+    fn idle_workspace_has_no_periodic_repaint() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let mut window = Window::new(&app, compact(), None);
+        let idle = fast_requests_while_idle(&mut app, &mut window);
+        assert_eq!(idle, 0, "idle workspace kept repainting");
+        drop(app);
+        fixture.close()?;
+
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        registered(&mut app);
+        let mut window = Window::new(&app, compact(), None);
+        let offline = fast_requests_while_idle(&mut app, &mut window);
+        assert_eq!(offline, 0, "registered offline workspace kept repainting");
+        drop(app);
+        fixture.close()?;
+
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        registered(&mut app);
+        app.child = Some(crate::lifecycle_tests::managed_child()?);
+        app.active_mode = Some(SessionMode::Communication);
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        snapshot.publish(WorkerState::Authenticated);
+        app.worker_state = Some(snapshot);
+        let mut window = Window::new(&app, compact(), None);
+        let communication = fast_requests_while_idle(&mut app, &mut window);
+        assert!(app.connected, "communication fixture never connected");
+        assert_eq!(communication, 0, "stable communication kept repainting");
+        // Sensitivity: the same frame path does report the existing 100 ms beat once a
+        // native session polls its health.
+        let requests = window.count_requests(Duration::from_secs(1));
+        app.active_mode = Some(SessionMode::Native);
+        window.frames(&mut app, 5);
+        assert!(
+            requests.load(Ordering::SeqCst) > 0,
+            "the counter missed the native activity beat"
+        );
+        app.active_mode = Some(SessionMode::Communication);
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    /// What the main paths leave behind; it must not depend on egui's animation time.
+    #[derive(Debug, PartialEq)]
+    struct Outcome {
+        add_opened_pairing: bool,
+        consent_painted: bool,
+        stale_consent_kept: bool,
+        consent_dialog_open: bool,
+        session_running_before_stop: bool,
+        stop_requested: bool,
+        dragging: bool,
+        edge: String,
+        stored_edge: Option<String>,
+        granted: bool,
+        identity_created: bool,
+    }
+
+    fn main_paths(animation_time: Option<f32>) -> Result<Outcome> {
+        // Add: the empty canvas slot opens the real pairing window.
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let mut window = Window::new(&app, wide(), animation_time);
+        window.frames(&mut app, 3);
+        let add = window.find(&mut app, "＋\n添加另一台电脑")?;
+        window.click(&mut app, add);
+        let add_opened_pairing = app.pairing_open && app.pairing_panel.open;
+        let mut granted = app.config.native || app.config.allow;
+        let mut identity_created = app.identity_dir().exists();
+        drop(app);
+        fixture.close()?;
+
+        // Consent: the native start dialog shows its consent and drops a stale tick while
+        // no fresh permission check exists.
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        registered(&mut app);
+        app.dialog = Some(Dialog::NativeStart);
+        app.native_confirmation = true;
+        let mut window = Window::new(&app, compact(), animation_time);
+        window.frames(&mut app, 10);
+        let consent_painted = !window.find_all(&mut app, CONSENT).is_empty();
+        let stale_consent_kept = app.native_confirmation;
+        let consent_dialog_open = app.dialog == Some(Dialog::NativeStart);
+        granted |= app.config.native || app.config.allow || app.child.is_some();
+        identity_created |= app.identity_dir().exists();
+        drop(app);
+        fixture.close()?;
+
+        // Stop: the title bar stop control asks the running worker to stop.
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        registered(&mut app);
+        app.child = Some(crate::lifecycle_tests::managed_child()?);
+        app.active_mode = Some(SessionMode::Communication);
+        let mut window = Window::new(&app, compact(), animation_time);
+        window.frames(&mut app, 3);
+        // The topmost occurrence is the title bar control.
+        let stop = window
+            .find_all(&mut app, "停止协同")
+            .into_iter()
+            .min_by(|a, b| a.y.total_cmp(&b.y))
+            .context("title bar stop control not painted")?;
+        let session_running_before_stop = app.child.is_some() && app.stopping.is_none();
+        window.click(&mut app, stop);
+        let stop_requested = app.stopping.is_some() || app.child.is_none();
+        granted |= app.config.native || app.config.allow;
+        identity_created |= app.identity_dir().exists();
+        drop(app);
+        fixture.close()?;
+
+        // Drag: releasing the other screen left of this one saves the new direction.
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        registered(&mut app);
+        let mut window = Window::new(&app, compact(), animation_time);
+        window.frames(&mut app, 20);
+        // At 920 points the sidebar hides names, so the first "B" is the canvas screen.
+        let start = window.find(&mut app, "B")?;
+        let end = start - egui::vec2(260.0, 0.0);
+        let press = vec![egui::Event::PointerMoved(start), pointer(start, true)];
+        window.step(&mut app, press);
+        window.step(&mut app, vec![egui::Event::PointerMoved(end)]);
+        let dragging = app.screen_drag.is_some();
+        window.step(&mut app, vec![pointer(end, false)]);
+        window.frames(&mut app, 30);
+        let edge = app.config.edge.clone();
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(app.dir.join("settings.json"))?)?;
+        let stored_edge = stored["data"]["edge"].as_str().map(str::to_owned);
+        granted |= app.config.native || app.config.allow || app.child.is_some();
+        identity_created |= app.identity_dir().exists();
+        drop(app);
+        fixture.close()?;
+
+        Ok(Outcome {
+            add_opened_pairing,
+            consent_painted,
+            stale_consent_kept,
+            consent_dialog_open,
+            session_running_before_stop,
+            stop_requested,
+            dragging,
+            edge,
+            stored_edge,
+            granted,
+            identity_created,
+        })
+    }
+
+    #[test]
+    fn animation_time_zero_is_functionally_identical() -> Result<()> {
+        let animated = main_paths(None)?;
+        let instant = main_paths(Some(0.0))?;
+        assert_eq!(animated, instant);
+        // The paths really ran; equality alone would also hold if both did nothing.
+        let expected = Outcome {
+            add_opened_pairing: true,
+            consent_painted: true,
+            stale_consent_kept: false,
+            consent_dialog_open: true,
+            session_running_before_stop: true,
+            stop_requested: true,
+            dragging: true,
+            edge: "left".into(),
+            stored_edge: Some("left".into()),
+            granted: false,
+            identity_created: false,
+        };
+        assert_eq!(instant, expected);
+        Ok(())
     }
 }

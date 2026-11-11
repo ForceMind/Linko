@@ -2323,3 +2323,64 @@ KVM-DIAG/2 expired cap=97 zero=27 filtered=1257 full=0 deq=97 stale=0 no_lease=0
 动效：只新增就绪对勾描线（240ms，一次性）；对话框淡入沿用 egui 窗口默认 `fade_in`。窗口在 `dialog` 置空后不再显示，所以没有淡出动画，这一点未改。
 
 未验证：本机没有 Rust/Cargo，未编译、未运行测试、未截图；fmt、严格 Clippy、locked test/build 与截图以 CI 为准。中文换行与图标对齐的实际观感、Windows／macOS 原生外观和高 DPI 未看过。逐条对照表需主会话或独立审查核对。
+
+
+## 2026-11-11 GUI 重做 S7：动效收尾与重绘预算审计（待 CI）
+
+分支 `gui-redesign-s7`，起点 S1–S6 合并基线 `3b95f94`（`origin/gui-ui-all2`）。按设计规格决策 5，第一期不加“减少动效”开关，也不改桌面偏好存储。本切片只改 `motion.rs`、`desktop_style.rs`、`icons.rs` 和本文档、`GUI_INTERACTIONS.zh-CN.md`；没有改任何界面行为、输入链路、协议、平台 crate 或 `session.rs`。
+
+### 重绘预算审计
+
+预算：单个动效不超过 360ms、一次性、播完后不再请求重绘；动画状态用固定 `Id`，不把变化的文字拼进 `Id`；等待转圈只在已有 100ms 节拍运行时走格，自己不请求重绘。下表全部是读代码的结论（S7 读了每个调用点所在函数与 `motion.rs` 全文），没有运行；其中“已有回归”一栏指 CI 中覆盖该路径的测试。
+
+| 动效 | 调用点（文件：函数） | 时长 | 触发 | 重绘条件 | 是否符合 | 问题／说明 |
+|---|---|---|---|---|---|---|
+| M1 悬停 | `shell_ui.rs`：`paint_control_surface`（侧栏行、图标按钮）；`desktop_ui.rs`：`segment`；`workspace_ui.rs`：`paint_canvas_button`；`pairing_panel.rs`：`entry_card` | 80ms | 指针进入或离开 | egui 动画表，值在 0 与 1 之间时才重绘；`Id` 为控件 `response.id.with("hover")` | 符合 | 无 |
+| M2 选中 | 同上四处，另有 `workspace_ui.rs`：`canvas_screen`（选择环，`Id` 为 `scope_id().with("local-screen"/"peer-screen").with("select")`） | 120ms | 选择变化 | 同上 | 符合 | 无 |
+| 详情抽屉展开 | `workspace_ui.rs`：`details_drawer`，`Id` 为 `context_control_id("details-drawer")` | 160ms | 点 ⓘ 开或关 | 同上；关闭到 0 后不再绘制 | 符合 | 规格表没有单列此项，按 M4 的一次性规则审；已有回归 `details_drawer_plays_one_transition_each_way_then_requests_no_repaint` |
+| M3 侧栏 | `desktop_ui.rs`：`desktop`（`sidebar_mix`，`Id` 为 `"linko-sidebar"`）；`shell_ui.rs`：`sidebar`（文字过半才显示） | 200ms | 点侧栏开关，或窗口宽度跨过 1100 点 | egui 动画表 | 符合 | 无 |
+| M4 页面切换 | `desktop_ui.rs`：`desktop`（`page_motion`，`Retrigger<u8>`，键为 `view_key(page)`） | 160ms | 页面键变化（首次绘制不播） | `OneShot::tick` 只在进度小于 1 时请求重绘 | 符合 | “设备”和“屏幕布局”共用一个键，二者互切不播；透明度不低于 0.35 |
+| M5 状态胶囊 | `shell_ui.rs`：`status_capsule`（`capsule_motion`，键为 `view.short`） | 180ms | 胶囊短文字变化 | 同上 | 符合预算 | 与规格触发条件有偏差：规格写“标题或色调变化”，实现只看短文字；短文字不变而标题或色调变了时不重播。不影响预算，只记录，不在本切片改 `shell_ui.rs` |
+| M6 角标弹出 | `workspace_ui.rs`：`workspace_canvas`（`local_badge`、`peer_badge`，`Retrigger<Badge>`） | 200ms | 角标种类变化（首次绘制不播） | 同上 | 符合预算 | 与规格触发条件有偏差：规格写“状态从无到有”；`Badge` 没有“无”这一项，实现对任一种类变化都弹一次。只记录 |
+| M7 回弹 | `workspace_ui.rs`：`CanvasMotion::retarget`、`remaining` | 220ms | 松手，或方向变化且偏移大于 0.5 点 | 同上 | 符合 | 规格写 `animate_value`，实现用 `OneShot` 缩小两轴偏移，效果等价；已有回归 `released_drag_rebounds_once_then_requests_no_repaint` |
+| M8 抖动 | `pairing_panel.rs`：`Feedback::reject`、`shake_offset` | 360ms | 输入端地址或码格式错、码被拒 | 同上 | 符合 | 已有回归 `rejected_code_shakes_once_and_then_stops_repainting` |
+| M9 对勾或叉号（配对） | `pairing_panel.rs`：`Feedback::observe`、`glyph` | 240ms | 阶段进入成功或失败（首次观察不播） | 同上 | 符合 | 无 |
+| M9 对勾（权限） | `worker_permissions.rs`：`native_start_header`（`animate_flag`，`Id` 为 `"native-start-ready-check"`） | 240ms | 检查结果变为就绪 | egui 动画表 | 符合 | 对话框首次打开时已就绪，直接显示完整对勾 |
+| M10 弹窗高度 | `pairing_panel.rs`：`ui`（`dialog_height`，`Id` 为 `"pairing_window_height"`） | 200ms | 目标高度在 520／540／600／620 之间变化 | egui 动画表 | 符合 | 高度另受窗口高度减 48 的上限约束 |
+| M11 等待转圈 | `shell_ui.rs`：`paint_capsule_glyph`（等待状态且 `activity_tick_active`）；`workspace_ui.rs`：`workspace_canvas`（同一条件，否则固定第 0 格）；`pairing_panel.rs`：`paint_glyph`（配对子进程轮询中）；`pairing_discovery.rs`：`search_spinner`（查找句柄存在时）；`worker_permissions.rs`：`native_start_header`（检查中） | 不定 | 等待类状态 | 只读 `input.time`，从不请求重绘；后三处显示的条件分别等于 `pairing_panel.needs_poll`、`discovery.needs_poll`、`worker_permissions.needs_poll` 为真，而这几项都在 `activity_tick_active` 里 | 符合 | 无 |
+| M12 列表项进出 | `pairing_discovery.rs`：`sync_rows`、`hint_row` | 180ms | 发现结果增减 | 每行一个 `OneShot`；离开的行播完即删；最多 320 行；停止查找时清空 | 符合 | 不使用 egui 动画表，所以不增加 `Id` |
+
+结论：14 项全部满足时长、一次性、结束后零重绘、固定 `Id` 和转圈只随已有节拍这五条，没有发现违反预算的地方，本切片没有修改任何调用点。另有两处与规格触发条件不一致（M5、M6），不影响预算，只记录。
+
+其他从代码看到的情况：
+
+- 同时播放数：单次状态变化最多同时触发胶囊 M5 和两个角标 M6；配对失败最多同时触发 M9 叉号、M8 抖动和 M10 高度。都不超过 3 个，最长 360ms。这是读代码推断，没有运行计时。
+- egui 动画表（0.37 `animation_manager.rs`，WebFetch 读源码）只插入不清理。本应用写入该表的 `Id` 要么是固定名字，要么是控件按布局顺序得到的 `response.id`，数量随界面结构有上限，不随时间或文字增长。
+- `motion::animate_flag` 和所有 `OneShot` 都用设计令牌里的固定时长，不读 egui 的 `Style::animation_time`。所以把 `animation_time` 设为 0 只影响 egui 自带的效果（例如窗口淡入），不会让本应用的动效变成瞬时。`scaled_secs` 是留给以后“减少动效”开关的入口，目前所有调用都传 1。
+- 不属于动效、但会请求重绘的现有路径：`main.rs` 的 100ms 活动节拍；权限观察 30 秒到期时请求一次重绘；退出检查、资源检查这两种隔离测试模式里的 50ms 轮询；手势画布绘制中的 `request_repaint`。这些都在 S0 之前就有，本切片没有改。
+
+### 新增回归测试（`motion.rs` 的 `shell_budget_tests`）
+
+两个测试都用 `crate::tests::Fixture` 加载真实 `App`，每帧按 eframe 的顺序依次调用 `logic_tick`、`desktop`、`request_activity_tick`，时间按 60Hz 推进，窗口有焦点、不注入指针。由于本切片不能改 `main.rs`，测试放在 `motion.rs` 里，通过 crate 内可见的 `App` 私有方法和 `crate::lifecycle_tests::managed_child` 驱动。
+
+- `idle_workspace_has_no_periodic_repaint`：空闲（未登记）、已登记离线、稳定仅通信（受管测试子进程，工作进程快照为已认证，断言 `connected` 为真）三种状态，各先稳定 60 帧，再跑 100 帧，断言没有延迟小于 1 秒的重绘请求。灵敏度：同一窗口改为 Native 模式跑 5 帧，断言计数大于 0，证明计数器能看到已有的 100ms 节拍。
+- `animation_time_zero_is_functionally_identical`：egui 默认动画时长与 `animation_time = 0` 各跑一遍四条主路径，结果逐项相等，并等于预期值：点画布空位“＋ 添加另一台电脑”打开真实配对窗口；“开启键鼠协同”对话框显示同意勾选框文字，旧的勾选在没有新鲜权限检查时被清掉，对话框保持打开；标题栏“停止协同”向受管子进程发出停止；把另一台屏幕拖到左边后内存和 `settings.json` 的方向都为 `left`。全程不创建身份、不打开键鼠或接收许可。注意上一条所说的限制：这个测试证明的是 egui 自带动画为 0 时功能不变，不能证明本应用动效时长为 0 时的表现。
+
+按 CLAUDE.md 的红绿要求，这两个测试应先在破坏被测行为时失败（例如让 `request_activity_tick` 在仅通信时也请求 100ms 重绘）。本机没有 Rust，这一步没有做，也没有运行过这两个测试；灵敏度目前只靠 Native 一段的正向断言。
+
+### 去除的 `allow(dead_code)`
+
+逐项用全文搜索确认在非测试代码里有调用后去除：`SHAKE_KNOTS_PX`、`OneShot::is_active`、`animate_scalar`、`expand_amount`、`dialog_height`、`shake_offset`（`motion.rs`）；`SHAKE_SECS`、`STROKE_DRAW_SECS`、`RADIUS_CHIP`、`RADIUS_CARD`、`surface_color`（`desktop_style.rs`）；`paint_check_progress`、`paint_cross_progress`（`icons.rs`）。
+
+保留并在代码旁写明原因：`linear`、`Retrigger::progress`、`Glide`、`presence_amount`、`sidebar_width`、`stroke_progress`、`MAX_INTERACTION_SECS`、`RADIUS_MENU`、`RADIUS_PILL`、`text_color`、`canvas_color` 只在测试中使用；`Icon` 枚举的 `Cross` 变体在测试之外没有被构造（配对窗口用 `paint_cross_progress` 逐笔绘制叉号）。
+
+### 已知遗留（本切片不修）
+
+1. 屏幕上下排列时，画布上的落点区只有约 20 点宽（S2 汇报），拖到上下方向不易命中。
+2. `desktop_ui.rs` 有 17 行、`pairing_panel.rs` 有 20 行超过 100 宽（中文按双宽计），集中在高级登记向导和配对窗口 `ui` 等 rustfmt 跳过的旧写法里；格式检查不会因此失败，但不易审读。
+3. 对话框关闭没有淡出：`dialog` 置空后窗口当帧消失（S5 已记录）。
+4. M5、M6 的触发条件与规格不一致，见上表。
+5. 界面字符串仍有约 40 行使用“对端”（含测试中断言的同一文字）（`desktop_state.rs`、`desktop_ui.rs`、`main.rs`、`worker_permissions.rs`、`workspace_ui.rs`、`pairing_supervisor.rs` 等），与术语表“另一台”不一致。其中 W3、W4 安全要点和权限说明属于 K 类文字，改动需要逐条对照表；本切片只在文档中标注。
+6. 资源对照（规格 3.4 第 4 项）：需要本分支的 `gui-memory` 工作流结果与 `130cd8e` 的 0.76% CPU、约 119MiB 对比，CI 结果出来前没有数字。
+
+未验证：本机没有 Rust/Cargo，未编译、未运行任何测试、未截图；fmt、严格 Clippy、locked test/build、截图与内存工作流以本分支的 CI 为准。视觉效果、动效的实际观感、Windows／macOS 原生外观和高 DPI 都没有看过。

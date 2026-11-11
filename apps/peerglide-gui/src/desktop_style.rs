@@ -298,8 +298,8 @@ pub(super) fn selection_colors(ui: &egui::Ui) -> (Color32, Color32) {
 
 /// Pure design tokens for the interface redesign: constants and side-effect free functions.
 /// Existing widgets keep their literal values until the slice that migrates them lands.
-/// The shell (S1) consumes the motion, sidebar, icon, control radius and spacing tokens;
-/// items marked `allow(dead_code)` wait for the canvas, pairing and dialog slices.
+/// The shell, canvas, context column, pairing window and dialogs consume these tokens. The
+/// few items still marked `allow(dead_code)` have no caller outside tests; each says why.
 pub(super) mod tokens {
     use super::palette;
     use eframe::egui::Color32;
@@ -321,16 +321,15 @@ pub(super) mod tokens {
     /// Display rebound after a drag is released (M7), seconds.
     pub(crate) const REBOUND_SECS: f32 = 0.22;
     /// Shake after a rejected code or address (M8), seconds.
-    #[allow(dead_code)]
     pub(crate) const SHAKE_SECS: f32 = 0.36;
     /// Check mark and cross stroke drawing (M9), seconds.
-    #[allow(dead_code)]
     pub(crate) const STROKE_DRAW_SECS: f32 = 0.24;
     /// Dialog height change (M10), seconds.
     pub(crate) const RESIZE_SECS: f32 = 0.20;
     /// List item entering or leaving (M12), seconds.
     pub(crate) const LIST_PRESENCE_SECS: f32 = 0.18;
     /// Upper bound for everything one interaction may play, seconds.
+    // Read by the budget test below; no screen needs the bound at run time.
     #[allow(dead_code)]
     pub(crate) const MAX_INTERACTION_SECS: f32 = 0.36;
     /// Spinner step (M11). Matches the existing 100 ms activity tick; it is not a timer.
@@ -347,14 +346,14 @@ pub(super) mod tokens {
     pub(crate) const ICON_MEDIUM: f32 = 20.0;
     pub(crate) const ICON_STROKE: f32 = 1.4;
 
-    #[allow(dead_code)]
     pub(crate) const RADIUS_CHIP: u8 = 8;
     pub(crate) const RADIUS_CONTROL: u8 = 9;
+    // Menu and pill radii of the design scale; no menu is painted by hand yet and the status
+    // capsule rounds by its own height.
     #[allow(dead_code)]
     pub(crate) const RADIUS_MENU: u8 = 10;
     #[allow(dead_code)]
     pub(crate) const RADIUS_PILL: u8 = 12;
-    #[allow(dead_code)]
     pub(crate) const RADIUS_CARD: u8 = 14;
 
     pub(crate) const SPACE_XS: f32 = 4.0;
@@ -374,16 +373,17 @@ pub(super) mod tokens {
         palette(dark).muted
     }
 
+    // Widgets read text color from `Visuals`, which `install` fills from the same palette.
     #[allow(dead_code)]
     pub(crate) fn text_color(dark: bool) -> Color32 {
         palette(dark).text
     }
 
-    #[allow(dead_code)]
     pub(crate) fn surface_color(dark: bool) -> Color32 {
         palette(dark).surface
     }
 
+    // The canvas paints its wash through `canvas_wash`; the theme test reads this one.
     #[allow(dead_code)]
     pub(crate) fn canvas_color(dark: bool) -> Color32 {
         palette(dark).canvas
