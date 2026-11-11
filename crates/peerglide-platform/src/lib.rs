@@ -11,6 +11,7 @@ mod capture_events;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+pub mod display_layout;
 #[cfg(any(windows, target_os = "macos", test))]
 mod held_inputs;
 #[cfg(any(windows, test))]
