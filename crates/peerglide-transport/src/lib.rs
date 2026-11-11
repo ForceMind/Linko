@@ -233,6 +233,9 @@ fn transport() -> Arc<quinn::TransportConfig> {
     ));
     t.keep_alive_interval(Some(Duration::from_millis(400)));
     t.datagram_receive_buffer_size(Some(64 * 1024));
+    // Motion carries an absolute cursor position. Bound the queue so a
+    // stalled link discards older positions before accumulating a backlog.
+    t.datagram_send_buffer_size(16 * 1024);
     t.receive_window((64 * 1024u32).into());
     t.stream_receive_window((16 * 1024u32).into());
     Arc::new(t)
