@@ -8,7 +8,7 @@ use quinn::{
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 pub mod pairing;
 pub mod trusted_listener;
@@ -308,8 +308,11 @@ pub async fn send(stream: &mut quinn::SendStream, msg: &Message) -> Result<()> {
     if bytes.len() > MAX_FRAME {
         bail!("frame too large");
     }
-    stream.write_u32(bytes.len() as u32).await?;
-    stream.write_all(&bytes).await?;
+    let mut frame = [0; 4 + MAX_FRAME];
+    let used = &mut frame[..4 + bytes.len()];
+    used[..4].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
+    used[4..].copy_from_slice(&bytes);
+    stream.write_all(used).await?;
     Ok(())
 }
 #[derive(Debug)]
@@ -349,16 +352,18 @@ pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
     if size == 0 || size > MAX_FRAME {
         return Err(anyhow::anyhow!("frame length invalid").context(InvalidMessageFrame));
     }
-    let mut bytes = vec![0; size];
-    AsyncReadExt::read_exact(stream, &mut bytes)
+    let mut buffer = [0; MAX_FRAME];
+    let body = &mut buffer[..size];
+    AsyncReadExt::read_exact(stream, body)
         .await
         .map_err(frame_read_error)?;
-    decode(&bytes).map_err(|error| anyhow::Error::msg(error).context(InvalidMessageFrame))
+    decode(body).map_err(|error| anyhow::Error::msg(error).context(InvalidMessageFrame))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[tokio::test]
     async fn legacy_protocol_peers_are_rejected_before_input_session() -> Result<()> {
         for alpn in [b"peerglide/3".as_slice(), b"peerglide/4".as_slice()] {
@@ -573,7 +578,7 @@ mod negative_tests {
         let client = async {
             let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
             let (mut tx, mut rx) = c.open_bi().await?;
-            tx.write_u32(u32::MAX).await?;
+            tx.write_all(&u32::MAX.to_be_bytes()).await?;
             assert!(matches!(
                 receive(&mut rx).await?,
                 Message::Denied { lease: 0 }
