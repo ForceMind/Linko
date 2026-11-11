@@ -71,18 +71,6 @@ impl App {
             None => "尚未开启键鼠会话",
         }
     }
-    fn unavailable(ui: &mut egui::Ui, title: &str, sentences: &[&str]) {
-        egui::Frame::group(ui.style())
-            .inner_margin(18.0)
-            .show(ui, |ui| {
-                ui.strong(title);
-                ui.add_space(7.0);
-                for sentence in sentences {
-                    ui.label(*sentence);
-                }
-                ui.weak("功能准备好后，会在这里提供独立的授权与操作入口。");
-            });
-    }
     pub(super) fn open_setup(&mut self) {
         self.peer_wait_expired = false;
         self.native_confirmation = false;
@@ -461,7 +449,7 @@ impl App {
                     self.clipboard_panel = clipboard;
                 }
                 #[cfg(not(any(windows, target_os = "macos")))]
-                Self::unavailable(ui, "当前平台暂不支持系统剪贴板共享", &[]);
+                ui.strong("当前平台暂不支持系统剪贴板共享");
             }
             CollaborationTab::Files => {
                 let mut files = std::mem::take(&mut self.file_panel);
