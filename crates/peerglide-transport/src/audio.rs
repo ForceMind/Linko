@@ -14,7 +14,9 @@ const HELLO_BYTES: usize = 8;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(4);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_CONSENT: Duration = Duration::from_secs(60 * 60);
-const PERIOD: Duration = Duration::from_millis(5);
+// The source emits a 5 ms frame on its clock. Permit up to 1 ms of
+// scheduling jitter without allowing multiple immediately queued frames.
+const MIN_SEND_INTERVAL: Duration = Duration::from_millis(4);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -154,7 +156,7 @@ impl Session {
         }
         let bytes = frame.encode().context("invalid local audio frame")?;
         self.connection.send_datagram(bytes.to_vec().into())?;
-        self.next_send = now + PERIOD;
+        self.next_send = now + MIN_SEND_INTERVAL;
         Ok(true)
     }
 

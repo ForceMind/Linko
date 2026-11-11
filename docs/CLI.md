@@ -72,3 +72,11 @@ Windows 和 macOS 提供显式播放入口。指定已线下核对的音频源�
 ```text
 peerglide play-audio --identity PATH --peer-cert SOURCE.der --volume 65
 ```
+
+Windows 的 `share-system-audio` 使用默认播放设备的 WASAPI 回环。
+当前支持 48 kHz 双声道 PCM16 或 Float32。接收端需先明确开启
+`play-audio` 并核对发送方证书。系统音频与麦克风权限分别处理。
+
+```text
+peerglide share-system-audio RECEIVER_IP:24874 --identity PATH --peer-cert RECEIVER.der
+```
