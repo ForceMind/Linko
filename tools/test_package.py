@@ -100,6 +100,7 @@ class Packaging(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
         os.environ.pop("LINKO_VERSION", None)
+        os.environ.pop("LINKO_REVIEW_HEAD", None)
 
     def test_macos_icon_has_transparent_optical_margin(self):
         root = Path(package.__file__).resolve().parent.parent
@@ -385,6 +386,50 @@ class Packaging(unittest.TestCase):
                 with self.assertRaises(OSError):
                     package.build_package(root, "Linux", "x86_64", FakeCodesign())
             self.assertEqual(list((root / "dist").iterdir()), [])
+
+    def test_package_records_review_commit_and_actual_checkout_tree(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            checkout, tree, base, head = ("1" * 40, "2" * 40, "3" * 40, "4" * 40)
+            git_result = subprocess.CompletedProcess(
+                ["git"], 0, stdout=f"{checkout}\n{tree}\n{base} {head}\n"
+            )
+            environment = {
+                "LINKO_VERSION": "2026.11.12-0600",
+                "LINKO_REVIEW_HEAD": head,
+                "GITHUB_SHA": checkout,
+            }
+            with patch.dict(os.environ, environment), patch.object(
+                package.subprocess, "run", return_value=git_result
+            ):
+                archive = package.build_package(root, "Linux", "x86_64", FakeCodesign())
+            with zipfile.ZipFile(archive) as zipped:
+                source = json.loads(zipped.read(f"{archive.stem}/{package.SOURCE_MANIFEST}"))
+            self.assertEqual(source["checkout_commit"], checkout)
+            self.assertEqual(source["checkout_tree"], tree)
+            self.assertEqual(source["review_commit"], head)
+            self.assertEqual(source["build_version"], environment["LINKO_VERSION"])
+
+    def test_wrong_review_checkout_stops_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            checkout, tree, head = "1" * 40, "2" * 40, "3" * 40
+            git_result = subprocess.CompletedProcess(
+                ["git"], 0, stdout=f"{checkout}\n{tree}\n\n"
+            )
+            environment = {
+                "LINKO_VERSION": "2026.11.12-0600",
+                "LINKO_REVIEW_HEAD": head,
+                "GITHUB_SHA": checkout,
+            }
+            with patch.dict(os.environ, environment), patch.object(
+                package.subprocess, "run", return_value=git_result
+            ):
+                with self.assertRaisesRegex(ValueError, "review commit does not match"):
+                    package.build_package(root, "Linux", "x86_64", FakeCodesign())
+            self.assertFalse((root / "dist").exists())
 
     def test_datetime_version_names_archive_and_sets_both_bundle_fields(self):
         with tempfile.TemporaryDirectory() as folder:

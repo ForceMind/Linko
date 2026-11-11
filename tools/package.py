@@ -6,6 +6,7 @@ publisher identity or notarization. No signing credentials, custom requirements,
 private entitlements, OS protection changes or TCC edits are used.
 """
 import hashlib
+import json
 import os
 import pathlib
 import platform
@@ -26,6 +27,8 @@ APP_DISPLAY_NAME = "Linko · 屏跃"
 APP_ICON_FILE = "Linko.icns"
 APP_IDENTIFIER = "com.peerglide.PeerGlide"
 WORKER_IDENTIFIER = APP_IDENTIFIER + ".worker"
+SOURCE_MANIFEST = "BUILD_SOURCE.json"
+_OBJECT_ID = re.compile(r"[0-9a-f]{40}")
 
 
 def bundle_versions(version):
@@ -52,6 +55,47 @@ def resolve_version(root):
     if match is None:
         raise ValueError("workspace version is missing")
     return match.group(1)
+
+
+def build_source(root, version, system, machine):
+    """Record the Git objects used by this build, including a PR merge checkout."""
+    review = os.environ.get("LINKO_REVIEW_HEAD")
+    github = os.environ.get("GITHUB_SHA") if review else None
+    if review is not None and not _OBJECT_ID.fullmatch(review):
+        raise ValueError("invalid review commit for package")
+    manifest = {
+        "schema_version": 1,
+        "product": PRODUCT_NAME,
+        "application_id": APP_IDENTIFIER,
+        "build_version": version,
+        "system": system.lower(),
+        "machine": machine.lower(),
+        "checkout_commit": None,
+        "checkout_tree": None,
+        "review_commit": review,
+    }
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "show", "-s", "--format=%H%n%T%n%P", "HEAD"],
+            check=True, capture_output=True, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        if review is not None:
+            raise ValueError("review package requires a Git checkout") from None
+        return manifest
+    lines = result.stdout.splitlines()
+    if len(lines) != 3:
+        raise ValueError("invalid package source metadata")
+    commit, tree, parents = lines
+    if not all(_OBJECT_ID.fullmatch(item) for item in [commit, tree, *parents.split()]):
+        raise ValueError("invalid package source object")
+    if github is not None and github != commit:
+        raise ValueError("runner checkout differs from GitHub source commit")
+    if review is not None and review not in [commit, *parents.split()]:
+        raise ValueError("review commit does not match the runner checkout")
+    manifest["checkout_commit"] = commit
+    manifest["checkout_tree"] = tree
+    return manifest
 
 
 def bundle_info(version):
@@ -126,8 +170,12 @@ def sign_macos_bundle(app, run):
     verify_macos_bundle_metadata(app, run)
 
 
-def _stage_bundle(root, bundle, system, version, run):
+def _stage_bundle(root, bundle, system, version, source, run):
     bundle.mkdir()
+    (bundle / SOURCE_MANIFEST).write_text(
+        json.dumps(source, ensure_ascii=True, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
     binary_dir = bundle
     if system == "Darwin":
         contents = bundle / APP_BUNDLE_NAME / "Contents"
@@ -178,6 +226,7 @@ def build_package(root=ROOT, system=None, machine=None, run=None):
     machine = machine or platform.machine()
     run = run or subprocess.run
     version = resolve_version(root)
+    source = build_source(root, version, system, machine)
     label = f"{PRODUCT_NAME}-{version}-{system.lower()}-{machine.lower()}"
     dist = root / "dist"
     archive = dist / (label + ".zip")
@@ -187,7 +236,7 @@ def build_package(root=ROOT, system=None, machine=None, run=None):
     dist.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="peerglide-package-") as temporary:
         bundle = pathlib.Path(temporary) / label
-        _stage_bundle(root, bundle, system, version, run)
+        _stage_bundle(root, bundle, system, version, source, run)
         archive_created = False
         checksum_created = False
         try:

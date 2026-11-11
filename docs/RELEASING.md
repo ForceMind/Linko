@@ -23,6 +23,14 @@
 - `tools/package.py` 优先使用 `LINKO_VERSION`（格式不符即报错），未设置时由 git 计算，git 不可用时回退到 `Cargo.toml` 的 workspace version（该值不随提交修改）。
 - 发布标签仍按上文 `vX.Y.Z-dev` 规则，与构建版本号相互独立。
 
+## 包内来源
+
+ZIP 根目录的 `BUILD_SOURCE.json` 记录版本、平台、架构和实际
+Git 提交及源码树。PR 工作流同时记录受审提交，GitHub 合成提交
+可与受审提交有不同编号。生成验收包时核对各平台的源码树与
+提交来源。来源字段和 SHA-256 需从可信 CI 或发布记录核对，
+本地 ad-hoc 校验和 ZIP 来源文件不提供发布者身份。
+
 ## 首个预览的来源
 
 0.3.16-dev 程序来自 `cb27bce72ece205f138180fd1b6ef0c8cbf0764f`、CI `42382394527`。首个公开包仅替换 ZIP 根目录的 README／SECURITY，程序和 App 内成员保持原样。标签的 Rust 源码须与该基线一致。新 ZIP 有独立摘要，不能混用原始 CI artifact 外层摘要。
