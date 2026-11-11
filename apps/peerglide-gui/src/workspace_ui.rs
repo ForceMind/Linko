@@ -220,7 +220,7 @@ impl App {
                             ui,
                             "登记",
                             if self.pairing_pending() {
-                                "等待对端回执"
+                                "等待另一台回执"
                             } else {
                                 "已登记设备"
                             },

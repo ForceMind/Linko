@@ -63,8 +63,8 @@ impl App {
         match self.input_state {
             Some(WorkerInputState::Disabled) => "键鼠未开启",
             Some(WorkerInputState::Local) => "本机控制（进程报告）",
-            Some(WorkerInputState::ControllingRemote) => "已获准向对端发送输入",
-            Some(WorkerInputState::ReceivingRemote) => "对端正在控制本机",
+            Some(WorkerInputState::ControllingRemote) => "已获准向另一台发送输入",
+            Some(WorkerInputState::ReceivingRemote) => "另一台正在控制本机",
             Some(WorkerInputState::Recovering) => "正在恢复本机输入",
             Some(WorkerInputState::RecoveryUnconfirmed) => "输入恢复未确认",
             Some(WorkerInputState::Unavailable) => "输入归属尚未确认",
@@ -789,8 +789,8 @@ impl App {
                                 self.wizard_listen = false;
                                 self.confirmed_fingerprint = None;
                             }
-                            ui.label("对端实际 IP 与端口（请勿照抄示例）");
-                            ui.add(egui::TextEdit::singleline(&mut self.wizard_address).hint_text("填写对端实际 IPv4:24870"));
+                            ui.label("另一台的实际 IP 与端口（请勿照抄示例）");
+                            ui.add(egui::TextEdit::singleline(&mut self.wizard_address).hint_text("填写另一台的实际 IPv4:24870"));
                             if ui.button("使用证书文件登记").clicked() {
                                 self.use_connection_info = false;
                                 self.confirmed_fingerprint = None;
@@ -811,7 +811,7 @@ impl App {
                         if self.use_connection_info {
                             self.connection_exchange_ui(ui);
                             if self.connection_addresses.len() > 1 {
-                                ui.label("对端有多个网卡：选择与你同一局域网的地址");
+                                ui.label("另一台有多个网卡，请选择与本机同一局域网的地址");
                                 egui::ComboBox::from_id_salt("peer-connection-address")
                                     .selected_text(if self.wizard_address.is_empty() { "请选择实际局域网地址" } else { &self.wizard_address })
                                     .show_ui(ui, |ui| {
@@ -824,13 +824,13 @@ impl App {
                                     });
                             }
                         } else {
-                            ui.label("对端公钥证书文件路径");
+                            ui.label("另一台的公钥证书文件路径");
                             if ui.text_edit_singleline(&mut self.import_path).changed() {
                                 self.confirmed_fingerprint = None;
                             }
                         }
                         ui.label(if self.wizard_listen {
-                            "本机等待连接；对端需选择连接本机。".to_owned()
+                            "本机等待连接，另一台需选择连接本机。".to_owned()
                         } else {
                             format!("本机将连接：{}", if self.wizard_address.is_empty() { "尚未选择地址" } else { &self.wizard_address })
                         });
@@ -839,10 +839,10 @@ impl App {
                             .ok()
                             .map(|bytes| transport::fingerprint(&bytes));
                         if let Some(fp) = &candidate {
-                            ui.label("对端证书BLAKE3指纹");
+                            ui.label("另一台的证书 BLAKE3 指纹");
                             ui.monospace(fp);
                         } else {
-                            ui.weak("尚未读取有效的对端公开证书。连接信息不是短码配对，也不自动授信。");
+                            ui.weak("尚未读取另一台的有效公开证书。连接信息不是短码配对，也不自动授信。");
                         }
                         let address_valid = self.wizard_listen || self.wizard_address.parse::<std::net::SocketAddr>().is_ok_and(|address| address.port() != 0 && !address.ip().is_unspecified());
                         let mut compared =
@@ -855,7 +855,7 @@ impl App {
                                 candidate.is_some(),
                                 egui::Checkbox::new(
                                     &mut compared,
-                                    "我已在对端独立核对该指纹，完全一致",
+                                    "我已在另一台独立核对该指纹，完全一致",
                                 ),
                             )
                             .changed()
@@ -883,8 +883,8 @@ impl App {
                     }
                     SetupStep::Permissions => {
                         ui.heading("选择你需要的协作方式");
-                        ui.checkbox(&mut self.wizard_allow, "允许此对端把键鼠输入发送到本机");
-                        ui.weak("不能代授对端接收本机控制。剪贴板/文件尚未提供，默认不开放。");
+                        ui.checkbox(&mut self.wizard_allow, "允许另一台把键鼠输入发送到本机");
+                        ui.weak("不能替另一台授权本机控制它。剪贴板/文件尚未提供，默认不开放。");
                         if ui.button("保存本机许可并继续").clicked() {
                             let old = self.config.allow;
                             self.config.allow = self.wizard_allow;
@@ -1618,7 +1618,7 @@ static NATIVE_START_RISK: [SafetyPoint; 3] = [
     },
     SafetyPoint {
         icon: Icon::Lock,
-        text: "连接/认证不代表对端允许本机控制。",
+        text: "连接/认证不代表另一台允许本机控制。",
     },
 ];
 static NATIVE_START_WAIT: [SafetyPoint; 3] = [
@@ -1637,16 +1637,16 @@ static NATIVE_START_WAIT: [SafetyPoint; 3] = [
 ];
 static NATIVE_START_RECEIVE_ALLOWED: SafetyPoint = SafetyPoint {
     icon: Icon::Arrow(icons::Direction::Left),
-    text: "本机接收偏好：允许已登记对端控制本机。",
+    text: "本机接收偏好：允许已登记的另一台控制本机。",
 };
 static NATIVE_START_RECEIVE_DENIED: [SafetyPoint; 2] = [
     SafetyPoint {
         icon: Icon::Lock,
-        text: "本机接收偏好：不允许对端控制本机。",
+        text: "本机接收偏好：不允许另一台控制本机。",
     },
     SafetyPoint {
         icon: Icon::Arrow(icons::Direction::Right),
-        text: "可请求控制已授权本机的对端。",
+        text: "可向已授权本机的另一台请求控制。",
     },
 ];
 static NATIVE_START_REPLACE: [SafetyPoint; 2] = [
@@ -1711,7 +1711,7 @@ pub(super) fn native_start_points(
 static REVOKE_POINTS: [SafetyPoint; 2] = [
     SafetyPoint {
         icon: Icon::Stop,
-        text: "停止会话并清除对端信任与本机接收许可。",
+        text: "停止会话，撤销本机对另一台的信任及本机接收许可。",
     },
     SafetyPoint {
         icon: Icon::Device,
@@ -2085,7 +2085,7 @@ pub(super) mod safety_dialog_tests {
                     let texts = texts_of(&points);
                     let has = |text: &str| texts.iter().copied().any(|item| item == text);
                     assert!(has("这会启动真实原生键鼠捕获与注入。"));
-                    assert!(has("连接/认证不代表对端允许本机控制。"));
+                    assert!(has("连接/认证不代表另一台允许本机控制。"));
                     assert!(has("Ctrl+Alt+Esc 紧急恢复。"));
                     assert!(has("实机兼容性、DPI、输入法与权限变化仍未完成验收。"));
                     assert!(has("接收端首次物理动作仅用于收回控制，不执行或回放。"));
@@ -2094,9 +2094,9 @@ pub(super) mod safety_dialog_tests {
                         has("清理成功后再以键鼠模式重连；失败不自动继续。"),
                         replaces
                     );
-                    assert_eq!(has("本机接收偏好：允许已登记对端控制本机。"), allow);
-                    assert_eq!(has("本机接收偏好：不允许对端控制本机。"), !allow);
-                    assert_eq!(has("可请求控制已授权本机的对端。"), !allow);
+                    assert_eq!(has("本机接收偏好：允许已登记的另一台控制本机。"), allow);
+                    assert_eq!(has("本机接收偏好：不允许另一台控制本机。"), !allow);
+                    assert_eq!(has("可向已授权本机的另一台请求控制。"), !allow);
                 }
             }
         }

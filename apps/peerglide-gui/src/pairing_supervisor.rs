@@ -300,7 +300,7 @@ impl Supervisor {
             .context("请先完成本次身份核验")?
             .context();
         let process = self.process.as_mut().context("配对进程已结束")?;
-        anyhow::ensure!(!process.approved, "本次已确认，请等待对端");
+        anyhow::ensure!(!process.approved, "本次已确认，请等待另一台");
         process
             .input
             .try_send(PairingCommand::approve(context))
@@ -320,7 +320,7 @@ impl Supervisor {
         let process = self
             .process
             .as_mut()
-            .context("本机可能已保存，对端回执未知")?;
+            .context("本机可能已保存，尚不清楚另一台是否回执")?;
         anyhow::ensure!(
             process.generation == self.generation
                 && self.phase == Phase::SaveReady
@@ -332,7 +332,7 @@ impl Supervisor {
         process
             .input
             .try_send(PairingCommand::local_saved(context))
-            .map_err(|_| anyhow::anyhow!("保存通知未送达，对端回执未知"))?;
+            .map_err(|_| anyhow::anyhow!("保存通知未送达，尚不清楚另一台是否回执"))?;
         process.local_saved = true;
         self.phase = Phase::AwaitingPeerSaved;
         Ok(())

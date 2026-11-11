@@ -135,7 +135,7 @@ pub(super) fn present(s: Snapshot) -> View {
         }
         if s.pairing_pending {
             return View::new(
-                "登记等待对端回执",
+                "登记等待另一台回执",
                 "待回执",
                 "本机记录已保留，尚不能开始协同。请重新核验或撤销待确认登记。",
                 Tone::Warning,
@@ -270,7 +270,7 @@ pub(super) fn present(s: Snapshot) -> View {
                 Tone::Accent,
             )),
             Some(WorkerSwitchState::Denied) => Some((
-                "上次切换未被对端接受",
+                "另一台未接受上次切换",
                 "切换被拒",
                 "请在另一台检查接收控制、键鼠开启和恢复提示；鼠标移回屏幕内再重试。",
                 Tone::Warning,
@@ -282,8 +282,8 @@ pub(super) fn present(s: Snapshot) -> View {
                 Tone::Warning,
             )),
             Some(WorkerSwitchState::PeerUnavailable) => Some((
-                "对端未提供鼠标能力",
-                "对端不可用",
+                "另一台未提供鼠标能力",
+                "另一台不可用",
                 "请在另一台检查键鼠是否已开启及平台支持情况。提供能力不等于允许接收控制。",
                 Tone::Warning,
             )),
@@ -297,7 +297,7 @@ pub(super) fn present(s: Snapshot) -> View {
         Some(WorkerInputState::ControllingRemote) => View::new(
             "已获准向另一台电脑发送输入",
             "控制另一台",
-            "请观察对端是否响应。Ctrl+Alt+Esc 可紧急恢复本机控制。",
+            "请观察另一台是否响应。Ctrl+Alt+Esc 可紧急恢复本机控制。",
             Tone::Accent,
             Action::None,
         ),
@@ -389,7 +389,7 @@ mod tests {
         let mut s = snapshot();
         s.pairing_pending = true;
         let view = present(s);
-        assert_eq!(view.title, "登记等待对端回执");
+        assert_eq!(view.title, "登记等待另一台回执");
         assert_eq!(view.action, Action::AddDevice);
         let mut s = snapshot();
         s.pairing_pending = true;

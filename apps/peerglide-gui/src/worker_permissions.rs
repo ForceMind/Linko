@@ -22,7 +22,7 @@ type Outcome = Result<PermissionReport, &'static str>;
 
 /// W3 header status once the last observation is older than `FRESHNESS`.
 const EXPIRED_SUMMARY: &str =
-    "上次结果已过期，开启前请重新检查。检查通过也不代表对端许可或实际输入效果。";
+    "上次结果已过期，开启前请重新检查。检查通过不代表另一台已许可，也不代表实际输入有效。";
 /// W3 header: what the check itself never does.
 pub(super) const HEADER_NOTE: SafetyPoint = SafetyPoint {
     icon: Icon::Lock,
@@ -51,7 +51,7 @@ pub(super) const DETAIL_FRESHNESS: [SafetyPoint; 2] = [
     },
     SafetyPoint {
         icon: Icon::Warning,
-        text: "检查通过也不代表对端许可或实际输入效果。",
+        text: "检查通过不代表另一台已许可，也不代表实际输入有效。",
     },
 ];
 
@@ -497,7 +497,7 @@ impl Checker {
         }
         self.report_ui(ui);
         if self.result.is_some() && self.readiness() == Readiness::Unchecked {
-            ui.weak("上次结果已过期，开启前请重新检查。检查通过也不代表对端许可或实际输入效果。");
+            ui.weak(EXPIRED_SUMMARY);
         }
     }
 }
