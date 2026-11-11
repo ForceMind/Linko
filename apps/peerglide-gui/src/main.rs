@@ -2640,8 +2640,7 @@ mod tests {
                             let ctx = root.ctx().clone();
                             egui::CentralPanel::default().show(root, |ui| match page {
                                 Page::Home => app.home(ui),
-                                Page::Devices => app.devices(ui),
-                                Page::Displays => app.displays(ui),
+                                Page::Devices | Page::Displays => app.devices(ui),
                                 Page::Settings => app.settings(ui, &ctx),
                                 Page::GestureLab => {
                                     app.gesture_lab.ui(ui, false);

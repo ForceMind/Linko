@@ -32,12 +32,11 @@ const HALF_DISC_STEPS: usize = 12;
 const LOCKED_NOTE: &str = "当前位置已锁定，暂不能调整方向。";
 /// Hover text of the sketch chip; the canvas is never measured display geometry.
 const SKETCH_HINT: &str = "仅表示两台主屏的相对方向，不代表真实尺寸。";
-
-/// The former layout subpage (L9) is this canvas now. Its old body, `App::displays` in
-/// `desktop_ui.rs`, lies outside this slice's files and goes with that file's next slice;
-/// until then this reference keeps it compiled although the shell no longer calls it.
-#[allow(dead_code)]
-const FORMER_LAYOUT_PAGE: fn(&mut App, &mut egui::Ui) = App::displays;
+/// Height of a context column status row and width of its label, in points.
+const CONTEXT_ROW_HEIGHT: f32 = 28.0;
+const CONTEXT_LABEL_W: f32 = 60.0;
+/// Short word of the connection row's stop button; its name keeps the full action.
+const STOP_WORD: &str = "断开";
 
 impl App {
     /// Home view: the screen canvas with the device context column. The device list lives
@@ -85,19 +84,8 @@ impl App {
         let margin = if compact { 12.0 } else { 16.0 };
         card(ui).inner_margin(margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.horizontal_wrapped(|ui| {
-                self.workspace_zoom_controls(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let details = if self.connection_details_open {
-                        "收起连接详情"
-                    } else {
-                        "连接与身份详情"
-                    };
-                    if ui.small_button(details).clicked() {
-                        self.connection_details_open = !self.connection_details_open;
-                    }
-                });
-            });
+            // The details switch is the context column's info button now.
+            ui.horizontal_wrapped(|ui| self.workspace_zoom_controls(ui));
             self.workspace_canvas(ui);
             self.workspace_direction_controls(ui);
             // Explains the selector directly above, so it stays in the first viewport.
@@ -474,138 +462,24 @@ impl App {
         }
     }
 
+    /// Context column: the selected device with the details switch, four status rows of an
+    /// icon and a short word, then the attention sentences and the one primary button.
+    /// Full sentences are each row's hover and accessible name; warning, consent,
+    /// permission and recovery sentences stay visible text.
     fn workspace_device_detail(&mut self, ui: &mut egui::Ui) {
         let compact = ui.available_width() < 270.0;
         let margin = if compact { 12.0 } else { 16.0 };
         let gap = if compact { 8.0 } else { 12.0 };
         card(ui).inner_margin(margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.spacing_mut().item_spacing.y = 4.0;
-            ui.label(desktop_style::semibold("连接状态", 16.0));
-            ui.add_space(4.0);
-            let connection = self.peer_connection_label();
-            let tone = if self.connected && self.child.is_some() && !self.pairing_pending() {
-                Tone::Good
-            } else {
-                Tone::Neutral
-            };
-            let connection_text =
-                desktop_style::status_text(connection, self.config.dark, tone).font(
-                    egui::FontId::new(18.0, egui::FontFamily::Name("linko-semibold".into())),
-                );
-            if self.child.is_some() {
-                ui.horizontal(|ui| {
-                    let width = (ui.available_width() - 120.0).max(1.0);
-                    ui.add_sized([width, 38.0], egui::Label::new(connection_text).truncate())
-                        .on_hover_text(connection);
-                    if ui
-                        .add_sized([112.0, 38.0], egui::Button::new("停止并断开"))
-                        .clicked()
-                    {
-                        self.stop();
-                    }
-                });
-            } else {
-                ui.label(connection_text);
-            }
-            let view = self.workspace_view();
-            let needs_attention = matches!(view.tone, Tone::Warning | Tone::Danger)
-                || (!self.connected && view.action == desktop_state::Action::None)
-                || self.last_failure
-                || self.peer_wait_expired
-                || self.pairing_pending();
-            if needs_attention {
-                ui.separator();
-                ui.label(desktop_style::status_text(
-                    view.title,
-                    self.config.dark,
-                    view.tone,
-                ));
-                ui.label(view.detail);
-            }
-        });
-        ui.add_space(gap);
-        card(ui).inner_margin(margin).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.spacing_mut().item_spacing.y = if compact { 4.0 } else { 6.0 };
-            ui.label(desktop_style::semibold("快捷操作", 17.0));
-            read_only_row(ui, |ui| {
-                ui.small("所选设备");
-                let name = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
-                    self.config.peer_name.as_str()
-                } else {
-                    desktop_ui::local_device_name()
-                };
-                ui.add(egui::Label::new(desktop_style::semibold(name, 14.0)).truncate())
-                    .on_hover_text(name);
-            });
-            let view = self.workspace_view();
-            let allowed = match view.action {
-                desktop_state::Action::AddDevice | desktop_state::Action::Connect => {
-                    self.idle_writable()
-                }
-                desktop_state::Action::CheckPermissions | desktop_state::Action::StartInput => {
-                    self.native_start_available()
-                }
-                desktop_state::Action::Recovery => true,
-                desktop_state::Action::None => false,
-            };
-            if view.action != desktop_state::Action::None {
-                let response = ui
-                    .add_enabled(
-                        allowed && self.dialog.is_none() && self.wizard.is_none(),
-                        desktop_style::primary(view.action.label()),
-                    )
-                    .on_hover_text(view.detail);
-                self.record_layout_control("primary_action", &response, ui.clip_rect());
-                if response.clicked() {
-                    self.workspace_action(view.action);
-                }
-            }
-            text_row(ui, "当前会话", self.input_label());
+            ui.spacing_mut().item_spacing.x = tokens::SPACE_SM;
+            ui.spacing_mut().item_spacing.y = tokens::SPACE_XS;
+            self.context_header(ui);
             ui.separator();
-            let readiness = self.worker_permissions.readiness();
-            let label = match readiness {
-                worker_permissions::Readiness::Ready => "刚刚检查通过",
-                worker_permissions::Readiness::Checking => "正在检查",
-                worker_permissions::Readiness::Unchecked => "尚未检查或已过期",
-                _ => "需要处理",
-            };
-            text_row(ui, "本机权限", label);
-            ui.horizontal_wrapped(|ui| {
-                ui.small("检查不会开启键鼠");
-                if ui
-                    .small_button("权限详情")
-                    .on_hover_text(readiness.detail())
-                    .clicked()
-                {
-                    self.navigate_to(Page::Settings);
-                    self.settings_section = SettingsSection::Permissions;
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.small("本机接收控制");
-                ui.small(if self.config.allow {
-                    "已允许"
-                } else {
-                    "默认关闭"
-                });
-                if ui
-                    .add_enabled(
-                        self.config.fingerprint.is_some(),
-                        egui::Button::new("设置").small(),
-                    )
-                    .clicked()
-                {
-                    self.device_tab = DeviceTab::Permissions;
-                }
-            });
-            if self.workspace_peer_selected && self.config.fingerprint.is_some() {
-                ui.small("对端的接收许可由对方单独设置。");
-            }
-            ui.small("开启键鼠仍需本次明确确认。");
+            self.context_rows(ui);
+            self.context_attention(ui);
+            ui.add_space(tokens::SPACE_XS);
+            self.context_primary(ui);
         });
         ui.add_space(gap);
         // Not connected capabilities stay labelled (decision 2); the page explains them.
@@ -615,6 +489,260 @@ impl App {
                 self.navigate_to(Page::Transfers);
             }
         });
+        self.details_drawer(ui, gap, margin);
+    }
+
+    /// Name of the selected device and the switch of the details drawer.
+    fn context_header(&mut self, ui: &mut egui::Ui) {
+        let name = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+            self.config.peer_name.clone()
+        } else {
+            desktop_ui::local_device_name().to_owned()
+        };
+        let size = Vec2::new(ui.available_width(), CANVAS_BUTTON_SIDE);
+        let layout = egui::Layout::left_to_right(egui::Align::Center);
+        ui.allocate_ui_with_layout(size, layout, |ui| {
+            let icon_size = Vec2::splat(tokens::ICON_MEDIUM);
+            let (rect, _) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
+            Icon::Device.paint(ui.painter(), rect, ui.visuals().text_color());
+            let width = ui.available_width() - CANVAS_BUTTON_SIDE - tokens::SPACE_SM;
+            let title = desktop_style::semibold(&name, 16.0);
+            desktop_ui::left_text_slot(ui, width.max(1.0), CANVAS_BUTTON_SIDE, title)
+                .on_hover_text(format!("所选设备：{name}"));
+            let open = self.connection_details_open;
+            let label = if open {
+                "收起连接详情"
+            } else {
+                "连接与身份详情"
+            };
+            let id = context_control_id("details");
+            if canvas_button(ui, id, Icon::Info, label, None, open).clicked() {
+                self.connection_details_open = !open;
+            }
+        });
+    }
+
+    /// Connection, input, receive control and local permission rows.
+    fn context_rows(&mut self, ui: &mut egui::Ui) {
+        let registered = self.config.fingerprint.is_some();
+        let running = self.child.is_some();
+        let (value, tone) = self.connection_short();
+        let stop_width = if running {
+            canvas_button_width(ui, Some(STOP_WORD))
+        } else {
+            0.0
+        };
+        let stop = context_row(
+            ui,
+            ContextRow {
+                key: "connection",
+                icon: Icon::Link,
+                label: "连接",
+                value,
+                tone,
+                full: self.peer_connection_label(),
+                trailing: stop_width,
+            },
+            |ui| {
+                if !running {
+                    return false;
+                }
+                let id = context_control_id("stop");
+                let word = Some(STOP_WORD);
+                let stop = canvas_button(ui, id, Icon::Stop, "停止并断开", word, false);
+                stop.clicked()
+            },
+        );
+        if stop {
+            self.stop();
+        }
+        let (value, tone) = self.input_short();
+        context_row(
+            ui,
+            ContextRow {
+                key: "input",
+                icon: Icon::Keyboard,
+                label: "键鼠",
+                value,
+                tone,
+                full: self.input_label(),
+                trailing: 0.0,
+            },
+            |_| (),
+        );
+        let allowed = self.config.allow;
+        let (value, tone) = if allowed {
+            ("已允许", Tone::Accent)
+        } else {
+            ("关闭", Tone::Neutral)
+        };
+        let full = if allowed {
+            "本机接收控制：已允许。另一台的接收许可由它单独设置。"
+        } else {
+            "本机接收控制：默认关闭。另一台的接收许可由它单独设置。"
+        };
+        let receive_settings = context_row(
+            ui,
+            ContextRow {
+                key: "receive",
+                icon: Icon::Lock,
+                label: "接收控制",
+                value,
+                tone,
+                full,
+                trailing: CANVAS_BUTTON_SIDE,
+            },
+            |ui| {
+                let id = context_control_id("receive-settings");
+                let icon = Icon::Arrow(Direction::Right);
+                let shown = ui.add_enabled_ui(registered, |ui| {
+                    canvas_button(ui, id, icon, "设置本机接收控制", None, false)
+                });
+                shown.inner.clicked()
+            },
+        );
+        if receive_settings {
+            self.device_tab = DeviceTab::Permissions;
+        }
+        let readiness = self.worker_permissions.readiness();
+        let (value, tone) = match readiness {
+            worker_permissions::Readiness::Ready => ("就绪", Tone::Good),
+            worker_permissions::Readiness::Checking => ("检查中", Tone::Accent),
+            worker_permissions::Readiness::Unchecked => ("需检查", Tone::Accent),
+            _ => ("需处理", Tone::Warning),
+        };
+        let permission_details = context_row(
+            ui,
+            ContextRow {
+                key: "permissions",
+                icon: Icon::Shield,
+                label: "本机权限",
+                value,
+                tone,
+                full: readiness.detail(),
+                trailing: CANVAS_BUTTON_SIDE,
+            },
+            |ui| {
+                let id = context_control_id("permission-details");
+                let icon = Icon::Arrow(Direction::Right);
+                let details = canvas_button(ui, id, icon, "权限详情", None, false);
+                details.clicked()
+            },
+        );
+        if permission_details {
+            self.navigate_to(Page::Settings);
+            self.settings_section = SettingsSection::Permissions;
+        }
+    }
+
+    /// Title and detail of states that need attention or offer no primary button, and the
+    /// consent boundary. These stay visible text, never only a hover.
+    fn context_attention(&mut self, ui: &mut egui::Ui) {
+        let view = self.workspace_view();
+        let needs_attention = matches!(view.tone, Tone::Warning | Tone::Danger)
+            || view.action == desktop_state::Action::None
+            || self.last_failure
+            || self.peer_wait_expired
+            || self.pairing_pending();
+        if needs_attention {
+            ui.separator();
+            ui.label(desktop_style::status_text(
+                view.title,
+                self.config.dark,
+                view.tone,
+            ));
+            ui.label(view.detail);
+        }
+        let consent = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+            "另一台的接收许可由它单独设置；开启键鼠仍需本次明确确认。"
+        } else {
+            "开启键鼠仍需本次明确确认。"
+        };
+        ui.label(RichText::new(consent).small().weak());
+    }
+
+    /// The only primary button of the column. Gate, label, hover and action are unchanged.
+    fn context_primary(&mut self, ui: &mut egui::Ui) {
+        let view = self.workspace_view();
+        let allowed = match view.action {
+            desktop_state::Action::AddDevice | desktop_state::Action::Connect => {
+                self.idle_writable()
+            }
+            desktop_state::Action::CheckPermissions | desktop_state::Action::StartInput => {
+                self.native_start_available()
+            }
+            desktop_state::Action::Recovery => true,
+            desktop_state::Action::None => false,
+        };
+        if view.action != desktop_state::Action::None {
+            let response = ui
+                .add_enabled(
+                    allowed && self.dialog.is_none() && self.wizard.is_none(),
+                    desktop_style::primary(view.action.label()),
+                )
+                .on_hover_text(view.detail);
+            self.record_layout_control("primary_action", &response, ui.clip_rect());
+            if response.clicked() {
+                self.workspace_action(view.action);
+            }
+        }
+    }
+
+    /// Details drawer under the column: the former connection and identity card with
+    /// discovery. Opening and closing play one slide and fade of `EXPAND_SECS` (M4) on a
+    /// fixed id and then paint statically; closed, it paints nothing.
+    fn details_drawer(&mut self, ui: &mut egui::Ui, gap: f32, margin: f32) {
+        let id = context_control_id("details-drawer");
+        let open = self.connection_details_open;
+        let amount = motion::expand_amount(ui.ctx(), id, open);
+        if amount <= 0.0 {
+            return;
+        }
+        ui.add_space(gap + motion::lerp(tokens::VIEW_SLIDE_PX, 0.0, amount));
+        ui.scope(|ui| {
+            ui.multiply_opacity(amount);
+            card(ui).inner_margin(margin).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                self.connection_details(ui);
+            });
+        });
+    }
+
+    /// Short word and tone of the connection row, in the order of `peer_connection_label`.
+    fn connection_short(&self) -> (&'static str, Tone) {
+        if self.pairing_pending() {
+            ("待回执", Tone::Warning)
+        } else if self.stopping.is_some() {
+            ("断开中", Tone::Warning)
+        } else if self.connected && self.child.is_some() {
+            ("已连接", Tone::Good)
+        } else if self.child.is_some() {
+            ("连接中", Tone::Accent)
+        } else if self.config.fingerprint.is_some() {
+            ("未连接", Tone::Neutral)
+        } else {
+            ("未添加", Tone::Accent)
+        }
+    }
+
+    /// Short word and tone of the input row, in the order of `input_label`, which stays
+    /// the row's hover and accessible name.
+    fn input_short(&self) -> (&'static str, Tone) {
+        if self.recovery_blocked {
+            return ("恢复未确认", Tone::Danger);
+        }
+        if self.stopping.is_some() {
+            return ("正在停止", Tone::Warning);
+        }
+        match self.input_state {
+            Some(WorkerInputState::Disabled) | None => ("未开启", Tone::Neutral),
+            Some(WorkerInputState::Local) => ("本机控制", Tone::Good),
+            Some(WorkerInputState::ControllingRemote) => ("控制另一台", Tone::Accent),
+            Some(WorkerInputState::ReceivingRemote) => ("被控制中", Tone::Accent),
+            Some(WorkerInputState::Recovering) => ("正在恢复", Tone::Warning),
+            Some(WorkerInputState::RecoveryUnconfirmed) => ("恢复未确认", Tone::Danger),
+            Some(WorkerInputState::Unavailable) => ("归属未确认", Tone::Warning),
+        }
     }
 }
 
@@ -737,16 +865,88 @@ fn card_metadata(ui: &mut egui::Ui, label: &str, value: &str) {
     );
 }
 
-fn text_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    read_only_row(ui, |ui| {
-        desktop_style::detail_icon(ui, label == "本机权限");
-        ui.add_sized(
-            [52.0, 20.0],
-            egui::Label::new(RichText::new(label).size(13.0).weak()),
-        );
-        ui.add(egui::Label::new(RichText::new(value).size(14.0)).truncate())
-            .on_hover_text(value);
+/// One status row of the context column.
+struct ContextRow<'a> {
+    /// Fixed key of the row's id.
+    key: &'static str,
+    icon: Icon,
+    label: &'static str,
+    value: &'a str,
+    tone: Tone,
+    /// Full sentence: the hover text and, after the label, the accessible name.
+    full: &'a str,
+    /// Width kept free at the end of the row for its control.
+    trailing: f32,
+}
+
+/// Category icon, label, then a value shape and short word. The hover and accessible name
+/// carry the full sentence; `trailing` adds the row's optional control at its end.
+fn context_row<R>(
+    ui: &mut egui::Ui,
+    row: ContextRow<'_>,
+    trailing: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let size = Vec2::new(ui.available_width(), CONTEXT_ROW_HEIGHT);
+    let layout = egui::Layout::left_to_right(egui::Align::Center);
+    let shown = ui.allocate_ui_with_layout(size, layout, |ui| {
+        let dark = ui.visuals().dark_mode;
+        let muted = tokens::muted_color(dark);
+        let ink = desktop_style::status_colors(dark, row.tone).1;
+        let icon_size = Vec2::splat(tokens::ICON_SMALL);
+        let (icon_rect, _) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
+        row.icon.paint(ui.painter(), icon_rect, muted);
+        let label = RichText::new(row.label).size(13.0).color(muted);
+        desktop_ui::left_text_slot(ui, CONTEXT_LABEL_W, CONTEXT_ROW_HEIGHT, label);
+        let (glyph_rect, _) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
+        value_glyph(ui.painter(), glyph_rect.shrink(2.0), ink, row.tone);
+        let reserve = if row.trailing > 0.0 {
+            row.trailing + ui.spacing().item_spacing.x
+        } else {
+            0.0
+        };
+        let width = (ui.available_width() - reserve).max(1.0);
+        let value = RichText::new(row.value).size(14.0).color(ink);
+        let value = desktop_ui::left_text_slot(ui, width, CONTEXT_ROW_HEIGHT, value);
+        let result = trailing(ui);
+        (icon_rect.union(value.rect), result)
     });
+    let (info, result) = shown.inner;
+    let response = ui.interact(info, context_control_id(row.key), egui::Sense::hover());
+    let name = format!("{}：{}", row.label, row.full);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &name));
+    response.on_hover_text(row.full);
+    result
+}
+
+/// Shape per tone of a row value, so color is never the only cue (spec 4.3).
+fn value_glyph(painter: &egui::Painter, rect: egui::Rect, ink: egui::Color32, tone: Tone) {
+    match tone {
+        Tone::Good => Icon::Check.paint(painter, rect, ink),
+        Tone::Warning | Tone::Danger => Icon::Warning.paint(painter, rect, ink),
+        Tone::Accent => {
+            painter.circle_filled(rect.center(), rect.width() * 0.22, ink);
+        }
+        Tone::Neutral => {
+            let stroke = egui::Stroke::new(icons::STROKE_WIDTH, ink);
+            painter.circle_stroke(rect.center(), rect.width() * 0.25, stroke);
+        }
+    }
+}
+
+/// Fixed id of a context column control or row, for tests, assistive tools and motion.
+fn context_control_id(key: &str) -> egui::Id {
+    egui::Id::unique(("linko-context", key))
+}
+
+/// Width `canvas_button` takes with `text`, so a row can keep that room free.
+fn canvas_button_width(ui: &egui::Ui, text: Option<&str>) -> f32 {
+    let Some(text) = text else {
+        return CANVAS_BUTTON_SIDE;
+    };
+    let font = egui::FontId::proportional(13.0);
+    let ink = ui.visuals().text_color();
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
+    galley.size().x + tokens::ICON_SMALL + 3.0 * tokens::SPACE_SM
 }
 
 /// Status badge on a canvas screen: one shape per state, so color only supports it
@@ -1244,18 +1444,24 @@ mod tests {
                 Vec2::new(1180.0, 820.0),
                 Vec2::new(1280.0, 800.0),
             ] {
+                // The details switch is an icon now; its fixed id is read inside the pass.
+                let mut details = None;
                 let output = ctx.run_ui(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
                     },
-                    |root| app.desktop(root),
+                    |root| {
+                        app.desktop(root);
+                        details = root.ctx().read_response(context_control_id("details"));
+                    },
                 );
                 let controls: Vec<_> = [
-                    "快捷操作",
-                    "所选设备",
+                    "连接",
+                    "键鼠",
+                    "接收控制",
+                    "本机权限",
                     "文件 · 剪贴板 未接通",
-                    "连接与身份详情",
                     "两台主屏的相对方向；另一端需设置相反方向。",
                 ]
                 .into_iter()
@@ -1335,6 +1541,16 @@ mod tests {
                         "{label} left the first viewport at {size:?}"
                     );
                 }
+                let details = details.context("details switch absent")?;
+                let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                assert!(
+                    details.interact_rect == details.rect,
+                    "details switch clipped at {size:?}"
+                );
+                assert!(
+                    viewport.contains_rect(details.rect),
+                    "details switch left the first viewport at {size:?}"
+                );
                 assert!(app.child.is_none() && !app.config.native && !app.config.allow);
             }
         }
@@ -1390,13 +1606,46 @@ mod tests {
         input: egui::RawInput,
         key: &str,
     ) -> (egui::FullOutput, Result<egui::Response>) {
-        let id = canvas_control_id(key);
+        frame_with_id(app, ctx, input, canvas_control_id(key))
+    }
+    /// One frame whose control `id` is read inside the pass, as in `frame_with_control`.
+    fn frame_with_id(
+        app: &mut App,
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        id: egui::Id,
+    ) -> (egui::FullOutput, Result<egui::Response>) {
         let mut response = None;
         let output = ctx.run_ui(input, |root| {
             app.desktop(root);
             response = root.ctx().read_response(id);
         });
-        (output, response.context("canvas control absent"))
+        (output, response.context("control absent"))
+    }
+    /// Every painted shape, nested lists flattened.
+    fn flat_shapes(output: &egui::FullOutput) -> Vec<&egui::epaint::Shape> {
+        fn push<'a>(shape: &'a egui::epaint::Shape, into: &mut Vec<&'a egui::epaint::Shape>) {
+            match shape {
+                egui::epaint::Shape::Vec(shapes) => {
+                    for nested in shapes {
+                        push(nested, into);
+                    }
+                }
+                other => into.push(other),
+            }
+        }
+        let mut shapes = Vec::new();
+        for clipped in &output.shapes {
+            push(&clipped.shape, &mut shapes);
+        }
+        shapes
+    }
+    fn painted_count(output: &egui::FullOutput, label: &str) -> usize {
+        output
+            .shapes
+            .iter()
+            .filter(|s| text_center(&s.shape, label).is_some())
+            .count()
     }
     /// The 1180x820 window of `frame`.
     fn wide_input() -> egui::RawInput {
@@ -1679,6 +1928,210 @@ mod tests {
         assert!(title_visible && detail_visible);
         assert!(app.child.is_none() && !app.config.native && !app.config.allow);
         drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn context_rows_pair_each_icon_with_its_label_and_value() -> Result<()> {
+        use egui::epaint::Shape;
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let original = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        let rows = [
+            ("connection", "连接"),
+            ("input", "键鼠"),
+            ("receive", "接收控制"),
+            ("permissions", "本机权限"),
+        ];
+        for paired in [false, true] {
+            app.config.fingerprint = paired.then(|| "context-rows-presentation-only".into());
+            let mut found = Vec::new();
+            let output = ctx.run_ui(wide_input(), |root| {
+                app.desktop(root);
+                for (key, _) in rows {
+                    found.push(root.ctx().read_response(context_control_id(key)));
+                }
+            });
+            let shapes = flat_shapes(&output);
+            for ((key, label), response) in rows.into_iter().zip(found) {
+                let row = response.with_context(|| format!("{key} row absent"))?;
+                let area = row.rect.expand(2.0);
+                let mut label_rect = None;
+                let mut words = 0;
+                let mut glyphs = Vec::new();
+                for shape in &shapes {
+                    let rect = shape.visual_bounding_rect();
+                    if !area.contains_rect(rect) {
+                        continue;
+                    }
+                    match *shape {
+                        Shape::Text(text) if text.galley.job.text == label => {
+                            label_rect = Some(rect);
+                        }
+                        Shape::Text(text) if !text.galley.job.text.is_empty() => {
+                            words += 1;
+                        }
+                        Shape::Text(_) => (),
+                        _ => glyphs.push(rect),
+                    }
+                }
+                let label_rect = label_rect.with_context(|| format!("{label} text absent"))?;
+                assert!(words >= 1, "{label} row lacks its short word");
+                let (left, right) = (label_rect.min.x + 0.5, label_rect.max.x);
+                let icon = glyphs.iter().any(|rect| rect.max.x <= left);
+                assert!(icon, "{label} row lacks an icon before its label");
+                // The value shape after the label keeps color from being the only cue.
+                let shape = glyphs.iter().any(|rect| rect.min.x >= right);
+                assert!(shape, "{label} row lacks a value shape");
+            }
+            output.drop_without_applying_deltas();
+            assert!(app.child.is_none() && !app.config.native && !app.config.allow);
+        }
+        app.config.fingerprint = original.fingerprint.clone();
+        assert!(app.config == original);
+        assert!(
+            !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
+        );
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn details_drawer_plays_one_transition_each_way_then_requests_no_repaint() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const FRAME_SECS: f64 = 1.0 / 60.0;
+        const HEADING: &str = "连接与身份详情";
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let original = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        let mut time = 0.0;
+        for _ in 0..20 {
+            step(&mut app, &ctx, time, vec![]);
+            time += FRAME_SECS;
+        }
+        let requests = std::sync::Arc::new(AtomicUsize::new(0));
+        let observed = std::sync::Arc::clone(&requests);
+        ctx.set_request_repaint_callback(move |request| {
+            if request.delay < std::time::Duration::from_secs(1) {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        for open in [true, false] {
+            let input = timed_input(time, vec![]);
+            let id = context_control_id("details");
+            let (output, switch) = frame_with_id(&mut app, &ctx, input, id);
+            output.drop_without_applying_deltas();
+            let at = switch?.rect.center();
+            let before = requests.load(Ordering::SeqCst);
+            time += FRAME_SECS;
+            let press = vec![egui::Event::PointerMoved(at), pointer(at, true)];
+            step(&mut app, &ctx, time, press);
+            time += FRAME_SECS;
+            step(&mut app, &ctx, time, vec![pointer(at, false)]);
+            assert_eq!(app.connection_details_open, open);
+            // The pointer leaves, so no hover or tooltip asks for frames of its own.
+            time += FRAME_SECS;
+            step(&mut app, &ctx, time, vec![egui::Event::PointerGone]);
+            time += FRAME_SECS;
+            let early = timed_frame(&mut app, &ctx, time, vec![]);
+            let shown_early = painted(&early, HEADING);
+            early.drop_without_applying_deltas();
+            // Opening, the drawer is already arriving; closing, it is still leaving.
+            assert!(shown_early, "drawer missing mid-transition, open={open}");
+            assert!(
+                requests.load(Ordering::SeqCst) > before,
+                "drawer transition never asked for a frame"
+            );
+            // EXPAND_SECS is 160 ms, inside the 360 ms interaction budget.
+            for _ in 0..30 {
+                time += FRAME_SECS;
+                step(&mut app, &ctx, time, vec![]);
+            }
+            let settled = requests.load(Ordering::SeqCst);
+            time += FRAME_SECS;
+            let rested = timed_frame(&mut app, &ctx, time, vec![]);
+            let shown = painted(&rested, HEADING);
+            rested.drop_without_applying_deltas();
+            assert_eq!(shown, open, "drawer end state");
+            for _ in 0..120 {
+                time += FRAME_SECS;
+                step(&mut app, &ctx, time, vec![]);
+            }
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                settled,
+                "drawer kept repainting, open={open}"
+            );
+        }
+        assert!(app.config == original && app.child.is_none() && !app.pairing_open);
+        assert!(!app.worker_permissions.needs_poll() && !app.native_confirmation);
+        assert!(
+            !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
+        );
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+    #[test]
+    fn context_column_paints_one_primary_button_and_keeps_its_gate() -> Result<()> {
+        use crate::desktop_state::Action;
+        let labels = [
+            Action::AddDevice,
+            Action::StartInput,
+            Action::CheckPermissions,
+            Action::Connect,
+            Action::Recovery,
+            Action::None,
+        ]
+        .map(Action::label);
+        let fixture = crate::tests::Fixture::new()?;
+        let ctx = crate::tests::ui_context();
+        // Unregistered, recovery, registered idle and read only, each in a fresh window.
+        for state in 0..4 {
+            let mut app = App::load(fixture.path.clone());
+            app.theme(&ctx);
+            if state > 0 {
+                app.config.fingerprint = Some("primary-presentation-only".into());
+            }
+            app.recovery_blocked = state == 1;
+            if state == 3 {
+                drop(app.config_store.take());
+            }
+            let action = app.workspace_view().action;
+            let output = frame(&mut app, &ctx, vec![]);
+            let counts = labels.map(|label| painted_count(&output, label));
+            let at = output
+                .shapes
+                .iter()
+                .find_map(|s| text_center(&s.shape, action.label()));
+            output.drop_without_applying_deltas();
+            for (label, count) in labels.into_iter().zip(counts) {
+                let expected = usize::from(action != Action::None && label == action.label());
+                assert_eq!(count, expected, "{label} in state {state}");
+            }
+            match action {
+                Action::AddDevice => {
+                    click(&mut app, &ctx, at.context("add button absent")?);
+                    assert!(app.pairing_open && app.child.is_none());
+                }
+                Action::Recovery => {
+                    click(&mut app, &ctx, at.context("recovery button absent")?);
+                    assert!(app.dialog == Some(Dialog::Recovery));
+                }
+                _ => assert!(state >= 2, "state {state} offered {action:?}"),
+            }
+            assert_eq!(action == Action::None, state == 3);
+            assert!(app.child.is_none() && !app.config.native && !app.config.allow);
+            assert!(!app.worker_permissions.needs_poll() && !app.native_confirmation);
+            drop(app);
+        }
+        assert!(
+            !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
+        );
         fixture.close()?;
         Ok(())
     }

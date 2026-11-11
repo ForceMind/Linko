@@ -55,6 +55,18 @@ pub(super) enum Icon {
     Stop,
     /// Circular arrow, for emergency recovery.
     Recover,
+    /// Two interlocking links, for the connection row.
+    Link,
+    /// Shield outline, for local permissions.
+    Shield,
+    /// Letter i in a ring, for the details drawer.
+    Info,
+    /// Disc with rays, for the light appearance.
+    Sun,
+    /// Crescent, for the dark appearance.
+    Moon,
+    /// Page with text lines, for diagnostics and logs.
+    Log,
 }
 
 impl Icon {
@@ -80,6 +92,12 @@ impl Icon {
             Icon::Keyboard => paint_keyboard(painter, grid, color),
             Icon::Stop => paint_stop(painter, grid, color),
             Icon::Recover => paint_recover(painter, grid, color),
+            Icon::Link => paint_link(painter, grid, color),
+            Icon::Shield => paint_shield(painter, grid, color),
+            Icon::Info => paint_info(painter, grid, color),
+            Icon::Sun => paint_sun(painter, grid, color),
+            Icon::Moon => paint_moon(painter, grid, color),
+            Icon::Log => paint_log(painter, grid, color),
         }
     }
 }
@@ -264,6 +282,102 @@ fn paint_recover(painter: &Painter, grid: Grid, color: Color32) {
     paint_path(painter, head.to_vec(), color);
 }
 
+fn paint_link(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    let radius = 2.5 * grid.unit;
+    for (left, right) in [(1.5, 9.5), (6.5, 14.5)] {
+        let link = Rect::from_min_max(grid.at(left, 5.5), grid.at(right, 10.5));
+        painter.rect_stroke(link, radius, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+fn paint_shield(painter: &Painter, grid: Grid, color: Color32) {
+    let outline = shield_outline(grid).to_vec();
+    painter.add(egui::Shape::closed_line(outline, line_stroke(color)));
+}
+
+fn paint_info(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    painter.circle_stroke(grid.at(8.0, 8.0), 6.5 * grid.unit, stroke);
+    painter.circle_filled(grid.at(8.0, 5.0), 0.9 * grid.unit, color);
+    painter.line_segment([grid.at(8.0, 7.5), grid.at(8.0, 11.5)], stroke);
+}
+
+/// Shield outline, clockwise from the top.
+fn shield_outline(grid: Grid) -> [Pos2; 6] {
+    [
+        grid.at(8.0, 1.5),
+        grid.at(14.0, 3.5),
+        grid.at(13.0, 10.0),
+        grid.at(8.0, 14.5),
+        grid.at(3.0, 10.0),
+        grid.at(2.0, 3.5),
+    ]
+}
+
+fn paint_sun(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    painter.circle_stroke(grid.at(8.0, 8.0), 3.0 * grid.unit, stroke);
+    for ray in sun_rays(grid) {
+        painter.line_segment(ray, stroke);
+    }
+}
+
+fn paint_moon(painter: &Painter, grid: Grid, color: Color32) {
+    let outline = moon_outline(grid);
+    painter.add(egui::Shape::closed_line(outline, line_stroke(color)));
+}
+
+fn paint_log(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    let page = Rect::from_min_max(grid.at(3.5, 1.5), grid.at(12.5, 14.5));
+    painter.rect_stroke(page, 1.5, stroke, egui::StrokeKind::Inside);
+    for line in log_lines(grid) {
+        painter.line_segment(line, stroke);
+    }
+}
+
+/// Eight short rays around the sun disc, clockwise from the right.
+fn sun_rays(grid: Grid) -> Vec<[Pos2; 2]> {
+    let center = grid.at(8.0, 8.0);
+    let mut rays = Vec::with_capacity(8);
+    for ray in 0..8 {
+        let angle = TAU * ray as f32 / 8.0;
+        let toward = egui::vec2(angle.cos(), angle.sin()) * grid.unit;
+        rays.push([center + toward * 4.8, center + toward * 6.4]);
+    }
+    rays
+}
+
+/// Closed crescent: the lit rim of a disc, then the edge of the disc that covers its upper
+/// right. Both arcs meet where the two circles intersect.
+fn moon_outline(grid: Grid) -> Vec<Pos2> {
+    let mut points = arc_points(
+        grid.at(8.0, 8.0),
+        5.5 * grid.unit,
+        4.0_f32.to_radians(),
+        266.0_f32.to_radians(),
+        20,
+    );
+    points.extend(arc_points(
+        grid.at(11.0, 5.0),
+        4.2 * grid.unit,
+        216.3_f32.to_radians(),
+        53.7_f32.to_radians(),
+        12,
+    ));
+    points
+}
+
+/// Three text lines of the log page, the last one shorter.
+fn log_lines(grid: Grid) -> [[Pos2; 2]; 3] {
+    [
+        [grid.at(5.5, 5.5), grid.at(10.5, 5.5)],
+        [grid.at(5.5, 8.0), grid.at(10.5, 8.0)],
+        [grid.at(5.5, 10.5), grid.at(8.5, 10.5)],
+    ]
+}
+
 /// Corner brackets of the fit icon, clockwise from the top left.
 fn fit_corners(grid: Grid) -> [[Pos2; 3]; 4] {
     [
@@ -409,7 +523,7 @@ mod tests {
         count
     }
 
-    fn every_icon() -> [Icon; 17] {
+    fn every_icon() -> [Icon; 23] {
         [
             Icon::Device,
             Icon::Lock,
@@ -428,6 +542,12 @@ mod tests {
             Icon::Keyboard,
             Icon::Stop,
             Icon::Recover,
+            Icon::Link,
+            Icon::Shield,
+            Icon::Info,
+            Icon::Sun,
+            Icon::Moon,
+            Icon::Log,
         ]
     }
 
@@ -464,8 +584,16 @@ mod tests {
         paths.push(arc);
         paths.push(recover_head.to_vec());
         paths.push(keyboard_keys(grid));
+        paths.push(shield_outline(grid).to_vec());
         for corner in fit_corners(grid) {
             paths.push(corner.to_vec());
+        }
+        for ray in sun_rays(grid) {
+            paths.push(ray.to_vec());
+        }
+        paths.push(moon_outline(grid));
+        for line in log_lines(grid) {
+            paths.push(line.to_vec());
         }
         for path in paths {
             assert_inside(&path);
