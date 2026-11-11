@@ -254,28 +254,32 @@ async fn main() -> Result<()> {
             device,
             volume,
             duration_secs,
-        } => audio_playback::run(
-            &identity,
-            &peer_cert,
-            bind,
-            device.as_deref(),
-            volume,
-            Duration::from_secs(duration_secs),
-        )
-        .await,
+        } => {
+            audio_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareSystemAudio {
             address,
             identity,
             peer_cert,
             duration_secs,
-        } => audio_source::share_system(
-            &identity,
-            &peer_cert,
-            address,
-            Duration::from_secs(duration_secs),
-        )
-        .await,
+        } => {
+            audio_source::share_system(
+                &identity,
+                &peer_cert,
+                address,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
         Command::Connect {
             address,
             options,
