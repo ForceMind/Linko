@@ -55,8 +55,10 @@ impl LatestPosition {
         if revision == 0 || revision == *seen || revision & 1 != 0 {
             return None;
         }
-        let [instance, generation, x, y, width, height] =
-            self.words.each_ref().map(|word| word.load(Ordering::SeqCst));
+        let [instance, generation, x, y, width, height] = self
+            .words
+            .each_ref()
+            .map(|word| word.load(Ordering::SeqCst));
         if self.revision.load(Ordering::SeqCst) != revision {
             return None;
         }
@@ -66,7 +68,10 @@ impl LatestPosition {
             y: f64::from_bits(y),
             width: f64::from_bits(width),
             height: f64::from_bits(height),
-            route: CaptureRoute::Local(CaptureEpoch { instance, generation }),
+            route: CaptureRoute::Local(CaptureEpoch {
+                instance,
+                generation,
+            }),
         })
     }
 }
@@ -103,9 +108,13 @@ impl CaptureEventSender {
             .as_mut()
             .expect("live capture sender owns its queue");
         if let Captured::Position {
-            x, y, width, height,
+            x,
+            y,
+            width,
+            height,
             route: CaptureRoute::Local(epoch),
-        } = event {
+        } = event
+        {
             if !queue.is_consumer_alive() {
                 return Err(event);
             }
@@ -135,13 +144,14 @@ impl Drop for CaptureEventSender {
 
 impl CaptureEvents {
     pub fn is_empty(&self) -> bool {
-        self.queue.is_empty()
-            && self.position.revision.load(Ordering::SeqCst) == self.seen_position
+        self.queue.is_empty() && self.position.revision.load(Ordering::SeqCst) == self.seen_position
     }
 
     fn try_event(&mut self) -> Option<Captured> {
         // A local position never delays a queued release, takeover or button.
-        self.queue.try_pop().or_else(|| self.position.take(&mut self.seen_position))
+        self.queue
+            .try_pop()
+            .or_else(|| self.position.take(&mut self.seen_position))
     }
 
     pub async fn recv(&mut self) -> Option<Captured> {
@@ -196,7 +206,10 @@ mod tests {
             y: f64::from(index + 1),
             width: 1000.0,
             height: 800.0,
-            route: CaptureRoute::Local(CaptureEpoch { instance: 1, generation: 2 }),
+            route: CaptureRoute::Local(CaptureEpoch {
+                instance: 1,
+                generation: 2,
+            }),
         }
     }
 
@@ -221,7 +234,10 @@ mod tests {
         assert!(events.is_empty());
         assert!(sender.try_push(position(300)).is_ok());
         drop(sender);
-        assert!(matches!(events.try_recv().unwrap(), Captured::Position { .. }));
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Captured::Position { .. }
+        ));
         assert!(matches!(
             events.try_recv(),
             Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
