@@ -147,7 +147,10 @@ impl ReceivedFile {
     /// Run on the local storage worker, outside native input or drag callbacks.
     pub fn prepare_drop(&self, check: impl FnMut() -> io::Result<()>) -> Result<PreparedDropPath> {
         let (actual, source) = Manifest::open_checked(&self.path, check)?;
-        ensure!(actual == self.manifest, "received file changed before native drop");
+        ensure!(
+            actual == self.manifest,
+            "received file changed before native drop"
+        );
         Ok(PreparedDropPath {
             path: self.path.clone(),
             _source: source,
@@ -451,7 +454,11 @@ where
     }
     let published = tokio::task::spawn_blocking({
         let guard = guard.clone();
-        move || manager.commit_checked(id, || guard.elapsed_ms(), || guard.check()).ok()
+        move || {
+            manager
+                .commit_checked(id, || guard.elapsed_ms(), || guard.check())
+                .ok()
+        }
     })
     .await?;
     let outcome = if published.is_some() {
