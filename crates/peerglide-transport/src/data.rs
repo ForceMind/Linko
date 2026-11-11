@@ -188,6 +188,16 @@ async fn negotiate(
 }
 
 #[cfg(test)]
+// Generated 1x1 RGBA test image.
+pub(crate) const TEST_PNG: [u8; 70] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x10, 0x54, 0x32, 0xfe,
+    0x0f, 0x00, 0x02, 0x14, 0x01, 0x66, 0x04, 0xe0, 0xde, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -230,7 +240,10 @@ mod tests {
 
     #[test]
     fn image_bit_requires_both_endpoints_and_preserves_text_file_hello() {
-        let all = Capabilities { images: true, ..TEXT_AND_FILES };
+        let all = Capabilities {
+            images: true,
+            ..TEXT_AND_FILES
+        };
         assert_eq!(TEXT_AND_FILES.hello()[5], 3);
         assert_eq!(Capabilities::from_hello(all.hello()).unwrap(), all);
         assert_eq!(all.shared(TEXT_ONLY), TEXT_ONLY);
@@ -600,17 +613,6 @@ mod tests {
             data_policy::Permissions,
         };
 
-        // Generated 1x1 RGBA test image.
-        const PNG: [u8; 70] = [
-            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00,
-            0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
-            0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
-            0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
-            0x54, 0x78, 0x9c, 0x63, 0x10, 0x54, 0x32, 0xfe, 0x0f, 0x00,
-            0x02, 0x14, 0x01, 0x66, 0x04, 0xe0, 0xde, 0x7f, 0x00, 0x00,
-            0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-        ];
-
         struct Memory {
             revision: u64,
             writes: usize,
@@ -658,28 +660,31 @@ mod tests {
             },
             60_000,
         )?;
-        assert!(send.write_image(Image::normalize(&PNG)?, Origin::Imported).await.is_err());
-        let mut backend = Memory { revision: 9, writes: 0 };
+        assert!(send
+            .write_image(Image::normalize(&TEST_PNG)?, Origin::Imported)
+            .await
+            .is_err());
+        let mut backend = Memory {
+            revision: 9,
+            writes: 0,
+        };
         for outcome in [ClipboardOutcome::Submitted, ClipboardOutcome::Changed] {
             let (sequence, pending) = tokio::try_join!(
-                send.write_image(Image::normalize(&PNG)?, Origin::Local),
+                send.write_image(Image::normalize(&TEST_PNG)?, Origin::Local),
                 receive.read_image(9),
             )?;
             assert_eq!(pending.dimensions(), (1, 1));
             let completion = receiver_consent.apply_image(pending, &mut backend)?;
             assert_eq!(completion.outcome(), outcome);
-            tokio::try_join!(
-                respond.report_image_result(completion),
-                async {
-                    assert_eq!(replies.wait_image_result(sequence).await?, outcome);
-                    Ok::<_, anyhow::Error>(())
-                },
-            )?;
+            tokio::try_join!(respond.report_image_result(completion), async {
+                assert_eq!(replies.wait_image_result(sequence).await?, outcome);
+                Ok::<_, anyhow::Error>(())
+            },)?;
         }
         assert_eq!(backend.writes, 1);
 
         let (_, pending) = tokio::try_join!(
-            send.write_image(Image::normalize(&PNG)?, Origin::Local),
+            send.write_image(Image::normalize(&TEST_PNG)?, Origin::Local),
             receive.read_image(backend.revision),
         )?;
         receiver_consent.revoke();

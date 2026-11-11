@@ -62,7 +62,10 @@ impl NativeClipboard {
         let Some(revision) = self.revision() else {
             return Ok(None);
         };
-        if !self.pasteboard.pasteboardItems().is_some_and(|items| items.count() == 1)
+        if !self
+            .pasteboard
+            .pasteboardItems()
+            .is_some_and(|items| items.count() == 1)
             || !self.only_formats(ordinary_image_type)
         {
             return Ok(None);
