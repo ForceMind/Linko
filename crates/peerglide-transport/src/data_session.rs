@@ -18,6 +18,7 @@ use std::{
 
 struct Policy {
     connection: Connection,
+    peer_digest: [u8; 32],
     clipboard: Mutex<Clipboard>,
     started: Instant,
 }
@@ -103,6 +104,7 @@ pub(super) fn new(
     }
     let policy = Arc::new(Policy {
         connection,
+        peer_digest,
         clipboard: Mutex::new(Clipboard::new(DataSession::new(peer_digest, nonce, 0))),
         started: Instant::now(),
     });
@@ -144,6 +146,12 @@ impl Consent {
 
     pub fn revoke(&mut self) {
         self.policy.close();
+    }
+
+    pub(crate) fn file_receive_peer(&self) -> Result<[u8; 32]> {
+        self.policy
+            .check(|session, now| session.authorize(Capability::FileReceive, now))?;
+        Ok(self.policy.peer_digest)
     }
 
     /// File dispatch still requires its own offer and transfer-ID checks.
