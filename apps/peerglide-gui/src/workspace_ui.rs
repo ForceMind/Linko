@@ -1183,7 +1183,8 @@ fn draw_workspace_device(
     let label_height = node.height() * 0.26;
     let image_area =
         egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
-    let aspect = visual_assets::device_aspect(kind);
+    let artwork = visual_assets::device_art(ui.ctx(), kind);
+    let aspect = artwork.as_ref().map_or(4.0 / 3.0, |asset| asset.aspect);
     let illustration_scale = match kind {
         visual_assets::DeviceKind::Laptop => 0.70,
         visual_assets::DeviceKind::Desktop => 1.0,
@@ -1219,11 +1220,11 @@ fn draw_workspace_device(
         let wash = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 18);
         painter.rect_filled(selected_frame.expand(5.0), 8.0, tokens::faded(wash, ring));
     }
-    if let Some(texture) = visual_assets::device_texture(ui.ctx(), kind) {
+    if let Some(artwork) = artwork {
         painter.image(
-            texture.id(),
+            artwork.texture.id(),
             image_rect,
-            visual_assets::device_uv(kind),
+            artwork.uv,
             egui::Color32::WHITE,
         );
     } else {
