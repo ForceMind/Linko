@@ -71,3 +71,15 @@ CI 使用纯数据回归并编译原生接口，系统实际读写留到集中�
 - [OpenClipboard](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard)
 - [GetClipboardSequenceNumber](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclipboardsequencenumber)
 - [SetClipboardData](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setclipboarddata)
+
+
+## macOS 文本后端
+
+后端由 AppKit 主线程持有，只按明确调用读取。先枚举有界纯文本类型，
+遇到未知、私有或隐藏标记则保留本机。读取前后核对 pasteboard
+`changeCount`。写入准备完毕后再核对预期版本，清空后复核当前归属，
+提交后也检查版本。公开 API 将版本查询、清空和写入分开，其他进程
+仍可能在相邻操作间修改剪贴板。清空后出现竞争或失败即返回结果
+未知，禁止自动重试。真实竞争和系统读写留到集中验收。
+
+- [Apple NSPasteboard changeCount](https://developer.apple.com/documentation/appkit/nspasteboard/changecount)

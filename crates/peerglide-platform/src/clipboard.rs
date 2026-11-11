@@ -1,6 +1,10 @@
 //! Explicit, local text clipboard operations. The data owner supplies consent.
 use peerglide_transfer::clipboard::Origin;
 
+#[cfg(target_os = "macos")]
+#[path = "clipboard_macos.rs"]
+mod native;
+#[cfg(windows)]
 #[path = "clipboard_windows.rs"]
 mod native;
 pub use native::NativeClipboard;

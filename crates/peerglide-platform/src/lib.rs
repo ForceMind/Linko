@@ -10,7 +10,7 @@ pub mod application_menu;
 mod capture_events;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub mod clipboard;
 pub mod context;
 #[cfg(any(windows, target_os = "macos", test))]
