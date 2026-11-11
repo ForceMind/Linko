@@ -1,4 +1,4 @@
-//! Explicit, local text clipboard operations. The data owner supplies consent.
+//! Explicit, local clipboard operations. The data owner supplies consent.
 use peerglide_transfer::clipboard::Origin;
 
 #[cfg(target_os = "macos")]
@@ -13,5 +13,12 @@ pub use native::NativeClipboard;
 pub struct TextSnapshot {
     pub revision: u64,
     pub text: String,
+    pub origin: Origin,
+}
+
+/// Raw native PNG snapshot. Normalize it before network transmission.
+pub struct ImageSnapshot {
+    pub revision: u64,
+    pub png: Vec<u8>,
     pub origin: Origin,
 }
