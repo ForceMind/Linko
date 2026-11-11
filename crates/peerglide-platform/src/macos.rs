@@ -23,6 +23,12 @@ struct Rect {
     size: Size,
 }
 const TAG: i64 = 0x50474c44;
+const WHEEL_AXIS1: u32 = 11;
+const WHEEL_AXIS2: u32 = 12;
+const WHEEL_CONTINUOUS: u32 = 88;
+const WHEEL_FIXED_AXIS1: u32 = 93;
+const WHEEL_FIXED_AXIS2: u32 = 94;
+const ONE_LINE: i64 = 1 << 16;
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
@@ -315,6 +321,53 @@ fn reconcile_source_cursor(remote: impl FnOnce() -> bool) {
     };
     state.reconcile(remote(), &mut NativeCursor);
 }
+struct FractionalWheel {
+    route: Option<CaptureRoute>,
+    remainder: [i64; 2],
+}
+
+impl FractionalWheel {
+    const fn new() -> Self {
+        Self {
+            route: None,
+            remainder: [0; 2],
+        }
+    }
+
+    fn steps(
+        &mut self,
+        route: CaptureRoute,
+        continuous: bool,
+        integer: [i16; 2],
+        fixed: [i64; 2],
+    ) -> [i16; 2] {
+        if !continuous || !route.remote() {
+            self.route = None;
+            self.remainder = [0; 2];
+            return integer;
+        }
+        if self.route != Some(route) {
+            self.route = Some(route);
+            self.remainder = [0; 2];
+        }
+        std::array::from_fn(|axis| {
+            let remainder = &mut self.remainder[axis];
+            // Keep native whole-line events and ignore ambiguous fixed-point
+            // values that are not fractional when the whole-line field is zero.
+            if integer[axis] != 0 || fixed[axis].unsigned_abs() >= ONE_LINE as u64 {
+                *remainder = 0;
+                return integer[axis];
+            }
+            let total = *remainder + fixed[axis];
+            *remainder = total % ONE_LINE;
+            (total / ONE_LINE) as i16
+        })
+    }
+}
+
+thread_local! {
+    static WHEEL: RefCell<FractionalWheel> = const { RefCell::new(FractionalWheel::new()) };
+}
 thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)};}
 static MODIFIERS: Mutex<u64> = Mutex::new(0);
 static BUTTONS: AtomicU64 = AtomicU64::new(0);
@@ -541,11 +594,23 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 if let Some(diagnostics) = s.gate.0.diagnostics.get() {
                     diagnostics.increment(input_diagnostics::Count::WheelPhysical);
                 }
-                return s.scroll_routed(
-                    CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
-                    CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
-                    route,
-                );
+                let integer = [
+                    CGEventGetIntegerValueField(event, WHEEL_AXIS2).clamp(-1200, 1200) as i16,
+                    CGEventGetIntegerValueField(event, WHEEL_AXIS1).clamp(-1200, 1200) as i16,
+                ];
+                let continuous =
+                    route.remote() && CGEventGetIntegerValueField(event, WHEEL_CONTINUOUS) != 0;
+                let fixed = if continuous {
+                    [
+                        CGEventGetIntegerValueField(event, WHEEL_FIXED_AXIS2),
+                        CGEventGetIntegerValueField(event, WHEEL_FIXED_AXIS1),
+                    ]
+                } else {
+                    [0; 2]
+                };
+                let [x, y] =
+                    WHEEL.with_borrow_mut(|wheel| wheel.steps(route, continuous, integer, fixed));
+                return s.scroll_routed(x, y, route);
             }
             _ => (),
         }
@@ -961,5 +1026,48 @@ mod display_layout_tests {
         assert!(display_metrics(19, rect, 45.0, 700, 1400).is_err());
         assert!(display_metrics(19, rect, 0.0, 0, 1400).is_err());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fractional_wheel_tests {
+    use super::*;
+
+    fn epoch(generation: u64) -> CaptureEpoch {
+        CaptureEpoch {
+            instance: 1,
+            generation,
+        }
+    }
+
+    #[test]
+    fn sub_line_scroll_accumulates_independent_axes_and_preserves_sign() {
+        let mut wheel = FractionalWheel::new();
+        let route = CaptureRoute::Remote(epoch(1));
+        let fixed = [-ONE_LINE / 2, ONE_LINE / 4];
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [-1, 0]);
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [-1, 1]);
+    }
+
+    #[test]
+    fn routing_discrete_input_and_ambiguous_fixed_values_reset_remainders() {
+        let mut wheel = FractionalWheel::new();
+        let first = CaptureRoute::Remote(epoch(1));
+        let next = CaptureRoute::Remote(epoch(2));
+        let local = CaptureRoute::Local(epoch(3));
+        let fixed = [ONE_LINE / 2, -ONE_LINE / 2];
+        assert_eq!(wheel.steps(first, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(local, true, [2, 3], fixed), [2, 3]);
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(next, false, [4, -5], fixed), [4, -5]);
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(
+            wheel.steps(next, true, [0; 2], [i64::MAX, i64::MIN]),
+            [0, 0]
+        );
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
     }
 }
