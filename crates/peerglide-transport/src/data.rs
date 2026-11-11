@@ -1,6 +1,6 @@
 //! Independent data negotiation over pinned mutual TLS. Capability is not consent.
-use super::{endpoint_alpn, verify_peer, Identity};
 pub use super::data_frames::{FrameReceiver, FrameSender};
+use super::{endpoint_alpn, verify_peer, Identity};
 use anyhow::{ensure, Context, Result};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};
 use std::{net::SocketAddr, time::Duration};
@@ -59,11 +59,7 @@ pub struct Stream {
 impl Stream {
     /// Separate halves allow each peer to read while its own write is blocked.
     /// The caller supplies an explicit, finite byte budget for each direction.
-    pub fn into_frames(
-        self,
-        send_bytes: u64,
-        receive_bytes: u64,
-    ) -> (FrameSender, FrameReceiver) {
+    pub fn into_frames(self, send_bytes: u64, receive_bytes: u64) -> (FrameSender, FrameReceiver) {
         (
             FrameSender::new(
                 self.send,
