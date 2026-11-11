@@ -224,8 +224,20 @@ impl ActionTriggerSource {
 pub struct PreparedLocalAction {
     #[cfg(windows)]
     origin: (AdmissionKey, Instant),
+    #[cfg(windows)]
+    gesture_dpi: Option<u32>,
     frozen: FrozenContext,
     consent: ConsentStamp,
+}
+
+#[cfg(windows)]
+impl PreparedLocalAction {
+    pub(crate) fn context(&self) -> Context {
+        self.frozen.context()
+    }
+    pub(crate) fn expires(&self) -> Instant {
+        self.frozen.expires()
+    }
 }
 
 pub fn implemented_actions() -> Capabilities {
@@ -328,6 +340,8 @@ struct NativeDriver<'a> {
     pending: Option<FrozenContext>,
     lease: Option<TargetLease>,
     context: Context,
+    #[cfg(windows)]
+    gesture_dpi: Option<u32>,
 }
 impl Driver for NativeDriver<'_> {
     fn context(&self) -> Context {
@@ -349,9 +363,17 @@ impl Driver for NativeDriver<'_> {
     ) -> Result<(), NativeFailure> {
         let lease = self.lease.as_ref().ok_or(NativeFailure::TargetLost)?;
         let owner = &mut *self.owner;
+        #[cfg(windows)]
+        let gesture_dpi = self.gesture_dpi;
         let mut guard = || {
             permit()?;
             lease.recheck(owner).map_err(failure)?;
+            #[cfg(windows)]
+            if let Some(dpi) = gesture_dpi {
+                if native::recovery_dpi(lease.native_target())? != dpi {
+                    return Err(NativeFailure::TargetLost);
+                }
+            }
             if Instant::now() >= deadline {
                 return Err(NativeFailure::BeforeSubmission);
             }
@@ -433,9 +455,26 @@ impl LocalActions {
         Ok(PreparedLocalAction {
             #[cfg(windows)]
             origin,
+            #[cfg(windows)]
+            gesture_dpi: None,
             frozen,
             consent: trigger.consent,
         })
+    }
+    #[cfg(windows)]
+    pub(crate) fn freeze_for_gesture(
+        &mut self,
+        trigger: ActionTrigger,
+        dpi: u32,
+        lifetime: Duration,
+    ) -> Result<PreparedLocalAction, NativeFailure> {
+        let mut prepared = self.freeze(trigger, lifetime)?;
+        if !(48..=768).contains(&dpi) {
+            let _ = self.cancel(prepared);
+            return Err(NativeFailure::BeforeSubmission);
+        }
+        prepared.gesture_dpi = Some(dpi);
+        Ok(prepared)
     }
     /// Read the real target and issue a frame-bound admission proof outside the
     /// input callback. This consumes/drops a native lease, never submits an action.
@@ -484,6 +523,7 @@ impl LocalActions {
             pending: Some(prepared.frozen),
             lease: None,
             context,
+            gesture_dpi: prepared.gesture_dpi,
         };
         if origin != receipt_origin {
             return Err(NativeFailure::TargetLost);
@@ -570,12 +610,24 @@ impl LocalActions {
                 pending: Some(prepared.frozen),
                 lease: None,
                 context,
+                #[cfg(windows)]
+                gesture_dpi: prepared.gesture_dpi,
             },
             consent: self.consent.clone(),
             stamp: prepared.consent,
             used: false,
         });
         self.results.run(request, Instant::now(), &mut backend)
+    }
+    #[cfg(windows)]
+    pub(crate) fn consent_is_live(&self) -> bool {
+        self.consent.stamp().is_ok()
+    }
+    #[cfg(windows)]
+    pub(crate) fn prepared_is_current(&self, prepared: &PreparedLocalAction) -> bool {
+        Instant::now() < prepared.frozen.expires()
+            && self.consent.policy_for(prepared.consent).is_ok()
+            && self.trigger_source().matches_admission(prepared.origin.0)
     }
     pub fn configuration_changed(&mut self) -> Result<(), WatchError> {
         self.contexts.configuration_changed()
