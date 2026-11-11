@@ -201,6 +201,12 @@ enum Dialog {
     ForceStop,
     Recovery,
 }
+struct PeerAddressEdit {
+    fingerprint: String,
+    saved_address: String,
+    address: String,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SetupStep {
     Identity,
@@ -435,6 +441,7 @@ struct App {
     capsule_motion: motion::Retrigger<(&'static str, desktop_style::Tone)>,
     notice_details: bool,
     connection_details_open: bool,
+    peer_address_edit: Option<PeerAddressEdit>,
     settings_section: SettingsSection,
     recording_mode: bool,
     layout_report: Option<PathBuf>,
@@ -572,6 +579,7 @@ impl App {
             capsule_motion: motion::Retrigger::default(),
             notice_details: false,
             connection_details_open: false,
+            peer_address_edit: None,
             settings_section: SettingsSection::General,
             device_tab: DeviceTab::Device,
             mouse_tab: MouseTab::Rules,
@@ -724,6 +732,68 @@ impl App {
         self.wizard_listen = false;
         Ok(())
     }
+    fn peer_address_editable(&self) -> bool {
+        self.idle_writable()
+            && !self.config.listen
+            && self.config.fingerprint.is_some()
+            && !self.pairing_pending()
+            && !self.recovery_blocked
+            && !self.enrollment_blocked
+            && self.wizard.is_none()
+            && self.dialog.is_none()
+    }
+    fn open_peer_address_editor(&mut self) {
+        if !self.peer_address_editable() {
+            return;
+        }
+        let Some(fingerprint) = self.config.fingerprint.clone() else {
+            return;
+        };
+        self.peer_address_edit = Some(PeerAddressEdit {
+            fingerprint,
+            saved_address: self.config.address.clone(),
+            address: self.config.address.clone(),
+        });
+    }
+    fn save_peer_address(&mut self, edit: &PeerAddressEdit) -> Result<()> {
+        anyhow::ensure!(self.peer_address_editable(), "当前不能修改连接地址");
+        anyhow::ensure!(
+            self.config.fingerprint.as_deref() == Some(edit.fingerprint.as_str())
+                && self.config.address == edit.saved_address,
+            "设备登记或连接地址已更新，请重新打开"
+        );
+        let address = edit
+            .address
+            .trim()
+            .parse::<std::net::SocketAddr>()
+            .context("请输入另一台的 IP 地址和端口")?;
+        anyhow::ensure!(
+            address.port() != 0
+                && !address.ip().is_unspecified()
+                && !address.ip().is_multicast()
+                && address.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::BROADCAST),
+            "请输入有效的单播地址和端口"
+        );
+        self.verified_peer_certificate()?;
+        let previous = std::mem::replace(&mut self.config.address, address.to_string());
+        if let Err(error) = self.save_config() {
+            self.config.address = previous;
+            return Err(error);
+        }
+        self.native_confirmation = false;
+        self.pending_start = None;
+        Ok(())
+    }
+    fn verified_peer_certificate(&self) -> Result<PathBuf> {
+        let cert = self.dir.join("trusted-peer.crt.der");
+        let bytes = transport::read_certificate(&cert).context("请先在“设备”页登记可信设备")?;
+        anyhow::ensure!(
+            self.config.fingerprint.as_deref() == Some(transport::fingerprint(&bytes).as_str()),
+            "已登记的证书发生变化，请重新明确登记"
+        );
+        Ok(cert)
+    }
+
     fn candidate(&self) -> Result<Vec<u8>> {
         if self.use_connection_info {
             anyhow::ensure!(
@@ -874,12 +944,7 @@ impl App {
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         anyhow::ensure!(self.child.is_none(), "已有会话正在运行");
         Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
-        let cert = self.dir.join("trusted-peer.crt.der");
-        let bytes = transport::read_certificate(&cert).context("请先在“设备”页登记可信设备")?;
-        anyhow::ensure!(
-            self.config.fingerprint.as_deref() == Some(transport::fingerprint(&bytes).as_str()),
-            "已登记的证书发生变化，请重新明确登记"
-        );
+        let cert = self.verified_peer_certificate()?;
         if !self.config.listen || probe {
             self.config
                 .address
@@ -2667,6 +2732,70 @@ mod tests {
         fixture.close()?;
         Ok(())
     }
+    #[test]
+    fn saved_peer_address_changes_only_the_endpoint_and_rejects_stale_edits() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        Identity::create(&app.identity_dir())?;
+        let peer = Identity::generate()?;
+        let certificate = fixture.path.join("trusted-peer.crt.der");
+        let settings = fixture.path.join("settings.json");
+        std::fs::write(&certificate, &peer.certificate)?;
+        app.config.fingerprint = Some(peer.fingerprint());
+        app.config.allow = true;
+        app.config.reconnect = true;
+        app.config.listen = false;
+        app.config.address = "192.168.1.2:24870".into();
+        app.save_config()?;
+
+        let mut expected = app.config.clone();
+        let before = std::fs::read(&settings)?;
+        app.open_peer_address_editor();
+        let mut edit = app
+            .peer_address_edit
+            .take()
+            .context("address editor did not open")?;
+        edit.address = "0.0.0.0:24870".into();
+        assert!(app.save_peer_address(&edit).is_err());
+        assert!(app.config == expected);
+        assert_eq!(std::fs::read(&settings)?, before);
+
+        let replacement = Identity::generate()?;
+        std::fs::write(&certificate, &replacement.certificate)?;
+        edit.address = "192.168.1.3:24870".into();
+        assert!(app.save_peer_address(&edit).is_err());
+        assert!(app.config == expected);
+        assert_eq!(std::fs::read(&settings)?, before);
+
+        std::fs::write(&certificate, &peer.certificate)?;
+        app.native_confirmation = true;
+        app.pending_start = Some(SessionMode::Native);
+        app.save_peer_address(&edit)?;
+        expected.address = edit.address.clone();
+        assert!(app.config == expected && app.child.is_none());
+        assert!(!app.native_confirmation && app.pending_start.is_none());
+        assert!(config_store::decode::<Config>(&std::fs::read(&settings)?)? == expected);
+        assert_eq!(std::fs::read(&certificate)?, peer.certificate);
+
+        edit.address = "192.168.1.4:24870".into();
+        assert!(app.save_peer_address(&edit).is_err());
+        assert!(app.config == expected);
+
+        app.open_peer_address_editor();
+        let mut fresh = app.peer_address_edit.take().unwrap();
+        fresh.address = edit.address;
+        let mut other_writer = expected.clone();
+        other_writer.dark = !other_writer.dark;
+        let updated = config_store::encode(&other_writer)?;
+        std::fs::write(&settings, &updated)?;
+        assert!(app.save_peer_address(&fresh).is_err());
+        assert!(app.config == expected);
+        assert_eq!(std::fs::read(&settings)?, updated);
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
     #[test]
     fn discovery_selection_stages_an_address_without_changing_saved_trust() -> Result<()> {
         let fixture = Fixture::new()?;

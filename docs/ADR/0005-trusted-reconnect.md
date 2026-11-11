@@ -76,3 +76,13 @@ boundary end returns through the same session cleanup; truncated FIN/invalid
 length/decode remains a protocol failure, not a reconnectable network error.
 Known transport losses retain their original class; nonzero/timeout connection
 closure is not silently mapped to success. No bytes, wire version or ALPN change.
+
+## Explicit address changes for an enrolled connector
+
+The idle, writable connector can save a replacement numeric IP and port from
+its connection details. The draft is bound to the original address and
+certificate fingerprint. Saving checks the pinned certificate and the
+versioned settings snapshot, preserves independent grants, and starts no
+worker. The next connection uses the same pin checks and a new session.
+Listener setup and new identity enrollment remain explicit operations.
+Discovery hints only enter a verification draft.

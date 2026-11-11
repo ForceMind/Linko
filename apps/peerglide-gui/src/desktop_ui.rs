@@ -273,6 +273,7 @@ impl App {
             ui.monospace(&self.config.address);
         }
         self.connection_actions(ui);
+        self.peer_address_editor(ui);
         if ui
             .add_enabled(
                 self.idle_writable(),
@@ -299,6 +300,39 @@ impl App {
             ui.monospace(fp);
         }
         ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
+    }
+    fn peer_address_editor(&mut self, ui: &mut egui::Ui) {
+        let editable = self.peer_address_editable();
+        let Some(mut edit) = self.peer_address_edit.take() else {
+            if editable && ui.button("更新已登记设备地址…").clicked() {
+                self.open_peer_address_editor();
+            }
+            return;
+        };
+
+        ui.label("更新连接地址，下次连接会重新核对已登记证书。");
+        ui.add_enabled(
+            editable,
+            egui::TextEdit::singleline(&mut edit.address).hint_text("IP 地址与端口"),
+        );
+        let (save, cancel) = ui
+            .horizontal_wrapped(|ui| {
+                (
+                    ui.add_enabled(editable, egui::Button::new("保存地址"))
+                        .clicked(),
+                    ui.button("取消").clicked(),
+                )
+            })
+            .inner;
+        if save {
+            let result = self.save_peer_address(&edit);
+            if result.is_err() {
+                self.peer_address_edit = Some(edit);
+            }
+            self.feedback(result, "已保存地址，连接时会核对原证书。");
+        } else if !cancel {
+            self.peer_address_edit = Some(edit);
+        }
     }
     pub(super) fn device_permissions(&mut self, ui: &mut egui::Ui) {
         ui.heading("让另一台电脑控制我");
