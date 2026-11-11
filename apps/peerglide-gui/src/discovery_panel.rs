@@ -90,7 +90,7 @@ impl Panel {
                                 if ui
                                     .add_enabled(
                                         idle && writable,
-                                        egui::Button::new(format!("使用地址 {address}")),
+                                        egui::Button::new(format!("带入核验 {address}")),
                                     )
                                     .clicked()
                                 {

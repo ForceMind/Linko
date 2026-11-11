@@ -711,14 +711,18 @@ impl App {
             .ok()
             .map(|i| i.fingerprint())
     }
-    fn use_discovery_address(&mut self, address: std::net::SocketAddr) -> Result<()> {
+    fn stage_discovery_address(&mut self, address: std::net::SocketAddr) -> Result<()> {
         anyhow::ensure!(
-            self.child.is_none() && self.instance_lock.is_some(),
-            "更改地址前请先停止会话"
+            self.idle_writable() && !self.recovery_blocked && !self.pairing_pending(),
+            "请先停止会话并处理待确认状态"
         );
-        self.config.address = address.to_string();
-        self.config.listen = false;
-        self.save_config()
+        self.open_advanced_setup();
+        self.pending_start = None;
+        self.loaded_connection_info = None;
+        self.connection_addresses.clear();
+        self.wizard_address = address.to_string();
+        self.wizard_listen = false;
+        Ok(())
     }
     fn candidate(&self) -> Result<Vec<u8>> {
         if self.use_connection_info {
@@ -2664,19 +2668,37 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn discovery_selection_changes_only_address_never_peer_authority() -> Result<()> {
+    fn discovery_selection_stages_an_address_without_changing_saved_trust() -> Result<()> {
         let fixture = Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
-        app.use_discovery_address("192.168.1.2:24870".parse()?)?;
-        assert!(!app.config.listen && !app.config.allow && app.config.fingerprint.is_none());
-        app.config.fingerprint = Some("existing pinned peer".into());
+        let settings = fixture.path.join("settings.json");
+        let original = app.config.clone();
+        app.stage_discovery_address("192.168.1.2:24870".parse()?)?;
+        assert!(app.config == original && !settings.exists());
+        assert!(matches!(app.wizard, Some(SetupStep::Identity)));
+        assert!(!app.pairing_open && !app.identity_dir().exists());
+
+        Identity::create(&app.identity_dir())?;
+        let peer = Identity::generate()?;
+        let certificate = fixture.path.join("trusted-peer.crt.der");
+        std::fs::write(&certificate, &peer.certificate)?;
+        app.config.fingerprint = Some(peer.fingerprint());
         app.config.allow = true;
-        app.use_discovery_address("192.168.1.3:24870".parse()?)?;
-        assert_eq!(
-            app.config.fingerprint.as_deref(),
-            Some("existing pinned peer")
-        );
-        assert!(app.config.allow);
+        app.config.listen = true;
+        app.save_config()?;
+        let original = app.config.clone();
+        let original_settings = std::fs::read(&settings)?;
+        app.confirmed_fingerprint = Some(peer.fingerprint());
+        app.stage_discovery_address("192.168.1.3:24870".parse()?)?;
+        assert!(matches!(app.wizard, Some(SetupStep::Find)));
+        assert!(!app.wizard_listen && !app.pairing_open);
+        assert_eq!(app.wizard_address, "192.168.1.3:24870");
+        assert!(app.confirmed_fingerprint.is_none());
+        assert!(app.config == original && app.child.is_none());
+        assert_eq!(std::fs::read(&settings)?, original_settings);
+        assert_eq!(std::fs::read(&certificate)?, peer.certificate);
+        drop(app);
+        fixture.close()?;
         Ok(())
     }
 }

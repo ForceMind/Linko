@@ -7,11 +7,12 @@ on port 24870. Only a public certificate fingerprint/protocol version and generi
 fingerprint-derived name/host are published, never the OS hostname/user/private key.
 Discovery is off at every launch. Existing manual address/enrollment remains usable.
 
-All results are `UntrustedHint`. Names/TXT may be spoofed. Use address only fills
-the next connection address; the pinned certificate and its separate grant are
-unchanged. A different certificate still requires independent comparison/enrollment,
-which clears the old peer's grant. Hints do not perform short-code authentication
-or automatic trust. A hint does not mean an authenticated/connected computer.
+All results are `UntrustedHint`. Names/TXT may be spoofed. Selecting an address
+fills the advanced verification draft. The saved endpoint, listener preference,
+pinned certificate and input grant stay in place while the draft is open or
+cancelled. Saving a different certificate requires independent comparison and
+enrollment, which clears the old peer's grant. An address hint alone supplies
+neither short-code authentication nor permission to connect or control.
 
 ## Bounds and lifecycle
 
