@@ -172,6 +172,11 @@ impl Panel {
         self.origin = None;
         peerglide_protocol::pairing_worker::clear_code(&mut self.code);
     }
+    fn close(&mut self) {
+        self.open = false;
+        self.cancel();
+    }
+
     fn worker() -> Result<PathBuf> {
         Ok(std::env::current_exe()?.with_file_name(if cfg!(windows) {
             "peerglide.exe"
@@ -368,6 +373,14 @@ impl Panel {
         if !self.open {
             return;
         }
+        if app.dialog.is_none()
+            && ctx.input(|input| {
+                input.modifiers == egui::Modifiers::NONE && input.key_pressed(egui::Key::Escape)
+            })
+        {
+            self.close();
+            return;
+        }
         let now = ctx.input(|input| input.time);
         let phase = self.supervisor.phase();
         self.feedback.observe(phase, self.join_entry, now);
@@ -458,7 +471,7 @@ impl Panel {
                     app.page=super::Page::Devices;app.device_tab=super::DeviceTab::Layout;self.open=false;
                 }
                 if self.supervisor.needs_poll()&&ui.button("停止核验").clicked(){self.cancel();}
-                if ui.button("关闭").clicked(){self.open=false;self.cancel();}
+                if ui.button("关闭").on_hover_text("Esc 关闭").clicked(){self.close();}
             });
         });
     }
@@ -721,7 +734,8 @@ fn code_cells(
     if response.clicked() {
         response.request_focus();
     }
-    let focused = response.has_focus();
+    let enabled = response.enabled();
+    let focused = enabled && response.has_focus();
     let changed = focused && ui.input(|input| apply_code_events(code, &input.events));
     if focused {
         // The platform enables native IME only while a widget publishes this output,
@@ -738,7 +752,7 @@ fn code_cells(
             });
         });
     }
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, CODE_LABEL));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, CODE_LABEL));
     if ui.is_rect_visible(rect) {
         let row = rect.translate(egui::vec2(offset, 0.0));
         let caret = focused.then_some(code.len());
@@ -1066,6 +1080,26 @@ mod tests {
         enabled
     }
     #[test]
+    fn disabled_code_cells_ignore_text_and_do_not_request_ime() {
+        let ctx = crate::tests::ui_context();
+        let mut code = String::new();
+        cells_pass(&ctx, &mut code, vec![]);
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::unique(CODE_CELLS_ID)));
+        let input = egui::RawInput {
+            events: vec![text("12345678")],
+            ..Default::default()
+        };
+        let output = ctx.run_ui(input, |ui| {
+            ui.add_enabled_ui(false, |ui| {
+                let (response, changed) = code_cells(ui, &mut code, 0.0, false);
+                assert!(!response.enabled() && !changed);
+            });
+        });
+        assert!(code.is_empty() && output.platform_output.ime.is_none());
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
     fn code_cells_take_input_only_after_focus() {
         let ctx = crate::tests::ui_context();
         let mut code = String::new();
@@ -1271,6 +1305,26 @@ mod tests {
         fixture.close()?;
         Ok(())
     }
+    #[test]
+    fn escape_closes_pairing_and_clears_the_unsent_code() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        app.open_setup();
+        app.pairing_panel.code = "12345678".into();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        window_pass(&mut app, &ctx, vec![key(egui::Key::Escape, true)])
+            .drop_without_applying_deltas();
+        assert!(!app.pairing_panel.open && !app.pairing_open);
+        assert!(app.pairing_panel.code.is_empty() && !app.pairing_panel.needs_poll());
+        assert!(app.config == before && app.child.is_none() && !app.native_confirmation);
+        assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
     #[test]
     fn first_pairing_window_keeps_prepare_and_close_visible_in_both_entry_modes() -> Result<()> {
         fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
