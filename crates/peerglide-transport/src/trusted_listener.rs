@@ -3,7 +3,7 @@ use crate::{peer_certificate, server_config, Identity, MAX_CERTIFICATE_BYTES};
 use anyhow::{ensure, Context, Result};
 use quinn::{Connection, Endpoint};
 use rustls::{pki_types::CertificateDer, RootCertStore};
-use std::{collections::BTreeMap, net::SocketAddr};
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 pub const MAX_TRUSTED_PEERS: usize = 16;
 pub type Fingerprint = [u8; 32];
@@ -65,7 +65,9 @@ impl Listener {
             .accept()
             .await
             .context("input listener closed")?;
-        let connection = incoming.await?;
+        let connection = tokio::time::timeout(Duration::from_secs(5), incoming)
+            .await
+            .context("trusted input handshake timed out")??;
         match self.exact_pin(&connection) {
             Ok(peer) => Ok(TrustedConnection { connection, peer }),
             Err(error) => {
