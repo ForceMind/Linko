@@ -121,7 +121,7 @@ mod native {
                     .map_err(WorkerError::Watch)?;
                 Ok(actions)
             })();
-            let actions = match setup {
+            let mut actions = match setup {
                 Ok(actions) => actions,
                 Err(error) => {
                     self.state = WorkerState::Fault;
