@@ -1,5 +1,6 @@
 //! Independent data negotiation over pinned mutual TLS. Capability is not consent.
 use super::{endpoint_alpn, verify_peer, Identity};
+pub use super::data_frames::{FrameReceiver, FrameSender};
 use anyhow::{ensure, Context, Result};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};
 use std::{net::SocketAddr, time::Duration};
@@ -49,9 +50,35 @@ impl Capabilities {
 /// A single negotiated stream on a data connection. Callers still need
 /// independent direction consent before any clipboard or file side effect.
 pub struct Stream {
-    pub send: SendStream,
-    pub receive: RecvStream,
+    send: SendStream,
+    receive: RecvStream,
+    connection: Connection,
     pub capabilities: Capabilities,
+}
+
+impl Stream {
+    /// Separate halves allow each peer to read while its own write is blocked.
+    /// The caller supplies an explicit, finite byte budget for each direction.
+    pub fn into_frames(
+        self,
+        send_bytes: u64,
+        receive_bytes: u64,
+    ) -> (FrameSender, FrameReceiver) {
+        (
+            FrameSender::new(
+                self.send,
+                self.connection.clone(),
+                self.capabilities,
+                send_bytes,
+            ),
+            FrameReceiver::new(
+                self.receive,
+                self.connection,
+                self.capabilities,
+                receive_bytes,
+            ),
+        )
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +155,7 @@ async fn negotiate(
         Ok(Stream {
             send,
             receive,
+            connection: connection.clone(),
             capabilities: supported.shared(peer),
         })
     })
@@ -198,6 +226,100 @@ mod tests {
         )?;
         assert_eq!(client.capabilities, TEXT_ONLY);
         assert_eq!(server.capabilities, TEXT_ONLY);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn admitted_data_roundtrip_consumes_exact_wire_budgets() -> Result<()> {
+        use peerglide_transfer::codec::{Frame, Kind, HEADER_BYTES};
+
+        let local = Identity::generate()?;
+        let peer = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let left = endpoint(bind, &local, &peer.certificate)?;
+        let right = endpoint(bind, &peer, &local.certificate)?;
+        let (connector, listener) = connect(&left, &right).await?;
+        let (outbound, inbound) = tokio::try_join!(
+            open(&connector, &peer.certificate, TEXT_ONLY),
+            accept(&listener, &local.certificate, TEXT_ONLY)
+        )?;
+        let text = "屏跃";
+        let limit = (HEADER_BYTES + 8 + text.len()) as u64;
+        let (mut send, _) = outbound.into_frames(limit, 0);
+        let (_, mut receive) = inbound.into_frames(0, limit);
+        let frame = Frame::Text {
+            sequence: 1,
+            text: text.into(),
+        };
+        let ((), (received, ticket)) = tokio::try_join!(
+            send.write_checked(&frame, |kind| {
+                assert_eq!(kind, Kind::Text);
+                Ok(())
+            }),
+            receive.read_checked(|header| {
+                assert_eq!(header.kind(), Kind::Text);
+                Ok(23)
+            })
+        )?;
+        assert_eq!(ticket, 23);
+        assert!(matches!(
+            received,
+            Frame::Text { sequence: 1, text: received_text } if received_text == text
+        ));
+        assert_eq!(send.remaining_bytes(), 0);
+        assert_eq!(receive.remaining_bytes(), 0);
+        assert!(send.write_checked(&frame, |_| Ok(())).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejected_or_cancelled_frame_closes_without_the_body() -> Result<()> {
+        use peerglide_transfer::codec::{Frame, Kind, HEADER_BYTES};
+
+        let local = Identity::generate()?;
+        let peer = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let mut wire = Vec::new();
+        let frame = Frame::Text {
+            sequence: 1,
+            text: "test".into(),
+        };
+        frame.write(&mut wire)?;
+        for allow_header in [false, true] {
+            let left = endpoint(bind, &local, &peer.certificate)?;
+            let right = endpoint(bind, &peer, &local.certificate)?;
+            let (connector, listener) = connect(&left, &right).await?;
+            let (mut outbound, inbound) = tokio::try_join!(
+                open(&connector, &peer.certificate, TEXT_ONLY),
+                accept(&listener, &local.certificate, TEXT_ONLY)
+            )?;
+            let (_, mut receive) = inbound.into_frames(0, 4096);
+            outbound.send.write_all(&wire[..HEADER_BYTES]).await?;
+            if allow_header {
+                let (admitted, seen) = tokio::sync::oneshot::channel();
+                let read = receive.read_checked(|header| {
+                    assert_eq!(header.kind(), Kind::Text);
+                    admitted.send(()).unwrap();
+                    Ok(())
+                });
+                tokio::pin!(read);
+                tokio::select! {
+                    signal = seen => signal?,
+                    _ = &mut read => panic!("a frame without its body completed"),
+                }
+                // Leaving this scope cancels the partially read frame.
+            } else {
+                let result = receive
+                    .read_checked::<()>(|header| {
+                        assert_eq!(header.kind(), Kind::Text);
+                        anyhow::bail!("direction not allowed");
+                    })
+                    .await;
+                let error = result.err().context("rejected frame was received")?;
+                assert_eq!(error.to_string(), "direction not allowed");
+            }
+            assert!(listener.close_reason().is_some());
+        }
         Ok(())
     }
 
