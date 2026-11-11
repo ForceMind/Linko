@@ -335,10 +335,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authenticated_data_directions_need_consent_and_revocation_invalidates_received_frames(
-    ) -> Result<()> {
-        use peerglide_transfer::{codec::Frame, data_policy::Permissions};
+    async fn authenticated_clipboard_checks_consent_revision_and_revocation() -> Result<()> {
+        use peerglide_transfer::{
+            clipboard::{Backend, Classification, Origin, WriteResult},
+            data_policy::Permissions,
+        };
 
+        struct Memory {
+            revision: u64,
+            text: String,
+        }
+        impl Backend for Memory {
+            fn compare_and_write(&mut self, expected: u64, text: &str) -> WriteResult {
+                if self.revision != expected {
+                    return WriteResult::Changed;
+                }
+                self.text = text.into();
+                self.revision += 1;
+                WriteResult::Submitted
+            }
+        }
         let local = Identity::generate()?;
         let peer = Identity::generate()?;
         let bind = "127.0.0.1:0".parse()?;
@@ -351,11 +367,9 @@ mod tests {
         )?;
         let (mut local_consent, mut send, _local_receive) = outbound.into_session(4096, 4096)?;
         let (mut peer_consent, mut peer_send, mut receive) = inbound.into_session(4096, 4096)?;
-        let text = Frame::Text {
-            sequence: 1,
-            text: "屏跃".into(),
-        };
-        assert!(send.write(&text).await.is_err());
+        let share = Classification::ShareableText;
+        let origin = Origin::Local;
+        assert!(send.write_text("屏跃", share, origin).await.is_err());
         local_consent.grant(
             Permissions {
                 text_send: true,
@@ -370,21 +384,50 @@ mod tests {
             },
             60_000,
         )?;
-        assert!(peer_send.write(&text).await.is_err());
-        let ((), first) = tokio::try_join!(send.write(&text), receive.read())?;
-        peer_consent.apply_received(first, |frame| {
-            assert!(matches!(frame, Frame::Text { sequence: 1, text } if text == "屏跃"));
-            Ok(())
-        })?;
-        let second = Frame::Text {
-            sequence: 2,
-            text: "第二帧".into(),
-        };
-        let ((), second) = tokio::try_join!(send.write(&second), receive.read())?;
-        peer_consent.revoke();
-        assert!(peer_consent
-            .apply_received::<()>(second, |_| panic!("revoked frame applied"))
+        assert!(peer_send
+            .write_text("未授予发送", share, origin)
+            .await
             .is_err());
+        assert!(send
+            .write_text("仅本机", Classification::LocalOnly, origin)
+            .await
+            .is_err());
+
+        let mut backend = Memory {
+            revision: 7,
+            text: String::new(),
+        };
+        let ((), first) = tokio::try_join!(
+            send.write_text("屏跃", share, origin),
+            receive.read(Some(backend.revision))
+        )?;
+        assert_eq!(
+            peer_consent.apply_text(first, &mut backend)?,
+            WriteResult::Submitted
+        );
+        assert_eq!(backend.text, "屏跃");
+
+        tokio::time::sleep(Duration::from_millis(110)).await;
+        let ((), second) = tokio::try_join!(
+            send.write_text("第二帧", share, origin),
+            receive.read(Some(backend.revision))
+        )?;
+        backend.revision += 1;
+        backend.text = "接收期间的本机编辑".into();
+        assert_eq!(
+            peer_consent.apply_text(second, &mut backend)?,
+            WriteResult::Changed
+        );
+        assert_eq!(backend.text, "接收期间的本机编辑");
+
+        tokio::time::sleep(Duration::from_millis(110)).await;
+        let ((), third) = tokio::try_join!(
+            send.write_text("第三帧", share, origin),
+            receive.read(Some(backend.revision))
+        )?;
+        peer_consent.revoke();
+        assert!(peer_consent.apply_text(third, &mut backend).is_err());
+        assert_eq!(backend.text, "接收期间的本机编辑");
         assert!(listener.close_reason().is_some());
         Ok(())
     }
