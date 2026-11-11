@@ -7,6 +7,8 @@ use std::sync::{
 };
 use std::time::Instant;
 pub mod application_menu;
+#[cfg(any(windows, target_os = "macos"))]
+mod audio_output;
 mod capture_events;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
@@ -22,6 +24,8 @@ pub mod input_diagnostics;
 #[cfg(any(windows, target_os = "macos"))]
 mod pair_ledger;
 mod receive_driver;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+pub mod system_audio_capture;
 pub mod tray;
 #[cfg(target_os = "linux")]
 pub mod x11_inject;
@@ -46,8 +50,13 @@ use pair_ledger::{PairLedger, PairOwner};
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub mod macos_audio;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub mod windows_audio;
+
 #[cfg(windows)]
 mod windows_display;
 #[cfg(target_os = "macos")]

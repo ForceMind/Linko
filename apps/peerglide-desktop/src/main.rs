@@ -1,3 +1,7 @@
+#[cfg(any(windows, target_os = "macos", test))]
+mod audio_playback;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+mod audio_source;
 mod input_diagnostics;
 mod layout_control;
 mod multi_peer;
@@ -131,6 +135,37 @@ enum Command {
         #[arg(long, default_value = "0.0.0.0:24870")]
         bind: SocketAddr,
     },
+    /// List the local playback devices without opening an audio stream.
+    #[cfg(any(windows, target_os = "macos"))]
+    AudioOutputDevices,
+    /// Play audio from one explicitly verified computer on this computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayAudio {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24874")]
+        bind: SocketAddr,
+        /// Local output device ID on Windows or device UID on macOS.
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
+    /// Share the local system audio with one verified computer.
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    ShareSystemAudio {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -225,6 +260,42 @@ async fn main() -> Result<()> {
             peer_cert,
             bind,
         } => multi_peer::run(&identity, &peer_cert, bind).await,
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::AudioOutputDevices => audio_playback::list_outputs(),
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayAudio {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => {
+            audio_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        Command::ShareSystemAudio {
+            address,
+            identity,
+            peer_cert,
+            duration_secs,
+        } => {
+            audio_source::share_system(
+                &identity,
+                &peer_cert,
+                address,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
         Command::Connect {
             address,
             options,

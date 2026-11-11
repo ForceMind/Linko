@@ -70,3 +70,27 @@ peerglide listen-peers --identity PATH --bind 0.0.0.0:24870 --peer-cert A.der --
 每个证书必须分别线下核对。对方使用已有的 `connect --probe` 检查
 同一个端口。监听可保持多条 v5 诊断连接，实际键鼠许可始终关闭。
 Ctrl+C 停止监听及这些连接。
+
+## 从一台可信电脑播放音频
+
+Windows 和 macOS 提供显式播放入口。指定已线下核对的音频源证书，
+可用 `peerglide audio-output-devices` 查看本机输出编号或 UID，再通过
+`--device` 选择。应用音量只影响该播放流。会话通过独立音频连接校验身份，Ctrl+C、
+断线或无音频超时会停止。此入口只接收音频，系统采集由单独命令和
+本机许可控制。
+
+```text
+peerglide play-audio --identity PATH --peer-cert SOURCE.der --volume 65
+```
+
+Windows 的 `share-system-audio` 使用默认播放设备的 WASAPI 回环。
+当前支持 48 kHz 双声道 PCM16 或 Float32。接收端需先明确开启
+`play-audio` 并核对发送方证书。系统音频与麦克风权限分别处理。
+
+```text
+peerglide share-system-audio RECEIVER_IP:24874 --identity PATH --peer-cert RECEIVER.der
+```
+
+macOS 13 或更新版本的同一发送命令使用 ScreenCaptureKit 的音频输出。
+系统可能要求录制权限。这个入口不打开麦克风或注册屏幕画面输出。
+真实权限提示、不同设备格式和结束后静音留到集中验收。

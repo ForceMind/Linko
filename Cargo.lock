@@ -2256,6 +2256,7 @@ version = "0.3.23-dev"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
+ "cc",
  "getrandom 0.3.4",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
