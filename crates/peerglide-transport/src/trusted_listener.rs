@@ -60,7 +60,11 @@ impl Listener {
     }
 
     pub async fn accept(&self) -> Result<TrustedConnection> {
-        let incoming = self.endpoint.accept().await.context("input listener closed")?;
+        let incoming = self
+            .endpoint
+            .accept()
+            .await
+            .context("input listener closed")?;
         let connection = incoming.await?;
         match self.exact_pin(&connection) {
             Ok(peer) => Ok(TrustedConnection { connection, peer }),
@@ -114,10 +118,9 @@ mod tests {
             Ok::<_, anyhow::Error>(tokio::try_join!(first, second)?)
         };
         let (((server_left, left_pin), (server_right, right_pin)), (client_left, client_right)) =
-            tokio::time::timeout(
-                std::time::Duration::from_secs(8),
-                async { tokio::try_join!(accepting, connecting) },
-            )
+            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                tokio::try_join!(accepting, connecting)
+            })
             .await??;
         let mut admitted = [left_pin, right_pin];
         admitted.sort_unstable();
@@ -154,11 +157,8 @@ mod tests {
         let listener = Listener::bind(address, &local, vec![allowed.certificate])?;
         let peer = crate::endpoint(address, &outsider, &local.certificate)?;
         let connecting = peer.connect(listener.local_addr()?, "peerglide.local")?;
-        let rejected = tokio::time::timeout(
-            std::time::Duration::from_secs(8),
-            listener.accept(),
-        )
-        .await?;
+        let rejected =
+            tokio::time::timeout(std::time::Duration::from_secs(8), listener.accept()).await?;
         assert!(rejected.is_err());
         // TLS client completion can precede server verification, so its local
         // success is never proof of admission on the accepting end.

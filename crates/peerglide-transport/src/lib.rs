@@ -269,9 +269,11 @@ fn server_config(
     alpn: &[u8],
 ) -> Result<quinn::ServerConfig> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier =
-        rustls::server::WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
-            .build()?;
+    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(roots),
+        provider.clone(),
+    )
+    .build()?;
     let mut server = rustls::ServerConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_client_cert_verifier(verifier)
@@ -289,7 +291,10 @@ fn peer_certificate(connection: &quinn::Connection) -> Result<CertificateDer<'st
         .context("missing TLS identity")?
         .downcast::<Vec<CertificateDer<'static>>>()
         .map_err(|_| anyhow::anyhow!("unexpected TLS identity"))?;
-    (*certs).into_iter().next().context("missing TLS certificate")
+    (*certs)
+        .into_iter()
+        .next()
+        .context("missing TLS certificate")
 }
 
 pub fn verify_peer(connection: &quinn::Connection, expected: &[u8]) -> Result<()> {
