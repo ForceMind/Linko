@@ -46,6 +46,8 @@ pub mod macos_audio;
 mod windows;
 #[cfg(windows)]
 pub mod windows_audio;
+#[cfg(all(windows, target_env = "msvc"))]
+pub mod windows_audio_capture;
 #[cfg(windows)]
 mod windows_display;
 #[cfg(target_os = "macos")]
