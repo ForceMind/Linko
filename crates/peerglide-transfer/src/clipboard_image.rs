@@ -1,4 +1,5 @@
 //! Canonical clipboard PNG. Pixel data is bounded and metadata stays local.
+use crate::clipboard::WriteResult;
 use png::{BitDepth, Decoder, Encoder, Limits, Transformations};
 use std::io::{self, Cursor, Write};
 
@@ -88,6 +89,15 @@ impl Image {
     pub fn as_png(&self) -> &[u8] {
         &self.png
     }
+
+    pub fn into_png(self) -> Vec<u8> {
+        self.png
+    }
+}
+
+/// Explicit local image import, with the same revision contract as text.
+pub trait ImageBackend {
+    fn compare_and_write_image(&mut self, expected_revision: u64, image: &Image) -> WriteResult;
 }
 
 fn valid_edge(edge: u32) -> bool {

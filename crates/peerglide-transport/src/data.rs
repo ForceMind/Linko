@@ -1,6 +1,8 @@
 //! Independent data negotiation over pinned mutual TLS. Capability is not consent.
 use super::data_frames::{FrameReceiver, FrameSender};
-pub use super::data_session::{AdmittedFrame, ClipboardCompletion, Consent, Receiver, Sender};
+pub use super::data_session::{
+    AdmittedFrame, AdmittedImage, ClipboardCompletion, Consent, ImageCompletion, Receiver, Sender,
+};
 use super::{endpoint_alpn, verify_peer, Identity};
 use anyhow::{ensure, Context, Result};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};
@@ -586,6 +588,103 @@ mod tests {
             "unexpected frame for the current file transfer phase"
         );
         assert!(listener.close_reason().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authenticated_image_import_rechecks_revision_and_revocation() -> Result<()> {
+        use peerglide_transfer::{
+            clipboard::{Origin, WriteResult},
+            clipboard_image::{Image, ImageBackend},
+            codec::ClipboardOutcome,
+            data_policy::Permissions,
+        };
+
+        // Generated 1x1 RGBA test image.
+        const PNG: [u8; 70] = [
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00,
+            0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+            0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9c, 0x63, 0x10, 0x54, 0x32, 0xfe, 0x0f, 0x00,
+            0x02, 0x14, 0x01, 0x66, 0x04, 0xe0, 0xde, 0x7f, 0x00, 0x00,
+            0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+
+        struct Memory {
+            revision: u64,
+            writes: usize,
+        }
+
+        impl ImageBackend for Memory {
+            fn compare_and_write_image(&mut self, expected: u64, image: &Image) -> WriteResult {
+                if expected != self.revision {
+                    return WriteResult::Changed;
+                }
+                assert_eq!(image.dimensions(), (1, 1));
+                self.revision += 1;
+                self.writes += 1;
+                WriteResult::Submitted
+            }
+        }
+
+        let source = Identity::generate()?;
+        let destination = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let left = endpoint(bind, &source, &destination.certificate)?;
+        let right = endpoint(bind, &destination, &source.certificate)?;
+        let (connector, listener) = connect(&left, &right).await?;
+        let images = Capabilities {
+            images: true,
+            ..Capabilities::default()
+        };
+        let (outbound, inbound) = tokio::try_join!(
+            open(&connector, &destination.certificate, images),
+            accept(&listener, &source.certificate, images),
+        )?;
+        let (mut sender_consent, mut send, mut replies) = outbound.into_session(4096, 4096)?;
+        let (mut receiver_consent, mut respond, mut receive) = inbound.into_session(4096, 4096)?;
+        sender_consent.grant(
+            Permissions {
+                image_send: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        receiver_consent.grant(
+            Permissions {
+                image_receive: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        assert!(send.write_image(Image::normalize(&PNG)?, Origin::Imported).await.is_err());
+        let mut backend = Memory { revision: 9, writes: 0 };
+        for outcome in [ClipboardOutcome::Submitted, ClipboardOutcome::Changed] {
+            let (sequence, pending) = tokio::try_join!(
+                send.write_image(Image::normalize(&PNG)?, Origin::Local),
+                receive.read_image(9),
+            )?;
+            assert_eq!(pending.dimensions(), (1, 1));
+            let completion = receiver_consent.apply_image(pending, &mut backend)?;
+            assert_eq!(completion.outcome(), outcome);
+            tokio::try_join!(
+                respond.report_image_result(completion),
+                async {
+                    assert_eq!(replies.wait_image_result(sequence).await?, outcome);
+                    Ok::<_, anyhow::Error>(())
+                },
+            )?;
+        }
+        assert_eq!(backend.writes, 1);
+
+        let (_, pending) = tokio::try_join!(
+            send.write_image(Image::normalize(&PNG)?, Origin::Local),
+            receive.read_image(backend.revision),
+        )?;
+        receiver_consent.revoke();
+        assert!(receiver_consent.apply_image(pending, &mut backend).is_err());
+        assert_eq!(backend.writes, 1);
         Ok(())
     }
 

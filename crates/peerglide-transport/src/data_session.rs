@@ -6,7 +6,8 @@ use super::{
 use anyhow::{ensure, Result};
 use peerglide_transfer::{
     clipboard::{Backend, Classification, Clipboard, Error as ClipboardError, Origin, WriteResult},
-    codec::{Frame, Kind, TextOutcome},
+    clipboard_image::{Image, ImageBackend},
+    codec::{ClipboardOutcome, Frame, Kind, TextOutcome},
     data_policy::{Capability, DataSession, Permissions, Permit},
 };
 use quinn::Connection;
@@ -60,11 +61,13 @@ pub struct Consent {
 pub struct Sender {
     policy: Arc<Policy>,
     frames: FrameSender,
+    image_sequence: u64,
 }
 
 pub struct Receiver {
     policy: Arc<Policy>,
     frames: FrameReceiver,
+    image_watermark: u64,
 }
 
 /// A frame admitted at the network header. Its ticket must still be valid at use.
@@ -84,6 +87,32 @@ pub struct ClipboardCompletion {
 
 impl ClipboardCompletion {
     pub fn outcome(&self) -> TextOutcome {
+        self.outcome
+    }
+}
+
+/// Validated pixels, bound to the original receive grant and local revision.
+pub struct AdmittedImage {
+    sequence: u64,
+    permit: Permit,
+    revision: u64,
+    image: Image,
+}
+
+impl AdmittedImage {
+    pub fn dimensions(&self) -> (u32, u32) {
+        self.image.dimensions()
+    }
+}
+
+pub struct ImageCompletion {
+    sequence: u64,
+    outcome: ClipboardOutcome,
+    permit: Permit,
+}
+
+impl ImageCompletion {
+    pub fn outcome(&self) -> ClipboardOutcome {
         self.outcome
     }
 }
@@ -117,10 +146,12 @@ pub(super) fn new(
         Sender {
             policy: policy.clone(),
             frames: sender,
+            image_sequence: 0,
         },
         Receiver {
             policy,
             frames: receiver,
+            image_watermark: 0,
         },
     ))
 }
@@ -189,12 +220,7 @@ impl Consent {
             clipboard.accept_received_text(sequence, text.as_bytes(), now)?;
             Ok::<_, ClipboardError>(())
         })?;
-        let outcome = match backend.compare_and_write(revision, &text) {
-            WriteResult::Submitted => TextOutcome::Submitted,
-            WriteResult::Changed => TextOutcome::Changed,
-            WriteResult::Failed => TextOutcome::Failed,
-            WriteResult::UnknownOutcome => TextOutcome::Unknown,
-        };
+        let outcome = clipboard_outcome(backend.compare_and_write(revision, &text));
         Ok(ClipboardCompletion {
             sequence,
             outcome,
@@ -213,6 +239,36 @@ impl Consent {
         Ok(ClipboardCompletion {
             sequence,
             outcome: TextOutcome::Declined,
+            permit: admitted.permit,
+        })
+    }
+
+    /// Import only the locally chosen image, after rechecking the original grant.
+    pub fn apply_image(
+        &mut self,
+        admitted: AdmittedImage,
+        backend: &mut impl ImageBackend,
+    ) -> Result<ImageCompletion> {
+        self.complete_image(admitted, |revision, image| {
+            clipboard_outcome(backend.compare_and_write_image(revision, image))
+        })
+    }
+
+    pub fn decline_image(&mut self, admitted: AdmittedImage) -> Result<ImageCompletion> {
+        self.complete_image(admitted, |_, _| ClipboardOutcome::Declined)
+    }
+
+    fn complete_image(
+        &mut self,
+        admitted: AdmittedImage,
+        complete: impl FnOnce(u64, &Image) -> ClipboardOutcome,
+    ) -> Result<ImageCompletion> {
+        self.policy.check(|session, now| {
+            session.validate(&admitted.permit, Capability::ImageReceive, now)
+        })?;
+        Ok(ImageCompletion {
+            sequence: admitted.sequence,
+            outcome: complete(admitted.revision, &admitted.image),
             permit: admitted.permit,
         })
     }
@@ -255,6 +311,47 @@ impl Sender {
             })
             .await?;
         Ok(sequence)
+    }
+
+    /// Send only a normalized local snapshot. Imported images stay local.
+    pub async fn write_image(&mut self, image: Image, origin: Origin) -> Result<u64> {
+        ensure!(origin == Origin::Local, "imported images stay local");
+        let policy = &self.policy;
+        let permit = policy.check(|session, now| session.authorize(Capability::ImageSend, now))?;
+        let sequence = self
+            .image_sequence
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("image sequence exhausted"))?;
+        self.image_sequence = sequence;
+        self.frames
+            .write_checked(
+                &Frame::Image {
+                    sequence,
+                    png: image.into_png(),
+                },
+                |_| {
+                    policy.check(|session, now| session.validate(&permit, Capability::ImageSend, now))
+                },
+            )
+            .await?;
+        Ok(sequence)
+    }
+
+    pub async fn report_image_result(&mut self, completed: ImageCompletion) -> Result<()> {
+        let policy = &self.policy;
+        self.frames
+            .write_checked(
+                &Frame::ImageResult {
+                    sequence: completed.sequence,
+                    outcome: completed.outcome,
+                },
+                |_| {
+                    policy.check(|session, now| {
+                        session.validate(&completed.permit, Capability::ImageReceive, now)
+                    })
+                },
+            )
+            .await
     }
 
     /// Acknowledge an admitted text that is waiting for a local write decision.
@@ -330,6 +427,39 @@ impl Receiver {
         })
     }
 
+    /// Check size and direction before allocating. Normalize off the network
+    /// runtime, then recheck the original permission before exposing an image.
+    pub async fn read_image(&mut self, revision: u64) -> Result<AdmittedImage> {
+        let policy = &self.policy;
+        let (frame, permit) = self
+            .frames
+            .read_checked(|header| {
+                ensure!(header.kind() == Kind::Image, "expected a clipboard image");
+                policy.check(|session, now| session.authorize(Capability::ImageReceive, now))
+            })
+            .await?;
+        let Frame::Image { sequence, png } = frame else {
+            anyhow::bail!("expected a clipboard image");
+        };
+        if sequence <= self.image_watermark {
+            policy.close();
+            anyhow::bail!("clipboard image sequence replayed");
+        }
+        self.image_watermark = sequence;
+        let image = tokio::task::spawn_blocking(move || Image::normalize(&png)).await?;
+        let Ok(image) = image else {
+            policy.close();
+            anyhow::bail!("clipboard image validation failed");
+        };
+        policy.check(|session, now| session.validate(&permit, Capability::ImageReceive, now))?;
+        Ok(AdmittedImage {
+            sequence,
+            permit,
+            revision,
+            image,
+        })
+    }
+
     /// Read only the file kinds valid in the current transfer phase. Admission
     /// happens before a body allocation. The owner must still check the ID and
     /// its per-offer acceptance before disk I/O.
@@ -362,7 +492,7 @@ impl Receiver {
     /// admitted the text; it does not prove an OS clipboard write.
     pub async fn wait_text_receipt(&mut self, sequence: u64) -> Result<()> {
         ensure!(sequence != 0, "invalid clipboard receipt sequence");
-        let frame = self.read_text_response(Kind::TextReceived).await?;
+        let frame = self.read_clipboard_response(Kind::TextReceived).await?;
         if !matches!(frame, Frame::TextReceived { sequence: received } if received == sequence) {
             self.policy.close();
             anyhow::bail!("clipboard receipt sequence differs");
@@ -372,7 +502,7 @@ impl Receiver {
 
     pub async fn wait_text_result(&mut self, sequence: u64) -> Result<TextOutcome> {
         ensure!(sequence != 0, "invalid clipboard result sequence");
-        let frame = self.read_text_response(Kind::TextResult).await?;
+        let frame = self.read_clipboard_response(Kind::TextResult).await?;
         match frame {
             Frame::TextResult {
                 sequence: received,
@@ -385,24 +515,49 @@ impl Receiver {
         }
     }
 
-    async fn read_text_response(&mut self, expected: Kind) -> Result<Frame> {
+    pub async fn wait_image_result(&mut self, sequence: u64) -> Result<ClipboardOutcome> {
+        ensure!(sequence != 0, "invalid image result sequence");
+        let frame = self.read_clipboard_response(Kind::ImageResult).await?;
+        match frame {
+            Frame::ImageResult {
+                sequence: received,
+                outcome,
+            } if received == sequence => Ok(outcome),
+            _ => {
+                self.policy.close();
+                anyhow::bail!("clipboard image result sequence differs");
+            }
+        }
+    }
+
+    async fn read_clipboard_response(&mut self, expected: Kind) -> Result<Frame> {
         let policy = &self.policy;
         // A fixed-size import result may wait for a person's local decision.
         // All other frames, including the initial receipt, keep the short limit.
-        let timeout = if expected == Kind::TextResult {
+        let timeout = if matches!(expected, Kind::TextResult | Kind::ImageResult) {
             Duration::from_secs(45)
         } else {
             Duration::from_secs(5)
         };
+        let capability = inbound(expected);
         let (frame, permit) = self
             .frames
             .read_checked_before(timeout, |header| {
                 ensure!(header.kind() == expected, "unexpected clipboard response");
-                policy.check(|clipboard, now| clipboard.authorize(Capability::TextSend, now))
+                policy.check(|clipboard, now| clipboard.authorize(capability, now))
             })
             .await?;
-        policy.check(|clipboard, now| clipboard.validate(&permit, Capability::TextSend, now))?;
+        policy.check(|clipboard, now| clipboard.validate(&permit, capability, now))?;
         Ok(frame)
+    }
+}
+
+fn clipboard_outcome(result: WriteResult) -> ClipboardOutcome {
+    match result {
+        WriteResult::Submitted => ClipboardOutcome::Submitted,
+        WriteResult::Changed => ClipboardOutcome::Changed,
+        WriteResult::Failed => ClipboardOutcome::Failed,
+        WriteResult::UnknownOutcome => ClipboardOutcome::Unknown,
     }
 }
 
