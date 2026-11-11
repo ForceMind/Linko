@@ -1,5 +1,6 @@
 //! Independent data negotiation over pinned mutual TLS. Capability is not consent.
-pub use super::data_frames::{FrameReceiver, FrameSender};
+use super::data_frames::{FrameReceiver, FrameSender};
+pub use super::data_session::{AdmittedFrame, Consent, Receiver, Sender};
 use super::{endpoint_alpn, verify_peer, Identity};
 use anyhow::{ensure, Context, Result};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};
@@ -53,13 +54,26 @@ pub struct Stream {
     send: SendStream,
     receive: RecvStream,
     connection: Connection,
+    peer_digest: [u8; 32],
     pub capabilities: Capabilities,
 }
 
 impl Stream {
-    /// Separate halves allow each peer to read while its own write is blocked.
-    /// The caller supplies an explicit, finite byte budget for each direction.
-    pub fn into_frames(self, send_bytes: u64, receive_bytes: u64) -> (FrameSender, FrameReceiver) {
+    /// Bind a fresh local consent owner and separate I/O halves to this
+    /// authenticated data connection. Both directions start with no consent.
+    pub fn into_session(
+        self,
+        send_bytes: u64,
+        receive_bytes: u64,
+    ) -> Result<(Consent, Sender, Receiver)> {
+        let connection = self.connection.clone();
+        let peer_digest = self.peer_digest;
+        let capabilities = self.capabilities;
+        let (sender, receiver) = self.into_frames(send_bytes, receive_bytes);
+        super::data_session::new(connection, peer_digest, capabilities, sender, receiver)
+    }
+
+    fn into_frames(self, send_bytes: u64, receive_bytes: u64) -> (FrameSender, FrameReceiver) {
         (
             FrameSender::new(
                 self.send,
@@ -152,6 +166,7 @@ async fn negotiate(
             send,
             receive,
             connection: connection.clone(),
+            peer_digest: *blake3::hash(pinned_peer).as_bytes(),
             capabilities: supported.shared(peer),
         })
     })
@@ -316,6 +331,61 @@ mod tests {
             }
             assert!(listener.close_reason().is_some());
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn authenticated_data_directions_need_consent_and_revocation_invalidates_received_frames(
+    ) -> Result<()> {
+        use peerglide_transfer::{codec::Frame, data_policy::Permissions};
+
+        let local = Identity::generate()?;
+        let peer = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let left = endpoint(bind, &local, &peer.certificate)?;
+        let right = endpoint(bind, &peer, &local.certificate)?;
+        let (connector, listener) = connect(&left, &right).await?;
+        let (outbound, inbound) = tokio::try_join!(
+            open(&connector, &peer.certificate, TEXT_ONLY),
+            accept(&listener, &local.certificate, TEXT_ONLY)
+        )?;
+        let (mut local_consent, mut send, _local_receive) = outbound.into_session(4096, 4096)?;
+        let (mut peer_consent, mut peer_send, mut receive) = inbound.into_session(4096, 4096)?;
+        let text = Frame::Text {
+            sequence: 1,
+            text: "屏跃".into(),
+        };
+        assert!(send.write(&text).await.is_err());
+        local_consent.grant(
+            Permissions {
+                text_send: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        peer_consent.grant(
+            Permissions {
+                text_receive: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        assert!(peer_send.write(&text).await.is_err());
+        let ((), first) = tokio::try_join!(send.write(&text), receive.read())?;
+        peer_consent.apply_received(first, |frame| {
+            assert!(matches!(frame, Frame::Text { sequence: 1, text } if text == "屏跃"));
+            Ok(())
+        })?;
+        let second = Frame::Text {
+            sequence: 2,
+            text: "第二帧".into(),
+        };
+        let ((), second) = tokio::try_join!(send.write(&second), receive.read())?;
+        peer_consent.revoke();
+        assert!(peer_consent
+            .apply_received::<()>(second, |_| panic!("revoked frame applied"))
+            .is_err());
+        assert!(listener.close_reason().is_some());
         Ok(())
     }
 

@@ -60,7 +60,8 @@ impl FrameSender {
         }
     }
 
-    pub fn remaining_bytes(&self) -> u64 {
+    #[cfg(test)]
+    pub(super) fn remaining_bytes(&self) -> u64 {
         self.remaining
     }
 
@@ -106,7 +107,8 @@ impl FrameReceiver {
         }
     }
 
-    pub fn remaining_bytes(&self) -> u64 {
+    #[cfg(test)]
+    pub(super) fn remaining_bytes(&self) -> u64 {
         self.remaining
     }
 
