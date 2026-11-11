@@ -4,8 +4,10 @@ use super::{
     egui, transport, App,
 };
 use anyhow::{Context, Result};
-use std::path::PathBuf;
-use transport::file_worker::{self, Decision, Event, FileOutcome, Job, Offer, Progress, Request};
+use std::{io, path::PathBuf, sync::mpsc};
+use transport::file_worker::{
+    self, Decision, Event, FileOutcome, History, HistoryState, Job, Offer, Progress, Request,
+};
 
 const PORT: u16 = 24873;
 
@@ -22,6 +24,16 @@ struct Active {
     stopping: bool,
 }
 
+enum HistoryQuery {
+    Pending(mpsc::Receiver<io::Result<History>>),
+    Complete(io::Result<History>),
+}
+
+struct HistorySearch {
+    directory: PathBuf,
+    query: HistoryQuery,
+}
+
 pub(super) struct Panel {
     active: Option<Active>,
     source: String,
@@ -32,6 +44,8 @@ pub(super) struct Panel {
     prepared_id: Option<[u8; 16]>,
     progress: Option<Progress>,
     notice: String,
+    history_directory: String,
+    history: Option<HistorySearch>,
 }
 
 impl Default for Panel {
@@ -46,6 +60,8 @@ impl Default for Panel {
             prepared_id: None,
             progress: None,
             notice: String::new(),
+            history_directory: String::new(),
+            history: None,
         }
     }
 }
@@ -65,6 +81,9 @@ impl Panel {
     }
 
     pub(super) fn tick(&mut self, app: &App) {
+        if let Some(search) = self.history.as_mut() {
+            search.poll();
+        }
         if self
             .active
             .as_ref()
@@ -248,6 +267,62 @@ impl Panel {
         if !self.notice.is_empty() {
             ui.label(&self.notice);
         }
+        ui.collapsing("接收历史与配额", |ui| {
+            self.history_ui(app, ui);
+        });
+    }
+
+    fn history_ui(&mut self, app: &App, ui: &mut egui::Ui) {
+        let pending = self
+            .history
+            .as_ref()
+            .is_some_and(|search| matches!(search.query, HistoryQuery::Pending(_)));
+        let enabled = !pending
+            && !app.resource_check_mode
+            && !app.quit_check_mode
+            && !app.close_requested
+            && !app.exit_confirmed;
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.label("接收目录");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.history_directory)
+                    .hint_text(&self.destination),
+            );
+            if ui.button("查询接收历史").clicked() {
+                let result = self.start_history(app);
+                if let Err(error) = result {
+                    self.notice = error.to_string();
+                }
+            }
+        });
+        if let Some(search) = &self.history {
+            ui.weak(search.directory.display().to_string());
+            match &search.query {
+                HistoryQuery::Pending(_) => {
+                    ui.label("正在读取接收账本。");
+                }
+                HistoryQuery::Complete(Ok(history)) => render_history(ui, history),
+                HistoryQuery::Complete(Err(_)) => {
+                    ui.label("无法读取接收账本。请检查目录是否存在或正在接收文件。");
+                }
+            }
+        }
+    }
+
+    fn start_history(&mut self, app: &App) -> Result<()> {
+        let text = if self.history_directory.is_empty() {
+            &self.destination
+        } else {
+            &self.history_directory
+        };
+        let directory = absolute_path(text).context("请填写接收目录的绝对路径")?;
+        let events = file_worker::inspect_history(directory.clone(), app.wake_ui.clone())
+            .context("无法查询接收历史")?;
+        self.history = Some(HistorySearch {
+            directory,
+            query: HistoryQuery::Pending(events),
+        });
+        Ok(())
     }
 
     fn active_ui(&mut self, app: &App, ui: &mut egui::Ui) {
@@ -285,6 +360,43 @@ impl Panel {
         {
             self.stop();
         }
+    }
+}
+
+impl HistorySearch {
+    fn poll(&mut self) {
+        let HistoryQuery::Pending(events) = &self.query else {
+            return;
+        };
+        let result = match events.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err(io::Error::other("receive history worker ended"))
+            }
+        };
+        self.query = HistoryQuery::Complete(result);
+    }
+}
+
+fn render_history(ui: &mut egui::Ui, history: &History) {
+    ui.label(format!(
+        "配额已预留 {} / {} 字节",
+        history.inventory.reserved_bytes,
+        file_worker::MAX_FILE_BYTES,
+    ));
+    if history.entries.is_empty() {
+        ui.label("此目录暂无接收记录。");
+    }
+    for entry in &history.entries {
+        let name = entry.name.as_deref().unwrap_or("名称未记录");
+        let state = match entry.state {
+            HistoryState::Reserved => "已预留",
+            HistoryState::Staged => "保有暂存",
+            HistoryState::PublicationUnconfirmed => "发布结果未确认",
+        };
+        ui.label(format!("{name} · {} 字节 · {state}", entry.size));
+        ui.weak(format!("续传编号 {}", encode_id(entry.id)));
     }
 }
 

@@ -5,9 +5,10 @@ use crate::{
     Identity,
 };
 use anyhow::{ensure, Context, Result};
-pub use peerglide_transfer::{codec::FileOutcome, MAX_FILE_BYTES};
+pub use peerglide_transfer::{codec::FileOutcome, History, HistoryState, MAX_FILE_BYTES};
 pub use crate::file_transfer::{Decision, Offer, ReceiveResult};
 use std::{
+    io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     sync::{mpsc, Arc, Mutex},
@@ -166,6 +167,23 @@ pub fn start(
     })
 }
 
+/// Scan one explicitly selected local receive directory off the desktop owner.
+pub fn inspect_history(
+    directory: PathBuf,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) -> Result<mpsc::Receiver<io::Result<History>>> {
+    let (send, receive) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("linko-file-history".into())
+        .spawn(move || {
+            let history = peerglide_transfer::receive_history(&directory);
+            if send.try_send(history).is_ok() {
+                wake();
+            }
+        })?;
+    Ok(receive)
+}
+
 async fn run(
     request: Request,
     identity: Identity,
@@ -263,6 +281,23 @@ mod tests {
             ensure!(Instant::now() < deadline, "file worker event timed out");
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn history_query_wakes_without_network_or_directory_changes() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let (send, wake) = mpsc::sync_channel(1);
+        let query = inspect_history(
+            fixture.0.clone(),
+            Arc::new(move || {
+                let _ = send.try_send(());
+            }),
+        )?;
+        wake.recv_timeout(Duration::from_secs(5))?;
+        let history = query.recv_timeout(Duration::from_secs(5))??;
+        assert!(history.entries.is_empty());
+        assert!(fs::read_dir(&fixture.0)?.next().is_none());
+        Ok(())
     }
 
     #[test]
