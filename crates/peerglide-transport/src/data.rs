@@ -107,7 +107,10 @@ async fn negotiate(
             Side::Connector => connection.open_bi().await?,
             Side::Listener => connection.accept_bi().await?,
         };
-        ensure!(send.id().index() == 0, "data connection already used a stream");
+        ensure!(
+            send.id().index() == 0,
+            "data connection already used a stream"
+        );
         let mut hello = [0; HELLO_BYTES];
         let peer = match side {
             Side::Connector => {
@@ -185,7 +188,9 @@ mod tests {
         let left = endpoint(bind, &local, &peer.certificate)?;
         let right = endpoint(bind, &peer, &local.certificate)?;
         let (connector, listener) = connect(&left, &right).await?;
-        assert!(open(&connector, &other.certificate, TEXT_ONLY).await.is_err());
+        assert!(open(&connector, &other.certificate, TEXT_ONLY)
+            .await
+            .is_err());
         assert!(connector.max_datagram_size().is_none());
         let (client, server) = tokio::try_join!(
             open(&connector, &peer.certificate, TEXT_ONLY),
@@ -208,8 +213,12 @@ mod tests {
         let input = super::super::endpoint(bind, &peer, &local.certificate)?;
         let input_client = super::super::endpoint(bind, &local, &peer.certificate)?;
         let (connector, listener) = connect(&input_client, &input).await?;
-        assert!(open(&connector, &peer.certificate, TEXT_ONLY).await.is_err());
-        assert!(accept(&listener, &local.certificate, TEXT_ONLY).await.is_err());
+        assert!(open(&connector, &peer.certificate, TEXT_ONLY)
+            .await
+            .is_err());
+        assert!(accept(&listener, &local.certificate, TEXT_ONLY)
+            .await
+            .is_err());
         assert!(connector.close_reason().is_none() && listener.close_reason().is_none());
         Ok(())
     }
