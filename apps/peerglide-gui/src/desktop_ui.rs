@@ -282,7 +282,8 @@ impl App {
         {
             self.open_advanced_setup();
         }
-        if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked() {
+        if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
+        {
             self.dialog = Some(Dialog::Revoke);
         }
         let own = self.local_fingerprint();
