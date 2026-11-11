@@ -18,6 +18,7 @@ import zipfile
 
 import build_version
 import package
+import portable_update
 import verify_macos_package
 import verify_portable_package
 
@@ -390,8 +391,7 @@ class Packaging(unittest.TestCase):
             self.assertEqual(list((root / "dist").iterdir()), [])
 
     @staticmethod
-    def portable_fixture(root, system, machine, wrong_cpu=False, extra=None):
-        version = "2026.11.12-0600"
+    def portable_fixture(root, system, machine, wrong_cpu=False, extra=None, version="2026.11.12-0600"):
         archive = root / f"Linko-{version}-{system.lower()}-{machine.lower()}.zip"
         source = package.build_source(root, version, system, machine)
         if system == "Windows":
@@ -462,6 +462,105 @@ class Packaging(unittest.TestCase):
             self.assertEqual(verify_portable_package.read_checksum(checksum, "Linko.zip"), digest)
             with self.assertRaisesRegex(ValueError, "does not name"):
                 verify_portable_package.read_checksum(checksum, "other.zip")
+
+    def test_portable_stage_uses_new_version_and_retains_other_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Linux", "x86_64")
+            versions = root / "versions"
+            versions.mkdir()
+            (versions / "unrelated").write_bytes(b"keep")
+            with self.assertRaisesRegex(ValueError, "checksum differs"):
+                portable_update.stage(versions, archive, "0" * 64, source)
+            self.assertEqual(list(versions.iterdir()), [versions / "unrelated"])
+
+            staged = portable_update.stage(versions, archive, digest, source)
+            receipt = json.loads((staged / portable_update.RECEIPT).read_bytes())
+            self.assertEqual(receipt["archive_sha256"], digest)
+            self.assertEqual(receipt["source"], source)
+            worker = staged / portable_update.PAYLOAD / "peerglide"
+            self.assertEqual(
+                hashlib.sha256(worker.read_bytes()).hexdigest(),
+                receipt["members"]["peerglide"],
+            )
+            self.assertEqual((versions / "unrelated").read_bytes(), b"keep")
+            with self.assertRaisesRegex(ValueError, "version already exists"):
+                portable_update.stage(versions, archive, digest, source)
+            self.assertEqual(
+                sorted(item.name for item in versions.iterdir()),
+                sorted([archive.stem, "unrelated"]),
+            )
+
+    def test_portable_upgrade_and_rollback_preserve_older_version_and_selection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            versions = root / "versions"
+            versions.mkdir()
+            installs = []
+            for version in ("2026.11.12-0600", "2026.11.12-0610"):
+                archive, digest, source = self.portable_fixture(
+                    root, "Linux", "x86_64", version=version
+                )
+                staged = portable_update.stage(versions, archive, digest, source)
+                receipt = hashlib.sha256((staged / portable_update.RECEIPT).read_bytes()).hexdigest()
+                installs.append((staged, digest, receipt))
+
+            first, second = installs
+            with patch.object(portable_update.platform, "system", return_value="Linux"), patch.object(
+                portable_update.platform, "machine", return_value="x86_64"
+            ):
+                old = portable_update.activate(versions, first[0].name, first[1], first[2])
+                self.assertEqual(portable_update.current_entry(versions), old)
+                selected = versions / portable_update.ACTIVE
+                initial = selected.read_bytes()
+                with portable_update.update_lock(versions):
+                    with self.assertRaisesRegex(ValueError, "another portable update"):
+                        portable_update.activate(versions, second[0].name, second[1], second[2])
+                with patch.object(portable_update.os, "replace", side_effect=OSError("fixture")):
+                    with self.assertRaises(OSError):
+                        portable_update.activate(versions, second[0].name, second[1], second[2])
+                self.assertEqual(selected.read_bytes(), initial)
+                self.assertFalse(list(versions.glob(".linko-selection-*")))
+
+                new = portable_update.activate(versions, second[0].name, second[1], second[2])
+                self.assertEqual(portable_update.current_entry(versions), new)
+                self.assertNotEqual(new, old)
+                after_upgrade = selected.read_bytes()
+                original = old.read_bytes()
+                old.write_bytes(b"fixture changed")
+                with self.assertRaisesRegex(ValueError, "staged member changed"):
+                    portable_update.rollback(versions)
+                self.assertEqual(selected.read_bytes(), after_upgrade)
+                old.write_bytes(original)
+                self.assertEqual(portable_update.rollback(versions), old)
+                self.assertEqual(portable_update.current_entry(versions), old)
+                self.assertTrue(new.exists())
+
+    def test_portable_activation_checks_exact_receipt_digest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Linux", "x86_64")
+            versions = root / "versions"
+            versions.mkdir()
+            staged = portable_update.stage(versions, archive, digest, source)
+            receipt_path = staged / portable_update.RECEIPT
+            receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            receipt_path.write_bytes(receipt_path.read_bytes() + b" ")
+            with self.assertRaisesRegex(ValueError, "staged receipt changed"):
+                portable_update.activate(versions, staged.name, digest, receipt_digest)
+            self.assertFalse((versions / portable_update.ACTIVE).exists())
+
+    def test_stage_does_not_take_over_empty_version_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Windows", "AMD64")
+            versions = root / "versions"
+            versions.mkdir()
+            existing = versions / archive.stem
+            existing.mkdir()
+            with self.assertRaisesRegex(ValueError, "version already exists"):
+                portable_update.stage(versions, archive, digest, source)
+            self.assertEqual(list(existing.iterdir()), [])
 
     def test_package_records_review_commit_and_actual_checkout_tree(self):
         with tempfile.TemporaryDirectory() as folder:

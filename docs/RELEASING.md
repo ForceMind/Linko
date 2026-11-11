@@ -31,6 +31,26 @@ Git 提交及源码树。PR 工作流同时记录受审提交，GitHub 合成提
 提交来源。来源字段和 SHA-256 需从可信 CI 或发布记录核对，
 本地 ad-hoc 校验和 ZIP 来源文件不提供发布者身份。
 
+## 便携版本选择与回滚
+
+`tools/portable_update.py` 使用用户指定且已存在的独立版本目录。
+`stage` 需要 ZIP、从可信 CI 或发布记录取得的 SHA-256 及预期
+来源 JSON。成功时输出本次暂存编号和收据摘要。`activate` 用这两个
+摘要复查已暂存内容后选择版本。`current` 复查并显示入口，
+`rollback` 复查前一版后恢复选择。工具输出入口，实际启动由
+用户操作。更新目录之外的应用配置、已配对身份和授权由应用继续管理。
+
+```text
+python tools/portable_update.py --versions PATH stage --archive ZIP --archive-sha256 SHA --expected-source SOURCE_JSON
+python tools/portable_update.py --versions PATH activate --label LABEL --archive-sha256 SHA --receipt-sha256 RECEIPT_SHA
+python tools/portable_update.py --versions PATH current
+python tools/portable_update.py --versions PATH rollback
+```
+
+版本目录保留旧包内容。切换记录以同目录替换，回读时验证收据和
+文件内容。系统级安装、后台服务、代码签名、公证及真实更新后的
+系统权限继续分别授权和验收。
+
 ## 首个预览的来源
 
 0.3.16-dev 程序来自 `cb27bce72ece205f138180fd1b6ef0c8cbf0764f`、CI `42382394527`。首个公开包仅替换 ZIP 根目录的 README／SECURITY，程序和 App 内成员保持原样。标签的 Rust 源码须与该基线一致。新 ZIP 有独立摘要，不能混用原始 CI artifact 外层摘要。
