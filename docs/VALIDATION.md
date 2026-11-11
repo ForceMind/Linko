@@ -2572,9 +2572,11 @@ F10 的捕获队列复用现有预分配 SPSC 环形队列，容量仍为 128。
 
 ## 2026-11-12 数据协作草稿验证
 
-精确提交 `2e5b28c84ea18d97bb22579c086994dca1421b4c` 的 Windows、
-macOS、Ubuntu 格式检查、严格 Clippy、locked 工作区测试、构建和平台冒烟
-已通过。最低 Rust、依赖审计、固定上游资格及 macOS/Ubuntu 资源检查通过。
+PR156 审阅提交为 `2e5b28c84ea18d97bb22579c086994dca1421b4c`。
+Actions 实际检出的合成提交为 `3dcb1d8bcc0198aad428c72d5b6dfaf90857aec2`，
+两者的源码树均为 `9bddd35c9a1946e3b008b0375123cbdac19acc47`。
+该次 Windows、macOS、Ubuntu 格式检查、严格 Clippy、locked 工作区
+测试、构建和平台冒烟已通过。最低 Rust、依赖审计、固定上游资格及 macOS/Ubuntu 资源检查通过。
 [三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43102482924) ·
 [固定上游资格](https://github.com/ForceMind/Linko/actions/runs/43102483061) ·
 [资源报告](https://github.com/ForceMind/Linko/actions/runs/43102482967)
