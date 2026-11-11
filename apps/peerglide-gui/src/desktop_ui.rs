@@ -1098,20 +1098,14 @@ impl App {
             .show(ui, |ui| {
                 self.worker_permissions.native_start_details(ui);
                 ui.separator();
-                ui.label("这会启动真实原生键鼠捕获与注入；实际工作进程将重新检查系统权限。连接/认证不代表对端允许本机控制。");
-                if !self.config.listen && !self.config.reconnect {
-                    ui.weak("本次会等待另一台电脑约一分钟，可随时停止；连接并重新验权后才开始捕获键鼠。这不会开启断线自动重连。");
+                let points = native_start_points(
+                    self.config.allow,
+                    !self.config.listen && !self.config.reconnect,
+                    self.child.is_some(),
+                );
+                for point in points {
+                    safety_point(ui, point);
                 }
-                ui.label(if self.config.allow {
-                    "本机接收偏好：允许已登记对端控制本机。"
-                } else {
-                    "本机接收偏好：不允许对端控制本机；可请求控制已授权本机的对端。"
-                });
-                if self.child.is_some() {
-                    ui.weak("当前仅通信会话将先停止；清理成功后再以键鼠模式重连。失败不自动继续。");
-                }
-                ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");
-                ui.label("接收端首次物理动作仅用于收回控制，不执行或回放。切回本机后先松开物理按键／鼠标按钮，再继续操作。");
                 if !self.notice.is_empty() {
                     ui.separator();
                     ui.label(&self.notice);
@@ -1193,22 +1187,93 @@ impl App {
             Dialog::ForceStop => "强制停止工作进程",
             Dialog::Recovery => "停止与恢复状态",
         };
-        egui::Window::new(title).open(&mut open).collapsible(false).default_width(580.0).default_height(540.0).vscroll(true).show(ctx,|ui|{
-            if ui.button("立即停止并恢复本机").clicked(){self.stop();}
-            ui.separator();match dialog{
-                Dialog::NativeStart=>{},
-                Dialog::Revoke=>{ui.label("停止会话并清除对端信任与本机接收许可。保留本机身份；下次需重新核验。");if ui.button("撤销并停止会话").clicked(){let result=self.revoke();self.feedback(result,"设备信任已撤销，旧会话正在停止。");self.dialog=None;}},
-                Dialog::Reset=>{ui.label("先备份设置和设备登记，再恢复默认并撤销信任。本机身份保持；无效或未来版本只读保留。");if ui.add_enabled(self.idle_writable(),egui::Button::new("确认备份并恢复设置")).clicked(){match self.reset_settings(){Ok(())=>{self.theme(ctx);self.notice="已备份并恢复默认，设备信任和授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},
-                Dialog::ForceStop=>{ui.label("仅在正常停止无响应时使用。强制结束不能确认输入已释放，之后本窗口只允许通信诊断。");if ui.button("明确强制结束，保留恢复警告").clicked(){if let Some(child)=self.child.as_mut(){let result=child.kill().map_err(anyhow::Error::from);self.feedback(result,"已请求强制结束，输入恢复未确认。");}
-                if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;}self.pending_start=None;self.dialog=None;}},
-                Dialog::Recovery=>{ui.strong(self.input_label());ui.label("松开物理按键/鼠标按钮，检查两端提示与系统权限。屏跃不会关闭安全防护，也不把退出当恢复成功。进程报告只表示软件路由与清理请求，不代表OS或应用效果已确认。");ui.label("恢复未确认时保留警告。可运行仅通信诊断；新的原生键鼠会话保持禁止。");ui.label("清理失败且原生捕获仍可用时：先松开全部物理按键／按钮，再重新按下并松开Ctrl+Alt+Esc，可请求强制返回。它仍保留未知警告，不证明系统按键已释放。");if self.child.is_some()&&ui.button("再次发送停止请求").clicked(){let result=self.resend_stop();self.feedback(result,"已再次发送停止请求，仍需等待清理结果。");}
-                if self.child.is_some()&&ui.button("正常停止无响应，查看强制结束…").clicked(){self.dialog=Some(Dialog::ForceStop);}
-                if self.close_requested&&self.child.is_none()&&ui.button("明确退出，已了解恢复未确认").clicked(){self.exit_confirmed=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);}},
-            }
-            if !self.notice.is_empty(){ui.label(&self.notice);}
-        });
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(580.0)
+            .default_height(540.0)
+            .vscroll(true)
+            .show(ctx, |ui| self.dialog_contents(ui, dialog));
         if !open {
             self.dialog = None;
+        }
+    }
+
+    /// W4: the stop control first, then icon points, then the one explicit action.
+    fn dialog_contents(&mut self, ui: &mut egui::Ui, dialog: Dialog) {
+        if ui.button("立即停止并恢复本机").clicked() {
+            self.stop();
+        }
+        ui.separator();
+        if dialog == Dialog::Recovery {
+            ui.strong(self.input_label());
+        }
+        for point in dialog_points(dialog) {
+            safety_point(ui, *point);
+        }
+        match dialog {
+            Dialog::NativeStart => {}
+            Dialog::Revoke => self.revoke_action(ui),
+            Dialog::Reset => self.reset_action(ui),
+            Dialog::ForceStop => self.force_stop_action(ui),
+            Dialog::Recovery => self.recovery_actions(ui),
+        }
+        if !self.notice.is_empty() {
+            ui.label(&self.notice);
+        }
+    }
+
+    fn revoke_action(&mut self, ui: &mut egui::Ui) {
+        if ui.button("撤销并停止会话").clicked() {
+            let result = self.revoke();
+            self.feedback(result, "设备信任已撤销，旧会话正在停止。");
+            self.dialog = None;
+        }
+    }
+
+    fn reset_action(&mut self, ui: &mut egui::Ui) {
+        let confirm = egui::Button::new("确认备份并恢复设置");
+        if !ui.add_enabled(self.idle_writable(), confirm).clicked() {
+            return;
+        }
+        match self.reset_settings() {
+            Ok(()) => {
+                self.theme(ui.ctx());
+                self.notice = "已备份并恢复默认，设备信任和授权关闭，本机身份保留。".into();
+                self.dialog = None;
+            }
+            Err(error) => self.notice = format!("恢复失败，原文件保留：{error:#}"),
+        }
+    }
+
+    fn force_stop_action(&mut self, ui: &mut egui::Ui) {
+        if !ui.button("明确强制结束，保留恢复警告").clicked() {
+            return;
+        }
+        if let Some(child) = self.child.as_mut() {
+            let result = child.kill().map_err(anyhow::Error::from);
+            self.feedback(result, "已请求强制结束，输入恢复未确认。");
+        }
+        if self.active_mode == Some(SessionMode::Native) {
+            self.recovery_blocked = true;
+        }
+        self.pending_start = None;
+        self.dialog = None;
+    }
+
+    fn recovery_actions(&mut self, ui: &mut egui::Ui) {
+        if self.child.is_some() && ui.button("再次发送停止请求").clicked() {
+            let result = self.resend_stop();
+            self.feedback(result, "已再次发送停止请求，仍需等待清理结果。");
+        }
+        let force = "正常停止无响应，查看强制结束…";
+        if self.child.is_some() && ui.button(force).clicked() {
+            self.dialog = Some(Dialog::ForceStop);
+        }
+        let exit = "明确退出，已了解恢复未确认";
+        if self.close_requested && self.child.is_none() && ui.button(exit).clicked() {
+            self.exit_confirmed = true;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
     pub(super) fn record_layout_control(
@@ -1421,6 +1486,256 @@ pub(super) fn left_text_slot(
     .inner
 }
 
+/// Icon side of a safety dialog point, in points.
+const POINT_ICON: f32 = desktop_style::tokens::ICON_SMALL;
+
+/// One sentence of a safety dialog with its icon. The text is the content; the icon only
+/// helps scanning, so a point can never be painted as an icon alone.
+#[derive(Clone, Copy)]
+pub(super) struct SafetyPoint {
+    pub(super) icon: Icon,
+    pub(super) text: &'static str,
+}
+
+impl SafetyPoint {
+    /// Warnings carry the warning color; every other point uses the accent color.
+    fn ink(self, dark: bool) -> egui::Color32 {
+        let tone = if self.icon == Icon::Warning {
+            desktop_style::Tone::Warning
+        } else {
+            desktop_style::Tone::Accent
+        };
+        desktop_style::status_colors(dark, tone).1
+    }
+}
+
+/// Paint `point` as an icon followed by its wrapped sentence.
+pub(super) fn safety_point(ui: &mut egui::Ui, point: SafetyPoint) -> egui::Response {
+    let ink = point.ink(ui.visuals().dark_mode);
+    icon_row(ui, point.text, |painter, rect| {
+        point.icon.paint(painter, rect, ink);
+    })
+}
+
+/// A row with a fixed icon cell and text that wraps in the remaining width. `paint` draws
+/// the icon; it is skipped while the cell is scrolled out of view.
+pub(super) fn icon_row(
+    ui: &mut egui::Ui,
+    text: impl Into<egui::WidgetText>,
+    paint: impl FnOnce(&egui::Painter, egui::Rect),
+) -> egui::Response {
+    let width = ui.available_width();
+    let line = ui.text_style_height(&egui::TextStyle::Body).max(POINT_ICON);
+    ui.horizontal_top(|ui| {
+        let cell = Vec2::new(POINT_ICON, line);
+        let (rect, _) = ui.allocate_exact_size(cell, egui::Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let icon = egui::Rect::from_center_size(rect.center(), Vec2::splat(POINT_ICON));
+            paint(ui.painter(), icon);
+        }
+        let text_width = (width - POINT_ICON - ui.spacing().item_spacing.x).max(1.0);
+        ui.vertical(|ui| {
+            ui.set_width(text_width);
+            ui.label(text)
+        })
+        .inner
+    })
+    .inner
+}
+
+static NATIVE_START_RISK: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "这会启动真实原生键鼠捕获与注入。",
+    },
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "实际工作进程将重新检查系统权限。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "连接/认证不代表对端允许本机控制。",
+    },
+];
+static NATIVE_START_WAIT: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "本次会等待另一台电脑约一分钟，可随时停止。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "连接并重新验权后才开始捕获键鼠。",
+    },
+    SafetyPoint {
+        icon: Icon::Stop,
+        text: "这不会开启断线自动重连。",
+    },
+];
+static NATIVE_START_RECEIVE_ALLOWED: SafetyPoint = SafetyPoint {
+    icon: Icon::Arrow(icons::Direction::Left),
+    text: "本机接收偏好：允许已登记对端控制本机。",
+};
+static NATIVE_START_RECEIVE_DENIED: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "本机接收偏好：不允许对端控制本机。",
+    },
+    SafetyPoint {
+        icon: Icon::Arrow(icons::Direction::Right),
+        text: "可请求控制已授权本机的对端。",
+    },
+];
+static NATIVE_START_REPLACE: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Stop,
+        text: "当前仅通信会话将先停止。",
+    },
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "清理成功后再以键鼠模式重连；失败不自动继续。",
+    },
+];
+static NATIVE_START_SHORTCUTS: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "Ctrl+Alt+Right 切换。",
+    },
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "Ctrl+Alt+Esc 紧急恢复。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "实机兼容性、DPI、输入法与权限变化仍未完成验收。",
+    },
+];
+static NATIVE_START_RETURN: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Arrow(icons::Direction::Left),
+        text: "接收端首次物理动作仅用于收回控制，不执行或回放。",
+    },
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "切回本机后先松开物理按键／鼠标按钮，再继续操作。",
+    },
+];
+
+/// W3 explanation in its original order. Conditional groups appear under the same
+/// conditions as the sentences they replace.
+pub(super) fn native_start_points(
+    allow: bool,
+    waits: bool,
+    replaces_session: bool,
+) -> Vec<SafetyPoint> {
+    let mut points = NATIVE_START_RISK.to_vec();
+    if waits {
+        points.extend_from_slice(&NATIVE_START_WAIT);
+    }
+    if allow {
+        points.push(NATIVE_START_RECEIVE_ALLOWED);
+    } else {
+        points.extend_from_slice(&NATIVE_START_RECEIVE_DENIED);
+    }
+    if replaces_session {
+        points.extend_from_slice(&NATIVE_START_REPLACE);
+    }
+    points.extend_from_slice(&NATIVE_START_SHORTCUTS);
+    points.extend_from_slice(&NATIVE_START_RETURN);
+    points
+}
+
+static REVOKE_POINTS: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Stop,
+        text: "停止会话并清除对端信任与本机接收许可。",
+    },
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "保留本机身份；下次需重新核验。",
+    },
+];
+static RESET_POINTS: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "先备份设置和设备登记，再恢复默认并撤销信任。",
+    },
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "本机身份保持。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "无效或未来版本只读保留。",
+    },
+];
+static FORCE_STOP_POINTS: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "仅在正常停止无响应时使用。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "强制结束不能确认输入已释放。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "之后本窗口只允许通信诊断。",
+    },
+];
+static RECOVERY_POINTS: [SafetyPoint; 10] = [
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "松开物理按键/鼠标按钮，检查两端提示与系统权限。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "屏跃不会关闭安全防护，也不把退出当恢复成功。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "进程报告只表示软件路由与清理请求。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "它不代表OS或应用效果已确认。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "恢复未确认时保留警告。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "可运行仅通信诊断；新的原生键鼠会话保持禁止。",
+    },
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "清理失败且原生捕获仍可用时，可请求强制返回：",
+    },
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "先松开全部物理按键／按钮；",
+    },
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "再重新按下并松开Ctrl+Alt+Esc。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "强制返回仍保留未知警告，不证明系统按键已释放。",
+    },
+];
+
+/// W4 explanation for `dialog`, in the original sentence order.
+fn dialog_points(dialog: Dialog) -> &'static [SafetyPoint] {
+    match dialog {
+        Dialog::NativeStart => &[],
+        Dialog::Revoke => &REVOKE_POINTS,
+        Dialog::Reset => &RESET_POINTS,
+        Dialog::ForceStop => &FORCE_STOP_POINTS,
+        Dialog::Recovery => &RECOVERY_POINTS,
+    }
+}
+
 pub(super) fn local_device_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "这台 Mac"
@@ -1608,5 +1923,171 @@ mod layout_tests {
         ] {
             assert_eq!(dropped_edge(center, local), None);
         }
+    }
+}
+
+/// Shared by the dialog tests here and in `worker_permissions`.
+#[cfg(test)]
+pub(super) mod safety_dialog_tests {
+    use super::*;
+
+    /// Text and non-text shapes of one frame. Texts keep the clip they were painted with.
+    pub(crate) struct Painted {
+        texts: Vec<(String, egui::Rect, egui::Rect)>,
+        marks: Vec<egui::Rect>,
+    }
+
+    fn collect(shape: &egui::epaint::Shape, clip: egui::Rect, painted: &mut Painted) {
+        match shape {
+            egui::epaint::Shape::Text(text) => {
+                let bounds = text.visual_bounding_rect();
+                painted
+                    .texts
+                    .push((text.galley.job.text.clone(), bounds, clip));
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, clip, painted);
+                }
+            }
+            other => painted.marks.push(other.visual_bounding_rect()),
+        }
+    }
+
+    impl Painted {
+        pub(crate) fn of(output: egui::FullOutput) -> Self {
+            let mut painted = Self {
+                texts: Vec::new(),
+                marks: Vec::new(),
+            };
+            for clipped in &output.shapes {
+                collect(&clipped.shape, clipped.clip_rect, &mut painted);
+            }
+            output.drop_without_applying_deltas();
+            painted
+        }
+
+        /// Bounds and clip of the painted text equal to `label`.
+        pub(crate) fn text(&self, label: &str) -> Option<(egui::Rect, egui::Rect)> {
+            let found = self.texts.iter().find(|(text, _, _)| text == label);
+            found.map(|(_, bounds, clip)| (*bounds, *clip))
+        }
+
+        /// True when an icon sized shape sits in the cell just left of `text`.
+        fn icon_before(&self, text: egui::Rect) -> bool {
+            self.marks.iter().any(|mark| {
+                mark.is_positive()
+                    && mark.width() <= POINT_ICON + 2.0
+                    && mark.height() <= POINT_ICON + 2.0
+                    && mark.max.x <= text.min.x
+                    && mark.min.x >= text.min.x - 2.0 * POINT_ICON - 12.0
+                    && mark.min.y < text.min.y + 20.0
+                    && mark.max.y > text.min.y - 6.0
+            })
+        }
+
+        /// Every label is painted inside its clip with an icon beside its first line.
+        pub(crate) fn assert_points(&self, labels: &[&str]) {
+            assert!(!labels.is_empty());
+            for label in labels {
+                let Some((bounds, clip)) = self.text(label) else {
+                    panic!("{label} absent");
+                };
+                assert!(clip.contains_rect(bounds), "{label} clipped");
+                assert!(self.icon_before(bounds), "{label} has no icon");
+            }
+        }
+    }
+
+    pub(crate) fn texts_of(points: &[SafetyPoint]) -> Vec<&'static str> {
+        points.iter().map(|point| point.text).collect()
+    }
+
+    /// Text present, at most 30 characters: a point never degrades to an icon alone.
+    pub(crate) fn assert_short_sentences(points: &[SafetyPoint]) {
+        for point in points {
+            let count = point.text.chars().count();
+            assert!(!point.text.trim().is_empty(), "a point without text");
+            assert!(count <= 30, "{} has {count} characters", point.text);
+        }
+    }
+
+    fn tall_frame(ctx: &egui::Context, run: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
+        let size = Vec2::new(580.0, 3000.0);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            ..Default::default()
+        };
+        ctx.run_ui(input, run)
+    }
+
+    #[test]
+    fn every_safety_point_keeps_a_short_sentence_and_its_conditions() {
+        for allow in [false, true] {
+            for waits in [false, true] {
+                for replaces in [false, true] {
+                    let points = native_start_points(allow, waits, replaces);
+                    assert_short_sentences(&points);
+                    let texts = texts_of(&points);
+                    let has = |text: &str| texts.iter().copied().any(|item| item == text);
+                    assert!(has("这会启动真实原生键鼠捕获与注入。"));
+                    assert!(has("连接/认证不代表对端允许本机控制。"));
+                    assert!(has("Ctrl+Alt+Esc 紧急恢复。"));
+                    assert!(has("实机兼容性、DPI、输入法与权限变化仍未完成验收。"));
+                    assert!(has("接收端首次物理动作仅用于收回控制，不执行或回放。"));
+                    assert_eq!(has("这不会开启断线自动重连。"), waits);
+                    assert_eq!(
+                        has("清理成功后再以键鼠模式重连；失败不自动继续。"),
+                        replaces
+                    );
+                    assert_eq!(has("本机接收偏好：允许已登记对端控制本机。"), allow);
+                    assert_eq!(has("本机接收偏好：不允许对端控制本机。"), !allow);
+                    assert_eq!(has("可请求控制已授权本机的对端。"), !allow);
+                }
+            }
+        }
+        assert!(dialog_points(Dialog::NativeStart).is_empty());
+        for dialog in [
+            Dialog::Revoke,
+            Dialog::Reset,
+            Dialog::ForceStop,
+            Dialog::Recovery,
+        ] {
+            assert!(!dialog_points(dialog).is_empty());
+            assert_short_sentences(dialog_points(dialog));
+        }
+    }
+
+    #[test]
+    fn every_safety_point_renders_its_icon_beside_its_text() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.dialog = Some(Dialog::NativeStart);
+        tall_frame(&ctx, |ui| app.native_start_contents(ui)).drop_without_applying_deltas();
+        let painted = Painted::of(tall_frame(&ctx, |ui| app.native_start_contents(ui)));
+        let waits = !app.config.listen && !app.config.reconnect;
+        let points = native_start_points(app.config.allow, waits, app.child.is_some());
+        painted.assert_points(&texts_of(&points));
+        for dialog in [
+            Dialog::Revoke,
+            Dialog::Reset,
+            Dialog::ForceStop,
+            Dialog::Recovery,
+        ] {
+            app.dialog = Some(dialog);
+            tall_frame(&ctx, |ui| app.dialog_contents(ui, dialog)).drop_without_applying_deltas();
+            let painted = Painted::of(tall_frame(&ctx, |ui| app.dialog_contents(ui, dialog)));
+            painted.assert_points(&texts_of(dialog_points(dialog)));
+            assert!(painted.text("立即停止并恢复本机").is_some());
+            assert_eq!(app.dialog, Some(dialog));
+        }
+        assert!(app.config == before && app.child.is_none() && !app.exit_confirmed);
+        assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
 }
