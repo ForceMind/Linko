@@ -243,11 +243,12 @@ impl Panel {
                 if pending {
                     let import = ui.button("导入到本机剪贴板").clicked();
                     let decline = ui.button("拒绝").clicked();
-                    if (import || decline)
-                        && let Err(error) = self.decide(app, import)
-                    {
-                        self.stop();
-                        self.notice = error.to_string();
+                    if import || decline {
+                        let result = self.decide(app, import);
+                        if let Err(error) = result {
+                            self.stop();
+                            self.notice = error.to_string();
+                        }
                     }
                 }
                 if ui
@@ -258,10 +259,12 @@ impl Panel {
                 }
             });
         }
-        if let Some(outcome) = self.local_outcome
-            && self.notice != outcome_label(outcome)
+        if let Some(label) = self
+            .local_outcome
+            .map(outcome_label)
+            .filter(|label| self.notice != *label)
         {
-            ui.label(outcome_label(outcome));
+            ui.label(label);
         }
         if !self.notice.is_empty() {
             ui.label(&self.notice);
