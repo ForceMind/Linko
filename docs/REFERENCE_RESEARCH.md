@@ -199,3 +199,42 @@ MIT OR Apache-2.0，是可继续审查的候选。[NCC历史报告](https://www.
 TLS固定证书验证，不伪造人工confirmed_fingerprint；旧登记成功、PAKE验证成功与
 双方持久提交成功是三个不同事实。取消/过期/新代次必须废弃迟到结果，尝试预算不随
 断线重置，输入/数据同意独立。登记的证书与配置事务仍需补齐，不称短码已可用。
+
+## Oink：独立注入线程（2026-11-11）
+
+参考源码同上固定 SHA（3ca82127e61f9d7106a70574a82cc63566d7a572），只读，未运行。用户已确认
+获作者对 Oink 原创代码的 MIT 集成许可；本次没有复制 Oink 源码或注释，只吸收机制并在
+PeerGlide 现有 Engine/Backend 结构内独立实现（`crates/peerglide-platform/src/inject_thread.rs`）。
+作者归属：机制来自 Oink 项目（oinkvm/oink）。
+
+已核对的机制（文件:行号）：
+- 注入独占线程，因为原生注入可能阻塞（受保护安装时是到服务助手的同步往返）：
+  `crates/oink-agent/src/threads/inject.rs:1-7`。
+- 有界队列 + 生产者先看余量，满则不读入；清理与模式屏障预留最后四分之一：
+  `inject.rs:157-159`、`inject.rs:507-523`、`inject.rs:562-564`。
+- 栅栏：`OwnerBegin` 记下失败计数基线，`OwnerFence` 在之前所有释放/原生操作执行后比较
+  失败计数并以原子状态回报（1 成功 / 2 失败 / 3 清理未完成）；生产者轮询而非阻塞：
+  `inject.rs:1169-1197`，`threads/input/driver.rs:489-538`。`UpdateFence` 先释放账本再回报：
+  `inject.rs:1198-1209`。
+- 注入失败只做检测计数，不重试补发：`inject.rs:1046-1053`。
+- 暂停/会话代次变化在队列之外处理，在途 OS 调用无法取消，但旧代次工作不再重放：
+  `inject.rs:796-825`、`inject.rs:927-939`；积压超过 5 秒则暂停并让所有栅栏失败：`inject.rs:910-926`。
+- 回调线程从不等待注入线程上的模式调用：`inject.rs:528-558`。
+- 停止：`Stop` 条目释放仍按住的输入后退出，句柄 Drop 时 join：`inject.rs:1210-1216`、`inject.rs:670-677`。
+- 钩子线程不对自身 SendInput 触发 LL 钩子（Windows 11），所以标记事件由另一线程注入：
+  `crates/oink-input/src/windows/hook.rs:489-505`、`hook.rs:2104-2106`；钩子线程被一件事占住超过
+  `LowLevelHooksTimeout` 就可能被系统卸载钩子：`hook.rs:1-10`、`hook.rs:2243-2257`。
+- 注入包统一带标记供钩子跳过：`oink-input/src/windows/inject.rs:24-31`、`inject.rs:115-129`。
+  `windows/mod.rs`、`loop_timer.rs`、`wheel_origin.rs` 已读，与本改动无直接对应机制
+  （高精度定时器与滚轮来源匹配不移植）。
+
+与 Oink 的差异及原因：
+- Oink 用 8192 项无锁队列且每个 MoveTo 都注入；PeerGlide 用 256 项预分配队列，并合并队尾
+  尚未开始的相邻光标移动，针对 F01 的先进先出累积延迟。键/按钮/滚轮不合并、不丢弃。
+- Oink 由路由层持有释放账本；PeerGlide 保留 Engine 的"先记可能的 Down"、失败 Up 的
+  3 次重试账本与 SourceLost 不盲发 Up：注入线程把失败的 Up 交回 Engine 重试，每次 SDK 调用前
+  复查来源观测与 epoch。
+- Oink 栅栏结果是三态原子；PeerGlide 的栅栏是 Engine 在 `leave_receiving`/`force_return` 前轮询
+  "队列空且在途调用已返回"，超过 1000 ms 走既有 FAILED/RecoveryRequired，不新增协议字段。
+- Oink 注入线程可暂停/恢复重建；PeerGlide 的注入线程随单一 capture 生命周期创建与停止，
+  不单独恢复。
