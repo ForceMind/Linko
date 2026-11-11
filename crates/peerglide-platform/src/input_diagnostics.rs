@@ -71,13 +71,14 @@ pub enum Count {
     SlowPointer,
     SlowInput,
     LoopStall,
+    PointerCoalesced,
 }
 
 /// Longest line the worker, the GUI log and the copy action accept. The
 /// largest possible summary (every counter at u32::MAX) must fit below it.
 pub const MAX_SUMMARY_BYTES: usize = 1600;
 
-const KEYS: [&str; Count::LoopStall as usize + 1] = [
+const KEYS: [&str; Count::PointerCoalesced as usize + 1] = [
     "cap",
     "zero",
     "filtered",
@@ -145,6 +146,7 @@ const KEYS: [&str; Count::LoopStall as usize + 1] = [
     "slow_ptr",
     "slow_inp",
     "loop_stall",
+    "rx_coalesced",
 ];
 
 pub struct InputDiagnostics {
@@ -229,20 +231,23 @@ impl fmt::Display for Snapshot {
 /// Only bounded, numeric summaries are eligible for the GUI copy action.
 pub fn is_summary(line: &str) -> bool {
     let mut fields = line.split_ascii_whitespace();
+    let matches_counter = |field: &str, key: &str| {
+        field.split_once('=').is_some_and(|(name, value)| {
+            name == key && value.bytes().all(|b| b.is_ascii_digit()) && value.parse::<u32>().is_ok()
+        })
+    };
+    let coalesced = Count::PointerCoalesced as usize;
     line.len() <= MAX_SUMMARY_BYTES
         && !line.bytes().any(|b| b.is_ascii_control())
         && fields.next() == Some("KVM-DIAG/5")
         && matches!(fields.next(), Some("sample" | "expired" | "end"))
-        && KEYS.iter().all(|key| {
-            fields
-                .next()
-                .and_then(|field| field.split_once('='))
-                .is_some_and(|(name, value)| {
-                    name == *key
-                        && value.bytes().all(|b| b.is_ascii_digit())
-                        && value.parse::<u32>().is_ok()
-                })
-        })
+        && KEYS[..coalesced]
+            .iter()
+            .all(|key| fields.next().is_some_and(|field| matches_counter(field, key)))
+        // Older workers omit the appended counter.
+        && fields
+            .next()
+            .is_none_or(|field| matches_counter(field, KEYS[coalesced]))
         && fields.next().is_none()
 }
 
@@ -264,6 +269,9 @@ mod tests {
         .to_string();
         assert!(summary.len() <= MAX_SUMMARY_BYTES);
         assert!(is_summary(&summary));
+        let (legacy, _) = summary.rsplit_once(' ').unwrap();
+        assert!(is_summary(legacy));
+        assert!(!is_summary(&format!("{legacy} rx_coalesced=invalid")));
         assert!(!is_summary(&summary.replace("KVM-DIAG/5", "KVM-DIAG/4")));
         assert!(!is_summary(&(summary.clone() + " path=/private")));
         assert!(!is_summary(&summary.replace("cap=", "address=")));
