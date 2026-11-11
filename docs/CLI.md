@@ -60,3 +60,14 @@ app/terminal running the prototype, followed by restart. Secure Input remains
 outside its control. Windows input cannot cross privilege boundaries or control
 UAC/secure desktop. Keep OS security protections enabled.
 
+
+## 从一台可信电脑播放音频
+
+Windows 和 macOS 提供显式播放入口。指定已线下核对的音频源证书，
+可选本机输出和应用音量。会话通过独立音频连接校验身份，Ctrl+C、
+断线或无音频超时会停止。此入口只接收音频，系统采集由单独命令和
+本机许可控制。
+
+```text
+peerglide play-audio --identity PATH --peer-cert SOURCE.der --volume 65
+```
