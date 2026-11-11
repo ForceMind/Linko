@@ -365,7 +365,7 @@ mod tests {
             open(&connector, &peer.certificate, TEXT_ONLY),
             accept(&listener, &local.certificate, TEXT_ONLY)
         )?;
-        let (mut local_consent, mut send, _local_receive) = outbound.into_session(4096, 4096)?;
+        let (mut local_consent, mut send, mut local_receive) = outbound.into_session(4096, 4096)?;
         let (mut peer_consent, mut peer_send, mut receive) = inbound.into_session(4096, 4096)?;
         let share = Classification::ShareableText;
         let origin = Origin::Local;
@@ -397,10 +397,16 @@ mod tests {
             revision: 7,
             text: String::new(),
         };
-        let ((), first) = tokio::try_join!(
+        let (sequence, mut first) = tokio::try_join!(
             send.write_text("屏跃", share, origin),
             receive.read(Some(backend.revision))
         )?;
+        tokio::try_join!(
+            peer_send.acknowledge_text(&mut first),
+            local_receive.wait_text_receipt(sequence)
+        )?;
+        assert!(peer_send.acknowledge_text(&mut first).await.is_err());
+        assert!(backend.text.is_empty());
         assert_eq!(
             peer_consent.apply_text(first, &mut backend)?,
             WriteResult::Submitted
@@ -408,7 +414,7 @@ mod tests {
         assert_eq!(backend.text, "屏跃");
 
         tokio::time::sleep(Duration::from_millis(110)).await;
-        let ((), second) = tokio::try_join!(
+        let (_, second) = tokio::try_join!(
             send.write_text("第二帧", share, origin),
             receive.read(Some(backend.revision))
         )?;
@@ -421,7 +427,7 @@ mod tests {
         assert_eq!(backend.text, "接收期间的本机编辑");
 
         tokio::time::sleep(Duration::from_millis(110)).await;
-        let ((), third) = tokio::try_join!(
+        let (_, third) = tokio::try_join!(
             send.write_text("第三帧", share, origin),
             receive.read(Some(backend.revision))
         )?;
@@ -429,6 +435,53 @@ mod tests {
         assert!(peer_consent.apply_text(third, &mut backend).is_err());
         assert_eq!(backend.text, "接收期间的本机编辑");
         assert!(listener.close_reason().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mismatched_clipboard_receipt_closes_the_data_connection() -> Result<()> {
+        use peerglide_transfer::{
+            clipboard::{Classification, Origin},
+            data_policy::Permissions,
+        };
+
+        let local = Identity::generate()?;
+        let peer = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let left = endpoint(bind, &local, &peer.certificate)?;
+        let right = endpoint(bind, &peer, &local.certificate)?;
+        let (connector, listener) = connect(&left, &right).await?;
+        let (outbound, inbound) = tokio::try_join!(
+            open(&connector, &peer.certificate, TEXT_ONLY),
+            accept(&listener, &local.certificate, TEXT_ONLY)
+        )?;
+        let (mut local_consent, mut send, mut local_receive) = outbound.into_session(4096, 4096)?;
+        let (mut peer_consent, mut peer_send, mut receive) = inbound.into_session(4096, 4096)?;
+        local_consent.grant(
+            Permissions {
+                text_send: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        peer_consent.grant(
+            Permissions {
+                text_receive: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        let (sequence, mut admitted) = tokio::try_join!(
+            send.write_text("样本", Classification::ShareableText, Origin::Local),
+            receive.read(Some(7))
+        )?;
+        peer_send.acknowledge_text(&mut admitted).await?;
+        let error = local_receive
+            .wait_text_receipt(sequence + 1)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "clipboard receipt sequence differs");
+        assert!(connector.close_reason().is_some());
         Ok(())
     }
 

@@ -71,6 +71,7 @@ pub struct AdmittedFrame {
     frame: Frame,
     permit: Permit,
     clipboard_revision: Option<u64>,
+    acknowledged: bool,
 }
 
 pub(super) fn new(
@@ -138,11 +139,9 @@ impl Consent {
         admitted: AdmittedFrame,
         apply: impl FnOnce(Frame) -> Result<T>,
     ) -> Result<T> {
-        let capability = inbound(admitted.frame.kind());
-        ensure!(
-            capability != Capability::TextReceive,
-            "use the clipboard write path"
-        );
+        let kind = admitted.frame.kind();
+        ensure!(is_file(kind), "use the clipboard receive path");
+        let capability = inbound(kind);
         self.policy
             .check(|session, now| session.validate(&admitted.permit, capability, now))?;
         apply(admitted.frame)
@@ -180,7 +179,7 @@ impl Drop for Consent {
 
 impl Sender {
     pub async fn write(&mut self, frame: &Frame) -> Result<()> {
-        ensure!(frame.kind() != Kind::Text, "use the clipboard send path");
+        ensure!(is_file(frame.kind()), "use the clipboard send path");
         let policy = &self.policy;
         self.frames
             .write_checked(frame, |kind| {
@@ -197,7 +196,7 @@ impl Sender {
         text: &str,
         classification: Classification,
         origin: Origin,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         let policy = &self.policy;
         let candidate =
             policy.check(|clipboard, now| clipboard.export(text, classification, origin, now))?;
@@ -207,7 +206,35 @@ impl Sender {
                 policy
                     .check(|clipboard, now| clipboard.validate(&permit, Capability::TextSend, now))
             })
-            .await
+            .await?;
+        Ok(sequence)
+    }
+
+    /// Acknowledge an admitted text that is waiting for a local write decision.
+    /// This neither applies the text nor grants a clipboard send direction.
+    pub async fn acknowledge_text(&mut self, admitted: &mut AdmittedFrame) -> Result<()> {
+        let Frame::Text { sequence, .. } = &admitted.frame else {
+            anyhow::bail!("expected a clipboard text frame");
+        };
+        ensure!(
+            !admitted.acknowledged,
+            "clipboard frame already acknowledged"
+        );
+        let policy = &self.policy;
+        self.frames
+            .write_checked(
+                &Frame::TextReceived {
+                    sequence: *sequence,
+                },
+                |_| {
+                    policy.check(|clipboard, now| {
+                        clipboard.validate(&admitted.permit, Capability::TextReceive, now)
+                    })
+                },
+            )
+            .await?;
+        admitted.acknowledged = true;
+        Ok(())
     }
 }
 
@@ -219,6 +246,10 @@ impl Receiver {
         let (frame, permit) = self
             .frames
             .read_checked(|header| {
+                ensure!(
+                    header.kind() != Kind::TextReceived,
+                    "use the receipt reader"
+                );
                 let capability = inbound(header.kind());
                 ensure!(
                     capability != Capability::TextReceive || clipboard_revision.is_some(),
@@ -231,13 +262,41 @@ impl Receiver {
             frame,
             permit,
             clipboard_revision,
+            acknowledged: false,
         })
     }
+
+    /// Wait for the exact sent sequence. A receipt only means the peer
+    /// admitted the text; it does not prove an OS clipboard write.
+    pub async fn wait_text_receipt(&mut self, sequence: u64) -> Result<()> {
+        ensure!(sequence != 0, "invalid clipboard receipt sequence");
+        let policy = &self.policy;
+        let (frame, permit) = self
+            .frames
+            .read_checked(|header| {
+                ensure!(
+                    header.kind() == Kind::TextReceived,
+                    "expected a clipboard receipt"
+                );
+                policy.check(|clipboard, now| clipboard.authorize(Capability::TextSend, now))
+            })
+            .await?;
+        if !matches!(frame, Frame::TextReceived { sequence: received } if received == sequence) {
+            policy.close();
+            anyhow::bail!("clipboard receipt sequence differs");
+        }
+        policy.check(|clipboard, now| clipboard.validate(&permit, Capability::TextSend, now))
+    }
+}
+
+fn is_file(kind: Kind) -> bool {
+    matches!(kind, Kind::Offer | Kind::Chunk | Kind::Cancel)
 }
 
 fn outbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextSend,
+        Kind::TextReceived => Capability::TextReceive,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileSend,
     }
 }
@@ -245,6 +304,7 @@ fn outbound(kind: Kind) -> Capability {
 fn inbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextReceive,
+        Kind::TextReceived => Capability::TextSend,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileReceive,
     }
 }

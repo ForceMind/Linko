@@ -25,6 +25,9 @@ pub enum Frame {
     Cancel {
         id: [u8; 16],
     },
+    TextReceived {
+        sequence: u64,
+    },
 }
 
 fn invalid() -> io::Error {
@@ -38,6 +41,7 @@ pub enum Kind {
     Offer = 2,
     Chunk = 3,
     Cancel = 4,
+    TextReceived = 5,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +60,7 @@ impl Header {
             2 => Kind::Offer,
             3 => Kind::Chunk,
             4 => Kind::Cancel,
+            5 => Kind::TextReceived,
             _ => return Err(invalid()),
         };
         let body_bytes =
@@ -81,6 +86,7 @@ fn valid_length(kind: Kind, len: usize) -> bool {
         Kind::Offer => (17..=MAX_MANIFEST_BYTES + 16).contains(&len),
         Kind::Chunk => (21..=CHUNK_BYTES + 20).contains(&len),
         Kind::Cancel => len == 16,
+        Kind::TextReceived => len == 8,
     }
 }
 
@@ -98,6 +104,7 @@ impl Frame {
             Self::Offer { .. } => Kind::Offer,
             Self::Chunk { .. } => Kind::Chunk,
             Self::Cancel { .. } => Kind::Cancel,
+            Self::TextReceived { .. } => Kind::TextReceived,
         }
     }
 
@@ -157,6 +164,13 @@ impl Frame {
             Kind::Cancel => Ok(Self::Cancel {
                 id: body.try_into().map_err(|_| invalid())?,
             }),
+            Kind::TextReceived => {
+                let sequence = u64::from_le_bytes(body.try_into().map_err(|_| invalid())?);
+                if sequence == 0 {
+                    return Err(invalid());
+                }
+                Ok(Self::TextReceived { sequence })
+            }
         }
     }
 
@@ -192,6 +206,12 @@ impl Frame {
                 body
             }
             Self::Cancel { id } => id.to_vec(),
+            Self::TextReceived { sequence } => {
+                if *sequence == 0 {
+                    return Err(invalid());
+                }
+                sequence.to_le_bytes().to_vec()
+            }
         };
         if !valid_length(kind, body.len()) {
             return Err(invalid());
