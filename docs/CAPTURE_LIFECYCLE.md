@@ -37,7 +37,7 @@ prove the previous implementation failed this boundary without hanging CI.
 `platform::gesture_capture` supplies a Windows-only library entry on the same
 existing WH_MOUSE_LL/WH_KEYBOARD_LL lifecycle; no binary calls it. KVM capture
 passes `None` and keeps its current dispatch/control behavior. The G1 branch
-runs before the KVM BTreeSets/tokio sender and does no recognition, OS target
+runs before the KVM hold accounting and event queue and does no recognition, OS target
 query, disk/network I/O or dynamic storage in callbacks. A preallocated 256-event
 SPSC ring carries opaque Begin/Move/End records to one worker. Raw coordinates
 are Windows physical pixels, not recognizer logical pixels or DPI acceptance.
@@ -352,3 +352,13 @@ X/Y 位移更新，因此现有 tap 读取的 `MouseEventDeltaX/Y`（字段 4/5�
 RecoveryRequired、异步失败的 Up 被重试、无新命令时也会发现异步失败。
 真实 SendInput 是否仍可能阻塞（例如受保护安装、UAC/安全桌面、其他进程慢钩子）、实际延迟
 与 Timeout 是否消失，都需要 Windows 实机 #3/C06 验证。
+
+## Bounded KVM capture handoff
+
+The desktop session allocates a 128-event SPSC ring before installing the
+existing native capture. The hook only writes into the ring. The same Windows
+message pump or macOS run loop wakes the async consumer after callback dispatch,
+before waiting again. Producer teardown publishes closure before waking the
+consumer. Input order, the full-queue gate disable, and pair ownership stay in
+the existing capture path. The Win/macOS timing and recovery cases remain part
+of the physical acceptance matrix.

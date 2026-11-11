@@ -126,6 +126,7 @@ impl<T: Send> Producer<T> {
     /// Constant bounded work: one closure check and one full check, no retry.
     /// A push already overlapping consumer closure may finish publication; final
     /// ownership still drops it. A push observing closure returns T unchanged.
+    #[cfg(any(windows, target_os = "macos", test))]
     pub(crate) fn try_push(&mut self, value: T) -> Result<(), T> {
         if !self.is_consumer_alive() {
             return Err(value);
@@ -143,6 +144,7 @@ impl<T: Send> Producer<T> {
         Ok(())
     }
 
+    #[cfg(any(windows, target_os = "macos", test))]
     pub(crate) fn is_consumer_alive(&self) -> bool {
         self.inner.consumer_alive.load(Ordering::Acquire)
     }
@@ -154,6 +156,9 @@ impl<T: Send> Drop for Producer<T> {
 }
 
 impl<T: Send> Consumer<T> {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inner.head.load(Ordering::Relaxed) == self.inner.tail.load(Ordering::Acquire)
+    }
     pub(crate) fn try_pop(&mut self) -> Option<T> {
         let head = self.inner.head.load(Ordering::Relaxed);
         if head == self.inner.tail.load(Ordering::Acquire) {

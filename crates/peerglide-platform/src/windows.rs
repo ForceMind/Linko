@@ -124,7 +124,7 @@ pub(super) fn suppressed_modifiers_held() -> bool {
 }
 thread_local! { static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)}; }
 pub fn capture(
-    tx: mpsc::Sender<Captured>,
+    tx: CaptureEventSender,
     gate: CaptureGate,
     target: InputCapabilities,
     local_gestures: Option<gesture_capture::CallbackBroker>,
@@ -132,7 +132,7 @@ pub fn capture(
     capture_impl(tx, gate, target, local_gestures, None)
 }
 pub(super) fn capture_receiving(
-    tx: mpsc::Sender<Captured>,
+    tx: CaptureEventSender,
     gate: CaptureGate,
     target: InputCapabilities,
     engine: receive_driver::ReceiveEngine,
@@ -141,7 +141,7 @@ pub(super) fn capture_receiving(
     capture_impl(tx, gate, target, None, Some((engine, wake)))
 }
 fn capture_impl(
-    tx: mpsc::Sender<Captured>,
+    tx: CaptureEventSender,
     gate: CaptureGate,
     target: InputCapabilities,
     local_gestures: Option<gesture_capture::CallbackBroker>,
@@ -291,13 +291,22 @@ fn capture_impl(
                 if !receive_gate.0.healthy.load(Ordering::Acquire) {
                     break true;
                 }
-                if PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0 {
+                let has_message = PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0;
+                if has_message {
                     if msg.message == WM_QUIT {
                         break true;
                     }
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
-                } else if !immediate {
+                }
+                // PeekMessage can dispatch a sent hook callback even when it
+                // returns no posted message. Publish before sleeping either way.
+                STATE.with_borrow_mut(|state| {
+                    if let Some(state) = state {
+                        state.tx.notify_after_callbacks();
+                    }
+                });
+                if !has_message && !immediate {
                     // Input/typed commands wake immediately; the timeout bounds cooperative shutdown.
                     if MsgWaitForMultipleObjectsEx(
                         0,
@@ -1095,7 +1104,7 @@ mod tests {
     #[test]
     fn startup_side_button_hold_blocks_receiving_until_its_local_up() {
         for (button, vk) in [(4, VK_XBUTTON1), (5, VK_XBUTTON2)] {
-            let (tx, mut rx) = mpsc::channel(8);
+            let (tx, mut rx) = capture_events::channel(8).unwrap();
             let mut state = HookState {
                 pairs: PairLedger::default(),
                 stopping: false,
@@ -1128,7 +1137,7 @@ mod tests {
     }
     #[test]
     fn startup_virtual_sample_repeat_is_not_a_fresh_switch_press() {
-        let (tx, _rx) = mpsc::channel(16);
+        let (tx, _rx) = capture_events::channel(16).unwrap();
         let mut s = HookState {
             pairs: PairLedger::default(),
             stopping: false,
@@ -1147,7 +1156,7 @@ mod tests {
     }
     #[test]
     fn keypad_enter_release_clears_ambiguous_startup_sample() {
-        let (tx, mut rx) = mpsc::channel(8);
+        let (tx, mut rx) = capture_events::channel(8).unwrap();
         let mut s = HookState {
             pairs: PairLedger::default(),
             stopping: false,

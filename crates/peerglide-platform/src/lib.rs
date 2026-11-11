@@ -6,8 +6,8 @@ use std::sync::{
     Arc, OnceLock,
 };
 use std::time::Instant;
-use tokio::sync::mpsc;
 pub mod application_menu;
+mod capture_events;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
@@ -18,13 +18,13 @@ mod inject_thread;
 pub mod input_diagnostics;
 mod receive_driver;
 pub mod tray;
+pub use capture_events::{CaptureEventSender, CaptureEvents};
 pub use receive_driver::{
     ReceiveAck, ReceiveControl, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot,
     COMMAND_TIMEOUT,
 };
 #[cfg(any(windows, test))]
 pub mod gesture_capture;
-#[cfg(any(windows, test))]
 mod gesture_queue;
 #[cfg(any(target_os = "macos", test))]
 mod source_cursor;
@@ -1096,11 +1096,16 @@ pub fn input_capabilities() -> InputCapabilities {
         InputCapabilities::default()
     }
 }
-pub fn capture(tx: mpsc::Sender<Captured>, target: InputCapabilities) -> Result<CaptureSession> {
+/// Preallocates the same 128 capture slots used by the desktop session.
+pub fn capture_event_channel() -> (CaptureEventSender, CaptureEvents) {
+    capture_events::channel(128).expect("fixed capture event capacity")
+}
+
+pub fn capture(tx: CaptureEventSender, target: InputCapabilities) -> Result<CaptureSession> {
     capture_with_diagnostics(tx, target, None)
 }
 pub fn capture_with_diagnostics(
-    tx: mpsc::Sender<Captured>,
+    tx: CaptureEventSender,
     target: InputCapabilities,
     diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
 ) -> Result<CaptureSession> {
@@ -1177,7 +1182,7 @@ struct HookState {
     toggle_route: Option<CaptureRoute>,
     #[cfg(windows)]
     local_gestures: Option<gesture_capture::CallbackBroker>,
-    tx: mpsc::Sender<Captured>,
+    tx: CaptureEventSender,
     gate: CaptureGate,
     keys: held_inputs::HeldKeys,
     buttons: held_inputs::HeldButtons,
@@ -1529,8 +1534,8 @@ impl HookState {
         self.gate
             .set_held((self.keys.len() + self.buttons.len() + self.pairs.extra_held) as u64);
     }
-    fn emit(&self, event: Captured) -> bool {
-        if self.tx.try_send(event).is_err() {
+    fn emit(&mut self, event: Captured) -> bool {
+        if self.tx.try_push(event).is_err() {
             self.gate.disable();
             false
         } else {
@@ -2187,8 +2192,8 @@ mod tests {
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod hook_tests {
     use super::*;
-    fn state(capacity: usize) -> (HookState, mpsc::Receiver<Captured>) {
-        let (tx, rx) = mpsc::channel(capacity);
+    fn state(capacity: usize) -> (HookState, CaptureEvents) {
+        let (tx, rx) = capture_events::channel(capacity).unwrap();
         (
             HookState {
                 pairs: PairLedger::default(),
@@ -2731,7 +2736,7 @@ mod hook_tests {
         assert!(!state.scroll(0, 0));
         assert!(matches!(
             events.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
 
         let epoch = activate(&state);
@@ -2747,7 +2752,7 @@ mod hook_tests {
         ));
         assert!(matches!(
             events.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
         assert!(diagnostics
             .snapshot(input_diagnostics::Phase::Sample)
@@ -2854,7 +2859,7 @@ mod hook_tests {
     }
     #[test]
     fn queue_overflow_disables_capture() {
-        let (s, _rx) = state(1);
+        let (mut s, _rx) = state(1);
         assert!(s.gate.try_activate());
         s.emit(Captured::Emergency);
         s.emit(Captured::Emergency);
@@ -2954,7 +2959,7 @@ mod fresh_escape_tests {
         force_calls: usize,
         up_calls: usize,
         arm_ctrl_during_second_up: bool,
-        _events: mpsc::Receiver<Captured>,
+        _events: CaptureEvents,
     }
     struct FakeBackend<'a> {
         state: &'a mut HookState,
@@ -3024,7 +3029,7 @@ mod fresh_escape_tests {
     }
     impl Rig {
         fn new() -> Self {
-            let (tx, events) = mpsc::channel(16);
+            let (tx, events) = capture_events::channel(16).unwrap();
             let gate = CaptureGate::default();
             let (driver, engine) = channel(8, Arc::new(|| {}), Some(&gate)).unwrap();
             assert!(gate.0.receive.set(driver.control()).is_ok());

@@ -906,7 +906,7 @@ pub fn capture(source: ActionTriggerSource) -> anyhow::Result<(GestureCapture, G
     );
     let (broker, receiver, control) = channel(source);
     let gate = crate::CaptureGate::default();
-    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let (tx, _rx) = crate::capture_events::channel(1).expect("valid unused KVM queue capacity");
     let thread = crate::native::capture(
         tx,
         gate.clone(),
