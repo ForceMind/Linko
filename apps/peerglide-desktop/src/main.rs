@@ -241,15 +241,17 @@ async fn main() -> Result<()> {
             device,
             volume,
             duration_secs,
-        } => audio_playback::run(
-            &identity,
-            &peer_cert,
-            bind,
-            device.as_deref(),
-            volume,
-            Duration::from_secs(duration_secs),
-        )
-        .await,
+        } => {
+            audio_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
         Command::Connect {
             address,
             options,

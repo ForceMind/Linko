@@ -16,7 +16,10 @@ pub enum Outcome {
 /// Only a locally authorized UI gesture supplies a previously verified path.
 /// This call owns an OLE UI message loop until the user drops or cancels.
 pub fn drag_prepared_file(path: &Path) -> Result<Outcome> {
-    ensure!(path.is_absolute(), "native drop requires a local absolute path");
+    ensure!(
+        path.is_absolute(),
+        "native drop requires a local absolute path"
+    );
     ensure!(
         path.symlink_metadata()
             .context("prepared drop file unavailable")?

@@ -60,7 +60,10 @@ impl Drop for SystemAudio {
 }
 
 fn check(result: i32, operation: &'static str) -> Result<()> {
-    ensure!(result >= 0, "WASAPI loopback {operation} failed ({result:#010x})");
+    ensure!(
+        result >= 0,
+        "WASAPI loopback {operation} failed ({result:#010x})"
+    );
     Ok(())
 }
 

@@ -1,13 +1,10 @@
 //! One explicitly authorized audio receiver with local output ownership.
 use anyhow::{Context, Result};
 use peerglide_core::audio_playout::{Buffer, Playout, SAMPLES};
-use peerglide_transport::audio;
 #[cfg(any(windows, target_os = "macos", test))]
 use peerglide_transport as transport;
-use std::{
-    future::Future,
-    time::Duration,
-};
+use peerglide_transport::audio;
+use std::{future::Future, time::Duration};
 
 #[cfg(any(windows, target_os = "macos"))]
 use std::{net::SocketAddr, path::Path};
@@ -16,10 +13,10 @@ use std::{net::SocketAddr, path::Path};
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(60);
 const PERIOD: Duration = Duration::from_millis(5);
 
-#[cfg(windows)]
-use peerglide_platform::windows_audio as native;
 #[cfg(target_os = "macos")]
 use peerglide_platform::macos_audio as native;
+#[cfg(windows)]
+use peerglide_platform::windows_audio as native;
 
 #[cfg(windows)]
 pub(super) fn list_outputs() -> Result<()> {
@@ -39,7 +36,10 @@ pub(super) fn list_outputs() -> Result<()> {
 
 #[cfg(any(windows, target_os = "macos"))]
 fn print_device(id: &str, name: &str) {
-    let name: String = name.chars().filter(|character| !character.is_control()).collect();
+    let name: String = name
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect();
     println!("{id}\t{name}");
 }
 
@@ -55,7 +55,10 @@ pub(super) async fn run(
     let identity = transport::Identity::load(identity)?;
     let pin = transport::read_certificate(peer_certificate)?;
     let endpoint = audio::endpoint(bind, &identity, &pin)?;
-    println!("Waiting for the authenticated audio source on {}.", endpoint.local_addr()?);
+    println!(
+        "Waiting for the authenticated audio source on {}.",
+        endpoint.local_addr()?
+    );
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
     let connection = tokio::select! {
@@ -103,7 +106,9 @@ where
     F: Future<Output = std::io::Result<()>>,
 {
     let mut buffer = Buffer::default();
-    let epoch = buffer.start().context("audio output generation exhausted")?;
+    let epoch = buffer
+        .start()
+        .context("audio output generation exhausted")?;
     let mut output = [0; SAMPLES];
     let mut started = false;
     let mut tick = tokio::time::interval(PERIOD);
@@ -160,12 +165,25 @@ mod tests {
         )?;
         let duration = Duration::from_secs(10);
         let (mut source_session, receiver_session) = tokio::try_join!(
-            audio::open(&client, &destination.certificate, audio::Direction::Send, duration),
-            audio::accept(&server, &source.certificate, audio::Direction::Playback, duration),
+            audio::open(
+                &client,
+                &destination.certificate,
+                audio::Direction::Send,
+                duration
+            ),
+            audio::accept(
+                &server,
+                &source.certificate,
+                audio::Direction::Playback,
+                duration
+            ),
         )?;
         let (stop, stopped) = oneshot::channel::<()>();
         let sender = async {
-            let frame = Frame { sequence: 1, samples: [11; SAMPLES] };
+            let frame = Frame {
+                sequence: 1,
+                samples: [11; SAMPLES],
+            };
             assert!(source_session.send(&frame)?);
             Ok::<_, anyhow::Error>(())
         };
@@ -173,7 +191,9 @@ mod tests {
         let receiver = drive(
             &receiver_session,
             async {
-                stopped.await.map_err(|_| std::io::Error::other("playback test ended"))
+                stopped
+                    .await
+                    .map_err(|_| std::io::Error::other("playback test ended"))
             },
             |samples| {
                 assert_eq!(*samples, [11; SAMPLES]);
