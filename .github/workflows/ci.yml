@@ -75,7 +75,14 @@ jobs:
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: xvfb-run -a -s "-screen 0 1600x1000x24" python tools/gui_smoke.py
+        run: |
+          xvfb_log="$RUNNER_TEMP/linko-xvfb.log"
+          if ! xvfb-run -a -e "$xvfb_log" -s "-screen 0 1600x1000x24" python tools/gui_smoke.py; then
+            if [ -f "$xvfb_log" ]; then
+              tail -30 "$xvfb_log"
+            fi
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Linux'
         with:
