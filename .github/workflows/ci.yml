@@ -71,9 +71,7 @@ jobs:
       - name: Prepare isolated Linux GUI dependencies
         if: runner.os == 'Linux'
         timeout-minutes: 10
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xdotool imagemagick libxkbcommon-x11-0 libegl1 libgl1-mesa-dri
+        run: bash tools/install_ci_gui_linux_deps.sh
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
         timeout-minutes: 5
