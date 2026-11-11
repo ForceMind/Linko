@@ -49,6 +49,7 @@ pub(super) async fn share_system(
     peer_certificate: &std::path::Path,
     address: std::net::SocketAddr,
     duration: std::time::Duration,
+    managed: bool,
 ) -> Result<()> {
     use anyhow::Context;
     use peerglide_protocol::audio::Frame;
@@ -70,7 +71,7 @@ pub(super) async fn share_system(
         SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
     };
     let endpoint = audio::endpoint(bind, &identity, &pin)?;
-    let stop = tokio::signal::ctrl_c();
+    let stop = super::audio_stop::requested(managed);
     tokio::pin!(stop);
     let connection = tokio::select! {
         biased;
