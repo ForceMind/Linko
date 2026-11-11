@@ -176,10 +176,7 @@ pub struct LocalText {
 
 pub enum LocalPayload {
     Text(LocalText),
-    Image {
-        png: Vec<u8>,
-        origin: Origin,
-    },
+    Image { png: Vec<u8>, origin: Origin },
 }
 
 enum PreparedPayload {
@@ -504,7 +501,10 @@ mod tests {
             (mode, notice),
             (Mode::Text, Event::PeerReceived) | (Mode::Image, Event::WaitingForImageResult)
         ));
-        assert_eq!(pending.dimensions(), (mode == Mode::Image).then_some((1, 1)));
+        assert_eq!(
+            pending.dimensions(),
+            (mode == Mode::Image).then_some((1, 1))
+        );
         assert!(backend.text.is_empty());
         assert_eq!(backend.images, 0);
         if cancel {

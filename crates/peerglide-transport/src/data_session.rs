@@ -167,7 +167,8 @@ impl Consent {
         ensure!(
             (self.capabilities.text || !permissions.text_send && !permissions.text_receive)
                 && (self.capabilities.files || !permissions.file_send && !permissions.file_receive)
-                && (self.capabilities.images || !permissions.image_send && !permissions.image_receive),
+                && (self.capabilities.images
+                    || !permissions.image_send && !permissions.image_receive),
             "data consent requests an unsupported capability"
         );
         self.policy
@@ -330,7 +331,8 @@ impl Sender {
                     png: image.into_png(),
                 },
                 |_| {
-                    policy.check(|session, now| session.validate(&permit, Capability::ImageSend, now))
+                    policy
+                        .check(|session, now| session.validate(&permit, Capability::ImageSend, now))
                 },
             )
             .await?;

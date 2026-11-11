@@ -268,12 +268,10 @@ impl Frame {
                 let sequence = read_sequence(body)?;
                 Ok(Self::TextReceived { sequence })
             }
-            Kind::TextResult => {
-                Ok(Self::TextResult {
-                    sequence: read_sequence(&body[..8])?,
-                    outcome: ClipboardOutcome::parse(body[8])?,
-                })
-            }
+            Kind::TextResult => Ok(Self::TextResult {
+                sequence: read_sequence(&body[..8])?,
+                outcome: ClipboardOutcome::parse(body[8])?,
+            }),
             Kind::FileAccepted => {
                 let next_chunk =
                     u32::from_le_bytes(body[16..20].try_into().map_err(|_| invalid())?);
@@ -468,7 +466,10 @@ mod tests {
         });
         assert!(matches!(
             Frame::read(result.as_slice()).unwrap(),
-            Frame::ImageResult { sequence: 2, outcome: ClipboardOutcome::Declined }
+            Frame::ImageResult {
+                sequence: 2,
+                outcome: ClipboardOutcome::Declined
+            }
         ));
         assert_ne!(result[4], Kind::TextResult as u8);
     }

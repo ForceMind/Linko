@@ -82,7 +82,9 @@ impl Panel {
                 Event::Pending(pending) => {
                     let notice = pending.dimensions().map_or_else(
                         || "已收到一条文本。请选择导入或拒绝。".into(),
-                        |(width, height)| format!("已收到 {width} × {height} PNG。请选择导入或拒绝。"),
+                        |(width, height)| {
+                            format!("已收到 {width} × {height} PNG。请选择导入或拒绝。")
+                        },
                     );
                     active.pending = Some(pending);
                     notice

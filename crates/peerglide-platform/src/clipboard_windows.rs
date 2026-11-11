@@ -16,12 +16,16 @@ use windows_sys::{
         System::{
             DataExchange::{
                 CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
-                GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+                GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW,
+                SetClipboardData,
             },
             LibraryLoader::GetModuleHandleW,
-            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT},
+            Memory::{
+                GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
+            },
             Ole::{
-                CF_BITMAP, CF_DIB, CF_DIBV5, CF_LOCALE, CF_OEMTEXT, CF_PALETTE, CF_TEXT, CF_UNICODETEXT,
+                CF_BITMAP, CF_DIB, CF_DIBV5, CF_LOCALE, CF_OEMTEXT, CF_PALETTE, CF_TEXT,
+                CF_UNICODETEXT,
             },
         },
         UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HWND_MESSAGE},
@@ -321,7 +325,10 @@ fn sequence() -> Option<u64> {
 fn png_length(allocation: usize, read: impl Fn(usize) -> u8) -> Option<usize> {
     const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
     if allocation < SIGNATURE.len()
-        || SIGNATURE.iter().enumerate().any(|(index, expected)| read(index) != *expected)
+        || SIGNATURE
+            .iter()
+            .enumerate()
+            .any(|(index, expected)| read(index) != *expected)
     {
         return None;
     }
