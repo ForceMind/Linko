@@ -2241,13 +2241,7 @@ mod tests {
             let mut draft = None;
             assert_eq!(
                 desktop_ui::update_layout_drag(
-                    &mut draft,
-                    &events,
-                    peer,
-                    local,
-                    canvas,
-                    true,
-                    false,
+                    &mut draft, &events, peer, local, canvas, true, false,
                 ),
                 Some(target)
             );
