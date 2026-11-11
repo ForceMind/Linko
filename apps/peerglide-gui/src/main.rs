@@ -1589,7 +1589,13 @@ impl App {
             }
         }
         self.check_exit_protection(ctx);
-        // Stop/Quit must cancel a queued upgrade before poll can start a successor.
+        // Close and tray Stop/Quit cancel queued upgrades before a worker exit
+        // can start a successor, including when the window will hide.
+        let window_close = ctx.input(|input| input.viewport().close_requested());
+        if window_close {
+            self.pending_start = None;
+            self.native_confirmation = false;
+        }
         self.process_tray_commands(ctx);
         self.poll();
         if let Some(remaining) = self.worker_permissions.expires_in() {
@@ -1598,7 +1604,7 @@ impl App {
         if self.worker_permissions.readiness() != worker_permissions::Readiness::Ready {
             self.native_confirmation = false;
         }
-        if ctx.input(|input| !input.focused || input.viewport().close_requested()) {
+        if window_close || ctx.input(|input| !input.focused) {
             self.pairing_panel.cancel();
         }
         let mut pairing = std::mem::take(&mut self.pairing_panel);
@@ -1621,7 +1627,7 @@ impl App {
             self.screen_drag = None;
             self.native_confirmation = false;
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.exit_confirmed {
+        if window_close && !self.exit_confirmed {
             self.process_window_close(
                 ctx,
                 self.tray.as_ref().is_some_and(|tray| tray.is_available()),
@@ -2920,6 +2926,35 @@ mod lifecycle_tests {
         assert!(app.stopping.is_some() || app.child.is_none());
         Ok(())
     }
+    #[test]
+    fn window_close_cancels_the_upgrade_before_reaping_a_clean_worker() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let mut child = managed_child()?;
+        child.stdin.as_mut().unwrap().write_all(b"stop\n")?;
+        assert!(child.wait()?.success());
+        app.child = Some(child);
+        app.active_mode = Some(SessionMode::Communication);
+        app.pending_start = Some(SessionMode::Native);
+        app.native_confirmation = true;
+        app.notice = "已有操作结果".into();
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_logic(&input, |ctx| app.logic_tick(ctx));
+        assert!(app.exit_confirmed && app.child.is_none());
+        assert!(!app.native_confirmation && app.pending_start.is_none());
+        assert_eq!(app.notice, "已有操作结果");
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
     #[test]
     fn tray_quit_cancels_upgrade_before_poll_and_unknown_cleanup_reveals_window() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;

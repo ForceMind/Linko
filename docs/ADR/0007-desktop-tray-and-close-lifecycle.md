@@ -19,8 +19,9 @@ The menu contains only Show, Stop and Quit in Chinese. It cannot enable native i
 change receiving/data grants or execute arbitrary commands. Callbacks coalesce these
 three intents into atomic bits and wake the GUI; they do not read private contents,
 perform file/network I/O, or execute worker commands. Stop/Quit cannot be dropped by
-a full queue. Quit wins over Show, and Stop/Quit cancel queued upgrades before poll
-can launch a successor.
+a full queue. Quit wins over Show. Stop, Quit and a window Close event cancel
+queued upgrades before poll can launch a successor. This also applies to a
+Close that hides the window and keeps an already active session.
 
 Desktop choices live in a separate versioned `desktop-preferences.json`, using the
 existing bounded store/locks. Input `settings.json`, its schema and device identity
