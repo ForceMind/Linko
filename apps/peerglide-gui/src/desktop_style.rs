@@ -296,39 +296,6 @@ pub(super) fn selection_colors(ui: &egui::Ui) -> (Color32, Color32) {
     tone_colors(ui.visuals().dark_mode, Tone::Accent)
 }
 
-pub(super) fn detail_icon(ui: &mut egui::Ui, permission: bool) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    let color = palette(ui.visuals().dark_mode).muted;
-    let coordinates: &[(f32, f32)] = if permission {
-        &[
-            (9.0, 1.5),
-            (15.5, 4.0),
-            (14.0, 12.5),
-            (9.0, 16.5),
-            (4.0, 12.5),
-            (2.5, 4.0),
-            (9.0, 1.5),
-        ]
-    } else {
-        &[
-            (4.0, 1.5),
-            (4.0, 15.0),
-            (7.5, 11.0),
-            (11.0, 16.0),
-            (13.0, 14.5),
-            (9.5, 9.5),
-            (15.0, 9.5),
-            (4.0, 1.5),
-        ]
-    };
-    let points = coordinates
-        .iter()
-        .map(|&(x, y)| rect.min + egui::vec2(x, y))
-        .collect();
-    painter.add(egui::Shape::line(points, Stroke::new(1.3, color)));
-}
-
 /// Draw one illustrative main monitor inside `rect`, including its stand.
 /// Geometry is decorative, never measured display size, connectivity or consent.
 pub(super) fn monitor(

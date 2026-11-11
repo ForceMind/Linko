@@ -168,13 +168,15 @@ impl App {
             _ => (),
         }
     }
+    /// Secondary connection actions with short labels; the hover keeps the full sentence.
     pub(super) fn connection_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     self.idle_writable() && self.config.fingerprint.is_some(),
-                    egui::Button::new("只连接，不开启键鼠"),
+                    egui::Button::new("仅通信"),
                 )
+                .on_hover_text("只连接，不开启键鼠")
                 .clicked()
             {
                 let result = self.start(false);
@@ -183,8 +185,9 @@ impl App {
             if ui
                 .add_enabled(
                     self.idle_writable() && self.config.fingerprint.is_some(),
-                    egui::Button::new("检查两台电脑的连接"),
+                    egui::Button::new("连通检查"),
                 )
+                .on_hover_text("检查两台电脑的连接，不读取或控制键鼠")
                 .clicked()
             {
                 let result = self.start(true);
@@ -249,56 +252,53 @@ impl App {
             });
         });
     }
+    /// Home view. The connection and identity details live in the context column's drawer.
     pub(super) fn devices(&mut self, ui: &mut egui::Ui) {
         self.recovery_panel(ui);
         self.device_workspace(ui);
-        ui.add_space(10.0);
-        if self.connection_details_open {
-            desktop_style::card(ui).show(ui, |ui| {
-                ui.strong("连接与身份详情");
-                ui.label(format!("连接详情：{}", self.status));
-                ui.label(if self.config.listen {
-                    "连接方式：等待另一台电脑"
-                } else {
-                    "连接方式：连接另一台电脑"
-                });
-                if !self.config.address.is_empty() {
-                    ui.monospace(&self.config.address);
-                }
-                self.connection_actions(ui);
-                if ui
-                    .add_enabled(
-                        self.idle_writable(),
-                        egui::Button::new("手动设置地址与核验…"),
-                    )
-                    .clicked()
-                {
-                    self.open_advanced_setup();
-                }
-                if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
-                {
-                    self.dialog = Some(Dialog::Revoke);
-                }
-                let own = self.local_fingerprint();
-                let publishing =
-                    self.child.is_some() && self.stopping.is_none() && self.config.listen;
-                let idle = self.child.is_none();
-                let writable = self.writable();
-                if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
-                    let result = self.use_discovery_address(address);
-                    self.feedback(result, "仅选择了地址，尚未登记或授权。");
-                    if self.notice.starts_with("仅选择") {
-                        self.open_setup();
-                        self.wizard = Some(SetupStep::Verify);
-                    }
-                }
-                if let Some(fp) = &self.config.fingerprint {
-                    ui.label("已登记的完整身份指纹");
-                    ui.monospace(fp);
-                }
-                ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
-            });
+    }
+    /// Body of the details drawer: the former connection and identity card, discovery included.
+    pub(super) fn connection_details(&mut self, ui: &mut egui::Ui) {
+        ui.strong("连接与身份详情");
+        ui.label(format!("连接详情：{}", self.status));
+        ui.label(if self.config.listen {
+            "连接方式：等待另一台电脑"
+        } else {
+            "连接方式：连接另一台电脑"
+        });
+        if !self.config.address.is_empty() {
+            ui.monospace(&self.config.address);
         }
+        self.connection_actions(ui);
+        if ui
+            .add_enabled(
+                self.idle_writable(),
+                egui::Button::new("手动设置地址与核验…"),
+            )
+            .clicked()
+        {
+            self.open_advanced_setup();
+        }
+        if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked() {
+            self.dialog = Some(Dialog::Revoke);
+        }
+        let own = self.local_fingerprint();
+        let publishing = self.child.is_some() && self.stopping.is_none() && self.config.listen;
+        let idle = self.child.is_none();
+        let writable = self.writable();
+        if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
+            let result = self.use_discovery_address(address);
+            self.feedback(result, "仅选择了地址，尚未登记或授权。");
+            if self.notice.starts_with("仅选择") {
+                self.open_setup();
+                self.wizard = Some(SetupStep::Verify);
+            }
+        }
+        if let Some(fp) = &self.config.fingerprint {
+            ui.label("已登记的完整身份指纹");
+            ui.monospace(fp);
+        }
+        ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
     }
     pub(super) fn device_permissions(&mut self, ui: &mut egui::Ui) {
         ui.heading("让另一台电脑控制我");

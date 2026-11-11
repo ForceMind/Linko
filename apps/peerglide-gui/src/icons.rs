@@ -55,6 +55,12 @@ pub(super) enum Icon {
     Stop,
     /// Circular arrow, for emergency recovery.
     Recover,
+    /// Two interlocking links, for the connection row.
+    Link,
+    /// Shield outline, for local permissions.
+    Shield,
+    /// Letter i in a ring, for the details drawer.
+    Info,
 }
 
 impl Icon {
@@ -80,6 +86,9 @@ impl Icon {
             Icon::Keyboard => paint_keyboard(painter, grid, color),
             Icon::Stop => paint_stop(painter, grid, color),
             Icon::Recover => paint_recover(painter, grid, color),
+            Icon::Link => paint_link(painter, grid, color),
+            Icon::Shield => paint_shield(painter, grid, color),
+            Icon::Info => paint_info(painter, grid, color),
         }
     }
 }
@@ -264,6 +273,39 @@ fn paint_recover(painter: &Painter, grid: Grid, color: Color32) {
     paint_path(painter, head.to_vec(), color);
 }
 
+fn paint_link(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    let radius = 2.5 * grid.unit;
+    for (left, right) in [(1.5, 9.5), (6.5, 14.5)] {
+        let link = Rect::from_min_max(grid.at(left, 5.5), grid.at(right, 10.5));
+        painter.rect_stroke(link, radius, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+fn paint_shield(painter: &Painter, grid: Grid, color: Color32) {
+    let outline = shield_outline(grid).to_vec();
+    painter.add(egui::Shape::closed_line(outline, line_stroke(color)));
+}
+
+fn paint_info(painter: &Painter, grid: Grid, color: Color32) {
+    let stroke = line_stroke(color);
+    painter.circle_stroke(grid.at(8.0, 8.0), 6.5 * grid.unit, stroke);
+    painter.circle_filled(grid.at(8.0, 5.0), 0.9 * grid.unit, color);
+    painter.line_segment([grid.at(8.0, 7.5), grid.at(8.0, 11.5)], stroke);
+}
+
+/// Shield outline, clockwise from the top.
+fn shield_outline(grid: Grid) -> [Pos2; 6] {
+    [
+        grid.at(8.0, 1.5),
+        grid.at(14.0, 3.5),
+        grid.at(13.0, 10.0),
+        grid.at(8.0, 14.5),
+        grid.at(3.0, 10.0),
+        grid.at(2.0, 3.5),
+    ]
+}
+
 /// Corner brackets of the fit icon, clockwise from the top left.
 fn fit_corners(grid: Grid) -> [[Pos2; 3]; 4] {
     [
@@ -409,7 +451,7 @@ mod tests {
         count
     }
 
-    fn every_icon() -> [Icon; 17] {
+    fn every_icon() -> [Icon; 20] {
         [
             Icon::Device,
             Icon::Lock,
@@ -428,6 +470,9 @@ mod tests {
             Icon::Keyboard,
             Icon::Stop,
             Icon::Recover,
+            Icon::Link,
+            Icon::Shield,
+            Icon::Info,
         ]
     }
 
@@ -464,6 +509,7 @@ mod tests {
         paths.push(arc);
         paths.push(recover_head.to_vec());
         paths.push(keyboard_keys(grid));
+        paths.push(shield_outline(grid).to_vec());
         for corner in fit_corners(grid) {
             paths.push(corner.to_vec());
         }
