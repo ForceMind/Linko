@@ -338,6 +338,7 @@ mod tests {
     async fn authenticated_clipboard_checks_consent_revision_and_revocation() -> Result<()> {
         use peerglide_transfer::{
             clipboard::{Backend, Classification, Origin, WriteResult},
+            codec::TextOutcome,
             data_policy::Permissions,
         };
 
@@ -407,10 +408,13 @@ mod tests {
         )?;
         assert!(peer_send.acknowledge_text(&mut first).await.is_err());
         assert!(backend.text.is_empty());
-        assert_eq!(
-            peer_consent.apply_text(first, &mut backend)?,
-            WriteResult::Submitted
-        );
+        let completed = peer_consent.apply_text(first, &mut backend)?;
+        assert_eq!(completed.outcome(), TextOutcome::Submitted);
+        let ((), result) = tokio::try_join!(
+            peer_send.report_text_result(completed),
+            local_receive.wait_text_result(sequence)
+        )?;
+        assert_eq!(result, TextOutcome::Submitted);
         assert_eq!(backend.text, "屏跃");
 
         tokio::time::sleep(Duration::from_millis(110)).await;
@@ -420,10 +424,21 @@ mod tests {
         )?;
         backend.revision += 1;
         backend.text = "接收期间的本机编辑".into();
-        assert_eq!(
-            peer_consent.apply_text(second, &mut backend)?,
-            WriteResult::Changed
-        );
+        let changed = peer_consent.apply_text(second, &mut backend)?;
+        assert_eq!(changed.outcome(), TextOutcome::Changed);
+        assert_eq!(backend.text, "接收期间的本机编辑");
+
+        tokio::time::sleep(Duration::from_millis(110)).await;
+        let (declined_sequence, declined) = tokio::try_join!(
+            send.write_text("拒绝样本", share, origin),
+            receive.read(Some(backend.revision))
+        )?;
+        let declined = peer_consent.decline_text(declined)?;
+        let ((), result) = tokio::try_join!(
+            peer_send.report_text_result(declined),
+            local_receive.wait_text_result(declined_sequence)
+        )?;
+        assert_eq!(result, TextOutcome::Declined);
         assert_eq!(backend.text, "接收期间的本机编辑");
 
         tokio::time::sleep(Duration::from_millis(110)).await;

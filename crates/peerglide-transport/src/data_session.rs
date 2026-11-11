@@ -6,7 +6,7 @@ use super::{
 use anyhow::{ensure, Result};
 use peerglide_transfer::{
     clipboard::{Backend, Classification, Clipboard, Error as ClipboardError, Origin, WriteResult},
-    codec::{Frame, Kind},
+    codec::{Frame, Kind, TextOutcome},
     data_policy::{Capability, DataSession, Permissions, Permit},
 };
 use quinn::Connection;
@@ -72,6 +72,19 @@ pub struct AdmittedFrame {
     permit: Permit,
     clipboard_revision: Option<u64>,
     acknowledged: bool,
+}
+
+/// A local terminal decision for one admitted sequence, with its original ticket.
+pub struct ClipboardCompletion {
+    sequence: u64,
+    outcome: TextOutcome,
+    permit: Permit,
+}
+
+impl ClipboardCompletion {
+    pub fn outcome(&self) -> TextOutcome {
+        self.outcome
+    }
 }
 
 pub(super) fn new(
@@ -153,7 +166,7 @@ impl Consent {
         &mut self,
         admitted: AdmittedFrame,
         backend: &mut impl Backend,
-    ) -> Result<WriteResult> {
+    ) -> Result<ClipboardCompletion> {
         let Frame::Text { sequence, text } = admitted.frame else {
             anyhow::bail!("expected a clipboard text frame");
         };
@@ -167,7 +180,31 @@ impl Consent {
             clipboard.accept_received_text(sequence, text.as_bytes(), now)?;
             Ok::<_, ClipboardError>(())
         })?;
-        Ok(backend.compare_and_write(revision, &text))
+        let outcome = match backend.compare_and_write(revision, &text) {
+            WriteResult::Submitted => TextOutcome::Submitted,
+            WriteResult::Changed => TextOutcome::Changed,
+            WriteResult::Failed => TextOutcome::Failed,
+            WriteResult::UnknownOutcome => TextOutcome::Unknown,
+        };
+        Ok(ClipboardCompletion {
+            sequence,
+            outcome,
+            permit: admitted.permit,
+        })
+    }
+
+    /// Decline the admitted text without consulting or changing the system clipboard.
+    pub fn decline_text(&mut self, admitted: AdmittedFrame) -> Result<ClipboardCompletion> {
+        let Frame::Text { sequence, .. } = admitted.frame else {
+            anyhow::bail!("expected a clipboard text frame");
+        };
+        self.policy
+            .check(|session, now| session.validate(&admitted.permit, Capability::TextReceive, now))?;
+        Ok(ClipboardCompletion {
+            sequence,
+            outcome: TextOutcome::Declined,
+            permit: admitted.permit,
+        })
     }
 }
 
@@ -228,6 +265,24 @@ impl Sender {
         admitted.acknowledged = true;
         Ok(())
     }
+
+    /// Send the local write/decline result once, consuming the completion.
+    pub async fn report_text_result(&mut self, completed: ClipboardCompletion) -> Result<()> {
+        let policy = &self.policy;
+        self.frames
+            .write_checked(
+                &Frame::TextResult {
+                    sequence: completed.sequence,
+                    outcome: completed.outcome,
+                },
+                |_| {
+                    policy.check(|clipboard, now| {
+                        clipboard.validate(&completed.permit, Capability::TextReceive, now)
+                    })
+                },
+            )
+            .await
+    }
 }
 
 impl Receiver {
@@ -238,7 +293,10 @@ impl Receiver {
         let (frame, permit) = self
             .frames
             .read_checked(|header| {
-                ensure!(header.kind() != Kind::TextReceived, "use the receipt reader");
+                ensure!(
+                    !matches!(header.kind(), Kind::TextReceived | Kind::TextResult),
+                    "use the clipboard response reader"
+                );
                 let capability = inbound(header.kind());
                 ensure!(
                     capability != Capability::TextReceive || clipboard_revision.is_some(),
@@ -259,19 +317,40 @@ impl Receiver {
     /// admitted the text; it does not prove an OS clipboard write.
     pub async fn wait_text_receipt(&mut self, sequence: u64) -> Result<()> {
         ensure!(sequence != 0, "invalid clipboard receipt sequence");
+        let frame = self.read_text_response(Kind::TextReceived).await?;
+        if !matches!(frame, Frame::TextReceived { sequence: received } if received == sequence) {
+            self.policy.close();
+            anyhow::bail!("clipboard receipt sequence differs");
+        }
+        Ok(())
+    }
+
+    pub async fn wait_text_result(&mut self, sequence: u64) -> Result<TextOutcome> {
+        ensure!(sequence != 0, "invalid clipboard result sequence");
+        let frame = self.read_text_response(Kind::TextResult).await?;
+        match frame {
+            Frame::TextResult {
+                sequence: received,
+                outcome,
+            } if received == sequence => Ok(outcome),
+            _ => {
+                self.policy.close();
+                anyhow::bail!("clipboard result sequence differs");
+            }
+        }
+    }
+
+    async fn read_text_response(&mut self, expected: Kind) -> Result<Frame> {
         let policy = &self.policy;
         let (frame, permit) = self
             .frames
             .read_checked(|header| {
-                ensure!(header.kind() == Kind::TextReceived, "expected a clipboard receipt");
+                ensure!(header.kind() == expected, "unexpected clipboard response");
                 policy.check(|clipboard, now| clipboard.authorize(Capability::TextSend, now))
             })
             .await?;
-        if !matches!(frame, Frame::TextReceived { sequence: received } if received == sequence) {
-            policy.close();
-            anyhow::bail!("clipboard receipt sequence differs");
-        }
-        policy.check(|clipboard, now| clipboard.validate(&permit, Capability::TextSend, now))
+        policy.check(|clipboard, now| clipboard.validate(&permit, Capability::TextSend, now))?;
+        Ok(frame)
     }
 }
 
@@ -282,7 +361,7 @@ fn is_file(kind: Kind) -> bool {
 fn outbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextSend,
-        Kind::TextReceived => Capability::TextReceive,
+        Kind::TextReceived | Kind::TextResult => Capability::TextReceive,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileSend,
     }
 }
@@ -290,7 +369,7 @@ fn outbound(kind: Kind) -> Capability {
 fn inbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextReceive,
-        Kind::TextReceived => Capability::TextSend,
+        Kind::TextReceived | Kind::TextResult => Capability::TextSend,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileReceive,
     }
 }

@@ -28,6 +28,33 @@ pub enum Frame {
     TextReceived {
         sequence: u64,
     },
+    TextResult {
+        sequence: u64,
+        outcome: TextOutcome,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TextOutcome {
+    Submitted = 1,
+    Changed = 2,
+    Declined = 3,
+    Failed = 4,
+    Unknown = 5,
+}
+
+impl TextOutcome {
+    fn parse(byte: u8) -> io::Result<Self> {
+        match byte {
+            1 => Ok(Self::Submitted),
+            2 => Ok(Self::Changed),
+            3 => Ok(Self::Declined),
+            4 => Ok(Self::Failed),
+            5 => Ok(Self::Unknown),
+            _ => Err(invalid()),
+        }
+    }
 }
 
 fn invalid() -> io::Error {
@@ -42,6 +69,7 @@ pub enum Kind {
     Chunk = 3,
     Cancel = 4,
     TextReceived = 5,
+    TextResult = 6,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +89,7 @@ impl Header {
             3 => Kind::Chunk,
             4 => Kind::Cancel,
             5 => Kind::TextReceived,
+            6 => Kind::TextResult,
             _ => return Err(invalid()),
         };
         let body_bytes =
@@ -87,6 +116,7 @@ fn valid_length(kind: Kind, len: usize) -> bool {
         Kind::Chunk => (21..=CHUNK_BYTES + 20).contains(&len),
         Kind::Cancel => len == 16,
         Kind::TextReceived => len == 8,
+        Kind::TextResult => len == 9,
     }
 }
 
@@ -105,6 +135,7 @@ impl Frame {
             Self::Chunk { .. } => Kind::Chunk,
             Self::Cancel { .. } => Kind::Cancel,
             Self::TextReceived { .. } => Kind::TextReceived,
+            Self::TextResult { .. } => Kind::TextResult,
         }
     }
 
@@ -170,7 +201,18 @@ impl Frame {
                     return Err(invalid());
                 }
                 Ok(Self::TextReceived { sequence })
-            },
+            }
+            Kind::TextResult => {
+                let sequence =
+                    u64::from_le_bytes(body[..8].try_into().map_err(|_| invalid())?);
+                if sequence == 0 {
+                    return Err(invalid());
+                }
+                Ok(Self::TextResult {
+                    sequence,
+                    outcome: TextOutcome::parse(body[8])?,
+                })
+            }
         }
     }
 
@@ -211,6 +253,14 @@ impl Frame {
                     return Err(invalid());
                 }
                 sequence.to_le_bytes().to_vec()
+            }
+            Self::TextResult { sequence, outcome } => {
+                if *sequence == 0 {
+                    return Err(invalid());
+                }
+                let mut body = sequence.to_le_bytes().to_vec();
+                body.push(*outcome as u8);
+                body
             }
         };
         if !valid_length(kind, body.len()) {
