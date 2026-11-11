@@ -2262,6 +2262,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "peerglide-actions",
  "peerglide-protocol",
+ "peerglide-transfer",
  "tokio",
  "windows-sys 0.61.2",
 ]

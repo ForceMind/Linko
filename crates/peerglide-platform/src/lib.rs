@@ -7,6 +7,8 @@ use std::sync::{
 };
 use std::time::Instant;
 pub mod application_menu;
+#[cfg(windows)]
+pub mod clipboard;
 mod capture_events;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
