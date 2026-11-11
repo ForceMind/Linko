@@ -919,9 +919,10 @@ pub(super) async fn run_with_diagnostics(
                     },
                     Captured::Position{x,y,width,height,route}=>{
                         if !matches!(route,CaptureRoute::Local(_)){continue;}
-                        size=(width.max(1.0),height.max(1.0));
-                        let nx=(x/(size.0-1.0).max(1.0)).clamp(0.0,1.0);let ny=(y/(size.1-1.0).max(1.0)).clamp(0.0,1.0);
-                        let cross=edge_gate.update(distance(edge,nx,ny)<=0.001,now_ms());
+                        if !width.is_finite() || !height.is_finite() || width<1.0 || height<1.0 {continue;}
+                        size=(width,height);
+                        let entry=primary_edge_entry(&mut edge_gate,edge,(x,y),size,now_ms());
+                        let cross=entry.is_some();
                         if cross {count(Count::EdgeHit);}
                         // Same order as the original condition chain; only the first blocker is tallied.
                         let gate_idle=capture.as_ref().is_some_and(|cap|cap.gate.idle());
@@ -933,11 +934,11 @@ pub(super) async fn run_with_diagnostics(
                             else if recovery.protection_pending() {Some(Count::BlockProtection)}
                             else {None};
                         if let Some(kind)=blocker {count(kind);}
-                        if cross && blocker.is_none(){
+                        if let Some(along)=entry.filter(|_|blocker.is_none()){
                             let CaptureRoute::Local(epoch)=route else{continue;};
                             let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
-                            let along=match edge{Edge::Left|Edge::Right=>ny,_=>nx};position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
+                            position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
                             pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
                         }
                     },
@@ -1104,6 +1105,28 @@ fn layout_hint_once(
     let withdraws = previous.is_some_and(|(l, p)| p != l.opposite());
     (hint.mismatched() || withdraws).then_some(hint)
 }
+fn primary_edge_entry(
+    gate: &mut EdgeGate,
+    edge: Edge,
+    (x, y): (f64, f64),
+    (width, height): (f64, f64),
+    now: u64,
+) -> Option<f64> {
+    // A secondary display can produce coordinates beyond the primary rectangle.
+    // Only an observed position inside that rectangle can rearm the entry gate.
+    if !(0.0..width).contains(&x) || !(0.0..height).contains(&y) {
+        return None;
+    }
+    let nx = (x / (width - 1.0).max(1.0)).min(1.0);
+    let ny = (y / (height - 1.0).max(1.0)).min(1.0);
+    let along = match edge {
+        Edge::Left | Edge::Right => ny,
+        Edge::Top | Edge::Bottom => nx,
+    };
+    gate.update(distance(edge, nx, ny) <= 0.001, now)
+        .then_some(along)
+}
+
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
     distance(source_edge.opposite(), x, y) <= 0.001
 }
@@ -1492,6 +1515,60 @@ mod tests {
                 WorkerInputState::Recovering,
                 WorkerInputState::RecoveryUnconfirmed,
             ]
+        );
+    }
+
+    #[test]
+    fn primary_edge_entry_ignores_secondary_displays_without_rearming() {
+        let size = (1920.0, 1080.0);
+        let interior = (959.5, 539.5);
+        for (edge, boundary, outside) in [
+            (Edge::Left, (0.0, interior.1), (-1.0, interior.1)),
+            (Edge::Right, (1919.5, interior.1), (1920.0, interior.1)),
+            (Edge::Top, (interior.0, 0.0), (interior.0, -1.0)),
+            (Edge::Bottom, (interior.0, 1079.5), (interior.0, 1080.0)),
+        ] {
+            let mut gate = EdgeGate::default();
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, outside, size, 500),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, boundary, size, 501),
+                Some(0.5)
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, outside, size, 900),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, boundary, size, 901),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, interior, size, 902),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, boundary, size, 903),
+                Some(0.5)
+            );
+        }
+    }
+
+    #[test]
+    fn primary_edge_entry_requires_both_coordinates_inside_the_primary_display() {
+        let mut gate = EdgeGate::default();
+        let size = (1920.0, 1080.0);
+        for y in [-1.0, 1080.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(
+                primary_edge_entry(&mut gate, Edge::Right, (1919.0, y), size, 500),
+                None
+            );
+        }
+        assert_eq!(
+            primary_edge_entry(&mut gate, Edge::Right, (1919.0, 539.5), size, 501),
+            Some(0.5)
         );
     }
 
