@@ -1,0 +1,13 @@
+[package]
+name = "linko-workspace-lab"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+
+# Isolated R&D package: no runtime/protocol change to the existing applications.
+# It has its own lockfile and CI; this is not a replacement application.
+[workspace]
+
+[dependencies]
