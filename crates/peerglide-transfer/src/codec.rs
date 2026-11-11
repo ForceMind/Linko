@@ -278,7 +278,10 @@ mod tests {
             assert_eq!(header.body_bytes(), 8 + "屏跃".len());
             Err(io::ErrorKind::PermissionDenied.into())
         });
-        assert_eq!(result.err().unwrap().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            result.err().unwrap().kind(),
+            io::ErrorKind::PermissionDenied
+        );
         assert_eq!(reader.position(), HEADER_BYTES as u64);
     }
 
