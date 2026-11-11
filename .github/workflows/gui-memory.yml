@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/gui-memory.yml'
+      - 'tools/install_ci_gui_linux_deps.sh'
       - 'tools/gui_memory_smoke.py'
       - 'tools/test_gui_memory_smoke.py'
       - 'tools/gui_worker_resource_smoke.py'
@@ -33,9 +34,7 @@ jobs:
         run: cargo build --release --locked -p peerglide-gui -p peerglide-desktop
       - name: Install isolated Linux display dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick xdotool libxkbcommon-x11-0 libegl1 libgl1-mesa-dri
+        run: bash tools/install_ci_gui_linux_deps.sh
       - name: Prepare report directory
         run: mkdir -p dist
       - name: GUI and owned NoNative worker accounting under isolated display
