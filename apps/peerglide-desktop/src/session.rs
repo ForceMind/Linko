@@ -1196,7 +1196,9 @@ fn observe_motion_datagram(
 
 #[cfg(any(windows, target_os = "macos"))]
 fn monitor_layout(native: bool) -> Option<Layout> {
-    native.then(platform::read_display_layout).and_then(Result::ok)
+    native
+        .then(platform::read_display_layout)
+        .and_then(Result::ok)
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -1214,7 +1216,11 @@ fn exposed_primary_edge(
         return true;
     };
     let primary = layout.primary();
-    let Some(display) = layout.displays().iter().find(|display| display.id == primary) else {
+    let Some(display) = layout
+        .displays()
+        .iter()
+        .find(|display| display.id == primary)
+    else {
         return false;
     };
     let bounds = display.bounds;
@@ -1765,28 +1771,56 @@ mod tests {
         use platform::display_layout::{Bounds, Display, DisplayId, Rotation};
         let primary = Display {
             id: DisplayId(1),
-            bounds: Bounds { left: 0.0, top: 0.0, right: 1920.0, bottom: 1080.0 },
+            bounds: Bounds {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1080.0,
+            },
             scale: 1.0,
             rotation: Rotation::Upright,
         };
         let right = Display {
             id: DisplayId(2),
-            bounds: Bounds { left: 1920.0, top: 0.0, right: 2920.0, bottom: 600.0 },
+            bounds: Bounds {
+                left: 1920.0,
+                top: 0.0,
+                right: 2920.0,
+                bottom: 600.0,
+            },
             ..primary
         };
         let layout = Layout::new(primary.id, vec![primary, right]).unwrap();
         let mut gate = EdgeGate::default();
         let size = (1920.0, 1080.0);
         assert!(primary_edge_entry(
-            &mut gate, Edge::Right, (1919.0, 200.0), size, 500, Some(&layout)
-        ).is_none());
+            &mut gate,
+            Edge::Right,
+            (1919.0, 200.0),
+            size,
+            500,
+            Some(&layout)
+        )
+        .is_none());
         assert!(primary_edge_entry(
-            &mut gate, Edge::Right, (1919.0, 700.0), size, 501, Some(&layout)
-        ).is_some());
+            &mut gate,
+            Edge::Right,
+            (1919.0, 700.0),
+            size,
+            501,
+            Some(&layout)
+        )
+        .is_some());
         let mut gate = EdgeGate::default();
         assert!(primary_edge_entry(
-            &mut gate, Edge::Right, (1918.0, 700.0), (1919.0, 1080.0), 600, Some(&layout)
-        ).is_none());
+            &mut gate,
+            Edge::Right,
+            (1918.0, 700.0),
+            (1919.0, 1080.0),
+            600,
+            Some(&layout)
+        )
+        .is_none());
     }
 
     #[test]
