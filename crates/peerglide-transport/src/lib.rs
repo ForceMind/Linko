@@ -11,6 +11,7 @@ use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub mod pairing;
+pub mod trusted_listener;
 
 pub struct Identity {
     pub certificate: Vec<u8>,
@@ -249,19 +250,8 @@ fn endpoint_alpn(
     peer: &[u8],
     alpn: &[u8],
 ) -> Result<Endpoint> {
+    let server = server_config(identity, roots(peer)?, alpn)?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
-        Arc::new(roots(peer)?),
-        provider.clone(),
-    )
-    .build()?;
-    let mut server = rustls::ServerConfig::builder_with_provider(provider.clone())
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_client_cert_verifier(verifier)
-        .with_single_cert(vec![identity.cert()], identity.key())?;
-    server.alpn_protocols = vec![alpn.to_vec()];
-    let mut s = quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server)?));
-    s.transport_config(transport());
     let mut client = rustls::ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .with_root_certificates(roots(peer)?)
@@ -269,17 +259,41 @@ fn endpoint_alpn(
     client.alpn_protocols = vec![alpn.to_vec()];
     let mut c = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client)?));
     c.transport_config(transport());
-    let mut e = Endpoint::server(s, addr)?;
+    let mut e = Endpoint::server(server, addr)?;
     e.set_default_client_config(c);
     Ok(e)
 }
-pub fn verify_peer(connection: &quinn::Connection, expected: &[u8]) -> Result<()> {
+fn server_config(
+    identity: &Identity,
+    roots: rustls::RootCertStore,
+    alpn: &[u8],
+) -> Result<quinn::ServerConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier =
+        rustls::server::WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
+            .build()?;
+    let mut server = rustls::ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13])?
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(vec![identity.cert()], identity.key())?;
+    server.alpn_protocols = vec![alpn.to_vec()];
+    let mut config =
+        quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server)?));
+    config.transport_config(transport());
+    Ok(config)
+}
+
+fn peer_certificate(connection: &quinn::Connection) -> Result<CertificateDer<'static>> {
     let certs = connection
         .peer_identity()
         .context("missing TLS identity")?
         .downcast::<Vec<CertificateDer<'static>>>()
         .map_err(|_| anyhow::anyhow!("unexpected TLS identity"))?;
-    if certs.first().map(|c| c.as_ref()) != Some(expected) {
+    (*certs).into_iter().next().context("missing TLS certificate")
+}
+
+pub fn verify_peer(connection: &quinn::Connection, expected: &[u8]) -> Result<()> {
+    if peer_certificate(connection)?.as_ref() != expected {
         bail!("peer certificate differs from enrolled identity");
     }
     Ok(())
