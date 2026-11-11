@@ -333,8 +333,10 @@ impl App {
         ui.add_space(16.0);
         ui.separator();
         ui.strong("更多协作方式");
-        ui.label("文字、图片和文件尚未接通，当前不会读取或同步这些内容。");
-        ui.weak("后续逐项开放，并分别询问你的同意，不包含在键鼠许可里。");
+        ui.label("文本共享需要两端各自确认。");
+        if ui.button("打开剪贴板").clicked() {
+            self.navigate_to(Page::Clipboard);
+        }
     }
     fn mouse(&mut self, ui: &mut egui::Ui) {
         if self.recording_mode {
@@ -450,31 +452,23 @@ impl App {
             },
         );
         ui.add_space(14.0);
-        desktop_style::card(ui).show(ui, |ui| {
-            desktop_style::pill(ui, "尚未接通", desktop_style::Tone::Neutral);
-            ui.add_space(12.0);
-            match self.collaboration_tab {
-                CollaborationTab::Clipboard => Self::unavailable(
-                    ui,
-                    "系统剪贴板尚未接通",
-                    &[
-                        "目前不会读取、写入或共享系统剪贴板。",
-                        "后续按设备、方向和手动／自动方式分别授权。",
-                    ],
-                ),
-                CollaborationTab::Files => Self::unavailable(
-                    ui,
-                    "文件发送与接收尚未接通",
-                    &[
-                        "当前不会读取或传送文件，也未提供原生跨屏拖拽。",
-                        "不会展示模拟传输进度。",
-                    ],
-                ),
+        desktop_style::card(ui).show(ui, |ui| match self.collaboration_tab {
+            CollaborationTab::Clipboard => {
+                #[cfg(any(windows, target_os = "macos"))]
+                {
+                    let mut clipboard = std::mem::take(&mut self.clipboard_panel);
+                    clipboard.ui(self, ui);
+                    self.clipboard_panel = clipboard;
+                }
+                #[cfg(not(any(windows, target_os = "macos")))]
+                Self::unavailable(ui, "当前平台暂不支持系统剪贴板共享", &[]);
             }
+            CollaborationTab::Files => Self::unavailable(
+                ui,
+                "文件发送与接收尚未接通",
+                &["目前也未提供原生跨屏拖拽。"],
+            ),
         });
-        ui.add_space(18.0);
-        ui.weak("连接成功不包含内容共享许可。");
-        ui.weak("离线数据模块不是已可用的系统共享功能。");
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.subpage_header(ui, "设置", Page::Displays);

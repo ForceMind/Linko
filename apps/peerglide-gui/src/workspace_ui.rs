@@ -383,13 +383,9 @@ impl App {
             self.context_primary(ui);
         });
         ui.add_space(gap);
-        // Not connected capabilities stay labelled (decision 2); the page explains them.
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("文件 · 剪贴板 未接通").small().weak());
-            if ui.small_button("说明").clicked() {
-                self.navigate_to(Page::Transfers);
-            }
-        });
+        if ui.small_button("文件与剪贴板").clicked() {
+            self.navigate_to(Page::Clipboard);
+        }
         self.details_drawer(ui, gap, margin);
     }
 
@@ -1332,7 +1328,7 @@ mod tests {
                     "键鼠",
                     "接收控制",
                     "本机权限",
-                    "文件 · 剪贴板 未接通",
+                    "文件与剪贴板",
                     "两台主屏的相对方向；另一端需设置相反方向。",
                 ]
                 .into_iter()
