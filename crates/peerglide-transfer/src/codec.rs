@@ -242,8 +242,7 @@ impl Frame {
                 Ok(Self::TextReceived { sequence })
             }
             Kind::TextResult => {
-                let sequence =
-                    u64::from_le_bytes(body[..8].try_into().map_err(|_| invalid())?);
+                let sequence = u64::from_le_bytes(body[..8].try_into().map_err(|_| invalid())?);
                 if sequence == 0 {
                     return Err(invalid());
                 }
@@ -253,7 +252,8 @@ impl Frame {
                 })
             }
             Kind::FileAccepted => {
-                let next_chunk = u32::from_le_bytes(body[16..20].try_into().map_err(|_| invalid())?);
+                let next_chunk =
+                    u32::from_le_bytes(body[16..20].try_into().map_err(|_| invalid())?);
                 if u64::from(next_chunk) > MAX_CHUNKS {
                     return Err(invalid());
                 }

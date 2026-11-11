@@ -216,11 +216,7 @@ impl Manager {
 
     /// A fresh clock is queried at every low-level publication boundary, after
     /// potentially slow whole-file hashing/sync. Never resets the grant deadline.
-    pub fn commit(
-        &mut self,
-        id: [u8; 16],
-        clock: impl FnMut() -> u64,
-    ) -> Result<PathBuf, Error> {
+    pub fn commit(&mut self, id: [u8; 16], clock: impl FnMut() -> u64) -> Result<PathBuf, Error> {
         self.commit_checked(id, clock, || Ok(()))
     }
 
@@ -457,14 +453,18 @@ mod tests {
         manager.write_chunk([1; 16], 0, b"file data", 1).unwrap();
 
         let mut checks = 0;
-        let result = manager.commit_checked([1; 16], || 2, || {
-            checks += 1;
-            if checks < 4 {
-                Ok(())
-            } else {
-                Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"))
-            }
-        });
+        let result = manager.commit_checked(
+            [1; 16],
+            || 2,
+            || {
+                checks += 1;
+                if checks < 4 {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"))
+                }
+            },
+        );
         assert!(matches!(
             result,
             Err(Error::Io(error)) if error.kind() == io::ErrorKind::Interrupted

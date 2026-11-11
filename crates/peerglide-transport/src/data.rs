@@ -501,8 +501,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_responses_use_reverse_direction_and_chunks_wait_for_the_correct_phase() -> Result<()>
-    {
+    async fn file_responses_use_reverse_direction_and_chunks_wait_for_the_correct_phase(
+    ) -> Result<()> {
         use peerglide_transfer::{
             codec::{FileOutcome, Frame, Kind},
             data_policy::Permissions,

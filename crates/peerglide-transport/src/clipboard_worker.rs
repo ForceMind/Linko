@@ -1,11 +1,11 @@
 //! Explicit one-shot text transfer. OS clipboard effects stay on the local owner.
 use crate::{data, Identity};
 use anyhow::{Context, Result};
+pub use peerglide_transfer::{clipboard::Classification, codec::TextOutcome};
 use peerglide_transfer::{
     clipboard::{Backend, Origin, MAX_TEXT_BYTES},
     data_policy::Permissions,
 };
-pub use peerglide_transfer::{clipboard::Classification, codec::TextOutcome};
 use quinn::Connection;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -246,7 +246,8 @@ async fn run(
                     .context("clipboard connection timed out")??,
             );
             let stream = data::open(&connection.0, &pinned_peer, TEXT).await?;
-            let (mut consent, mut send, mut receive) = stream.into_session(WIRE_BYTES, CONTROL_BYTES)?;
+            let (mut consent, mut send, mut receive) =
+                stream.into_session(WIRE_BYTES, CONTROL_BYTES)?;
             consent.grant(data_permissions(true, false), GRANT_MS)?;
             let sequence = send
                 .write_text(&text.text, text.classification, text.origin)
@@ -264,14 +265,18 @@ async fn run(
             events.post(Event::Listening(endpoint.local_addr()?))?;
             let connection = OwnedConnection(
                 tokio::time::timeout(LISTEN_TIMEOUT, async {
-                    let incoming = endpoint.accept().await.context("clipboard listener closed")?;
+                    let incoming = endpoint
+                        .accept()
+                        .await
+                        .context("clipboard listener closed")?;
                     Ok::<_, anyhow::Error>(incoming.await?)
                 })
                 .await
                 .context("clipboard listener timed out")??,
             );
             let stream = data::accept(&connection.0, &pinned_peer, TEXT).await?;
-            let (mut consent, mut send, mut receive) = stream.into_session(CONTROL_BYTES, WIRE_BYTES)?;
+            let (mut consent, mut send, mut receive) =
+                stream.into_session(CONTROL_BYTES, WIRE_BYTES)?;
             consent.grant(data_permissions(false, true), GRANT_MS)?;
             let mut frame = receive.read(Some(revision)).await?;
             send.acknowledge_text(&mut frame).await?;
@@ -347,7 +352,8 @@ mod tests {
             backend.revision,
             wake.clone(),
         )?;
-        let Event::Listening(address) = receiving.events.recv_timeout(Duration::from_secs(5))? else {
+        let Event::Listening(address) = receiving.events.recv_timeout(Duration::from_secs(5))?
+        else {
             anyhow::bail!("expected clipboard listener readiness");
         };
         let sending = send(

@@ -144,7 +144,9 @@ mod tests {
         let source = fixture(3, 2, false);
         let image = Image::normalize(&source).unwrap();
         assert_eq!(image.dimensions(), (3, 2));
-        let mut reader = Decoder::new(Cursor::new(image.as_png())).read_info().unwrap();
+        let mut reader = Decoder::new(Cursor::new(image.as_png()))
+            .read_info()
+            .unwrap();
         assert!(reader.info().uncompressed_latin1_text.is_empty());
         let mut pixels = [0; 24];
         reader.next_frame(&mut pixels).unwrap();

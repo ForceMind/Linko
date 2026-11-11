@@ -25,8 +25,7 @@ impl Pin {
 
     pub(super) fn load(app: &App) -> Result<(Self, Identity, Vec<u8>)> {
         anyhow::ensure!(ready(app), "请先完成设备配对并打开可写窗口");
-        app.ensure_pairing_ready()
-            .context("请先完成设备配对核验")?;
+        app.ensure_pairing_ready().context("请先完成设备配对核验")?;
         let identity = Identity::load(&app.identity_dir()).context("无法读取本机身份")?;
         let peer = transport::read_certificate(&app.dir.join("trusted-peer.crt.der"))
             .context("无法读取已登记的证书")?;
@@ -74,10 +73,7 @@ pub(super) fn send_address(text: &str, saved: &str, port: u16) -> Result<SocketA
     } else {
         parse_address(text).context("请输入接收端 IP 地址和 UDP 端口")?
     };
-    anyhow::ensure!(
-        !address.ip().is_unspecified(),
-        "请输入接收端的实际 IP 地址"
-    );
+    anyhow::ensure!(!address.ip().is_unspecified(), "请输入接收端的实际 IP 地址");
     Ok(address)
 }
 
