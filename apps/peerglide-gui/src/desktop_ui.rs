@@ -443,9 +443,13 @@ impl App {
             }
         });
         let muted = tokens::muted_color(ui.visuals().dark_mode);
-        icon_row(ui, "内容共享与键鼠控制分别授权。", |painter, rect| {
-            Icon::Lock.paint(painter, rect, muted);
-        });
+        icon_row(
+            ui,
+            "内容共享与键鼠控制分别授权。",
+            |painter, rect| {
+                Icon::Lock.paint(painter, rect, muted);
+            },
+        );
         ui.add_space(14.0);
         desktop_style::card(ui).show(ui, |ui| {
             desktop_style::pill(ui, "尚未接通", desktop_style::Tone::Neutral);
@@ -1461,10 +1465,8 @@ const SETTINGS_SECTIONS: [(SettingsSection, Icon, &str); 3] = [
     (SettingsSection::Advanced, Icon::Log, "诊断与资料"),
 ];
 /// Appearance choices; the value is the stored dark mode flag.
-const APPEARANCES: [(bool, Icon, &str); 2] = [
-    (false, Icon::Sun, "浅色"),
-    (true, Icon::Moon, "深色"),
-];
+const APPEARANCES: [(bool, Icon, &str); 2] =
+    [(false, Icon::Sun, "浅色"), (true, Icon::Moon, "深色")];
 
 /// Segmented control. Every segment shows its icon and its label, and the label is its
 /// accessible name, so an icon never stands alone. Returns true when a click changed
