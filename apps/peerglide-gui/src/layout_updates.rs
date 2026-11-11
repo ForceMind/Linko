@@ -56,7 +56,9 @@ impl App {
         let peer = edge_label(edge_name(hint.peer));
         let button = format!("改为{}", edge_label(edge_name(hint.suggested())));
         ui.horizontal_wrapped(|ui| {
-            ui.small(format!("两台电脑的方向设置不一致（另一台将本机设在{peer}）"));
+            ui.small(format!(
+                "两台电脑的方向设置不一致（另一台将本机设在{peer}）"
+            ));
             let enabled = self.layout_editable() && self.layout_request.is_none();
             if ui
                 .add_enabled(enabled, egui::Button::new(button).small())
