@@ -80,3 +80,7 @@ Windows 的 `share-system-audio` 使用默认播放设备的 WASAPI 回环。
 ```text
 peerglide share-system-audio RECEIVER_IP:24874 --identity PATH --peer-cert RECEIVER.der
 ```
+
+macOS 13 或更新版本的同一发送命令使用 ScreenCaptureKit 的音频输出。
+系统可能要求录制权限。这个入口不打开麦克风或注册屏幕画面输出。
+真实权限提示、不同设备格式和结束后静音留到集中验收。
