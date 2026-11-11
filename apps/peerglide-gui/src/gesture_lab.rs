@@ -182,8 +182,8 @@ impl GestureLab {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, worker_running: bool) -> Option<Rect> {
         self.inspection = None;
-        ui.heading("录制与本窗口测试");
-        ui.label("在画布内按住鼠标右键绘制手势，按 Esc 取消。");
+        ui.strong("录制与本窗口测试");
+        ui.label("按住右键在画布内绘制，Esc 取消。");
         ui.weak("仅限此画布，不捕获全局输入、不执行动作。只有点击保存才会写入文件。");
         if worker_running {
             self.cancel();

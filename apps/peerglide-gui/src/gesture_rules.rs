@@ -280,9 +280,11 @@ impl RuleEditor {
         }
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, dir: &Path, writable: bool) {
-        ui.heading("轨迹、范围与动作");
+        ui.strong("轨迹、范围与动作");
         ui.label("保存的是本机规则。全局手势 G1 仍关闭，勾选规则仅用于匹配预览。");
-        ui.weak("Windows 已实现最小化 / 最大化 / 关闭窗口的 Native 库；macOS 已实现最小化 / 关闭窗口；Linux 暂无。均未在此 GUI 接通执行，真实效果未验收。");
+        ui.weak("Windows 已实现最小化 / 最大化 / 关闭窗口的 Native 库。");
+        ui.weak("macOS 已实现最小化 / 关闭窗口；Linux 暂无。");
+        ui.weak("均未在此 GUI 接通执行，真实效果未验收。");
         if !writable {
             ui.label("当前配置只读，可以查看与测试，不能编辑或保存。");
         }

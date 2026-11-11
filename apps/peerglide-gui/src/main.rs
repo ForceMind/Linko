@@ -10,13 +10,16 @@ mod discovery_panel;
 mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
+mod icons;
 mod layout_updates;
+mod motion;
 mod pairing_discovery;
 mod pairing_panel;
 mod pairing_receipt;
 pub mod pairing_supervisor;
 mod quit_check;
 mod resource_check;
+mod shell_ui;
 mod visual_assets;
 mod worker_output;
 mod worker_permissions;
@@ -426,6 +429,10 @@ fn read_worker_diagnostics(
 struct App {
     workspace_peer_selected: bool,
     workspace_zoom: f32,
+    /// Explicit sidebar choice; None follows the window width.
+    sidebar_pref: Option<bool>,
+    page_motion: motion::Retrigger<u8>,
+    capsule_motion: motion::Retrigger<&'static str>,
     notice_details: bool,
     connection_details_open: bool,
     settings_section: SettingsSection,
@@ -560,6 +567,9 @@ impl App {
             layout_geometry: std::collections::BTreeMap::new(),
             workspace_peer_selected: false,
             workspace_zoom: 1.0,
+            sidebar_pref: None,
+            page_motion: motion::Retrigger::default(),
+            capsule_motion: motion::Retrigger::default(),
             notice_details: false,
             connection_details_open: false,
             settings_section: SettingsSection::General,
@@ -1353,9 +1363,16 @@ impl App {
         self.notice = "退出恢复入口发生变化，已请求停止键鼠。请确认恢复状态并重新打开屏跃。".into();
     }
     fn request_activity_tick(&self, ctx: &egui::Context) {
+        if self.activity_tick_active() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+    /// True while the 100 ms activity beat runs. Waiting indicators may step on this beat;
+    /// they never schedule their own.
+    fn activity_tick_active(&self) -> bool {
         // Stable communication is woken by stdout/stderr instead of painting
         // at 10Hz. Keep Native health polling and EOF/stop reaping unchanged.
-        if (self.child.is_some() && self.active_mode == Some(SessionMode::Native))
+        (self.child.is_some() && self.active_mode == Some(SessionMode::Native))
             || (self
                 .worker_state
                 .as_ref()
@@ -1369,9 +1386,6 @@ impl App {
             || self.gesture_lab.needs_tick()
             || self.layout_report.is_some()
             || self.pairing_panel.needs_poll()
-        {
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
     }
     fn show_window(&mut self, ctx: &egui::Context) {
         self.window_hidden = false;
@@ -2631,8 +2645,7 @@ mod tests {
                             let ctx = root.ctx().clone();
                             egui::CentralPanel::default().show(root, |ui| match page {
                                 Page::Home => app.home(ui),
-                                Page::Devices => app.devices(ui),
-                                Page::Displays => app.displays(ui),
+                                Page::Devices | Page::Displays => app.devices(ui),
                                 Page::Settings => app.settings(ui, &ctx),
                                 Page::GestureLab => {
                                     app.gesture_lab.ui(ui, false);
