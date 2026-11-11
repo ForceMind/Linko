@@ -551,6 +551,41 @@ mod tests {
     }
 
     #[test]
+    fn history_leaves_untouched_directories_and_legacy_records_unchanged() {
+        use crate::{receive_history, HistoryState};
+
+        let fixture = Fixture::new();
+        let untouched = fixture.0.join("untouched");
+        fs::create_dir(&untouched).unwrap();
+        assert!(receive_history(&untouched).unwrap().entries.is_empty());
+        assert_eq!(fs::read_dir(&untouched).unwrap().count(), 0);
+
+        let (manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        assert!(receive_history(&root).is_err());
+        drop(manager);
+        let staged = Receiver::create(&root, binding(1), manifest.clone()).unwrap();
+        drop(staged);
+        let unconfirmed = Receiver::create(&root, binding(2), manifest).unwrap();
+        fs::write(unconfirmed.dir.join("committing"), []).unwrap();
+        drop(unconfirmed);
+        let before = fs::read_dir(&root).unwrap().count();
+        let history = receive_history(&root).unwrap();
+        assert_eq!(history.inventory.reserved_bytes, 18);
+        assert_eq!(history.inventory.reservations, 2);
+        for (id, state) in [
+            ([1; 16], HistoryState::Staged),
+            ([2; 16], HistoryState::PublicationUnconfirmed),
+        ] {
+            let entry = history.entries.iter().find(|entry| entry.id == id).unwrap();
+            assert_eq!(entry.state, state);
+            assert_eq!(entry.name.as_deref(), Some("source.txt"));
+            assert_eq!(entry.size, 9);
+        }
+        assert_eq!(fs::read_dir(&root).unwrap().count(), before);
+    }
+
+    #[test]
     fn restart_preserves_cancelled_and_published_reservations() {
         let fixture = Fixture::new();
         let (mut manager, manifest) = fixture.setup(18);
