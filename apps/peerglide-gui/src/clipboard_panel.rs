@@ -1,4 +1,4 @@
-//! One-shot text controls. Rendering and polling never access the system clipboard.
+//! One-shot clipboard controls. Rendering and polling never access the system clipboard.
 use super::{
     data_access::{self, Pin},
     egui, transport, App,
@@ -6,7 +6,7 @@ use super::{
 use anyhow::{Context, Result};
 use peerglide_platform::clipboard::NativeClipboard;
 use transport::clipboard_worker::{
-    self, Classification, Event, Job, LocalText, PendingText, TextOutcome,
+    self, Classification, Event, Job, LocalPayload, LocalText, Mode, PendingClipboard, TextOutcome,
 };
 
 const PORT: u16 = 24872;
@@ -14,13 +14,14 @@ const PORT: u16 = 24872;
 struct Active {
     pin: Pin,
     job: Job,
-    pending: Option<PendingText>,
+    pending: Option<PendingClipboard>,
     stopping: bool,
 }
 
 pub(super) struct Panel {
     clipboard: Option<NativeClipboard>,
     active: Option<Active>,
+    mode: Mode,
     target: String,
     bind: String,
     notice: String,
@@ -32,6 +33,7 @@ impl Default for Panel {
         Self {
             clipboard: None,
             active: None,
+            mode: Mode::Text,
             target: String::new(),
             bind: format!("0.0.0.0:{PORT}"),
             notice: String::new(),
@@ -76,9 +78,14 @@ impl Panel {
                     address.port()
                 ),
                 Event::PeerReceived => "另一台已收到文本，正在等对方决定是否导入。".into(),
-                Event::Pending(text) => {
-                    active.pending = Some(text);
-                    "已收到一条文本。请选择导入或拒绝。".into()
+                Event::WaitingForImageResult => "已提交图片，正在等待接收端回执。".into(),
+                Event::Pending(pending) => {
+                    let notice = pending.dimensions().map_or_else(
+                        || "已收到一条文本。请选择导入或拒绝。".into(),
+                        |(width, height)| format!("已收到 {width} × {height} PNG。请选择导入或拒绝。"),
+                    );
+                    active.pending = Some(pending);
+                    notice
                 }
                 Event::Finished(outcome) => {
                     active.pending = None;
@@ -87,7 +94,7 @@ impl Panel {
                 Event::Stopped => "本次剪贴板共享已停止。".into(),
                 Event::Failed(_) => {
                     active.pending = None;
-                    "剪贴板共享未完成。请检查两端地址、端口、配对状态和等待时间。".into()
+                    "剪贴板共享未完成。请检查内容格式、两端类型、地址和等待时间。".into()
                 }
             };
         }
@@ -112,22 +119,8 @@ impl Panel {
         let wake = app.wake_ui.clone();
         let job = if send {
             let target = data_access::send_address(&self.target, &app.config.address, PORT)?;
-            let snapshot = self
-                .clipboard()?
-                .snapshot()
-                .context("无法读取可共享的文本")?
-                .context("当前剪贴板没有可共享的普通文本")?;
-            clipboard_worker::send(
-                target,
-                identity,
-                peer,
-                LocalText {
-                    text: snapshot.text,
-                    classification: Classification::ShareableText,
-                    origin: snapshot.origin,
-                },
-                wake,
-            )
+            let payload = self.local_payload()?;
+            clipboard_worker::send(target, identity, peer, payload, wake)
         } else {
             let bind =
                 data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?;
@@ -135,7 +128,7 @@ impl Panel {
                 .clipboard()?
                 .revision()
                 .context("无法确认本机剪贴板当前版本")?;
-            clipboard_worker::receive(bind, identity, peer, revision, wake)
+            clipboard_worker::receive(bind, identity, peer, revision, self.mode, wake)
         }
         .context("无法启动剪贴板后台任务")?;
         self.active = Some(Active {
@@ -145,16 +138,44 @@ impl Panel {
             stopping: false,
         });
         self.notice = if send {
-            "正在发送本次选定的文本。".into()
+            "正在准备发送当前剪贴板内容。".into()
         } else {
-            "正在准备接收一条文本。".into()
+            "正在准备等待本次共享。".into()
         };
         Ok(())
     }
 
+    fn local_payload(&mut self) -> Result<LocalPayload> {
+        match self.mode {
+            Mode::Text => {
+                let snapshot = self
+                    .clipboard()?
+                    .snapshot()
+                    .context("无法读取可共享的文本")?
+                    .context("当前剪贴板没有可共享的普通文本")?;
+                Ok(LocalPayload::Text(LocalText {
+                    text: snapshot.text,
+                    classification: Classification::ShareableText,
+                    origin: snapshot.origin,
+                }))
+            }
+            Mode::Image => {
+                let snapshot = self
+                    .clipboard()?
+                    .image_snapshot()
+                    .context("无法读取可共享的 PNG")?
+                    .context("当前剪贴板没有可共享的 PNG")?;
+                Ok(LocalPayload::Image {
+                    png: snapshot.png,
+                    origin: snapshot.origin,
+                })
+            }
+        }
+    }
+
     fn decide(&mut self, app: &App, import: bool) -> Result<()> {
-        let active = self.active.as_mut().context("没有待处理的文本")?;
-        let pending = active.pending.take().context("没有待处理的文本")?;
+        let active = self.active.as_mut().context("没有待处理的剪贴板内容")?;
+        let pending = active.pending.take().context("没有待处理的剪贴板内容")?;
         let (pin, _, _) = Pin::load(app)?;
         anyhow::ensure!(pin == active.pin && !active.stopping, "配对状态已变化");
         let completion = if import {
@@ -173,15 +194,25 @@ impl Panel {
     }
 
     pub(super) fn ui(&mut self, app: &App, ui: &mut egui::Ui) {
-        ui.label("先在接收端选择“等待接收”，再从另一台发送当前纯文本。");
-        ui.weak("发送前请确认当前复制的内容。每次接收都需要本机确认导入。");
+        ui.add_enabled_ui(self.active.is_none(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.selectable_value(&mut self.mode, Mode::Text, "纯文本");
+                ui.selectable_value(&mut self.mode, Mode::Image, "PNG 图片");
+            });
+        });
+        ui.label("两端先选同一种内容，接收端再开启等待。");
+        ui.weak("发送前请确认当前复制的内容。导入需要在接收端再次确认。");
+        let send_label = match self.mode {
+            Mode::Text => "发送当前纯文本",
+            Mode::Image => "发送当前 PNG",
+        };
         ui.add_space(8.0);
         ui.add_enabled_ui(data_access::ready(app) && self.active.is_none(), |ui| {
             let hint = data_access::saved_target(&app.config.address, PORT)
                 .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
             ui.label("接收端地址");
             ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
-            if ui.button("发送当前纯文本").clicked() {
+            if ui.button(send_label).clicked() {
                 self.local_outcome = None;
                 if let Err(error) = self.start(app, true) {
                     self.notice = error.to_string();
@@ -238,10 +269,10 @@ impl Panel {
 
 fn outcome_label(outcome: TextOutcome) -> &'static str {
     match outcome {
-        TextOutcome::Submitted => "文本已提交给接收端的系统剪贴板。",
-        TextOutcome::Changed => "接收端的剪贴板已变化，本次文本未导入。",
+        TextOutcome::Submitted => "已提交给接收端的系统剪贴板。",
+        TextOutcome::Changed => "接收端的剪贴板已变化，本次内容未导入。",
         TextOutcome::Declined => "接收端已拒绝导入。",
-        TextOutcome::Failed => "接收端无法导入文本。",
+        TextOutcome::Failed => "接收端无法导入。",
         TextOutcome::Unknown => "系统未能确认导入结果，请在接收端检查剪贴板。",
     }
 }

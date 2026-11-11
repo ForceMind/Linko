@@ -1,9 +1,10 @@
-//! Explicit one-shot text transfer. OS clipboard effects stay on the local owner.
+//! Explicit one-shot clipboard transfer. OS clipboard effects stay on the local owner.
 use crate::{data, Identity};
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 pub use peerglide_transfer::{clipboard::Classification, codec::TextOutcome};
 use peerglide_transfer::{
     clipboard::{Backend, Origin, MAX_TEXT_BYTES},
+    clipboard_image::{Image, ImageBackend, MAX_PNG_BYTES},
     data_policy::Permissions,
 };
 use quinn::Connection;
@@ -15,12 +16,6 @@ use std::{
 };
 use tokio::sync::{oneshot, watch};
 
-const TEXT: data::Capabilities = data::Capabilities {
-    text: true,
-    files: false,
-    images: false,
-};
-const WIRE_BYTES: u64 = MAX_TEXT_BYTES as u64 + 1024;
 const CONTROL_BYTES: u64 = 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -29,23 +24,78 @@ const GRANT_MS: u64 = 60_000;
 
 type Wake = Arc<dyn Fn() + Send + Sync>;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Text,
+    Image,
+}
+
+impl Mode {
+    fn capabilities(self) -> data::Capabilities {
+        data::Capabilities {
+            text: self == Self::Text,
+            files: false,
+            images: self == Self::Image,
+        }
+    }
+
+    fn budget(self) -> u64 {
+        let bytes = match self {
+            Self::Text => MAX_TEXT_BYTES,
+            Self::Image => MAX_PNG_BYTES,
+        };
+        bytes as u64 + 1024
+    }
+
+    fn permissions(self, sending: bool) -> Permissions {
+        Permissions {
+            text_send: self == Self::Text && sending,
+            text_receive: self == Self::Text && !sending,
+            image_send: self == Self::Image && sending,
+            image_receive: self == Self::Image && !sending,
+            ..Permissions::default()
+        }
+    }
+}
+
 pub enum Event {
     Listening(SocketAddr),
     PeerReceived,
-    Pending(PendingText),
+    WaitingForImageResult,
+    Pending(PendingClipboard),
     Finished(TextOutcome),
     Stopped,
     Failed(String),
 }
 
-pub struct PendingText {
-    consent: data::Consent,
-    frame: data::AdmittedFrame,
+enum PendingFrame {
+    Text(data::AdmittedFrame),
+    Image(data::AdmittedImage),
 }
 
-impl PendingText {
-    pub fn import(mut self, backend: &mut impl Backend) -> Result<Completion> {
-        let result = self.consent.apply_text(self.frame, backend)?;
+pub struct PendingClipboard {
+    consent: data::Consent,
+    frame: PendingFrame,
+}
+
+impl PendingClipboard {
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        match &self.frame {
+            PendingFrame::Text(_) => None,
+            PendingFrame::Image(image) => Some(image.dimensions()),
+        }
+    }
+
+    pub fn import(mut self, backend: &mut (impl Backend + ImageBackend)) -> Result<Completion> {
+        let result = match self.frame {
+            PendingFrame::Text(frame) => {
+                CompletedFrame::Text(self.consent.apply_text(frame, backend)?)
+            }
+            PendingFrame::Image(frame) => {
+                CompletedFrame::Image(self.consent.apply_image(frame, backend)?)
+            }
+        };
         Ok(Completion {
             consent: self.consent,
             result,
@@ -53,7 +103,10 @@ impl PendingText {
     }
 
     pub fn decline(mut self) -> Result<Completion> {
-        let result = self.consent.decline_text(self.frame)?;
+        let result = match self.frame {
+            PendingFrame::Text(frame) => CompletedFrame::Text(self.consent.decline_text(frame)?),
+            PendingFrame::Image(frame) => CompletedFrame::Image(self.consent.decline_image(frame)?),
+        };
         Ok(Completion {
             consent: self.consent,
             result,
@@ -61,14 +114,22 @@ impl PendingText {
     }
 }
 
+enum CompletedFrame {
+    Text(data::ClipboardCompletion),
+    Image(data::ImageCompletion),
+}
+
 pub struct Completion {
     consent: data::Consent,
-    result: data::ClipboardCompletion,
+    result: CompletedFrame,
 }
 
 impl Completion {
     pub fn outcome(&self) -> TextOutcome {
-        self.result.outcome()
+        match &self.result {
+            CompletedFrame::Text(result) => result.outcome(),
+            CompletedFrame::Image(result) => result.outcome(),
+        }
     }
 }
 
@@ -113,14 +174,41 @@ pub struct LocalText {
     pub origin: Origin,
 }
 
+pub enum LocalPayload {
+    Text(LocalText),
+    Image {
+        png: Vec<u8>,
+        origin: Origin,
+    },
+}
+
+enum PreparedPayload {
+    Text(LocalText),
+    Image(Image),
+}
+
+impl LocalPayload {
+    async fn prepare(self) -> Result<(Mode, PreparedPayload)> {
+        match self {
+            Self::Text(text) => Ok((Mode::Text, PreparedPayload::Text(text))),
+            Self::Image { png, origin } => {
+                ensure!(origin == Origin::Local, "imported images stay local");
+                let image = tokio::task::spawn_blocking(move || Image::normalize(&png)).await??;
+                Ok((Mode::Image, PreparedPayload::Image(image)))
+            }
+        }
+    }
+}
+
 enum Operation {
     Send {
         target: SocketAddr,
-        text: LocalText,
+        payload: LocalPayload,
     },
     Receive {
         bind: SocketAddr,
         revision: u64,
+        mode: Mode,
         decision: oneshot::Receiver<Completion>,
     },
 }
@@ -129,11 +217,11 @@ pub fn send(
     target: SocketAddr,
     identity: Identity,
     pinned_peer: Vec<u8>,
-    text: LocalText,
+    payload: LocalPayload,
     wake: Wake,
 ) -> Result<Job> {
     spawn(
-        Operation::Send { target, text },
+        Operation::Send { target, payload },
         identity,
         pinned_peer,
         None,
@@ -146,6 +234,7 @@ pub fn receive(
     identity: Identity,
     pinned_peer: Vec<u8>,
     revision: u64,
+    mode: Mode,
     wake: Wake,
 ) -> Result<Job> {
     let (decide, decision) = oneshot::channel();
@@ -153,6 +242,7 @@ pub fn receive(
         Operation::Receive {
             bind,
             revision,
+            mode,
             decision,
         },
         identity,
@@ -192,6 +282,7 @@ fn spawn(
             let events = Events { tx, wake };
             let result = (|| -> Result<()> {
                 let runtime = tokio::runtime::Builder::new_current_thread()
+                    .max_blocking_threads(1)
                     .enable_all()
                     .build()?;
                 runtime.block_on(async {
@@ -234,7 +325,8 @@ async fn run(
     events: &Events,
 ) -> Result<()> {
     let outcome = match operation {
-        Operation::Send { target, text } => {
+        Operation::Send { target, payload } => {
+            let (mode, payload) = payload.prepare().await?;
             let bind = match target.ip() {
                 IpAddr::V4(_) => SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
                 IpAddr::V6(_) => SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
@@ -246,20 +338,30 @@ async fn run(
                     .await
                     .context("clipboard connection timed out")??,
             );
-            let stream = data::open(&connection.0, &pinned_peer, TEXT).await?;
+            let stream = data::open(&connection.0, &pinned_peer, mode.capabilities()).await?;
             let (mut consent, mut send, mut receive) =
-                stream.into_session(WIRE_BYTES, CONTROL_BYTES)?;
-            consent.grant(data_permissions(true, false), GRANT_MS)?;
-            let sequence = send
-                .write_text(&text.text, text.classification, text.origin)
-                .await?;
-            receive.wait_text_receipt(sequence).await?;
-            events.post(Event::PeerReceived)?;
-            receive.wait_text_result(sequence).await?
+                stream.into_session(mode.budget(), CONTROL_BYTES)?;
+            consent.grant(mode.permissions(true), GRANT_MS)?;
+            match payload {
+                PreparedPayload::Text(text) => {
+                    let sequence = send
+                        .write_text(&text.text, text.classification, text.origin)
+                        .await?;
+                    receive.wait_text_receipt(sequence).await?;
+                    events.post(Event::PeerReceived)?;
+                    receive.wait_text_result(sequence).await?
+                }
+                PreparedPayload::Image(image) => {
+                    let sequence = send.write_image(image, Origin::Local).await?;
+                    events.post(Event::WaitingForImageResult)?;
+                    receive.wait_image_result(sequence).await?
+                }
+            }
         }
         Operation::Receive {
             bind,
             revision,
+            mode,
             decision,
         } => {
             let endpoint = data::endpoint(bind, &identity, &pinned_peer)?;
@@ -275,18 +377,27 @@ async fn run(
                 .await
                 .context("clipboard listener timed out")??,
             );
-            let stream = data::accept(&connection.0, &pinned_peer, TEXT).await?;
+            let stream = data::accept(&connection.0, &pinned_peer, mode.capabilities()).await?;
             let (mut consent, mut send, mut receive) =
-                stream.into_session(CONTROL_BYTES, WIRE_BYTES)?;
-            consent.grant(data_permissions(false, true), GRANT_MS)?;
-            let mut frame = receive.read(Some(revision)).await?;
-            send.acknowledge_text(&mut frame).await?;
-            events.post(Event::Pending(PendingText { consent, frame }))?;
+                stream.into_session(CONTROL_BYTES, mode.budget())?;
+            consent.grant(mode.permissions(false), GRANT_MS)?;
+            let frame = match mode {
+                Mode::Text => {
+                    let mut frame = receive.read(Some(revision)).await?;
+                    send.acknowledge_text(&mut frame).await?;
+                    PendingFrame::Text(frame)
+                }
+                Mode::Image => PendingFrame::Image(receive.read_image(revision).await?),
+            };
+            events.post(Event::Pending(PendingClipboard { consent, frame }))?;
             let completion = tokio::time::timeout(DECISION_TIMEOUT, decision)
                 .await
                 .context("clipboard import decision timed out")??;
             let outcome = completion.outcome();
-            send.report_text_result(completion.result).await?;
+            match completion.result {
+                CompletedFrame::Text(result) => send.report_text_result(result).await?,
+                CompletedFrame::Image(result) => send.report_image_result(result).await?,
+            }
             // Keep the endpoint and consent alive until the source reads its
             // terminal result and closes. This does not retry any OS effect.
             let _ = tokio::time::timeout(Duration::from_secs(5), connection.0.closed()).await;
@@ -297,14 +408,6 @@ async fn run(
     events.post(Event::Finished(outcome))
 }
 
-fn data_permissions(send: bool, receive: bool) -> Permissions {
-    Permissions {
-        text_send: send,
-        text_receive: receive,
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +416,7 @@ mod tests {
     struct Memory {
         revision: u64,
         text: String,
+        images: usize,
     }
 
     impl Backend for Memory {
@@ -326,17 +430,38 @@ mod tests {
         }
     }
 
+    impl ImageBackend for Memory {
+        fn compare_and_write_image(&mut self, revision: u64, _: &Image) -> WriteResult {
+            if revision != self.revision {
+                return WriteResult::Changed;
+            }
+            self.revision += 1;
+            self.images += 1;
+            WriteResult::Submitted
+        }
+    }
+
     #[test]
     fn two_workers_keep_consent_until_local_import_and_report_the_result() -> Result<()> {
-        loopback(false)
+        loopback(Mode::Text, false)
     }
 
     #[test]
     fn stopping_the_receiver_invalidates_an_already_admitted_frame() -> Result<()> {
-        loopback(true)
+        loopback(Mode::Text, true)
     }
 
-    fn loopback(cancel: bool) -> Result<()> {
+    #[test]
+    fn image_worker_waits_for_the_local_import_and_reports_the_result() -> Result<()> {
+        loopback(Mode::Image, false)
+    }
+
+    #[test]
+    fn stopping_the_receiver_invalidates_a_validated_image() -> Result<()> {
+        loopback(Mode::Image, true)
+    }
+
+    fn loopback(mode: Mode, cancel: bool) -> Result<()> {
         let source = Identity::generate()?;
         let destination = Identity::generate()?;
         let source_cert = source.certificate.clone();
@@ -345,37 +470,43 @@ mod tests {
         let mut backend = Memory {
             revision: 5,
             text: String::new(),
+            images: 0,
         };
         let mut receiving = receive(
             "127.0.0.1:0".parse()?,
             destination,
             source_cert,
             backend.revision,
+            mode,
             wake.clone(),
         )?;
         let Event::Listening(address) = receiving.events.recv_timeout(Duration::from_secs(5))?
         else {
             anyhow::bail!("expected clipboard listener readiness");
         };
-        let sending = send(
-            address,
-            source,
-            destination_cert,
-            LocalText {
+        let payload = match mode {
+            Mode::Text => LocalPayload::Text(LocalText {
                 text: "屏跃".into(),
                 classification: Classification::ShareableText,
                 origin: Origin::Local,
+            }),
+            Mode::Image => LocalPayload::Image {
+                png: data::TEST_PNG.to_vec(),
+                origin: Origin::Local,
             },
-            wake,
-        )?;
+        };
+        let sending = send(address, source, destination_cert, payload, wake)?;
         let Event::Pending(pending) = receiving.events.recv_timeout(Duration::from_secs(8))? else {
             anyhow::bail!("expected an admitted clipboard frame");
         };
+        let notice = sending.events.recv_timeout(Duration::from_secs(5))?;
         assert!(matches!(
-            sending.events.recv_timeout(Duration::from_secs(5))?,
-            Event::PeerReceived
+            (mode, notice),
+            (Mode::Text, Event::PeerReceived) | (Mode::Image, Event::WaitingForImageResult)
         ));
+        assert_eq!(pending.dimensions(), (mode == Mode::Image).then_some((1, 1)));
         assert!(backend.text.is_empty());
+        assert_eq!(backend.images, 0);
         if cancel {
             receiving.stop();
             assert!(matches!(
@@ -384,6 +515,7 @@ mod tests {
             ));
             assert!(pending.import(&mut backend).is_err());
             assert!(backend.text.is_empty());
+            assert_eq!(backend.images, 0);
             assert!(matches!(
                 sending.events.recv_timeout(Duration::from_secs(5))?,
                 Event::Failed(_)
@@ -391,7 +523,10 @@ mod tests {
             return Ok(());
         }
         receiving.complete(pending.import(&mut backend)?)?;
-        assert_eq!(backend.text, "屏跃");
+        match mode {
+            Mode::Text => assert_eq!(backend.text, "屏跃"),
+            Mode::Image => assert_eq!(backend.images, 1),
+        }
         assert!(matches!(
             sending.events.recv_timeout(Duration::from_secs(5))?,
             Event::Finished(TextOutcome::Submitted)

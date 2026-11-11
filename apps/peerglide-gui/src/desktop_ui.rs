@@ -321,7 +321,7 @@ impl App {
         ui.add_space(16.0);
         ui.separator();
         ui.strong("更多协作方式");
-        ui.label("文件和文本共享需要两端各自确认。");
+        ui.label("文件和剪贴板共享需要两端各自确认。");
         if ui.button("打开文件与剪贴板").clicked() {
             self.navigate_to(Page::Transfers);
         }
