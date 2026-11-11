@@ -16,8 +16,7 @@ impl Span {
     }
 
     fn contains(self, fraction: f64) -> bool {
-        fraction >= self.start
-            && (fraction < self.end || (self.end == 1.0 && fraction == self.end))
+        fraction >= self.start && (fraction < self.end || (self.end == 1.0 && fraction == self.end))
     }
 }
 
@@ -71,7 +70,11 @@ impl Table {
             if link.target.peer == [0; 32] {
                 return Err(Error::InvalidPeer);
             }
-            if !layout.displays().iter().any(|display| display.id == link.source_display) {
+            if !layout
+                .displays()
+                .iter()
+                .any(|display| display.id == link.source_display)
+            {
                 return Err(Error::UnknownSource);
             }
         }
@@ -104,7 +107,8 @@ impl Table {
         })?;
         let unit = (anchor.fraction - link.source_span.start)
             / (link.source_span.end - link.source_span.start);
-        let fraction = link.target_span.start + unit * (link.target_span.end - link.target_span.start);
+        let fraction =
+            link.target_span.start + unit * (link.target_span.end - link.target_span.start);
         Some(Route {
             target: link.target,
             fraction: fraction.clamp(link.target_span.start, link.target_span.end),
@@ -150,7 +154,10 @@ mod tests {
                 display: Some(DisplayId(u64::from(peer))),
                 edge: Edge::Left,
             },
-            target_span: Span { start: 0.25, end: 0.75 },
+            target_span: Span {
+                start: 0.25,
+                end: 0.75,
+            },
         }
     }
 
@@ -159,7 +166,11 @@ mod tests {
         let main = display(1, 0.0, 0.0);
         let upper = display(2, -140.0, -100.0);
         let layout = Layout::new(main.id, vec![main, upper]).unwrap();
-        let table = Table::new(&layout, vec![link(upper.id, 2, 0.5, 1.0), link(upper.id, 1, 0.0, 0.5)]).unwrap();
+        let table = Table::new(
+            &layout,
+            vec![link(upper.id, 2, 0.5, 1.0), link(upper.id, 1, 0.0, 0.5)],
+        )
+        .unwrap();
         let first = layout.edge_at(Edge::Right, -40.5, -75.0, 2.0).unwrap();
         let route = table.resolve(&layout, first).unwrap();
         assert_eq!(route.target.peer, [1; 32]);
@@ -175,7 +186,11 @@ mod tests {
         let main = display(1, 0.0, 0.0);
         let mut layout = Layout::new(main.id, vec![main]).unwrap();
         assert_eq!(
-            Table::new(&layout, vec![link(main.id, 1, 0.0, 0.8), link(main.id, 2, 0.5, 1.0)]).err(),
+            Table::new(
+                &layout,
+                vec![link(main.id, 1, 0.0, 0.8), link(main.id, 2, 0.5, 1.0)]
+            )
+            .err(),
             Some(Error::Overlap)
         );
         assert_eq!(
