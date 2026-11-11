@@ -1,6 +1,6 @@
 //! Bounded PCM playout for one locally authorized audio source.
 //! No OS device, input grant, network or media-content diagnostics.
-pub use peerglide_protocol::audio::{Frame, CHANNELS, SAMPLE_RATE, SAMPLES};
+pub use peerglide_protocol::audio::{Frame, CHANNELS, SAMPLES, SAMPLE_RATE};
 
 const WINDOW: usize = 16;
 const PREFILL: usize = 3;
