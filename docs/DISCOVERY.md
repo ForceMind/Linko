@@ -83,3 +83,11 @@ permission grant. Cross-host multicast, platform prompts, adapter changes and
 sleep remain native acceptance work. New metadata/expiry and disabled-interface
 daemon lifecycle tests, plus address-selection/default-off GUI regressions, do
 not replace those checks. Candidate CI evidence is in VALIDATION.md.
+
+## 手动 IPv6 短码配对
+
+选择 IPv6 手动地址后，显示短码的工作进程使用 IPv6 监听。另一台
+输入 IPv6 地址，带端口时使用方括号。链路本地地址使用连接端的
+数字接口编号。该入口沿用短码、精确证书绑定和双端保存流程。
+自动发现与发布当前仍只提供 IPv4 提示。IPv6 跨主机与多网卡
+留待真实局域网验收。
