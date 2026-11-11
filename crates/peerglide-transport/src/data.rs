@@ -335,7 +335,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authenticated_data_directions_need_consent_and_revocation_invalidates_received_frames() -> Result<()> {
+    async fn authenticated_data_directions_need_consent_and_revocation_invalidates_received_frames(
+    ) -> Result<()> {
         use peerglide_transfer::{codec::Frame, data_policy::Permissions};
 
         let local = Identity::generate()?;

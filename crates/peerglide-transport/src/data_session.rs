@@ -43,7 +43,8 @@ impl Policy {
         if let Ok(mut session) = self.session.lock() {
             session.close();
         }
-        self.connection.close(0u8.into(), b"local data session stopped");
+        self.connection
+            .close(0u8.into(), b"local data session stopped");
     }
 }
 
@@ -80,7 +81,9 @@ pub(super) fn new(
     let mut nonce = [0; 32];
     if let Err(error) = rand::rngs::OsRng.try_fill_bytes(&mut nonce) {
         connection.close(1u8.into(), b"data session setup failed");
-        return Err(anyhow::anyhow!("data session randomness unavailable: {error}"));
+        return Err(anyhow::anyhow!(
+            "data session randomness unavailable: {error}"
+        ));
     }
     let policy = Arc::new(Policy {
         connection,
@@ -108,7 +111,10 @@ impl Consent {
     /// Set the initial local grant once. Changing it requires revocation and
     /// a fresh connection, so in-flight work cannot outlive its scope.
     pub fn grant(&mut self, permissions: Permissions, lifetime_ms: u64) -> Result<()> {
-        ensure!(!self.granted, "open a fresh connection to change data consent");
+        ensure!(
+            !self.granted,
+            "open a fresh connection to change data consent"
+        );
         ensure!(
             (self.capabilities.text || !permissions.text_send && !permissions.text_receive)
                 && (self.capabilities.files || !permissions.file_send && !permissions.file_receive),
