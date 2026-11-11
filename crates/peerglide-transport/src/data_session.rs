@@ -139,7 +139,10 @@ impl Consent {
         apply: impl FnOnce(Frame) -> Result<T>,
     ) -> Result<T> {
         let capability = inbound(admitted.frame.kind());
-        ensure!(capability != Capability::TextReceive, "use the clipboard write path");
+        ensure!(
+            capability != Capability::TextReceive,
+            "use the clipboard write path"
+        );
         self.policy
             .check(|session, now| session.validate(&admitted.permit, capability, now))?;
         apply(admitted.frame)
@@ -196,15 +199,13 @@ impl Sender {
         origin: Origin,
     ) -> Result<()> {
         let policy = &self.policy;
-        let candidate = policy.check(|clipboard, now| {
-            clipboard.export(text, classification, origin, now)
-        })?;
+        let candidate =
+            policy.check(|clipboard, now| clipboard.export(text, classification, origin, now))?;
         let (sequence, text, permit) = candidate.into_parts();
         self.frames
             .write_checked(&Frame::Text { sequence, text }, |_| {
-                policy.check(|clipboard, now| {
-                    clipboard.validate(&permit, Capability::TextSend, now)
-                })
+                policy
+                    .check(|clipboard, now| clipboard.validate(&permit, Capability::TextSend, now))
             })
             .await
     }
