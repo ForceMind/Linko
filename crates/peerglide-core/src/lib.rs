@@ -2,6 +2,8 @@
 use peerglide_protocol::{Input, Motion, LEASE_MS};
 use std::collections::BTreeSet;
 
+pub mod input_owner;
+
 /// Terminal reliable cursor and balanced releases; never log input payloads.
 pub struct FinishedLease {
     pub cursor: Option<Motion>,
