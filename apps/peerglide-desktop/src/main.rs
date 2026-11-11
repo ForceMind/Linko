@@ -182,7 +182,7 @@ struct Options {
     #[arg(long, value_enum, default_value = "right")]
     edge: Side,
 }
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::PairOffer {
