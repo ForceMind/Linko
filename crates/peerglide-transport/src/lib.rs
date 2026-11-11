@@ -10,6 +10,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+pub mod layout_binding;
 pub mod pairing;
 pub mod trusted_listener;
 
