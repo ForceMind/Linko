@@ -605,6 +605,14 @@ impl App {
             card(ui).inner_margin(margin).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 self.selected_device_metadata(ui);
+                #[cfg(any(windows, target_os = "macos"))]
+                if !self.workspace_peer_selected {
+                    let enabled = open
+                        && !self.resource_check_mode
+                        && !self.quit_check_mode
+                        && self.layout_report.is_none();
+                    self.display_inventory.ui(ui, enabled, &self.wake_ui);
+                }
                 ui.separator();
                 self.connection_details(ui);
             });
