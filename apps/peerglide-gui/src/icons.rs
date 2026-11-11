@@ -22,8 +22,6 @@ pub(super) const MIN_SIDE: f32 = 6.0;
 
 /// Direction of an arrow icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// The shell uses Left for "back"; the layout direction buttons (slice S2) use the others.
-#[allow(dead_code)]
 pub(super) enum Direction {
     Left,
     Right,
@@ -33,7 +31,7 @@ pub(super) enum Direction {
 
 /// The icon set of the design. Icons join as the slices that paint them land.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// Lock and Cross are painted by the context bar and pairing slices (S3, S4).
+// Cross is painted by the pairing slice (S4).
 #[allow(dead_code)]
 pub(super) enum Icon {
     /// Display on a stand.
@@ -46,6 +44,9 @@ pub(super) enum Icon {
     /// Two sliders, for settings.
     Sliders,
     Plus,
+    Minus,
+    /// Four corner brackets, for fitting the view.
+    Fit,
     /// Panel outline with a divider, for showing or hiding the sidebar.
     Sidebar,
     /// Key caps, for shortcuts.
@@ -73,6 +74,8 @@ impl Icon {
             Icon::Arrow(direction) => paint_arrow(painter, grid, color, direction),
             Icon::Sliders => paint_sliders(painter, grid, color),
             Icon::Plus => paint_plus(painter, grid, color),
+            Icon::Minus => paint_minus(painter, grid, color),
+            Icon::Fit => paint_fit(painter, grid, color),
             Icon::Sidebar => paint_sidebar(painter, grid, color),
             Icon::Keyboard => paint_keyboard(painter, grid, color),
             Icon::Stop => paint_stop(painter, grid, color),
@@ -221,6 +224,16 @@ fn paint_plus(painter: &Painter, grid: Grid, color: Color32) {
     painter.line_segment([grid.at(3.0, 8.0), grid.at(13.0, 8.0)], stroke);
 }
 
+fn paint_minus(painter: &Painter, grid: Grid, color: Color32) {
+    painter.line_segment([grid.at(3.0, 8.0), grid.at(13.0, 8.0)], line_stroke(color));
+}
+
+fn paint_fit(painter: &Painter, grid: Grid, color: Color32) {
+    for corner in fit_corners(grid) {
+        paint_path(painter, corner.to_vec(), color);
+    }
+}
+
 fn paint_sidebar(painter: &Painter, grid: Grid, color: Color32) {
     let stroke = line_stroke(color);
     let frame = Rect::from_min_max(grid.at(1.5, 2.5), grid.at(14.5, 13.5));
@@ -249,6 +262,20 @@ fn paint_recover(painter: &Painter, grid: Grid, color: Color32) {
     let (arc, head) = recover_geometry(grid);
     paint_path(painter, arc, color);
     paint_path(painter, head.to_vec(), color);
+}
+
+/// Corner brackets of the fit icon, clockwise from the top left.
+fn fit_corners(grid: Grid) -> [[Pos2; 3]; 4] {
+    [
+        [grid.at(2.5, 6.0), grid.at(2.5, 2.5), grid.at(6.0, 2.5)],
+        [grid.at(10.0, 2.5), grid.at(13.5, 2.5), grid.at(13.5, 6.0)],
+        [
+            grid.at(13.5, 10.0),
+            grid.at(13.5, 13.5),
+            grid.at(10.0, 13.5),
+        ],
+        [grid.at(6.0, 13.5), grid.at(2.5, 13.5), grid.at(2.5, 10.0)],
+    ]
 }
 
 /// Upper two rows of key caps.
@@ -382,7 +409,7 @@ mod tests {
         count
     }
 
-    fn every_icon() -> [Icon; 15] {
+    fn every_icon() -> [Icon; 17] {
         [
             Icon::Device,
             Icon::Lock,
@@ -395,6 +422,8 @@ mod tests {
             Icon::Arrow(Direction::Down),
             Icon::Sliders,
             Icon::Plus,
+            Icon::Minus,
+            Icon::Fit,
             Icon::Sidebar,
             Icon::Keyboard,
             Icon::Stop,
@@ -435,6 +464,9 @@ mod tests {
         paths.push(arc);
         paths.push(recover_head.to_vec());
         paths.push(keyboard_keys(grid));
+        for corner in fit_corners(grid) {
+            paths.push(corner.to_vec());
+        }
         for path in paths {
             assert_inside(&path);
             for point in path {
