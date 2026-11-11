@@ -197,7 +197,7 @@ impl Panel {
                 if files.len() != 1 {
                     return None;
                 }
-                files[0].path()?.to_str().map(str::to_owned)
+                files[0].path().to_str().map(str::to_owned)
             });
             if let Some(path) = dropped {
                 self.source = path;
