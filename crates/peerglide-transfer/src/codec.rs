@@ -170,7 +170,7 @@ impl Frame {
                     return Err(invalid());
                 }
                 Ok(Self::TextReceived { sequence })
-            },
+            }
         }
     }
 

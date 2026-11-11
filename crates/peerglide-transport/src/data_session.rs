@@ -216,14 +216,22 @@ impl Sender {
         let Frame::Text { sequence, .. } = &admitted.frame else {
             anyhow::bail!("expected a clipboard text frame");
         };
-        ensure!(!admitted.acknowledged, "clipboard frame already acknowledged");
+        ensure!(
+            !admitted.acknowledged,
+            "clipboard frame already acknowledged"
+        );
         let policy = &self.policy;
         self.frames
-            .write_checked(&Frame::TextReceived { sequence: *sequence }, |_| {
-                policy.check(|clipboard, now| {
-                    clipboard.validate(&admitted.permit, Capability::TextReceive, now)
-                })
-            })
+            .write_checked(
+                &Frame::TextReceived {
+                    sequence: *sequence,
+                },
+                |_| {
+                    policy.check(|clipboard, now| {
+                        clipboard.validate(&admitted.permit, Capability::TextReceive, now)
+                    })
+                },
+            )
             .await?;
         admitted.acknowledged = true;
         Ok(())
@@ -238,7 +246,10 @@ impl Receiver {
         let (frame, permit) = self
             .frames
             .read_checked(|header| {
-                ensure!(header.kind() != Kind::TextReceived, "use the receipt reader");
+                ensure!(
+                    header.kind() != Kind::TextReceived,
+                    "use the receipt reader"
+                );
                 let capability = inbound(header.kind());
                 ensure!(
                     capability != Capability::TextReceive || clipboard_revision.is_some(),
@@ -263,7 +274,10 @@ impl Receiver {
         let (frame, permit) = self
             .frames
             .read_checked(|header| {
-                ensure!(header.kind() == Kind::TextReceived, "expected a clipboard receipt");
+                ensure!(
+                    header.kind() == Kind::TextReceived,
+                    "expected a clipboard receipt"
+                );
                 policy.check(|clipboard, now| clipboard.authorize(Capability::TextSend, now))
             })
             .await?;
