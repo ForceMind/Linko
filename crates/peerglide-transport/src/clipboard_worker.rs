@@ -2,10 +2,10 @@
 use crate::{data, Identity};
 use anyhow::{Context, Result};
 use peerglide_transfer::{
-    clipboard::{Backend, Classification, Origin, MAX_TEXT_BYTES},
-    codec::TextOutcome,
+    clipboard::{Backend, Origin, MAX_TEXT_BYTES},
     data_policy::Permissions,
 };
+pub use peerglide_transfer::{clipboard::Classification, codec::TextOutcome};
 use quinn::Connection;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
