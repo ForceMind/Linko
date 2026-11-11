@@ -1,4 +1,4 @@
-//! Worker-owned X11 pointer injection. No product caller or capture hook yet.
+//! Worker-owned X11 pointer and keyboard injection. No product caller or capture hook yet.
 use crate::ReceivePoint;
 use anyhow::{ensure, Context, Result};
 use x11rb::{
@@ -6,12 +6,28 @@ use x11rb::{
     protocol::{
         xproto::{
             ConnectionExt as _, Window, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT,
-            MOTION_NOTIFY_EVENT,
+            KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
         },
         xtest::ConnectionExt as _,
     },
     rust_connection::RustConnection,
 };
+
+#[path = "x11_keymap.rs"]
+mod keymap;
+use keymap::KeyMap;
+
+fn submit_owned(slot: &mut bool, down: bool, submit: impl FnOnce() -> Result<()>) -> Result<bool> {
+    if !down && !*slot {
+        return Ok(false);
+    }
+    if down {
+        *slot = true;
+    }
+    submit()?;
+    *slot = down;
+    Ok(true)
+}
 
 struct Buttons {
     owned: [bool; 3],
@@ -34,16 +50,9 @@ impl Buttons {
             .map(usize::from)
             .filter(|index| *index < self.owned.len())
             .context("unsupported X11 button")?;
-        let slot = &mut self.owned[index];
-        if !down && !*slot {
-            return Ok(false);
-        }
-        if down {
-            *slot = true;
-        }
-        submit([1, 3, 2][index], down)?;
-        *slot = down;
-        Ok(true)
+        submit_owned(&mut self.owned[index], down, || {
+            submit([1, 3, 2][index], down)
+        })
     }
 
     fn release(&mut self, mut submit: impl FnMut(u8, bool) -> Result<()>) -> Result<()> {
@@ -65,6 +74,8 @@ pub struct Injector {
     width: u16,
     height: u16,
     buttons: Buttons,
+    keyboard: Option<KeyMap>,
+    owned_keys: [bool; 256],
 }
 
 impl Injector {
@@ -106,12 +117,15 @@ impl Injector {
             .is_some(),
             "X11 root exceeds XTEST coordinate limits"
         );
+        let keyboard = KeyMap::load(&connection).ok();
         Ok(Self {
             connection,
             root,
             width: geometry.width,
             height: geometry.height,
             buttons: Buttons::new(),
+            keyboard,
+            owned_keys: [false; 256],
         })
     }
 
@@ -135,6 +149,35 @@ impl Injector {
         })
     }
 
+    pub fn key_usages(&self) -> impl Iterator<Item = u16> + '_ {
+        self.keyboard.iter().flat_map(|keyboard| keyboard.usages())
+    }
+
+    pub fn key(&mut self, usage: u16, down: bool) -> Result<bool> {
+        let code = self.keyboard.as_ref().and_then(|keyboard| keyboard.code(usage))
+            .context("unsupported X11 keyboard position")?;
+        let connection = &self.connection;
+        let root = self.root;
+        submit_owned(&mut self.owned_keys[usize::from(code)], down, || {
+            post_key(connection, root, code, down)
+        })
+    }
+
+    pub fn release_owned(&mut self) -> Result<()> {
+        let mut result = self.release_buttons();
+        for (code, slot) in self.owned_keys.iter_mut().enumerate() {
+            let release = submit_owned(slot, false, || {
+                post_key(&self.connection, self.root, code as u8, false)
+            });
+            if let Err(error) = release {
+                if result.is_ok() {
+                    result = Err(error);
+                }
+            }
+        }
+        result
+    }
+
     pub fn release_buttons(&mut self) -> Result<()> {
         let root = self.root;
         let connection = &self.connection;
@@ -145,7 +188,7 @@ impl Injector {
 
 impl Drop for Injector {
     fn drop(&mut self) {
-        let _ = self.release_buttons();
+        let _ = self.release_owned();
     }
 }
 
@@ -171,6 +214,11 @@ fn coordinates(point: ReceivePoint, width: u16, height: u16) -> Option<(i16, i16
         (point.x * f64::from(last_x)).round() as i16,
         (point.y * f64::from(last_y)).round() as i16,
     ))
+}
+
+fn post_key(connection: &RustConnection, root: Window, key: u8, down: bool) -> Result<()> {
+    let kind = if down { KEY_PRESS_EVENT } else { KEY_RELEASE_EVENT };
+    post(connection, root, kind, key, 0, 0)
 }
 
 fn post_button(connection: &RustConnection, root: Window, button: u8, down: bool) -> Result<()> {
@@ -228,6 +276,19 @@ mod tests {
         .is_none());
         assert!(coordinates(ReceivePoint { x: 1.0, y: 1.0 }, 32769, 1080).is_none());
         assert!(coordinates(ReceivePoint { x: 1.0, y: 1.0 }, 0, 1080).is_none());
+    }
+
+    #[test]
+    fn uncertain_owned_key_releases_only_after_confirmed_submission() -> Result<()> {
+        let mut owned = false;
+        assert!(!submit_owned(&mut owned, false, || unreachable!())?);
+        assert!(submit_owned(&mut owned, true, || anyhow::bail!("test down error")).is_err());
+        assert!(owned);
+        assert!(submit_owned(&mut owned, false, || anyhow::bail!("test up error")).is_err());
+        assert!(owned);
+        assert!(submit_owned(&mut owned, false, || Ok(()))?);
+        assert!(!owned);
+        Ok(())
     }
 
     #[test]
