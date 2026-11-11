@@ -1,7 +1,9 @@
 //! Input receive lifecycle and owned-injection recovery.
 use anyhow::Result;
 use peerglide_core::{PendingReleases, Receiver};
-use peerglide_platform::{CaptureEpoch, ReceiveAck, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot};
+use peerglide_platform::{
+    CaptureEpoch, ReceiveAck, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot,
+};
 use peerglide_protocol::{Input, Motion};
 
 pub(super) struct Recovery {
@@ -80,7 +82,12 @@ impl Recovery {
             )
         })
     }
-    pub(super) async fn finish(&mut self, lease: u64, cursor: Option<Motion>, now: u64) -> Result<()> {
+    pub(super) async fn finish(
+        &mut self,
+        lease: u64,
+        cursor: Option<Motion>,
+        now: u64,
+    ) -> Result<()> {
         if !self.native {
             return self.finish_with(lease, cursor, now, |_| Ok(()), |_| Ok(()));
         }
@@ -131,7 +138,13 @@ impl Recovery {
         })?;
         pointer_result
     }
-    pub(super) async fn input(&mut self, lease: u64, event: Input, cursor: Motion, now: u64) -> Result<bool> {
+    pub(super) async fn input(
+        &mut self,
+        lease: u64,
+        event: Input,
+        cursor: Motion,
+        now: u64,
+    ) -> Result<bool> {
         if !self.native {
             return self.input_with(lease, event, cursor, now, |_| Ok(()), |_| Ok(()));
         }
