@@ -8,8 +8,7 @@ pub(super) fn ui_context() -> egui::Context {
 }
 
 #[test]
-fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants() -> Result<()>
-{
+fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants() -> Result<()> {
     let fixture = Fixture::new()?;
     let mut app = App::load(fixture.path.clone());
     app.config.native = true;
@@ -34,12 +33,12 @@ fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants
             args.iter().any(|s| s == "--probe"),
             mode == SessionMode::Probe
         );
-        assert!(args.windows(2).any(|pair| {
-            pair[0] == "--expected-local-fingerprint" && pair[1] == "test-local"
-        }));
-        assert!(args.windows(2).any(|pair| {
-            pair[0] == "--expected-peer-fingerprint" && pair[1] == "test-peer"
-        }));
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--expected-local-fingerprint" && pair[1] == "test-local" }));
+        assert!(args
+            .windows(2)
+            .any(|pair| { pair[0] == "--expected-peer-fingerprint" && pair[1] == "test-peer" }));
     }
     let native = app.worker_command(
         PathBuf::from("not-executed-worker"),
@@ -52,9 +51,7 @@ fn communication_and_probe_commands_never_inherit_saved_native_or_receive_grants
         .get_args()
         .map(|s| s.to_string_lossy().to_string())
         .collect();
-    assert!(
-        args.iter().any(|s| s == "--native") && args.iter().any(|s| s == "--allow-control")
-    );
+    assert!(args.iter().any(|s| s == "--native") && args.iter().any(|s| s == "--allow-control"));
     Ok(())
 }
 #[test]
@@ -442,8 +439,7 @@ fn desktop_preferences_preserve_input_schema_and_future_desktop_file() -> Result
     Ok(())
 }
 #[test]
-fn full_desktop_and_dialogs_render_without_starting_workers_or_exporting_samples() -> Result<()>
-{
+fn full_desktop_and_dialogs_render_without_starting_workers_or_exporting_samples() -> Result<()> {
     let fixture = Fixture::new()?;
     let mut app = App::load(fixture.path.clone());
     let ctx = ui_context();
@@ -542,8 +538,7 @@ fn malformed_gui_options_fail_before_creating_a_profile() {
 #[test]
 fn ordinary_geometry_option_requires_an_explicit_fresh_profile() -> Result<()> {
     assert!(
-        Options::try_parse_from(["peerglide-gui", "--ui-layout-report", "report.json"])
-            .is_err()
+        Options::try_parse_from(["peerglide-gui", "--ui-layout-report", "report.json"]).is_err()
     );
     let fixture = Fixture::new()?;
     let options = Options::try_parse_from([
@@ -582,8 +577,7 @@ impl Fixture {
                 Ok(()) => return Ok(Self { path, live: true }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => {
-                    return Err(e)
-                        .with_context(|| format!("create GUI fixture {}", path.display()))
+                    return Err(e).with_context(|| format!("create GUI fixture {}", path.display()))
                 }
             }
         }
@@ -612,8 +606,7 @@ fn parallel_fixtures_have_exclusive_ownership_and_cleanup() -> Result<()> {
         .into_iter()
         .map(|t| t.join().expect("fixture thread panicked"))
         .collect::<Result<_>>()?;
-    let paths: std::collections::BTreeSet<_> =
-        fixtures.iter().map(|f| f.path.clone()).collect();
+    let paths: std::collections::BTreeSet<_> = fixtures.iter().map(|f| f.path.clone()).collect();
     assert_eq!(paths.len(), 32);
     for fixture in &fixtures {
         assert!(fixture.path.is_dir());
@@ -651,7 +644,10 @@ fn pasted_connection_material_keeps_following_controls_within_a_small_window() -
                 egui::CentralPanel::default().show(root, |ui| {
                     let top = ui.cursor().min.y;
                     app.connection_exchange_ui(ui);
-                    assert!(ui.cursor().min.y - top < 400.0, "pasted certificate pushed read/confirmation controls below a small window");
+                    assert!(
+                        ui.cursor().min.y - top < 400.0,
+                        "pasted certificate pushed read/confirmation controls below a small window"
+                    );
                 });
             },
         );
@@ -773,8 +769,7 @@ fn enrollment_requires_confirmation_and_detects_changed_certificate() -> Result<
         let local = Identity::create(&app.identity_dir())?;
         let peer = Identity::generate()?;
         let candidate = dir.join("candidate.der");
-        std::fs::write(&candidate, &peer.certificate)
-            .context("write peer candidate fixture")?;
+        std::fs::write(&candidate, &peer.certificate).context("write peer candidate fixture")?;
         app.import_path = candidate.display().to_string();
         assert!(app.enroll().is_err());
         app.confirmed_fingerprint = Some(peer.fingerprint());
@@ -867,8 +862,7 @@ fn settings_conflict_during_enrollment_preserves_existing_peer_and_consumes_conf
     Ok(())
 }
 #[test]
-fn replacing_a_peer_never_inherits_its_control_grant_and_second_gui_cannot_write() -> Result<()>
-{
+fn replacing_a_peer_never_inherits_its_control_grant_and_second_gui_cannot_write() -> Result<()> {
     let fixture = Fixture::new()?;
     let mut app = App::load(fixture.path.clone());
     Identity::create(&app.identity_dir())?;
