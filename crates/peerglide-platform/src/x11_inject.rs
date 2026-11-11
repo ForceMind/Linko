@@ -5,8 +5,8 @@ use x11rb::{
     connection::Connection as _,
     protocol::{
         xproto::{
-            ConnectionExt as _, Window, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT,
-            KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
+            ConnectionExt as _, Window, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, KEY_PRESS_EVENT,
+            KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
         },
         xtest::ConnectionExt as _,
     },
@@ -154,7 +154,10 @@ impl Injector {
     }
 
     pub fn key(&mut self, usage: u16, down: bool) -> Result<bool> {
-        let code = self.keyboard.as_ref().and_then(|keyboard| keyboard.code(usage))
+        let code = self
+            .keyboard
+            .as_ref()
+            .and_then(|keyboard| keyboard.code(usage))
             .context("unsupported X11 keyboard position")?;
         let connection = &self.connection;
         let root = self.root;
@@ -217,7 +220,11 @@ fn coordinates(point: ReceivePoint, width: u16, height: u16) -> Option<(i16, i16
 }
 
 fn post_key(connection: &RustConnection, root: Window, key: u8, down: bool) -> Result<()> {
-    let kind = if down { KEY_PRESS_EVENT } else { KEY_RELEASE_EVENT };
+    let kind = if down {
+        KEY_PRESS_EVENT
+    } else {
+        KEY_RELEASE_EVENT
+    };
     post(connection, root, kind, key, 0, 0)
 }
 

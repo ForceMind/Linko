@@ -16,12 +16,16 @@ impl KeyMap {
         let reply = connection
             .xkb_get_names(u16::from(ID::USE_CORE_KBD), NameDetail::KEY_NAMES)?
             .reply()?;
-        let names = reply.value_list.key_names.context("XKB key positions unavailable")?;
+        let names = reply
+            .value_list
+            .key_names
+            .context("XKB key positions unavailable")?;
         ensure!(
             names.len() == usize::from(reply.n_keys)
                 && reply.first_key >= reply.min_key_code
                 && reply.first_key >= 8
-                && usize::from(reply.first_key) + names.len() <= usize::from(reply.max_key_code) + 1,
+                && usize::from(reply.first_key) + names.len()
+                    <= usize::from(reply.max_key_code) + 1,
             "invalid XKB key position count"
         );
         Ok(Self::from_names(
@@ -70,7 +74,9 @@ fn usage(name: [u8; 4]) -> Option<u16> {
     const AD: [u16; 12] = [
         0x14, 0x1a, 0x08, 0x15, 0x17, 0x1c, 0x18, 0x0c, 0x12, 0x13, 0x2f, 0x30,
     ];
-    const AC: [u16; 11] = [0x04, 0x16, 0x07, 0x09, 0x0a, 0x0b, 0x0d, 0x0e, 0x0f, 0x33, 0x34];
+    const AC: [u16; 11] = [
+        0x04, 0x16, 0x07, 0x09, 0x0a, 0x0b, 0x0d, 0x0e, 0x0f, 0x33, 0x34,
+    ];
     const AB: [u16; 10] = [0x1d, 0x1b, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38];
     if name[2].is_ascii_digit() && name[3].is_ascii_digit() {
         let index = usize::from(name[2] - b'0') * 10 + usize::from(name[3] - b'0');
@@ -88,7 +94,9 @@ fn usage(name: [u8; 4]) -> Option<u16> {
             }
             _ => return None,
         };
-        return index.checked_sub(1).and_then(|index| row.get(index).copied());
+        return index
+            .checked_sub(1)
+            .and_then(|index| row.get(index).copied());
     }
     let end = name
         .iter()
