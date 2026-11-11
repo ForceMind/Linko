@@ -808,6 +808,18 @@ const KEYS: &[(u16, u16, bool)] = &[
     (0x62, 0x52, false),
     (0x63, 0x53, false),
     (0x64, 0x56, false),
+    (0x68, 0x64, false),
+    (0x69, 0x65, false),
+    (0x6a, 0x66, false),
+    (0x6b, 0x67, false),
+    (0x6c, 0x68, false),
+    (0x6d, 0x69, false),
+    (0x6e, 0x6a, false),
+    (0x6f, 0x6b, false),
+    (0x70, 0x6c, false),
+    (0x71, 0x6d, false),
+    (0x72, 0x6e, false),
+    (0x73, 0x76, false),
     (0xe0, 0x1d, false),
     (0xe1, 0x2a, false),
     (0xe2, 0x38, false),
@@ -828,6 +840,17 @@ fn from_scan(scan: u16, extended: bool) -> Option<u16> {
         .find(|k| k.1 == scan && k.2 == extended)
         .map(|k| k.0)
 }
+fn captured_usage(vk: u16, scan: u16, extended: bool) -> Option<u16> {
+    if vk == VK_PAUSE || vk == VK_SNAPSHOT {
+        None
+    } else if vk == VK_NUMLOCK {
+        Some(0x53)
+    } else {
+        // Scan 0x76 is also documented for the Japanese LANG5 usage.
+        from_scan(scan, extended).filter(|usage| *usage != 0x73 || vk == VK_F24)
+    }
+}
+
 const STARTUP_VK: u16 = 0x4000;
 #[cfg(test)]
 fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: bool) -> bool {
@@ -842,13 +865,7 @@ fn physical_key_routed(
     down: bool,
     route: CaptureRoute,
 ) -> bool {
-    let usage = if vk == VK_PAUSE || vk == VK_SNAPSHOT {
-        None
-    } else if vk == VK_NUMLOCK {
-        Some(0x53)
-    } else {
-        from_scan(scan, extended)
-    };
+    let usage = captured_usage(vk, scan, extended);
     if let Some(broker) = s.local_gestures.as_mut() {
         broker.clear_startup_key(STARTUP_VK | vk);
         // HookState's G1 branches use only the broker's fixed key bitset.
@@ -1101,6 +1118,25 @@ mod tests {
         assert_eq!(from_scan(0x1d, false), Some(0xe0));
         assert_eq!(from_scan(0x1d, true), Some(0xe4));
     }
+    #[test]
+    fn extended_function_keys_keep_scan_identity_and_balanced_release() {
+        let scans = [0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x76];
+        assert_eq!(captured_usage(VK_F24, 0x76, false), Some(0x73));
+        assert_eq!(captured_usage(VK_KANA, 0x76, false), None);
+        for (usage, scan) in (0x68..=0x73).zip(scans) {
+            assert_eq!(to_scan(usage), Some((scan, false)));
+            assert_eq!(from_scan(scan, false), Some(usage));
+            for down in [true, false] {
+                let (packets, count) = input_packets(Input::Key { usage, down }).unwrap();
+                assert_eq!(count, 1);
+                // SAFETY: the test supplied a keyboard input.
+                let key = unsafe { packets[0].Anonymous.ki };
+                assert_eq!(key.wScan, scan);
+                assert_eq!(key.dwFlags & KEYEVENTF_KEYUP != 0, !down);
+            }
+        }
+    }
+
     #[test]
     fn startup_side_button_hold_blocks_receiving_until_its_local_up() {
         for (button, vk) in [(4, VK_XBUTTON1), (5, VK_XBUTTON2)] {
