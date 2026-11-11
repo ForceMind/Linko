@@ -18,6 +18,7 @@ import zipfile
 
 import build_version
 import package
+import portable_update
 import verify_macos_package
 import verify_portable_package
 
@@ -462,6 +463,46 @@ class Packaging(unittest.TestCase):
             self.assertEqual(verify_portable_package.read_checksum(checksum, "Linko.zip"), digest)
             with self.assertRaisesRegex(ValueError, "does not name"):
                 verify_portable_package.read_checksum(checksum, "other.zip")
+
+    def test_portable_stage_uses_new_version_and_retains_other_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Linux", "x86_64")
+            versions = root / "versions"
+            versions.mkdir()
+            (versions / "unrelated").write_bytes(b"keep")
+            with self.assertRaisesRegex(ValueError, "checksum differs"):
+                portable_update.stage(versions, archive, "0" * 64, source)
+            self.assertEqual(list(versions.iterdir()), [versions / "unrelated"])
+
+            staged = portable_update.stage(versions, archive, digest, source)
+            receipt = json.loads((staged / portable_update.RECEIPT).read_bytes())
+            self.assertEqual(receipt["archive_sha256"], digest)
+            self.assertEqual(receipt["source"], source)
+            worker = staged / portable_update.PAYLOAD / "peerglide"
+            self.assertEqual(
+                hashlib.sha256(worker.read_bytes()).hexdigest(),
+                receipt["members"]["peerglide"],
+            )
+            self.assertEqual((versions / "unrelated").read_bytes(), b"keep")
+            with self.assertRaisesRegex(ValueError, "version already exists"):
+                portable_update.stage(versions, archive, digest, source)
+            self.assertEqual(
+                sorted(item.name for item in versions.iterdir()),
+                sorted([archive.stem, "unrelated"]),
+            )
+
+    def test_stage_does_not_take_over_empty_version_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Windows", "AMD64")
+            versions = root / "versions"
+            versions.mkdir()
+            existing = versions / archive.stem
+            existing.mkdir()
+            with self.assertRaisesRegex(ValueError, "version already exists"):
+                portable_update.stage(versions, archive, digest, source)
+            self.assertEqual(list(existing.iterdir()), [])
 
     def test_package_records_review_commit_and_actual_checkout_tree(self):
         with tempfile.TemporaryDirectory() as folder:
