@@ -1453,7 +1453,10 @@ mod tests {
             "127.0.0.1:24871".parse::<SocketAddr>()?
         );
         assert_eq!(parse_address("::1")?, "[::1]:24871".parse()?);
-        assert_eq!(parse_address("[fe80::1%2]:24871")?, "[fe80::1%2]:24871".parse()?);
+        assert_eq!(
+            parse_address("[fe80::1%2]:24871")?,
+            "[fe80::1%2]:24871".parse()?
+        );
         assert_eq!(
             local_offer_address("fe80::1".parse()?, "[::]:24871".parse()?),
             Some("[fe80::1%连接端接口编号]:24871".into())
