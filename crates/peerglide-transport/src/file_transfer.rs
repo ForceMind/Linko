@@ -10,6 +10,7 @@ use peerglide_transfer::{
 use quinn::Connection;
 use rand::RngCore;
 use std::{
+    fs::File,
     future::Future,
     io,
     path::PathBuf,
@@ -30,6 +31,7 @@ const DATA_BYTES: u64 = MAX_FILE_BYTES
 const REPLY_BYTES: u64 = 256;
 const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const DECISION_TIMEOUT: Duration = Duration::from_secs(60);
+const ACCEPT_TIMEOUT: Duration = Duration::from_secs(180);
 const GRANT: Duration = Duration::from_secs(20 * 60);
 
 #[derive(Clone, Default)]
@@ -99,6 +101,150 @@ pub enum Decision {
 pub struct ReceiveResult {
     pub outcome: FileOutcome,
     pub report_queued: bool,
+}
+
+/// A locally selected file and its frozen manifest. The data job owns the
+/// handle, so later path replacements cannot redirect reads.
+pub struct Source {
+    id: [u8; 16],
+    manifest: Manifest,
+    file: File,
+}
+
+impl Source {
+    /// A resume ID is only a matching key. The peer pin and exact manifest
+    /// are verified independently by the receiving storage owner.
+    pub async fn open(
+        path: PathBuf,
+        resume_id: Option<[u8; 16]>,
+        stop: Cancellation,
+    ) -> Result<Self> {
+        tokio::task::spawn_blocking(move || {
+            let mut id = resume_id.unwrap_or_default();
+            if resume_id.is_none() {
+                rand::rngs::OsRng
+                    .try_fill_bytes(&mut id)
+                    .map_err(|_| anyhow::anyhow!("file transfer randomness unavailable"))?;
+            }
+            ensure!(id != [0; 16], "invalid file transfer ID");
+            let (manifest, file) = Manifest::open_checked(&path, || stop.check())?;
+            Ok(Self { id, manifest, file })
+        })
+        .await?
+    }
+
+    pub fn id(&self) -> [u8; 16] {
+        self.id
+    }
+}
+
+/// Locally queued file bytes, including any accepted resume prefix.
+#[derive(Clone, Copy)]
+pub struct SentProgress {
+    pub queued_bytes: u64,
+    pub total_bytes: u64,
+}
+
+/// Send one explicitly selected file and require the matching terminal receipt.
+pub async fn send(
+    connection: &Connection,
+    pinned_peer: &[u8],
+    source: Source,
+    stop: Cancellation,
+    mut progress: impl FnMut(SentProgress),
+) -> Result<FileOutcome> {
+    let guard = Guard {
+        connection: connection.clone(),
+        stop,
+        started: Instant::now(),
+    };
+    let _close = CloseOnExit(connection);
+    guard.check()?;
+    let stream = data::open(connection, pinned_peer, FILES).await?;
+    let (mut consent, mut send, mut receive) = stream.into_session(DATA_BYTES, REPLY_BYTES)?;
+    consent.grant(
+        Permissions {
+            file_send: true,
+            ..Permissions::default()
+        },
+        GRANT.as_millis() as u64,
+    )?;
+    let id = source.id;
+    let total_bytes = source.manifest.size();
+    let total_chunks = source.manifest.chunks();
+    send.write(&Frame::Offer {
+        id,
+        manifest: source.manifest.clone(),
+    })
+    .await?;
+    let admitted = receive
+        .read_file(&[Kind::FileAccepted, Kind::FileResult], ACCEPT_TIMEOUT)
+        .await?;
+    let response = consent.apply_received(admitted, Ok)?;
+    let next = match response {
+        Frame::FileAccepted {
+            id: received,
+            next_chunk,
+        } if received == id && next_chunk as usize <= total_chunks => next_chunk as usize,
+        Frame::FileResult {
+            id: received,
+            outcome: outcome @ (FileOutcome::Declined | FileOutcome::Failed),
+        } if received == id => return Ok(outcome),
+        _ => anyhow::bail!("file approval differs from the offered transfer"),
+    };
+    let mut queued_bytes = (next as u64 * CHUNK_BYTES as u64).min(total_bytes);
+    progress(SentProgress {
+        queued_bytes,
+        total_bytes,
+    });
+    let upload = async {
+        let mut source = source;
+        for index in next..total_chunks {
+            let (opened, bytes) = tokio::task::spawn_blocking({
+                let guard = guard.clone();
+                move || -> Result<(Source, Vec<u8>)> {
+                    guard.check()?;
+                    let bytes = source.manifest.read_chunk(&mut source.file, index)?;
+                    Ok((source, bytes))
+                }
+            })
+            .await??;
+            source = opened;
+            let len = bytes.len() as u64;
+            send.write(&Frame::Chunk {
+                id,
+                index: u32::try_from(index)?,
+                bytes,
+            })
+            .await?;
+            queued_bytes += len;
+            progress(SentProgress {
+                queued_bytes,
+                total_bytes,
+            });
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+    let terminal = async {
+        let received = receive.read_file(&[Kind::FileResult], GRANT).await?;
+        consent.apply_received(received, |frame| match frame {
+            Frame::FileResult { id: received, outcome } if received == id => Ok(outcome),
+            _ => anyhow::bail!("file result differs from the offered transfer"),
+        })
+    };
+    tokio::pin!(terminal);
+    tokio::select! {
+        biased;
+        uploaded = upload => {
+            uploaded?;
+            terminal.await
+        }
+        outcome = &mut terminal => {
+            let outcome = outcome?;
+            ensure!(outcome == FileOutcome::Failed, "unexpected early file result");
+            Ok(outcome)
+        }
+    }
 }
 
 /// A pre-existing local limit. The peer's offer cannot raise it.
@@ -298,25 +444,51 @@ mod tests {
 
     #[tokio::test]
     async fn rejected_offer_leaves_receive_directory_untouched() -> Result<()> {
-        loopback(false).await
+        loopback(false, false).await
     }
 
     #[tokio::test]
     async fn approved_offer_is_published_and_reported_after_verified_chunks() -> Result<()> {
-        loopback(true).await
+        loopback(true, false).await
     }
 
-    async fn loopback(approve: bool) -> Result<()> {
+    #[tokio::test]
+    async fn a_new_connection_resumes_matching_verified_staging() -> Result<()> {
+        loopback(true, true).await
+    }
+
+    async fn loopback(approve: bool, resume: bool) -> Result<()> {
         let dir = TestDirectory::new()?;
         let source_path = dir.0.join("example.bin");
         let destination = dir.0.join("received");
         let contents = vec![0x2a; CHUNK_BYTES + 19];
         fs::write(&source_path, &contents)?;
         fs::create_dir(&destination)?;
-        let (manifest, mut source_file) = Manifest::open_checked(&source_path, || Ok(()))?;
-
         let source = Identity::generate()?;
         let peer = Identity::generate()?;
+        let id = [1; 16];
+        let prepared = Source::open(source_path, Some(id), Cancellation::default()).await?;
+        if resume {
+            let digest = *blake3::hash(&source.certificate).as_bytes();
+            let session = DataSession::new(digest, [2; 32], 0);
+            let mut manager = Manager::new(&destination, session, 2 * CHUNK_BYTES as u64)?;
+            manager
+                .consent(
+                    Permissions {
+                        file_receive: true,
+                        ..Permissions::default()
+                    },
+                    1000,
+                    0,
+                )
+                .map_err(|error| anyhow::anyhow!("test grant: {error:?}"))?;
+            manager
+                .accept(PeerBinding::new(digest, id), prepared.manifest.clone(), false, 0)
+                .map_err(|error| anyhow::anyhow!("test admission: {error:?}"))?;
+            manager
+                .write_chunk(id, 0, &contents[..CHUNK_BYTES], 1)
+                .map_err(|error| anyhow::anyhow!("test write: {error:?}"))?;
+        }
         let address: SocketAddr = "127.0.0.1:0".parse()?;
         let left = data::endpoint(address, &source, &peer.certificate)?;
         let right = data::endpoint(address, &peer, &source.certificate)?;
@@ -344,11 +516,13 @@ mod tests {
                 async move {
                     assert_eq!(offer.name, "example.bin");
                     assert_eq!(offer.size, size);
-                    assert!(fs::read_dir(&directory)?.next().is_none());
+                    if !resume {
+                        assert!(fs::read_dir(&directory)?.next().is_none());
+                    }
                     if approve {
                         Ok(Decision::Accept {
                             directory,
-                            resume: false,
+                            resume,
                         })
                     } else {
                         Ok(Decision::Decline)
@@ -357,54 +531,25 @@ mod tests {
             },
             |progress| last_progress = Some(progress),
         );
-        let sender = async {
-            let _close = CloseOnExit(&client);
-            let (mut consent, mut send, mut receive) =
-                data::open(&client, &peer.certificate, FILES)
-                    .await?
-                    .into_session(DATA_BYTES, REPLY_BYTES)?;
-            consent.grant(
-                Permissions {
-                    file_send: true,
-                    ..Permissions::default()
-                },
-                60_000,
-            )?;
-            let id = [1; 16];
-            send.write(&Frame::Offer {
-                id,
-                manifest: manifest.clone(),
-            })
-            .await?;
-            if approve {
-                let accepted = receive.read_file(&[Kind::FileAccepted], FRAME_TIMEOUT).await?;
-                consent.apply_received(accepted, |frame| {
-                    ensure!(matches!(
-                        frame,
-                        Frame::FileAccepted { id: received, next_chunk: 0 } if received == id
-                    ));
-                    Ok(())
-                })?;
-                for index in 0..manifest.chunks() {
-                    send.write(&Frame::Chunk {
-                        id,
-                        index: u32::try_from(index)?,
-                        bytes: manifest.read_chunk(&mut source_file, index)?,
-                    })
-                    .await?;
-                }
-            }
-            let result = receive.read_file(&[Kind::FileResult], FRAME_TIMEOUT).await?;
-            consent.apply_received(result, |frame| match frame {
-                Frame::FileResult { id: received, outcome } if received == id => Ok(outcome),
-                _ => anyhow::bail!("wrong file outcome"),
-            })
-        };
+        let mut first_progress = None;
+        let sender = send(
+            &client,
+            &peer.certificate,
+            prepared,
+            Cancellation::default(),
+            |progress| {
+                first_progress.get_or_insert(progress.queued_bytes);
+            },
+        );
         let (received, sent) = tokio::try_join!(receiver, sender)?;
         assert_eq!(received.outcome, sent);
         assert!(received.report_queued);
         if approve {
             assert_eq!(sent, FileOutcome::Committed);
+            assert_eq!(
+                first_progress,
+                Some(if resume { CHUNK_BYTES as u64 } else { 0 })
+            );
             assert!(last_progress.context("missing disk progress")?.chunks_complete);
             assert_eq!(fs::read(destination.join("example.bin"))?, contents);
         } else {
