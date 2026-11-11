@@ -31,7 +31,8 @@ pub(super) enum Direction {
 
 /// The icon set of the design. Icons join as the slices that paint them land.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-// Cross is painted by the pairing slice (S4).
+// `Cross` is never built outside tests: the pairing window draws its cross progressively
+// with `paint_cross_progress`. The variant keeps the set complete for a static cross.
 #[allow(dead_code)]
 pub(super) enum Icon {
     /// Display on a stand.
@@ -118,8 +119,6 @@ pub(super) fn paint_spinner(painter: &Painter, rect: Rect, color: Color32, head:
 }
 
 /// A check mark that draws itself, `progress` from 0 to 1 (M9).
-// Painted by the permission and pairing slices (S3, S4).
-#[allow(dead_code)]
 pub(super) fn paint_check_progress(painter: &Painter, rect: Rect, color: Color32, progress: f32) {
     if is_paintable(rect) {
         paint_check(painter, Grid::new(rect), color, progress);
@@ -127,8 +126,6 @@ pub(super) fn paint_check_progress(painter: &Painter, rect: Rect, color: Color32
 }
 
 /// A cross whose two strokes draw one after the other, `progress` from 0 to 1 (M9).
-// Painted by the pairing slice (S4).
-#[allow(dead_code)]
 pub(super) fn paint_cross_progress(painter: &Painter, rect: Rect, color: Color32, progress: f32) {
     if is_paintable(rect) {
         paint_cross(painter, Grid::new(rect), color, progress);
