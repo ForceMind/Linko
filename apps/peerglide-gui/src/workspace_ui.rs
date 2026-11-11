@@ -24,6 +24,8 @@ const CHIP_INSET: f32 = 10.0;
 /// the local screen plus 10 points (`dropped_edge`), so the screens must leave a real drop
 /// zone beside it: at 530 a 920 point window kept about 33 points, now about 79.
 const SIDE_BY_SIDE_W: f32 = 700.0;
+/// Leave a reachable top and bottom drop target outside the local screen's dead zone.
+const STACKED_LAYOUT_H: f32 = 680.0;
 /// Offsets shorter than this snap instead of rebounding, so a plain click never animates.
 const REBOUND_MIN_PX: f32 = 0.5;
 /// Segments of the filled half of the pending badge.
@@ -1246,8 +1248,9 @@ fn workspace_rects(
     zoom: f32,
 ) -> (egui::Rect, egui::Rect) {
     let vertical = paired && matches!(edge, "top" | "bottom");
+    let height_budget = if vertical { STACKED_LAYOUT_H } else { 240.0 };
     let scale = (canvas.width() / if vertical { 270.0 } else { SIDE_BY_SIDE_W })
-        .min(canvas.height() / if vertical { 500.0 } else { 240.0 })
+        .min(canvas.height() / height_budget)
         .clamp(0.0, 1.35);
     let zoom = if zoom.is_finite() {
         zoom.clamp(0.6, 1.0)
@@ -2213,6 +2216,45 @@ mod tests {
         fixture.close()?;
         Ok(())
     }
+    #[test]
+    fn compact_vertical_layout_leaves_reachable_targets_on_both_sides() {
+        let canvas = egui::Rect::from_min_size(egui::pos2(30.0, 50.0), Vec2::new(270.0, 180.0));
+        for (edge, target, from_top) in [("bottom", "top", true), ("top", "bottom", false)] {
+            let (local, peer) = workspace_rects(canvas.shrink(20.0), edge, true, 1.0);
+            let height = if from_top {
+                local.top() - canvas.top()
+            } else {
+                canvas.bottom() - local.bottom()
+            };
+            assert!(height - 10.0 >= 32.0);
+            let y = if from_top {
+                canvas.top() + 16.0
+            } else {
+                canvas.bottom() - 16.0
+            };
+            let end = egui::pos2(local.center().x, y);
+            let events = [
+                pointer(peer.center(), true),
+                egui::Event::PointerMoved(end),
+                pointer(end, false),
+            ];
+            let mut draft = None;
+            assert_eq!(
+                desktop_ui::update_layout_drag(
+                    &mut draft,
+                    &events,
+                    peer,
+                    local,
+                    canvas,
+                    true,
+                    false,
+                ),
+                Some(target)
+            );
+            assert!(draft.is_none());
+        }
+    }
+
     #[test]
     fn primary_screen_and_peer_stay_inside_compact_canvas_in_all_directions() {
         for size in [
