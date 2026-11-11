@@ -1,7 +1,7 @@
 //! Bounded Unicode text engine, independent of OS polling and transport.
 //! No payload implements Debug. Backends must never log text or content hashes.
 use crate::{
-    data_policy::{Capability, DataSession, Denied, Permissions},
+    data_policy::{Capability, DataSession, Denied, Permissions, Permit},
     Digest,
 };
 use std::collections::VecDeque;
@@ -58,7 +58,7 @@ pub trait Backend {
 pub struct Outbound {
     sequence: u64,
     text: String,
-    permit: crate::data_policy::Permit,
+    permit: Permit,
 }
 impl Outbound {
     pub fn sequence(&self) -> u64 {
@@ -66,6 +66,11 @@ impl Outbound {
     }
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Move the bounded text into a frame while retaining its local ticket.
+    pub fn into_parts(self) -> (u64, String, Permit) {
+        (self.sequence, self.text, self.permit)
     }
 }
 
@@ -106,6 +111,19 @@ impl Clipboard {
     pub fn close(&mut self) {
         self.session.close();
         self.echoes.clear();
+    }
+
+    pub fn authorize(&mut self, capability: Capability, now: u64) -> Result<Permit, Denied> {
+        self.session.authorize(capability, now)
+    }
+
+    pub fn validate(
+        &mut self,
+        permit: &Permit,
+        capability: Capability,
+        now: u64,
+    ) -> Result<(), Denied> {
+        self.session.validate(permit, capability, now)
     }
 
     fn valid_text(text: &str) -> Result<(), Error> {
@@ -186,6 +204,18 @@ impl Clipboard {
         now: u64,
         backend: &mut impl Backend,
     ) -> Result<WriteResult, Error> {
+        let text = self.accept_received_text(sequence, bytes, now)?;
+        Ok(backend.compare_and_write(expected_revision, text))
+    }
+
+    /// Consume a valid sequence and remember its digest on the authenticated
+    /// session, before the owner invokes the OS revision-checked write.
+    pub fn accept_received_text<'a>(
+        &mut self,
+        sequence: u64,
+        bytes: &'a [u8],
+        now: u64,
+    ) -> Result<&'a str, Error> {
         let permit = self
             .session
             .authorize(Capability::TextReceive, now)
@@ -208,7 +238,7 @@ impl Clipboard {
         self.received = sequence;
         self.last_receive = Some(now);
         self.remember(*blake3::hash(bytes).as_bytes(), now);
-        Ok(backend.compare_and_write(expected_revision, text))
+        Ok(text)
     }
 }
 

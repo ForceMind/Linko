@@ -5,8 +5,9 @@ use super::{
 };
 use anyhow::{ensure, Result};
 use peerglide_transfer::{
+    clipboard::{Backend, Classification, Clipboard, Error as ClipboardError, Origin, WriteResult},
     codec::{Frame, Kind},
-    data_policy::{Capability, DataSession, Denied, Permissions, Permit},
+    data_policy::{Capability, DataSession, Permissions, Permit},
 };
 use quinn::Connection;
 use rand::RngCore;
@@ -17,17 +18,17 @@ use std::{
 
 struct Policy {
     connection: Connection,
-    session: Mutex<DataSession>,
+    clipboard: Mutex<Clipboard>,
     started: Instant,
 }
 
 impl Policy {
-    fn check<T>(
+    fn check<T, E: std::fmt::Debug>(
         &self,
-        operation: impl FnOnce(&mut DataSession, u64) -> Result<T, Denied>,
+        operation: impl FnOnce(&mut Clipboard, u64) -> Result<T, E>,
     ) -> Result<T> {
-        let mut session = self
-            .session
+        let mut clipboard = self
+            .clipboard
             .lock()
             .map_err(|_| anyhow::anyhow!("data consent unavailable"))?;
         ensure!(
@@ -35,13 +36,13 @@ impl Policy {
             "data connection closed"
         );
         let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        operation(&mut session, now)
-            .map_err(|error| anyhow::anyhow!("data consent denied ({error:?})"))
+        operation(&mut clipboard, now)
+            .map_err(|error| anyhow::anyhow!("data policy rejected operation ({error:?})"))
     }
 
     fn close(&self) {
-        if let Ok(mut session) = self.session.lock() {
-            session.close();
+        if let Ok(mut clipboard) = self.clipboard.lock() {
+            clipboard.close();
         }
         self.connection
             .close(0u8.into(), b"local data session stopped");
@@ -69,6 +70,7 @@ pub struct Receiver {
 pub struct AdmittedFrame {
     frame: Frame,
     permit: Permit,
+    clipboard_revision: Option<u64>,
 }
 
 pub(super) fn new(
@@ -87,7 +89,7 @@ pub(super) fn new(
     }
     let policy = Arc::new(Policy {
         connection,
-        session: Mutex::new(DataSession::new(peer_digest, nonce, 0)),
+        clipboard: Mutex::new(Clipboard::new(DataSession::new(peer_digest, nonce, 0))),
         started: Instant::now(),
     });
     Ok((
@@ -130,16 +132,40 @@ impl Consent {
         self.policy.close();
     }
 
-    /// Recheck on the local owner immediately before an OS or disk side effect.
+    /// File dispatch still requires its own offer and transfer-ID checks.
     pub fn apply_received<T>(
         &mut self,
         admitted: AdmittedFrame,
         apply: impl FnOnce(Frame) -> Result<T>,
     ) -> Result<T> {
         let capability = inbound(admitted.frame.kind());
+        ensure!(capability != Capability::TextReceive, "use the clipboard write path");
         self.policy
             .check(|session, now| session.validate(&admitted.permit, capability, now))?;
         apply(admitted.frame)
+    }
+
+    /// The revision was sampled before the frame was queued. This owner checks
+    /// consent and sequence without holding the policy lock during an OS write.
+    pub fn apply_text(
+        &mut self,
+        admitted: AdmittedFrame,
+        backend: &mut impl Backend,
+    ) -> Result<WriteResult> {
+        let Frame::Text { sequence, text } = admitted.frame else {
+            anyhow::bail!("expected a clipboard text frame");
+        };
+        let revision = admitted
+            .clipboard_revision
+            .ok_or_else(|| anyhow::anyhow!("clipboard revision missing"))?;
+        self.policy.check(|clipboard, now| {
+            clipboard
+                .validate(&admitted.permit, Capability::TextReceive, now)
+                .map_err(ClipboardError::Permission)?;
+            clipboard.accept_received_text(sequence, text.as_bytes(), now)?;
+            Ok::<_, ClipboardError>(())
+        })?;
+        Ok(backend.compare_and_write(revision, &text))
     }
 }
 
@@ -151,6 +177,7 @@ impl Drop for Consent {
 
 impl Sender {
     pub async fn write(&mut self, frame: &Frame) -> Result<()> {
+        ensure!(frame.kind() != Kind::Text, "use the clipboard send path");
         let policy = &self.policy;
         self.frames
             .write_checked(frame, |kind| {
@@ -159,18 +186,51 @@ impl Sender {
             })
             .await
     }
+
+    /// Classify the local snapshot, prevent echo and recheck its original
+    /// direction ticket immediately before the network write.
+    pub async fn write_text(
+        &mut self,
+        text: &str,
+        classification: Classification,
+        origin: Origin,
+    ) -> Result<()> {
+        let policy = &self.policy;
+        let candidate = policy.check(|clipboard, now| {
+            clipboard.export(text, classification, origin, now)
+        })?;
+        let (sequence, text, permit) = candidate.into_parts();
+        self.frames
+            .write_checked(&Frame::Text { sequence, text }, |_| {
+                policy.check(|clipboard, now| {
+                    clipboard.validate(&permit, Capability::TextSend, now)
+                })
+            })
+            .await
+    }
 }
 
 impl Receiver {
-    pub async fn read(&mut self) -> Result<AdmittedFrame> {
+    /// Supply the local clipboard revision before reading an incoming text
+    /// frame. File-only consumers may omit it.
+    pub async fn read(&mut self, clipboard_revision: Option<u64>) -> Result<AdmittedFrame> {
         let policy = &self.policy;
         let (frame, permit) = self
             .frames
             .read_checked(|header| {
-                policy.check(|session, now| session.authorize(inbound(header.kind()), now))
+                let capability = inbound(header.kind());
+                ensure!(
+                    capability != Capability::TextReceive || clipboard_revision.is_some(),
+                    "clipboard revision missing"
+                );
+                policy.check(|session, now| session.authorize(capability, now))
             })
             .await?;
-        Ok(AdmittedFrame { frame, permit })
+        Ok(AdmittedFrame {
+            frame,
+            permit,
+            clipboard_revision,
+        })
     }
 }
 
