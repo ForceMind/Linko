@@ -76,22 +76,31 @@ def build_source(root, version, system, machine):
     }
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "show", "-s", "--format=%H%n%T%n%P", "HEAD"],
-            check=True, capture_output=True, text=True,
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=True, capture_output=True,
+        )
+        commit = result.stdout.decode("ascii").strip()
+        if not _OBJECT_ID.fullmatch(commit):
+            raise ValueError("invalid package checkout commit")
+        # Read the commit object, not a history walk. A depth-1 checkout marks
+        # HEAD shallow, but the object's tree and parent records still exist.
+        result = subprocess.run(
+            ["git", "-C", str(root), "cat-file", "commit", commit],
+            check=True, capture_output=True,
         )
     except (OSError, subprocess.CalledProcessError):
         if review is not None:
             raise ValueError("review package requires a Git checkout") from None
         return manifest
-    lines = result.stdout.splitlines()
-    if len(lines) != 3:
-        raise ValueError("invalid package source metadata")
-    commit, tree, parents = lines
-    if not all(_OBJECT_ID.fullmatch(item) for item in [commit, tree, *parents.split()]):
+    headers = result.stdout.split(b"\n\n", 1)[0].splitlines()
+    trees = [line[5:].decode("ascii") for line in headers if line.startswith(b"tree ")]
+    parents = [line[7:].decode("ascii") for line in headers if line.startswith(b"parent ")]
+    if len(trees) != 1 or not all(_OBJECT_ID.fullmatch(item) for item in [*trees, *parents]):
         raise ValueError("invalid package source object")
+    tree = trees[0]
     if github is not None and github != commit:
         raise ValueError("runner checkout differs from GitHub source commit")
-    if review is not None and review not in [commit, *parents.split()]:
+    if review is not None and review not in [commit, *parents]:
         raise ValueError("review commit does not match the runner checkout")
     manifest["checkout_commit"] = commit
     manifest["checkout_tree"] = tree
