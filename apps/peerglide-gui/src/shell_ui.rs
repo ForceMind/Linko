@@ -78,7 +78,7 @@ impl App {
             .observe((view.title, view.tone), now, tokens::CAPSULE_SECS);
         let progress = self.capsule_motion.tick(&ctx);
         let (fill, ink) = desktop_style::status_colors(ui.visuals().dark_mode, view.tone);
-        let font = egui::FontId::new(13.0, egui::FontFamily::Name("linko-semibold".into()));
+        let font = egui::FontId::new(13.0, egui::FontFamily::Name("linko-emphasis".into()));
         let short = view.short.to_owned();
         let galley = ui.painter().layout_no_wrap(short, font, ink);
         let width = galley.size().x + LABEL_PADDING;
@@ -347,7 +347,7 @@ fn device_row(
             if name.chars().nth(16).is_some() {
                 title.push('…');
             }
-            let font = egui::FontId::new(14.0, egui::FontFamily::Name("linko-semibold".into()));
+            let font = egui::FontId::new(14.0, egui::FontFamily::Name("linko-emphasis".into()));
             let title = labels.layout_no_wrap(title, font, ink);
             let muted = tokens::muted_color(dark);
             let small = egui::FontId::proportional(12.0);

@@ -136,7 +136,7 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
     style.spacing.menu_margin = egui::Margin::same(8);
     style.text_styles.insert(
         TextStyle::Heading,
-        FontId::new(28.0, egui::FontFamily::Name("linko-heading".into())),
+        FontId::new(28.0, egui::FontFamily::Name("linko-emphasis".into())),
     );
     style
         .text_styles
@@ -157,14 +157,14 @@ pub(super) fn install(ctx: &egui::Context, dark: bool) {
 pub(super) fn heading_text(text: impl Into<String>) -> RichText {
     RichText::new(text.into()).font(FontId::new(
         28.0,
-        egui::FontFamily::Name("linko-heading".into()),
+        egui::FontFamily::Name("linko-emphasis".into()),
     ))
 }
 
 pub(super) fn semibold(text: impl Into<String>, size: f32) -> RichText {
     RichText::new(text.into()).font(FontId::new(
         size,
-        egui::FontFamily::Name("linko-semibold".into()),
+        egui::FontFamily::Name("linko-emphasis".into()),
     ))
 }
 
