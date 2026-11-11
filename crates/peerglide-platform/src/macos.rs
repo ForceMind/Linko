@@ -608,9 +608,8 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 } else {
                     [0; 2]
                 };
-                let [x, y] = WHEEL.with_borrow_mut(|wheel| {
-                    wheel.steps(route, continuous, integer, fixed)
-                });
+                let [x, y] =
+                    WHEEL.with_borrow_mut(|wheel| wheel.steps(route, continuous, integer, fixed));
                 return s.scroll_routed(x, y, route);
             }
             _ => (),
