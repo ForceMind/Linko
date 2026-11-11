@@ -646,7 +646,7 @@ pub(super) async fn run_with_diagnostics(
         super::WorkerState::Authenticated,
     );
     input_status.reporter.peer_motion(peer.motion());
-    let (itx, mut input) = mpsc::channel(128);
+    let (itx, mut input) = platform::capture_event_channel();
     let count = |kind| {
         if let Some(diagnostics) = diagnostics {
             diagnostics.increment(kind);

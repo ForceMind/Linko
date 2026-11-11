@@ -232,7 +232,7 @@ thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)
 static MODIFIERS: Mutex<u64> = Mutex::new(0);
 static BUTTONS: AtomicU64 = AtomicU64::new(0);
 pub(super) fn capture_receiving(
-    tx: mpsc::Sender<Captured>,
+    tx: CaptureEventSender,
     gate: CaptureGate,
     target: InputCapabilities,
     mut engine: receive_driver::ReceiveEngine,
@@ -313,6 +313,11 @@ pub(super) fn capture_receiving(
                     if immediate { 0.0 } else { 0.05 },
                     true,
                 );
+                STATE.with_borrow_mut(|state| {
+                    if let Some(state) = state {
+                        state.tx.notify_after_callbacks();
+                    }
+                });
                 if result == 1 || result == 2 {
                     receive_gate.source_lost();
                     break;
@@ -803,7 +808,7 @@ mod tests {
     fn startup_other_button_hold_blocks_receiving_until_its_local_up() {
         for number in 3u8..32 {
             let button = number + 1;
-            let (tx, mut rx) = mpsc::channel(8);
+            let (tx, mut rx) = capture_events::channel(8).unwrap();
             let mut state = HookState {
                 pairs: PairLedger::default(),
                 stopping: false,
