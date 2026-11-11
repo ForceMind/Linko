@@ -3,6 +3,7 @@ import zlib
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import plistlib
 import shutil
@@ -14,6 +15,7 @@ import unittest
 from unittest.mock import patch
 import zipfile
 
+import build_version
 import package
 import verify_macos_package
 
@@ -92,6 +94,12 @@ def fixture(root):
 
 
 class Packaging(unittest.TestCase):
+    def setUp(self):
+        # Legacy tests exercise the Cargo.toml fallback: no CI version, no enclosing repository.
+        environment = patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": tempfile.gettempdir()})
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("LINKO_VERSION", None)
 
     def test_macos_icon_has_transparent_optical_margin(self):
         root = Path(package.__file__).resolve().parent.parent
@@ -377,6 +385,46 @@ class Packaging(unittest.TestCase):
                 with self.assertRaises(OSError):
                     package.build_package(root, "Linux", "x86_64", FakeCodesign())
             self.assertEqual(list((root / "dist").iterdir()), [])
+
+    def test_datetime_version_names_archive_and_sets_both_bundle_fields(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            with patch.dict(os.environ, {"LINKO_VERSION": "2026.11.10-1749"}):
+                archive = package.build_package(root, "Darwin", "arm64", FakeCodesign())
+            self.assertEqual(archive.name, "Linko-2026.11.10-1749-darwin-arm64.zip")
+            with zipfile.ZipFile(archive) as zipped:
+                info = plistlib.loads(zipped.read(archive.stem + "/Linko.app/Contents/Info.plist"))
+            self.assertEqual(info["CFBundleShortVersionString"], "2026.11.10")
+            self.assertEqual(info["CFBundleVersion"], "20261110.1749")
+        self.assertEqual(package.bundle_info("2026.11.10-0905")["CFBundleVersion"], "20261110.905")
+        self.assertEqual(package.bundle_info("2026.1.2-0000")["CFBundleVersion"], "20260102.0")
+
+    def test_malformed_linko_version_is_rejected_before_any_output(self):
+        for value in ("0.3.23-dev", "2026.11.10", "2026.02.10-1749", "2026.11.10-2460"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                fixture(root)
+                with patch.dict(os.environ, {"LINKO_VERSION": value}):
+                    with self.assertRaisesRegex(ValueError, "LINKO_VERSION"):
+                        package.build_package(root, "Linux", "x86_64", FakeCodesign())
+                self.assertFalse((root / "dist").exists())
+
+    def test_unset_version_comes_from_commit_time_in_beijing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            # 2026-12-31 16:00 UTC is 2027-01-01 00:00 in UTC+08:00.
+            with patch.object(build_version, "commit_timestamp", return_value=1798732800) as stamp:
+                self.assertEqual(package.resolve_version(root), "2027.1.1-0000")
+            stamp.assert_called_once_with(root)
+
+    def test_missing_commit_time_falls_back_to_workspace_version(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            with patch.object(build_version, "commit_timestamp", side_effect=FileNotFoundError("git")):
+                self.assertEqual(package.resolve_version(root), "0.2.3-dev")
 
 
 if __name__ == "__main__":

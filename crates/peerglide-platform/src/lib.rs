@@ -11,6 +11,8 @@ pub mod application_menu;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+#[cfg(any(windows, test))]
+mod inject_thread;
 pub mod input_diagnostics;
 mod receive_driver;
 pub mod tray;
@@ -22,6 +24,8 @@ pub use receive_driver::{
 pub mod gesture_capture;
 #[cfg(any(windows, test))]
 mod gesture_queue;
+#[cfg(any(target_os = "macos", test))]
+mod source_cursor;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
 
@@ -270,6 +274,16 @@ impl CaptureGate {
     fn commit_from(&self, token: CaptureCommitToken, deadline: u64, now: u64) -> CaptureCommit {
         let word = self.0.control.load(Ordering::Acquire);
         self.commit_from_word(token, deadline, now, word, || {})
+    }
+    /// Pure read for source cursor reconciliation outside callbacks. An expired
+    /// watchdog deadline already means Local, even before an event disables it.
+    #[cfg(any(target_os = "macos", test))]
+    fn remote_live(&self) -> Option<CaptureEpoch> {
+        let word = self.0.control.load(Ordering::Acquire);
+        let live = self.0.healthy.load(Ordering::Acquire)
+            && word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED) == ACTIVE
+            && self.0.deadline.load(Ordering::Acquire) > now_ms();
+        live.then(|| self.epoch_from(word))
     }
     fn source_commit_current(&self, epoch: CaptureEpoch) -> bool {
         let word = self.0.control.load(Ordering::Acquire);
@@ -632,6 +646,7 @@ impl CaptureSession {
             // needs room beyond the edge. macOS reads native event deltas.
             #[cfg(windows)]
             pointer(0.5, 0.5)?;
+            freeze_source_cursor(&self.gate, epoch);
             Ok(Some(epoch))
         })();
         if result.is_err() {
@@ -679,8 +694,10 @@ impl CaptureSession {
                 Some((return_x, return_y));
             // Do not post an absolute move when taking over macOS's relative
             // motion stream. Its displacement can affect the next event.
+            // macOS instead disconnects the cursor; event deltas stay valid.
             #[cfg(windows)]
             pointer(0.5, 0.5)?;
+            freeze_source_cursor(&self.gate, epoch);
             Ok(())
         })();
         if effect.is_err() {
@@ -720,6 +737,13 @@ impl CaptureSession {
     }
     pub fn restore_checked(&self) -> Result<()> {
         self.gate.disable();
+        // Reconnecting is recovery, not a pointer request: it also runs after
+        // source loss and before the receiving early return.
+        // A failed reconnect is retried by the capture loop while Local; it must
+        // not turn an otherwise clean return into a failed session.
+        if let Err(error) = release_source_cursor() {
+            eprintln!("{error:#}");
+        }
         anyhow::ensure!(
             self.gate.0.healthy.load(Ordering::Acquire),
             "native capture source lost; no further pointer request is permitted"
@@ -744,13 +768,142 @@ impl CaptureSession {
         let _ = self.restore_checked();
     }
 }
+/// Native loop only: tallies an SDK call that held the single native owner too long.
+#[cfg(any(windows, target_os = "macos"))]
+fn note_slow_sdk(gate: &CaptureGate, started: std::time::Instant, kind: input_diagnostics::Count) {
+    if started.elapsed() >= std::time::Duration::from_millis(50) {
+        if let Some(diagnostics) = gate.0.diagnostics.get() {
+            diagnostics.increment(kind);
+        }
+    }
+}
+/// Native loop only: tallies a gap between loop turns long enough to delay commands.
+#[cfg(any(windows, target_os = "macos"))]
+fn note_loop_gap(gate: &CaptureGate, last: &mut std::time::Instant) {
+    let now = std::time::Instant::now();
+    if now.duration_since(*last) >= std::time::Duration::from_millis(200) {
+        if let Some(diagnostics) = gate.0.diagnostics.get() {
+            diagnostics.increment(input_diagnostics::Count::LoopStall);
+        }
+    }
+    *last = now;
+}
+/// Native-owner SDK pointer request with its aggregate diagnostics. On Windows
+/// receiving this runs on the injection thread, never inside a hook callback.
+#[cfg(any(windows, target_os = "macos"))]
+fn submit_pointer(
+    gate: &CaptureGate,
+    point: ReceivePoint,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    let diagnostics = gate.0.diagnostics.get();
+    #[cfg(windows)]
+    let before = diagnostics
+        .filter(|d| d.sample_cursor(now_ms()))
+        .map(|_| windows::diagnostic_cursor_position());
+    let started = std::time::Instant::now();
+    let result = native::receive_pointer(point.x, point.y);
+    note_slow_sdk(gate, started, input_diagnostics::Count::SlowPointer);
+    if let Some(diagnostics) = diagnostics {
+        use input_diagnostics::Count;
+        diagnostics.increment(if result.is_ok() {
+            Count::NativeSubmitted
+        } else {
+            Count::NativeFailed
+        });
+        #[cfg(windows)]
+        if let Some(before) = before.filter(|_| result.is_ok()) {
+            diagnostics.increment(match (before, windows::diagnostic_cursor_position()) {
+                (Some(a), Some(b)) if a != b => Count::CursorMoved,
+                (Some(_), Some(_)) => Count::CursorUnchanged,
+                _ => Count::CursorUnknown,
+            });
+        }
+    }
+    result
+}
+#[cfg(any(windows, target_os = "macos"))]
+fn submit_input(
+    gate: &CaptureGate,
+    event: Input,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    let started = std::time::Instant::now();
+    let result = native::receive_inject(event);
+    note_slow_sdk(gate, started, input_diagnostics::Count::SlowInput);
+    result
+}
+/// Injection-thread side of the Windows receiver. Every item is rechecked
+/// against the same source observation rule before its SDK call.
+#[cfg(windows)]
+struct ReceiveSink {
+    gate: CaptureGate,
+    observation: Arc<std::sync::Mutex<SourceObservation>>,
+}
+#[cfg(windows)]
+impl inject_thread::Sink for ReceiveSink {
+    fn start(&mut self) {
+        native::prepare_inject_thread();
+    }
+    fn admit(&mut self, epoch: CaptureEpoch) -> bool {
+        let observed = self.observation.lock();
+        let observation = *observed.unwrap_or_else(std::sync::PoisonError::into_inner);
+        observation.fresh_at(now_ms(), std::time::SystemTime::now())
+            && self.gate.0.healthy.load(Ordering::Acquire)
+            && self.gate.receiving_epoch() == Some(epoch)
+    }
+    fn submit(
+        &mut self,
+        item: inject_thread::Item,
+    ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+        match item {
+            inject_thread::Item::Pointer(point) => submit_pointer(&self.gate, point),
+            inject_thread::Item::Input(event) => submit_input(&self.gate, event),
+        }
+    }
+}
 #[cfg(any(windows, target_os = "macos"))]
 struct NativeReceiveBackend {
     gate: CaptureGate,
     observation: SourceObservation,
+    /// Receiving capture only; owned and stopped by the Native loop.
+    #[cfg(windows)]
+    inject: Option<inject_thread::InjectThread>,
+    #[cfg(windows)]
+    published: Arc<std::sync::Mutex<SourceObservation>>,
 }
 #[cfg(any(windows, target_os = "macos"))]
 impl NativeReceiveBackend {
+    fn set_observation(&mut self, observation: SourceObservation) {
+        self.observation = observation;
+        #[cfg(windows)]
+        {
+            let published = self.published.lock();
+            *published.unwrap_or_else(std::sync::PoisonError::into_inner) = observation;
+        }
+    }
+    #[cfg(windows)]
+    fn queue(
+        &self,
+        item: inject_thread::Item,
+    ) -> Option<std::result::Result<(), peerglide_actions::execution::NativeFailure>> {
+        use peerglide_actions::execution::NativeFailure;
+        let inject = self.inject.as_ref()?;
+        Some(match self.gate.receiving_epoch() {
+            Some(epoch) => inject.push(epoch, item),
+            None => Err(NativeFailure::BeforeSubmission),
+        })
+    }
+    /// Discard unstarted work; no new SDK call starts afterwards. Non-blocking.
+    #[cfg(windows)]
+    fn request_inject_stop(&self) {
+        if let Some(inject) = &self.inject {
+            inject.request_stop();
+        }
+    }
+    /// Bounded wait for the in-flight SDK call; false means unconfirmed.
+    #[cfg(windows)]
+    fn join_inject(&mut self, timeout: std::time::Duration) -> bool {
+        self.inject.as_mut().is_none_or(|t| t.join(timeout))
+    }
     fn source_available(&self) -> bool {
         if !self
             .observation
@@ -792,29 +945,11 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
         }
-        let diagnostics = self.gate.0.diagnostics.get();
         #[cfg(windows)]
-        let before = diagnostics
-            .filter(|d| d.sample_cursor(now_ms()))
-            .map(|_| windows::diagnostic_cursor_position());
-        let result = native::receive_pointer(point.x, point.y);
-        if let Some(diagnostics) = diagnostics {
-            use input_diagnostics::Count;
-            diagnostics.increment(if result.is_ok() {
-                Count::NativeSubmitted
-            } else {
-                Count::NativeFailed
-            });
-            #[cfg(windows)]
-            if let Some(before) = before.filter(|_| result.is_ok()) {
-                diagnostics.increment(match (before, windows::diagnostic_cursor_position()) {
-                    (Some(a), Some(b)) if a != b => Count::CursorMoved,
-                    (Some(_), Some(_)) => Count::CursorUnchanged,
-                    _ => Count::CursorUnknown,
-                });
-            }
+        if let Some(result) = self.queue(inject_thread::Item::Pointer(point)) {
+            return result;
         }
-        result
+        submit_pointer(&self.gate, point)
     }
     fn input(
         &mut self,
@@ -823,7 +958,11 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
         }
-        native::receive_inject(event)
+        #[cfg(windows)]
+        if let Some(result) = self.queue(inject_thread::Item::Input(event)) {
+            return result;
+        }
+        submit_input(&self.gate, event)
     }
     fn leave_receiving(
         &mut self,
@@ -831,6 +970,11 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
     ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        // Second check behind the Engine fence: never retire with queued effects.
+        #[cfg(windows)]
+        if self.inject.as_ref().is_some_and(|t| t.pending()) {
+            return Err(peerglide_actions::execution::NativeFailure::UnknownOutcome);
         }
         self.gate
             .leave_receiving(epoch, false)
@@ -843,6 +987,12 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
     ) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
         if !self.source_available() {
             return Err(peerglide_actions::execution::NativeFailure::PermissionLost);
+        }
+        // Forced return permits no further injection: drop unstarted work and
+        // keep protection until any in-flight SDK call has returned.
+        #[cfg(windows)]
+        if self.inject.as_ref().is_some_and(|t| !t.discard()) {
+            return Err(peerglide_actions::execution::NativeFailure::UnknownOutcome);
         }
         self.gate
             .leave_receiving(epoch, true)
@@ -861,6 +1011,18 @@ impl receive_driver::ReceiveBackend for NativeReceiveBackend {
                 GuardFailure::Modifiers => Count::GuardModifiers,
             });
         }
+    }
+    #[cfg(windows)]
+    fn effects_pending(&mut self) -> bool {
+        self.inject.as_ref().is_some_and(|t| t.pending())
+    }
+    #[cfg(windows)]
+    fn effects_failed(&mut self) -> bool {
+        self.inject.as_ref().is_some_and(|t| t.take_failure())
+    }
+    #[cfg(windows)]
+    fn take_failed_release(&mut self) -> Option<Input> {
+        self.inject.as_ref()?.take_failed_release()
     }
 }
 /// The loop's last observation, never a timestamp refreshed by an SDK return.
@@ -911,7 +1073,7 @@ impl SourceHealth {
         // Stamp before the health query. A slow query or later SDK call cannot
         // advance this baseline and hide a gap before subsequent owned Up.
         self.observation = SourceObservation::at(now, wall);
-        backend.observation = self.observation;
+        backend.set_observation(self.observation);
         if self.checked == u64::MAX || now.saturating_sub(self.checked) >= 100 {
             self.checked = now;
             if !context::capture_source_available() {
@@ -987,6 +1149,23 @@ pub fn pointer(x: f64, y: f64) -> Result<()> {
     {
         let _ = (x, y);
         anyhow::bail!("native injection unavailable")
+    }
+}
+/// Outside callbacks only. Windows keeps its existing parked cursor instead.
+fn freeze_source_cursor(gate: &CaptureGate, epoch: CaptureEpoch) {
+    #[cfg(target_os = "macos")]
+    native::freeze_source_cursor(|| gate.remote_live() == Some(epoch));
+    #[cfg(not(target_os = "macos"))]
+    let _ = (gate, epoch);
+}
+fn release_source_cursor() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        native::release_source_cursor()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(())
     }
 }
 #[cfg(any(windows, target_os = "macos"))]
@@ -1896,6 +2075,48 @@ mod tests {
         assert!(session.restore_checked().is_err());
         assert!(!session.gate.active());
         assert_eq!(*session.return_position.lock().unwrap(), Some((0.2, 0.3)));
+    }
+    #[test]
+    fn source_cursor_freeze_follows_only_the_exact_live_remote_phase() {
+        use crate::source_cursor::{CursorBackend, FreezeState};
+        struct Requests(Vec<bool>);
+        impl CursorBackend for Requests {
+            fn associate(&mut self, connected: bool) -> bool {
+                self.0.push(connected);
+                true
+            }
+        }
+        let gate = CaptureGate::default();
+        let mut native = Requests(Vec::new());
+        let mut cursor = FreezeState::new();
+        assert_eq!(gate.remote_live(), None);
+        // Stop/Emergency/fault disable, watchdog expiry and source loss (last: terminal).
+        let endings: [fn(&CaptureGate); 3] = [
+            CaptureGate::disable,
+            |gate| gate.0.deadline.store(0, Ordering::Release),
+            CaptureGate::source_lost,
+        ];
+        for end in endings {
+            assert!(gate.try_activate());
+            let epoch = gate.remote_live().unwrap();
+            cursor.freeze(gate.remote_live() == Some(epoch), &mut native);
+            cursor.freeze(gate.remote_live() == Some(epoch), &mut native);
+            cursor.reconcile(gate.remote_live().is_some(), &mut native);
+            assert_eq!(native.0, [false]);
+            end(&gate);
+            assert_eq!(gate.remote_live(), None);
+            // Independent loop check and the later session restore both run.
+            cursor.reconcile(gate.remote_live().is_some(), &mut native);
+            cursor.reconcile(gate.remote_live().is_some(), &mut native);
+            assert!(cursor.release(&mut native));
+            assert_eq!(native.0, [false, true], "exactly one reconnect per phase");
+            gate.disable();
+            // A late handoff effect from the finished epoch never disconnects.
+            cursor.freeze(gate.remote_live() == Some(epoch), &mut native);
+            assert_eq!(native.0, [false, true]);
+            native.0.clear();
+        }
+        assert!(!gate.try_activate(), "source loss is terminal");
     }
     #[cfg(any(windows, target_os = "macos"))]
     #[test]

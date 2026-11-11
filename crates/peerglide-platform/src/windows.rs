@@ -8,6 +8,16 @@ use windows_sys::Win32::{
 };
 
 const TAG: usize = 0x50474c44;
+/// Receiver injection queue; adjacent pointer moves coalesce into one slot.
+const INJECT_CAPACITY: usize = 256;
+
+/// Runs once on the receiver injection thread, matching the capture thread's
+/// coordinate context. It installs no hook.
+pub(super) fn prepare_inject_thread() {
+    unsafe {
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalMouseEvent {
@@ -145,10 +155,6 @@ fn capture_impl(
             let receive_gate = gate.clone();
             let mut receive = receive;
             let mut source_health = SourceHealth::new();
-            let mut receive_backend = NativeReceiveBackend {
-                gate: receive_gate.clone(),
-                observation: source_health.observation,
-            };
             let mut queue: MSG = std::mem::zeroed();
             PeekMessageW(&mut queue, null_mut(), 0, 0, PM_NOREMOVE);
             let _wake_registration = receive.as_ref().map(|(_, wake)| {
@@ -157,6 +163,33 @@ fn capture_impl(
                 }
                 WakeRegistration(wake.clone())
             });
+            // SendInput leaves this hook-owning thread; see CAPTURE_LIFECYCLE.
+            // Created before the hooks, owned and stopped by this loop.
+            let published = Arc::new(std::sync::Mutex::new(source_health.observation));
+            let inject = match receive.as_ref() {
+                Some((_, wake)) => {
+                    let wake = wake.clone();
+                    let sink = ReceiveSink {
+                        gate: receive_gate.clone(),
+                        observation: published.clone(),
+                    };
+                    let wake: inject_thread::Wake = Arc::new(move || wake.wake());
+                    match inject_thread::spawn(sink, INJECT_CAPACITY, wake) {
+                        Ok(inject) => Some(inject),
+                        Err(_) => {
+                            let _ = ready.send(false);
+                            return;
+                        }
+                    }
+                }
+                None => None,
+            };
+            let mut receive_backend = NativeReceiveBackend {
+                gate: receive_gate.clone(),
+                observation: source_health.observation,
+                inject,
+                published,
+            };
             let keys = initial_keys();
             let buttons = initial_buttons();
             let mut local_gestures = local_gestures;
@@ -205,7 +238,9 @@ fn capture_impl(
             }
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
+            let mut last_turn = std::time::Instant::now();
             let unexpected = loop {
+                super::note_loop_gap(&receive_gate, &mut last_turn);
                 if receive.is_some() {
                     let debt = STATE
                         .with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
@@ -291,8 +326,18 @@ fn capture_impl(
                 engine.pump(&mut receive_backend, now_ms(), true);
                 let _ = engine.outcome(); // Preserve failure in the shared control.
             }
+            // Unstarted effects never run after this capture; an in-flight call
+            // may still need hooks serviced, so unhook before the bounded join.
+            receive_backend.request_inject_stop();
             UnhookWindowsHookEx(mouse);
             UnhookWindowsHookEx(keyboard);
+            if !receive_backend.join_inject(std::time::Duration::from_millis(500)) {
+                if let Some((engine, _)) = receive.as_mut() {
+                    engine.mark_unconfirmed();
+                }
+                // Drop still joins: the injector never outlives this thread.
+            }
+            drop(receive_backend);
         },
         reservation,
     );

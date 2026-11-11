@@ -2321,3 +2321,50 @@ Windows 摘要（`KVM-DIAG/3 expired`）要点：`cap＝deq＝tx＝2408`，`gran
 `/4` 新增字段（线上协议不变）：源端边缘判定 `edge_hit`（到达边缘）及首个阻挡原因 `blk_peer`（对端无移动能力）、`blk_gate`（捕获门非 Local 空闲）、`blk_busy`（已有发出中的请求或租约）、`blk_recv`（本机仍持有接收租约）、`blk_prot`（接收保护尚未撤销）；`acq_tx` 发出 Acquire、`denied_rx` 收到 Denied、`acq_to` 等待授予超时、`acq_cancel` 本机准入保护取消；接收端 `acq_rx` 收到 Acquire、`deny_arg` 参数无效、`deny_busy` 本机忙、`deny_auth` 未授权接收控制、`deny_lease` 租约被拒（已有租约或编号复用）、`deny_begin` 进入接收失败、`deny_place` 入口定位失败。macOS 的 `wh_inj` 现在统计回到 tap 的自注入滚轮，`wh_phys` 统计未带标记的滚轮；若 `scr_apply` 很大而 `wh_inj` 为 0、`wh_phys` 很大，说明注入的滚轮没有带上自有标记，被当成本机物理输入而吞掉并请求接管。摘要上限提高到 1600 字节，最长约 1237 字节。
 
 下次复测先看 Mac 行：`edge_hit` 是否大于 0；若是，`blk_*` 哪一项非零（本机没发出 Acquire），或 `acq_tx` 大于 0 而 `denied_rx` 非零（Windows 拒绝，再看 Windows 行的 `deny_*`），或 `acq_to` 非零（Windows 没回应）。
+
+
+## 2026-11-10 方向不一致提示与零增量滚轮跳过（待 CI，未实机）
+
+背景（用户实测，未由本批复现）：两端都保持默认“另一台在右侧”，而物理上 Windows 在 Mac 左侧，Mac 只能向右推才会跨屏，表现为“Mac 过不去”；把 Mac 改为“Windows 在左”、Windows 保持“Mac 在右”后恢复正常。Linko 此前不检查两端方向是否互补。
+
+本批改动（线上协议、ALPN v5、授予／拒绝逻辑均不变，不新增钩子，回调内无新增工作）：
+
+- 接收端在 `Message::Acquire{edge: remote_edge}` 处比较 `remote_edge == 本机 edge.opposite()`。不一致时，只经 worker 私有 stdout 发出一行 `layout_hint`（`crates/peerglide-protocol/src/layout_ipc.rs` 的 `LayoutHint`，字段 `local`／`peer`，256 字节上限，未知字段／版本被拒），同一 (本机方向, 对端方向) 组合只发一次，方向互补后清除记忆。
+- GUI 在 `read_worker_output` 解析该行，存入每个子进程独立的共享槽位；方向选择器下方显示“两台电脑的位置不一致”和“改为 X 侧”按钮，按钮走既有 `try_set_edge`，连接中即既有的 `request_edge` 实时更新。提示只在连接中、子进程存活、显示方向仍等于提示比较时的本机方向时出现；点击成功、方向改变、断开或停止后消失。
+- `Captured::Input` 分支遇到 `Scroll{0,0}` 时只计 `scr_zero`，不再经可靠流发送；非零滚轮的 `scr_tx` 计数不变。
+
+读代码得出的依据：发送端 Acquire 携带的是发送端自己的 edge（对端在其哪一侧），所以双方互补时 `remote_edge == edge.opposite()`；接收端入口位置本就用 `remote_edge.opposite()`。提示只在对端实际尝试跨屏时才会产生，且只能说明两端“不互补”，不能判断哪一端与物理摆放相符，界面文字因此只陈述对端的设置并给出镜像方向的一键修改，是否采纳由用户按实际摆放决定。零增量滚轮在本机已被钩子吞掉，跳过发送不改变本机行为；上一轮 Windows 摘要里 `scr_zero＝0`，所以它不是那次滚轮问题的解释，本改动只是省去无效消息。
+
+新增测试（均未运行）：`layout_ipc` 往返与畸形输入拒绝；session 中的去重函数与零滚轮判定；GUI 中提示随连接／显示方向出现与消失、点击产生方向为镜像值的 `request_edge`、提示行进入槽位而非诊断队列。
+
+未验证：本机没有 Rust/Cargo，未编译、未运行任何测试；fmt、严格 Clippy、locked test/build 以精确提交 CI 为准。未做任何真机或 GUI 渲染检查。物理验收仍需用户在两端确认：方向不互补时哪一端出现提示、按钮文字是否清楚、点击后两端可以双向跨屏，以及方向互补时不出现提示。该验收属于 #3/C06，不能由 CI 或合成事件勾选。
+
+评审修正（同一 PR）：提示行改为“观察记录”，一致的组合在刚报告过不一致之后也会发出一次，用来撤回 GUI 里过时的提示；GUI 点击后不再立即清除提示，而是等 worker 确认新方向（显示方向改变后自然隐藏），被拒绝时保留以便重试，等待确认期间按钮禁用。另按 rustfmt 调整一处断言格式。仍未在本机编译。
+
+
+## 2026-11-10 Windows→Mac 滚轮：Apple 芯片上的可变参数调用约定错误（待 CI 与实机）
+
+用户第三次双端短测（Mac 为 `/4` 包，Windows 仍为 `/3` 包）：Windows `wh_phys＝44`、`scr_tx＝44`；Mac `scr_apply＝44`、`wh_inj＝44`、`sdk_fail＝0`。即 44 次滚轮全部到达 Mac、提交成功，并以本进程标记回到 tap 后被放行，没有被当成本机物理输入吞掉；用户仍看到 Mac 不滚动。
+
+原因（读代码与调用约定得出，未经实机验证）：C 原型为 `CGEventCreateScrollWheelEvent(source, units, wheelCount, int32_t wheel1, ...)`，`wheel1` 是具名参数；本项目把它声明为 `fn CGEventCreateScrollWheelEvent(source, unit, count, ...)`，把 `wheel1` 也作为可变参数传入。Apple arm64 调用约定把可变参数全部放在栈上、具名参数放在寄存器里，所以系统读到的纵向值是寄存器中的残留值，我们传的纵向值被当成横向值；x86_64 上两者恰好一致，因此只在 Apple 芯片上出现。修正改用定长的 `CGEventCreateScrollWheelEvent2(source, unit, 2, y, x, 0)`（Oink 参考实现同样使用该接口）。仓库内没有其他可变参数 FFI 声明。排除过的解释：滚轮被本机 tap 吞掉（`wh_inj＝44` 否定）、Windows 未发出或零增量（`scr_tx＝44`、`scr_zero＝0` 否定）。
+
+同一轮另见 Windows `rel_fail＝1`：一次来自 Mac 的可靠输入在 Windows 注入失败，按现有代码会使会话以错误结束（两端摘要均为 `end`）。具体错误需要 Windows 会话记录中的错误行，尚未取得，不在本批修改。
+
+
+## 2026-11-10 Mac→Windows 滚轮后会话因原生接收超时而结束（待 CI 与实机）
+
+同一轮 Windows 会话记录末尾为 `Error: native receive service: Timeout`，结束摘要 `rel_rx＝2`、`rel_apply＝1`、`rel_fail＝1`、`scr_apply＝1`、`wh_inj＝1`：Mac 发来的第一次滚轮在 Windows 注入成功，第二次的原生命令在 250 ms 内没有回复。超时会使取消守卫请求恢复，原生端随即把这次接收标为排空并清理已注入的按下（现有测试 `bounded_timeout_cancels_late_begin_and_down_even_without_any_native_pump_progress` 覆盖这一点），但会话层把 `Timeout` 当作致命错误，直接结束了整个连接，之后的滚轮与移动全部丢失。
+
+本批只改会话层：输入或光标命令超时且该接收已不再活动时，写一行诊断并按“未提交”处理；下一轮循环走既有路径释放租约、通知对端 Release，并照旧检查原生端确认清理完成，无法确认时仍按原逻辑报错结束。原生恢复与已注入按下的清理逻辑不变，线上协议不变。会话层这一分支没有新的自动测试；物理效果需要两端同包复测。为什么第二次命令会超过 250 ms 仍未查明，本批不修改超时时长。
+
+
+## 2026-11-10 集成包实测：Windows→Mac 滚轮恢复；Mac→Windows 仍因 Windows 原生线程停滞而反复中断（/5 计时计数，待 CI）
+
+用户用集成包 e31a38a（PR97–PR100）双端实测：Windows→Mac 滚轮恢复正常（Windows `scr_tx＝188`，Mac `scr_apply＝188`，用户确认），确认 PR99 的调用约定修复在 Apple 芯片上生效。Mac→Windows 仍不正常：Windows `rel_rx＝60`、`rel_apply＝40`、`scr_apply＝34`，记录末尾仍为 `Error: native receive service: Timeout`；Mac `peer_rel＝4`，即 Windows 四次主动结束 Mac 的控制。PR100 已使输入超时不再断开连接，这次的超时出现在释放或进入接收阶段，说明 Windows 原生线程停滞的时间超过单条命令期限。用户同时看到 Mac 光标在控制 Windows 时仍跟着移动，PR98 的解耦在后台 worker 进程中未生效（与该 PR 中记录的风险一致）。
+
+为区分 Windows 停在系统注入调用还是线程别处，本批新增 `KVM-DIAG/5` 三个计时计数（只在原生循环内计时，不在回调中）：`slow_ptr` 单次光标注入超过 50 ms，`slow_inp` 单次输入注入超过 50 ms，`loop_stall` 原生循环两轮之间超过 200 ms。线上协议与输入行为不变。本机未编译。
+
+
+## 2026-11-10 构建版本改为提交时间（待 CI）
+
+版本改为按提交时间（北京时间）生成：`tools/build_version.py`、`tools/package.py`、CI 在构建前写入 `LINKO_VERSION`，GUI 侧栏优先显示该编译期值，规则见 docs/RELEASING.md。本机 Python 3 运行 `test_build_version.py` 与 `test_package.py` 通过；本机无 Rust/Cargo，GUI 与 build.rs 的改动未编译，fmt、严格 Clippy、locked test/build 及 Windows/macOS 打包以精确提交 CI 为准。未做任何物理验收，也不影响 #3/C06 的状态。
