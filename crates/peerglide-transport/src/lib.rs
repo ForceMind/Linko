@@ -363,7 +363,6 @@ pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
     async fn legacy_protocol_peers_are_rejected_before_input_session() -> Result<()> {
@@ -579,7 +578,7 @@ mod negative_tests {
         let client = async {
             let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
             let (mut tx, mut rx) = c.open_bi().await?;
-            tx.write_u32(u32::MAX).await?;
+            tx.write_all(&u32::MAX.to_be_bytes()).await?;
             assert!(matches!(
                 receive(&mut rx).await?,
                 Message::Denied { lease: 0 }
