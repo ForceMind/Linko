@@ -195,8 +195,12 @@ fn next_instance() -> Result<u64, LayoutError> {
         let next = current
             .checked_add(1)
             .ok_or(LayoutError::GenerationExhausted)?;
-        let exchanged =
-            NEXT_INSTANCE.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed);
+        let exchanged = NEXT_INSTANCE.compare_exchange_weak(
+            current,
+            next,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
         match exchanged {
             Ok(id) => return Ok(id),
             Err(actual) => current = actual,
