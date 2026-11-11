@@ -11,6 +11,8 @@ Malformed or interrupted frames close the connection.
 | Text | A bounded UTF-8 snapshot with a nonzero sequence |
 | TextReceived | An admitted sequence waiting for a local clipboard decision |
 | TextResult | The receiver's local import result for that exact sequence |
+| Image | A bounded PNG payload with its own nonzero sequence |
+| ImageResult | The receiver's local image import result for that exact sequence |
 | Offer | A random transfer ID and bounded file manifest |
 | FileAccepted | The matching transfer ID and first requested chunk index |
 | Chunk | The matching transfer ID, index and bounded data |
@@ -38,3 +40,9 @@ Tests exercise bounded framing, fragmented and back-to-back input, wrong
 direction and phase, and codec-to-storage behavior. File wire responses are a
 foundation for the receiver and sender owners. Cross-host clipboard and file
 acceptance require the matching application candidate and physical verification.
+
+The image flag is advertised only when using an image-capable connection.
+Text-only and file-only workers keep the same hello bytes. Images use distinct
+send and receive consent. The frame decoder checks size and signature before
+an image controller runs full pixel validation. A structurally valid frame
+alone is insufficient to import a PNG.

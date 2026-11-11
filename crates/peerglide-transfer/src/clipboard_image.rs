@@ -2,6 +2,7 @@
 use png::{BitDepth, Decoder, Encoder, Limits, Transformations};
 use std::io::{self, Cursor, Write};
 
+pub(crate) const PNG_SIGNATURE: [u8; 8] = *b"\x89PNG\r\n\x1a\n";
 pub const MAX_PNG_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EDGE: u32 = 2048;
 const MAX_PIXELS: usize = MAX_EDGE as usize * MAX_EDGE as usize;
