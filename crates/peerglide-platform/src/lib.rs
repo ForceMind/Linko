@@ -41,6 +41,8 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
+pub mod windows_audio;
+#[cfg(windows)]
 mod windows_display;
 #[cfg(target_os = "macos")]
 use macos as native;
