@@ -787,6 +787,7 @@ mod tests {
         let baseline = BoundIdentity {
             desktop: "Default",
             window: super::super::WindowSnapshot {
+                dpi: 96,
                 foreground: null_mut(),
                 focused: null_mut(),
                 process_id: 7,
@@ -812,6 +813,9 @@ mod tests {
         assert!(changed != baseline);
         changed = baseline;
         changed.window.thread_id += 1;
+        assert!(changed != baseline);
+        changed = baseline;
+        changed.window.dpi = 144;
         assert!(changed != baseline);
         changed = baseline;
         changed.created += 1;

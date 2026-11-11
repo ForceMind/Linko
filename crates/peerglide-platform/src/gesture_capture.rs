@@ -24,7 +24,7 @@ const PUBLISHING: u64 = 2;
 const ARMED: u64 = 4;
 const RECOVERING: u64 = 8;
 const EVENT_STEP: u64 = 16;
-const MAX_HOLD: Duration = Duration::from_millis(2500);
+pub(crate) const MAX_HOLD: Duration = Duration::from_millis(2500);
 #[path = "gesture_recovery.rs"]
 mod recovery;
 pub(crate) use recovery::RecoveryCleanup;
@@ -95,6 +95,7 @@ struct Shared {
     physical_held: AtomicU64,
     cancelled: AtomicU64,
     retired: AtomicU64,
+    latest_sequence: AtomicU64,
 }
 impl Shared {
     fn new() -> Self {
@@ -113,6 +114,7 @@ impl Shared {
             physical_held: AtomicU64::new(0),
             cancelled: AtomicU64::new(0),
             retired: AtomicU64::new(0),
+            latest_sequence: AtomicU64::new(0),
         }
     }
     fn disarm(&self) {
@@ -196,7 +198,10 @@ impl Shared {
         self.latch
             .compare_exchange(old, publishing, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| CaptureError::Held)?;
-        if self.physical_held.load(Ordering::Acquire) != 0 || self.debt.load(Ordering::Acquire) {
+        if self.physical_held.load(Ordering::Acquire) != 0
+            || self.debt.load(Ordering::Acquire)
+            || self.latest_sequence.load(Ordering::Acquire) > self.retired.load(Ordering::Acquire)
+        {
             self.latch.fetch_and(!PUBLISHING, Ordering::AcqRel);
             return Err(CaptureError::Held);
         }
@@ -677,6 +682,9 @@ impl<S: TriggerProducer> Broker<S> {
             self.phase = Phase::BypassHeld;
             return false;
         }
+        self.shared
+            .latest_sequence
+            .store(sequence, Ordering::Release);
         self.first = Some(point);
         self.max_distance_sq = 0.0;
         self.dpi = dpi;
@@ -1192,6 +1200,19 @@ mod tests {
         assert!(b.cleanup_request().is_none());
         assert!(b.shared.recovery.owns_down());
         assert!(b.shared.lost.load(Ordering::Acquire));
+    }
+    #[test]
+    fn unread_begin_frame_cannot_be_replaced_before_its_stroke_is_retired() {
+        let (mut b, mut rx) = fixture(8);
+        let receipt = completed_receipt(&mut b, &mut rx);
+        assert_eq!(
+            b.shared.publish(b.source.frame(), now_ms()),
+            Err(CaptureError::Held)
+        );
+        assert_eq!(receipt.point(), (10, 20, 96));
+        b.shared.retired.store(1, Ordering::Release);
+        arm(&b);
+        assert!(right(&mut b, true));
     }
     #[test]
     fn callback_during_publication_cannot_reopen_a_held_or_already_completed_pair() {
