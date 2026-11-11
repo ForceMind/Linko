@@ -1529,14 +1529,26 @@ mod tests {
             (Edge::Bottom, (interior.0, 1079.5), (interior.0, 1080.0)),
         ] {
             let mut gate = EdgeGate::default();
-            assert_eq!(primary_edge_entry(&mut gate, edge, outside, size, 500), None);
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, outside, size, 500),
+                None
+            );
             assert_eq!(
                 primary_edge_entry(&mut gate, edge, boundary, size, 501),
                 Some(0.5)
             );
-            assert_eq!(primary_edge_entry(&mut gate, edge, outside, size, 900), None);
-            assert_eq!(primary_edge_entry(&mut gate, edge, boundary, size, 901), None);
-            assert_eq!(primary_edge_entry(&mut gate, edge, interior, size, 902), None);
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, outside, size, 900),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, boundary, size, 901),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, interior, size, 902),
+                None
+            );
             assert_eq!(
                 primary_edge_entry(&mut gate, edge, boundary, size, 903),
                 Some(0.5)
