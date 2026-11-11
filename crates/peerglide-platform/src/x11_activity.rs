@@ -49,18 +49,22 @@ impl Activity {
                 && device.name == XTEST_KEYBOARD
         });
         let xtest = [
-            unique(pointer.map(|device| device.deviceid)).context("XTEST pointer source ambiguous")?,
-            unique(keyboard.map(|device| device.deviceid)).context("XTEST keyboard source ambiguous")?,
+            unique(pointer.map(|device| device.deviceid))
+                .context("XTEST pointer source ambiguous")?,
+            unique(keyboard.map(|device| device.deviceid))
+                .context("XTEST keyboard source ambiguous")?,
         ];
         ensure!(xtest[0] != xtest[1], "XTEST sources are ambiguous");
         let masks = [
             EventMask {
                 deviceid: ALL_MASTERS,
-                mask: vec![XIEventMask::RAW_KEY_PRESS
-                    | XIEventMask::RAW_KEY_RELEASE
-                    | XIEventMask::RAW_BUTTON_PRESS
-                    | XIEventMask::RAW_BUTTON_RELEASE
-                    | XIEventMask::RAW_MOTION],
+                mask: vec![
+                    XIEventMask::RAW_KEY_PRESS
+                        | XIEventMask::RAW_KEY_RELEASE
+                        | XIEventMask::RAW_BUTTON_PRESS
+                        | XIEventMask::RAW_BUTTON_RELEASE
+                        | XIEventMask::RAW_MOTION,
+                ],
             },
             EventMask {
                 deviceid: ALL_DEVICES,
@@ -112,18 +116,27 @@ mod tests {
     fn takeover_uses_only_source_and_topology_without_accessing_input_payloads() {
         let xtest = [5, 6];
         for sourceid in [5, 6] {
-            assert!(!takeover(&Event::XinputRawMotion(RawMotionEvent {
-                sourceid,
-                ..Default::default()
-            }), xtest));
+            assert!(!takeover(
+                &Event::XinputRawMotion(RawMotionEvent {
+                    sourceid,
+                    ..Default::default()
+                }),
+                xtest
+            ));
         }
         for sourceid in [0, 14] {
-            assert!(takeover(&Event::XinputRawKeyPress(RawKeyPressEvent {
-                sourceid,
-                ..Default::default()
-            }), xtest));
+            assert!(takeover(
+                &Event::XinputRawKeyPress(RawKeyPressEvent {
+                    sourceid,
+                    ..Default::default()
+                }),
+                xtest
+            ));
         }
-        assert!(takeover(&Event::XinputHierarchy(HierarchyEvent::default()), xtest));
+        assert!(takeover(
+            &Event::XinputHierarchy(HierarchyEvent::default()),
+            xtest
+        ));
         assert_eq!(unique([5].into_iter()), Some(5));
         assert_eq!(unique([5, 6].into_iter()), None);
         assert_eq!(unique([0].into_iter()), None);
