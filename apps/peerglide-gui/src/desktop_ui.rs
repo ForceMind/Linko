@@ -1,10 +1,7 @@
 //! Actual desktop interactions. No example devices or simulated permissions.
 use super::*;
-/// CI sets LINKO_VERSION (commit time, UTC+08:00); local builds fall back to the crate version.
-const DISPLAY_VERSION: &str = match option_env!("LINKO_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
+use desktop_style::tokens;
+use icons::Icon;
 impl App {
     pub(super) fn writable(&self) -> bool {
         !self.quit_check_mode
@@ -74,19 +71,15 @@ impl App {
             None => "尚未开启键鼠会话",
         }
     }
-    pub(super) fn heading(ui: &mut egui::Ui, title: &str, subtitle: &str) {
-        ui.heading(desktop_style::heading_text(title));
-        ui.add_space(7.0);
-        ui.weak(subtitle);
-        ui.add_space(20.0);
-    }
-    fn unavailable(ui: &mut egui::Ui, title: &str, description: &str) {
+    fn unavailable(ui: &mut egui::Ui, title: &str, sentences: &[&str]) {
         egui::Frame::group(ui.style())
             .inner_margin(18.0)
             .show(ui, |ui| {
                 ui.strong(title);
                 ui.add_space(7.0);
-                ui.label(description);
+                for sentence in sentences {
+                    ui.label(*sentence);
+                }
                 ui.weak("功能准备好后，会在这里提供独立的授权与操作入口。");
             });
     }
@@ -178,13 +171,15 @@ impl App {
             _ => (),
         }
     }
+    /// Secondary connection actions with short labels; the hover keeps the full sentence.
     pub(super) fn connection_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     self.idle_writable() && self.config.fingerprint.is_some(),
-                    egui::Button::new("只连接，不开启键鼠"),
+                    egui::Button::new("仅通信"),
                 )
+                .on_hover_text("只连接，不开启键鼠")
                 .clicked()
             {
                 let result = self.start(false);
@@ -193,8 +188,9 @@ impl App {
             if ui
                 .add_enabled(
                     self.idle_writable() && self.config.fingerprint.is_some(),
-                    egui::Button::new("检查两台电脑的连接"),
+                    egui::Button::new("连通检查"),
                 )
+                .on_hover_text("检查两台电脑的连接，不读取或控制键鼠")
                 .clicked()
             {
                 let result = self.start(true);
@@ -228,11 +224,7 @@ impl App {
         ui.weak(view.detail);
     }
     pub(super) fn home(&mut self, ui: &mut egui::Ui) {
-        Self::heading(
-            ui,
-            "你的协作空间",
-            "两台电脑，一套键鼠。先连接，再自然地跨过屏幕边缘。",
-        );
+        self.subpage_header(ui, "协作总览", Page::Shortcuts);
         desktop_style::card(ui).show(ui, |ui| {
             let view = self.workspace_view();
             ui.heading(view.title);
@@ -243,15 +235,13 @@ impl App {
             }
         });
         ui.add_space(20.0);
-        ui.heading("也可以只用这台电脑");
-        ui.add_space(8.0);
         desktop_style::card(ui).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
                 ui.strong("鼠标手势");
                 desktop_style::pill(ui, "全局功能开发中", desktop_style::Tone::Neutral);
             });
-            ui.label("先在窗口里画一条轨迹，试试识别结果，或为常用应用保存规则。");
+            ui.label("在窗口里试画轨迹，或为常用应用保存规则。");
             ui.weak("现在可离线配置和预览；不会捕获全局鼠标或执行动作。");
             ui.horizontal_wrapped(|ui| {
                 if ui.button("试画一条手势").clicked() {
@@ -265,56 +255,54 @@ impl App {
             });
         });
     }
+    /// Home view. The connection and identity details live in the context column's drawer.
     pub(super) fn devices(&mut self, ui: &mut egui::Ui) {
         self.recovery_panel(ui);
         self.device_workspace(ui);
-        ui.add_space(10.0);
-        if self.connection_details_open {
-            desktop_style::card(ui).show(ui, |ui| {
-                ui.strong("连接与身份详情");
-                ui.label(format!("连接详情：{}", self.status));
-                ui.label(if self.config.listen {
-                    "连接方式：等待另一台电脑"
-                } else {
-                    "连接方式：连接另一台电脑"
-                });
-                if !self.config.address.is_empty() {
-                    ui.monospace(&self.config.address);
-                }
-                self.connection_actions(ui);
-                if ui
-                    .add_enabled(
-                        self.idle_writable(),
-                        egui::Button::new("手动设置地址与核验…"),
-                    )
-                    .clicked()
-                {
-                    self.open_advanced_setup();
-                }
-                if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
-                {
-                    self.dialog = Some(Dialog::Revoke);
-                }
-                let own = self.local_fingerprint();
-                let publishing =
-                    self.child.is_some() && self.stopping.is_none() && self.config.listen;
-                let idle = self.child.is_none();
-                let writable = self.writable();
-                if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
-                    let result = self.use_discovery_address(address);
-                    self.feedback(result, "仅选择了地址，尚未登记或授权。");
-                    if self.notice.starts_with("仅选择") {
-                        self.open_setup();
-                        self.wizard = Some(SetupStep::Verify);
-                    }
-                }
-                if let Some(fp) = &self.config.fingerprint {
-                    ui.label("已登记的完整身份指纹");
-                    ui.monospace(fp);
-                }
-                ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
-            });
+    }
+    /// Body of the details drawer: the former connection and identity card, discovery included.
+    pub(super) fn connection_details(&mut self, ui: &mut egui::Ui) {
+        ui.strong("连接与身份详情");
+        ui.label(format!("连接详情：{}", self.status));
+        ui.label(if self.config.listen {
+            "连接方式：等待另一台电脑"
+        } else {
+            "连接方式：连接另一台电脑"
+        });
+        if !self.config.address.is_empty() {
+            ui.monospace(&self.config.address);
         }
+        self.connection_actions(ui);
+        if ui
+            .add_enabled(
+                self.idle_writable(),
+                egui::Button::new("手动设置地址与核验…"),
+            )
+            .clicked()
+        {
+            self.open_advanced_setup();
+        }
+        if self.config.fingerprint.is_some() && ui.button("移除这台电脑的信任…").clicked()
+        {
+            self.dialog = Some(Dialog::Revoke);
+        }
+        let own = self.local_fingerprint();
+        let publishing = self.child.is_some() && self.stopping.is_none() && self.config.listen;
+        let idle = self.child.is_none();
+        let writable = self.writable();
+        if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
+            let result = self.use_discovery_address(address);
+            self.feedback(result, "仅选择了地址，尚未登记或授权。");
+            if self.notice.starts_with("仅选择") {
+                self.open_setup();
+                self.wizard = Some(SetupStep::Verify);
+            }
+        }
+        if let Some(fp) = &self.config.fingerprint {
+            ui.label("已登记的完整身份指纹");
+            ui.monospace(fp);
+        }
+        ui.weak("短码核验支持两台电脑；多设备和精细多屏拓扑尚未提供。");
     }
     pub(super) fn device_permissions(&mut self, ui: &mut egui::Ui) {
         ui.heading("让另一台电脑控制我");
@@ -348,118 +336,6 @@ impl App {
         ui.label("文字、图片和文件尚未接通，当前不会读取或同步这些内容。");
         ui.weak("后续逐项开放，并分别询问你的同意，不包含在键鼠许可里。");
     }
-    pub(super) fn displays(&mut self, ui: &mut egui::Ui) {
-        ui.strong("屏幕的位置");
-        ui.weak("拖动另一台电脑的屏幕，或直接选择方向。位置用于下一次会话。");
-        let registered = self.config.fingerprint.is_some();
-        let editable = self.layout_editable();
-        let width = ui.available_width().max(1.0);
-        let height = if matches!(self.displayed_edge(), "top" | "bottom") {
-            230.0
-        } else {
-            180.0
-        };
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
-        let (local, peer) = screen_rects(rect, self.displayed_edge());
-        let interaction_canvas = rect.intersect(ui.clip_rect());
-        if !editable
-            || !ui.input(|i| i.focused)
-            || self
-                .screen_drag
-                .is_some_and(|(_, _, old)| old != interaction_canvas)
-        {
-            self.screen_drag = None;
-        }
-        let _ = ui.interact(
-            peer,
-            ui.scope_id().with("peer-display"),
-            if editable {
-                egui::Sense::drag()
-            } else {
-                egui::Sense::hover()
-            },
-        );
-        // Window-local ordered events preserve a down/move/up batch even when egui's
-        // frame-level drag response no longer retains the original press position.
-        let (focused, down, events) =
-            ui.input(|i| (i.focused, i.pointer.primary_down(), i.events.clone()));
-        let layer = ui.layer_id();
-        let own_press = events.iter().all(|event| match event {
-            egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                ..
-            } => ui.ctx().layer_id_at(*pos) == Some(layer),
-            _ => true,
-        });
-        let edge = update_layout_drag(
-            &mut self.screen_drag,
-            &events,
-            peer,
-            local,
-            interaction_canvas,
-            editable && focused && own_press,
-            down,
-        );
-        if let Some(edge) = edge {
-            self.try_set_edge(edge);
-            ui.ctx().request_repaint();
-        }
-        let displayed = self.screen_drag.map_or(peer, |(_, center, _)| {
-            egui::Rect::from_center_size(center, peer.size())
-        });
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 12.0, ui.visuals().faint_bg_color);
-        painter.line_segment(
-            [local.center(), displayed.center()],
-            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-        );
-        desktop_style::monitor(
-            &painter,
-            local,
-            local_device_name(),
-            true,
-            self.child.is_some()
-                && self.active_mode == Some(SessionMode::Native)
-                && self.input_state == Some(WorkerInputState::Local),
-            self.config.dark,
-        );
-        desktop_style::monitor(
-            &painter,
-            displayed,
-            if registered {
-                &self.config.peer_name
-            } else {
-                "等待添加电脑"
-            },
-            false,
-            self.child.is_some()
-                && self.connected
-                && self.input_state == Some(WorkerInputState::ControllingRemote),
-            self.config.dark,
-        );
-        ui.add_space(8.0);
-        ui.add_enabled_ui(editable && self.screen_drag.is_none(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("另一台电脑在我的");
-                for side in ["left", "right", "top", "bottom"] {
-                    if ui
-                        .selectable_label(self.displayed_edge() == side, edge_label(side))
-                        .clicked()
-                    {
-                        self.try_set_edge(side);
-                    }
-                }
-            });
-        });
-        if !registered {
-            ui.weak("添加电脑后即可调整位置。");
-        } else if !self.idle_writable() {
-            ui.weak("当前位置已锁定，停止协同后可以调整。");
-        }
-        ui.weak("仅表示两台主显示器的相对方向，不代表真实尺寸。另一端需设置相反方向。");
-    }
     fn mouse(&mut self, ui: &mut egui::Ui) {
         if self.recording_mode {
             self.gesture_lab.ui(ui, self.child.is_some());
@@ -468,14 +344,9 @@ impl App {
             self.use_recorded_gesture(ui);
             return;
         }
-        if ui.button("‹ 返回快捷键").clicked() {
-            self.navigate_to(Page::Shortcuts);
-        }
-        Self::heading(
-            ui,
-            "本机鼠标",
-            "录制轨迹、选择动作、测试并保存。当前为离线配置，不执行系统动作。",
-        );
+        self.subpage_header(ui, "本机鼠标", Page::Shortcuts);
+        ui.weak("离线配置：录制、测试并保存规则，不执行系统动作。");
+        ui.add_space(14.0);
         egui::Frame::group(ui.style())
             .inner_margin(14.0)
             .show(ui, |ui| {
@@ -522,18 +393,23 @@ impl App {
         }
     }
     fn shortcuts(&mut self, ui: &mut egui::Ui) {
-        Self::heading(ui, "快捷键", "随时切回本机，也可以离线配置本机鼠标。");
+        self.subpage_header(ui, "快捷键", Page::Displays);
         desktop_style::card(ui).show(ui, |ui| {
+            ui.set_min_width(ui.available_width().min(680.0));
             ui.strong("键鼠协同");
             ui.add_space(10.0);
-            ui.label("Ctrl + Alt + Right    切换控制目标");
-            ui.label("Ctrl + Alt + Esc       紧急恢复本机");
-            ui.weak("仅在已明确开启的键鼠会话中生效。切回后先松开物理按键与鼠标按钮。");
+            for shortcut in &SHORTCUTS {
+                shortcut_row(ui, shortcut);
+            }
+            ui.add_space(6.0);
+            ui.weak("仅在已明确开启的键鼠会话中生效。");
+            ui.weak("切回后先松开物理按键与鼠标按钮。");
         });
         ui.add_space(14.0);
         desktop_style::card(ui).show(ui, |ui| {
+            ui.set_min_width(ui.available_width().min(680.0));
             ui.strong("本机鼠标");
-            ui.label("录制轨迹、预览识别结果、管理应用规则。");
+            ui.label("录制轨迹、预览识别、管理应用规则。");
             ui.weak("全局手势尚未接通；离线配置不会捕获全局鼠标或执行系统动作。");
             ui.horizontal_wrapped(|ui| {
                 if ui.button("手势实验室").clicked() {
@@ -557,15 +433,24 @@ impl App {
         } else {
             CollaborationTab::Files
         };
-        Self::heading(
+        self.subpage_header(ui, "文件与剪贴板", Page::Displays);
+        ui.horizontal(|ui| {
+            for (page, label) in [(Page::Transfers, "文件传输"), (Page::Clipboard, "剪贴板")]
+            {
+                if ui.selectable_label(self.page == page, label).clicked() {
+                    self.navigate_to(page);
+                }
+            }
+        });
+        let muted = tokens::muted_color(ui.visuals().dark_mode);
+        icon_row(
             ui,
-            if self.page == Page::Clipboard {
-                "剪贴板"
-            } else {
-                "文件传输"
-            },
             "内容共享与键鼠控制分别授权。",
+            |painter, rect| {
+                Icon::Lock.paint(painter, rect, muted);
+            },
         );
+        ui.add_space(14.0);
         desktop_style::card(ui).show(ui, |ui| {
             desktop_style::pill(ui, "尚未接通", desktop_style::Tone::Neutral);
             ui.add_space(12.0);
@@ -573,37 +458,47 @@ impl App {
                 CollaborationTab::Clipboard => Self::unavailable(
                     ui,
                     "系统剪贴板尚未接通",
-                    "目前不会读取、写入或共享系统剪贴板。后续按设备、方向和手动／自动方式分别授权。",
+                    &[
+                        "目前不会读取、写入或共享系统剪贴板。",
+                        "后续按设备、方向和手动／自动方式分别授权。",
+                    ],
                 ),
                 CollaborationTab::Files => Self::unavailable(
                     ui,
                     "文件发送与接收尚未接通",
-                    "当前不会读取或传送文件，也未提供原生跨屏拖拽。不会展示模拟传输进度。",
+                    &[
+                        "当前不会读取或传送文件，也未提供原生跨屏拖拽。",
+                        "不会展示模拟传输进度。",
+                    ],
                 ),
             }
         });
         ui.add_space(18.0);
-        ui.weak("连接成功不包含内容共享许可。离线数据模块不是已可用的系统共享功能。");
+        ui.weak("连接成功不包含内容共享许可。");
+        ui.weak("离线数据模块不是已可用的系统共享功能。");
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        Self::heading(ui, "设置", "让屏跃按你的习惯工作。");
+        self.subpage_header(ui, "设置", Page::Displays);
         if self.application_menu_error.is_some() {
             desktop_style::card(ui).show(ui, |ui| {
-            ui.set_min_width(ui.available_width().min(680.0));
+                ui.set_min_width(ui.available_width().min(680.0));
                 desktop_style::pill(ui, "退出恢复入口未就绪", desktop_style::Tone::Warning);
-                ui.label("本窗口不能开启新的键鼠会话，仍可使用通信诊断。请先确认恢复状态，再重新打开本版屏跃。");
+                ui.label("本窗口不能开启新的键鼠会话，仍可使用通信诊断。");
+                ui.label("请先确认恢复状态，再重新打开本版屏跃。");
             });
             ui.add_space(14.0);
         }
         if !self.writable() {
             desktop_style::card(ui).show(ui, |ui| {
-            ui.set_min_width(ui.available_width().min(680.0));
+                ui.set_min_width(ui.available_width().min(680.0));
                 desktop_style::pill(ui, "设置只读，原资料已保留", desktop_style::Tone::Warning);
                 if self.enrollment_blocked {
                     ui.label("设备变更尚未完成，原资料已保留，当前不能重置设备设置。");
-                    ui.weak("重新打开仍无法收尾时，请保留整个资料目录供检查。不会开启键鼠或覆盖冲突文件。");
+                    ui.weak("重新打开仍无法收尾时，请保留整个资料目录供检查。");
+                    ui.weak("不会开启键鼠或覆盖冲突文件。");
                 } else {
-                    ui.label("可能是另一窗口正在使用资料，或设置需要恢复。恢复前会备份，不改变本机身份。");
+                    ui.label("可能是另一窗口正在使用资料，或设置需要恢复。");
+                    ui.label("恢复前会备份，不改变本机身份。");
                 }
                 if !self.enrollment_blocked
                     && self.instance_lock.is_some()
@@ -615,19 +510,7 @@ impl App {
             });
             ui.add_space(14.0);
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.settings_section, SettingsSection::General, "常规");
-            ui.selectable_value(
-                &mut self.settings_section,
-                SettingsSection::Permissions,
-                "系统权限",
-            );
-            ui.selectable_value(
-                &mut self.settings_section,
-                SettingsSection::Advanced,
-                "诊断与资料",
-            );
-        });
+        segmented(ui, &mut self.settings_section, &SETTINGS_SECTIONS);
         ui.add_space(18.0);
         match self.settings_section {
             SettingsSection::General => {
@@ -635,13 +518,13 @@ impl App {
                     ui.set_min_width(ui.available_width().min(680.0));
                     ui.strong("外观与连接");
                     ui.add_enabled_ui(self.writable(), |ui| {
-                        let previous = self.config.dark;
-                        ui.horizontal_wrapped(|ui| {
+                        let mut dark = self.config.dark;
+                        ui.horizontal(|ui| {
                             ui.label("外观");
-                            ui.selectable_value(&mut self.config.dark, false, "浅色");
-                            ui.selectable_value(&mut self.config.dark, true, "深色");
+                            segmented(ui, &mut dark, &APPEARANCES);
                         });
-                        if previous != self.config.dark {
+                        if dark != self.config.dark {
+                            self.config.dark = dark;
                             self.theme(ctx);
                             self.save();
                         }
@@ -705,11 +588,12 @@ impl App {
                     });
                     if self.tray.as_ref().is_some_and(|tray| tray.is_available()) {
                         ui.label("入口已显示：可打开窗口、停止协同或退出屏跃。");
-                        ui.weak(if self.desktop_preferences.close_to_tray {
-                    "关闭窗口不会停止协同。停止或退出请使用菜单栏／托盘；退出仍等待输入清理。"
-                } else {
-                    "关闭窗口会停止协同、清理输入，然后退出。"
-                });
+                        if self.desktop_preferences.close_to_tray {
+                            ui.weak("关闭窗口不会停止协同。");
+                            ui.weak("停止或退出请使用菜单栏／托盘；退出仍等待输入清理。");
+                        } else {
+                            ui.weak("关闭窗口会停止协同、清理输入，然后退出。");
+                        }
                     } else {
                         ui.label("关闭窗口会停止协同、清理输入，然后退出。");
                         if !supported {
@@ -738,6 +622,15 @@ impl App {
             }
             SettingsSection::Advanced => {
                 egui::CollapsingHeader::new("高级诊断").show(ui, |ui| {
+                    self.diagnostics(ui);
+                });
+            }
+        }
+    }
+    /// Advanced diagnostics, collapsed by default. The summary keeps its source: the newest
+    /// log line that `input_diagnostics::is_summary` accepts. Only the layout lives here.
+    fn diagnostics(&mut self, ui: &mut egui::Ui) {
+        use peerglide_platform::input_diagnostics::is_summary;
         ui.strong("本GUI进程的系统权限");
         ui.weak("只在点击时读取，不申请或修改权限。实际输入进程会独立复查。");
         if ui.button("检查当前系统权限").clicked() {
@@ -765,20 +658,18 @@ impl App {
                 SecureInput::Unsupported => "此平台无同名Secure Input检查。",
             });
         }
-        ui.weak("macOS按需要在系统设置中处理辅助功能/输入监控，再重新检查。Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
-
-            ui.separator();
-            ui.strong("会话记录 · 不含按键内容");
-            if let Some(summary) = self.logs.iter().rev().find(|line| {
-                peerglide_platform::input_diagnostics::is_summary(line)
-            }) {
-                if ui.button("复制本机输入诊断摘要").clicked() {
-                    ui.ctx().copy_text(summary.clone());
-                }
+        ui.weak("macOS按需要在系统设置中处理辅助功能/输入监控，再重新检查。");
+        ui.weak("Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
+        ui.separator();
+        ui.strong("会话记录 · 不含按键内容");
+        let summary = self.logs.iter().rev().find(|line| is_summary(line));
+        if let Some(summary) = summary {
+            if ui.button("复制本机输入诊断摘要").clicked() {
+                ui.ctx().copy_text(summary.clone());
             }
-            for line in &self.logs { ui.monospace(line); }
-        });
-            }
+        }
+        for line in &self.logs {
+            ui.monospace(line);
         }
     }
     fn recovery_panel(&mut self, ui: &mut egui::Ui) {
@@ -1117,20 +1008,14 @@ impl App {
             .show(ui, |ui| {
                 self.worker_permissions.native_start_details(ui);
                 ui.separator();
-                ui.label("这会启动真实原生键鼠捕获与注入；实际工作进程将重新检查系统权限。连接/认证不代表对端允许本机控制。");
-                if !self.config.listen && !self.config.reconnect {
-                    ui.weak("本次会等待另一台电脑约一分钟，可随时停止；连接并重新验权后才开始捕获键鼠。这不会开启断线自动重连。");
+                let points = native_start_points(
+                    self.config.allow,
+                    !self.config.listen && !self.config.reconnect,
+                    self.child.is_some(),
+                );
+                for point in points {
+                    safety_point(ui, point);
                 }
-                ui.label(if self.config.allow {
-                    "本机接收偏好：允许已登记对端控制本机。"
-                } else {
-                    "本机接收偏好：不允许对端控制本机；可请求控制已授权本机的对端。"
-                });
-                if self.child.is_some() {
-                    ui.weak("当前仅通信会话将先停止；清理成功后再以键鼠模式重连。失败不自动继续。");
-                }
-                ui.label("Ctrl+Alt+Right切换；Ctrl+Alt+Esc紧急恢复。实机兼容性、DPI、输入法与权限变化仍未完成验收。");
-                ui.label("接收端首次物理动作仅用于收回控制，不执行或回放。切回本机后先松开物理按键／鼠标按钮，再继续操作。");
                 if !self.notice.is_empty() {
                     ui.separator();
                     ui.label(&self.notice);
@@ -1212,22 +1097,93 @@ impl App {
             Dialog::ForceStop => "强制停止工作进程",
             Dialog::Recovery => "停止与恢复状态",
         };
-        egui::Window::new(title).open(&mut open).collapsible(false).default_width(580.0).default_height(540.0).vscroll(true).show(ctx,|ui|{
-            if ui.button("立即停止并恢复本机").clicked(){self.stop();}
-            ui.separator();match dialog{
-                Dialog::NativeStart=>{},
-                Dialog::Revoke=>{ui.label("停止会话并清除对端信任与本机接收许可。保留本机身份；下次需重新核验。");if ui.button("撤销并停止会话").clicked(){let result=self.revoke();self.feedback(result,"设备信任已撤销，旧会话正在停止。");self.dialog=None;}},
-                Dialog::Reset=>{ui.label("先备份设置和设备登记，再恢复默认并撤销信任。本机身份保持；无效或未来版本只读保留。");if ui.add_enabled(self.idle_writable(),egui::Button::new("确认备份并恢复设置")).clicked(){match self.reset_settings(){Ok(())=>{self.theme(ctx);self.notice="已备份并恢复默认，设备信任和授权关闭，本机身份保留。".into();self.dialog=None;},Err(error)=>self.notice=format!("恢复失败，原文件保留：{error:#}")}}},
-                Dialog::ForceStop=>{ui.label("仅在正常停止无响应时使用。强制结束不能确认输入已释放，之后本窗口只允许通信诊断。");if ui.button("明确强制结束，保留恢复警告").clicked(){if let Some(child)=self.child.as_mut(){let result=child.kill().map_err(anyhow::Error::from);self.feedback(result,"已请求强制结束，输入恢复未确认。");}
-                if self.active_mode==Some(SessionMode::Native){self.recovery_blocked=true;}self.pending_start=None;self.dialog=None;}},
-                Dialog::Recovery=>{ui.strong(self.input_label());ui.label("松开物理按键/鼠标按钮，检查两端提示与系统权限。屏跃不会关闭安全防护，也不把退出当恢复成功。进程报告只表示软件路由与清理请求，不代表OS或应用效果已确认。");ui.label("恢复未确认时保留警告。可运行仅通信诊断；新的原生键鼠会话保持禁止。");ui.label("清理失败且原生捕获仍可用时：先松开全部物理按键／按钮，再重新按下并松开Ctrl+Alt+Esc，可请求强制返回。它仍保留未知警告，不证明系统按键已释放。");if self.child.is_some()&&ui.button("再次发送停止请求").clicked(){let result=self.resend_stop();self.feedback(result,"已再次发送停止请求，仍需等待清理结果。");}
-                if self.child.is_some()&&ui.button("正常停止无响应，查看强制结束…").clicked(){self.dialog=Some(Dialog::ForceStop);}
-                if self.close_requested&&self.child.is_none()&&ui.button("明确退出，已了解恢复未确认").clicked(){self.exit_confirmed=true;ctx.send_viewport_cmd(egui::ViewportCommand::Close);}},
-            }
-            if !self.notice.is_empty(){ui.label(&self.notice);}
-        });
+        egui::Window::new(title)
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(580.0)
+            .default_height(540.0)
+            .vscroll(true)
+            .show(ctx, |ui| self.dialog_contents(ui, dialog));
         if !open {
             self.dialog = None;
+        }
+    }
+
+    /// W4: the stop control first, then icon points, then the one explicit action.
+    fn dialog_contents(&mut self, ui: &mut egui::Ui, dialog: Dialog) {
+        if ui.button("立即停止并恢复本机").clicked() {
+            self.stop();
+        }
+        ui.separator();
+        if dialog == Dialog::Recovery {
+            ui.strong(self.input_label());
+        }
+        for point in dialog_points(dialog) {
+            safety_point(ui, *point);
+        }
+        match dialog {
+            Dialog::NativeStart => {}
+            Dialog::Revoke => self.revoke_action(ui),
+            Dialog::Reset => self.reset_action(ui),
+            Dialog::ForceStop => self.force_stop_action(ui),
+            Dialog::Recovery => self.recovery_actions(ui),
+        }
+        if !self.notice.is_empty() {
+            ui.label(&self.notice);
+        }
+    }
+
+    fn revoke_action(&mut self, ui: &mut egui::Ui) {
+        if ui.button("撤销并停止会话").clicked() {
+            let result = self.revoke();
+            self.feedback(result, "设备信任已撤销，旧会话正在停止。");
+            self.dialog = None;
+        }
+    }
+
+    fn reset_action(&mut self, ui: &mut egui::Ui) {
+        let confirm = egui::Button::new("确认备份并恢复设置");
+        if !ui.add_enabled(self.idle_writable(), confirm).clicked() {
+            return;
+        }
+        match self.reset_settings() {
+            Ok(()) => {
+                self.theme(ui.ctx());
+                self.notice = "已备份并恢复默认，设备信任和授权关闭，本机身份保留。".into();
+                self.dialog = None;
+            }
+            Err(error) => self.notice = format!("恢复失败，原文件保留：{error:#}"),
+        }
+    }
+
+    fn force_stop_action(&mut self, ui: &mut egui::Ui) {
+        if !ui.button("明确强制结束，保留恢复警告").clicked() {
+            return;
+        }
+        if let Some(child) = self.child.as_mut() {
+            let result = child.kill().map_err(anyhow::Error::from);
+            self.feedback(result, "已请求强制结束，输入恢复未确认。");
+        }
+        if self.active_mode == Some(SessionMode::Native) {
+            self.recovery_blocked = true;
+        }
+        self.pending_start = None;
+        self.dialog = None;
+    }
+
+    fn recovery_actions(&mut self, ui: &mut egui::Ui) {
+        if self.child.is_some() && ui.button("再次发送停止请求").clicked() {
+            let result = self.resend_stop();
+            self.feedback(result, "已再次发送停止请求，仍需等待清理结果。");
+        }
+        let force = "正常停止无响应，查看强制结束…";
+        if self.child.is_some() && ui.button(force).clicked() {
+            self.dialog = Some(Dialog::ForceStop);
+        }
+        let exit = "明确退出，已了解恢复未确认";
+        if self.close_requested && self.child.is_none() && ui.button(exit).clicked() {
+            self.exit_confirmed = true;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
     pub(super) fn record_layout_control(
@@ -1259,31 +1215,26 @@ impl App {
             self.dialog = None;
         }
     }
-    fn safety_controls(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .button("紧急恢复本机")
+    /// Laid out right to left: emergency recovery stays in the top-right corner.
+    pub(super) fn safety_controls(&mut self, ui: &mut egui::Ui) {
+        if shell_ui::icon_button(ui, Icon::Recover, "紧急恢复本机", true)
             .on_hover_text("Ctrl+Alt+Esc；立即请求停止，不等待二次确认")
             .clicked()
         {
             self.stop();
             self.gesture_lab.cancel();
         }
-        if ui
-            .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
-            .clicked()
-        {
+        let stop = ui.add_enabled(self.child.is_some(), |ui: &mut egui::Ui| {
+            shell_ui::icon_button(ui, Icon::Stop, "停止协同", true)
+        });
+        if stop.clicked() {
             self.stop();
         }
-        if self.stopping.is_some() || self.recovery_blocked {
-            if ui.button("查看恢复状态").clicked() {
-                self.dialog = Some(Dialog::Recovery);
-            }
-            let view = self.workspace_view();
-            ui.label(desktop_style::status_text(
-                view.title,
-                self.config.dark,
-                view.tone,
-            ));
+        // The capsule carries the recovery state; this entry opens the full guidance.
+        if (self.stopping.is_some() || self.recovery_blocked)
+            && shell_ui::icon_button(ui, Icon::Warning, "查看恢复状态", true).clicked()
+        {
+            self.dialog = Some(Dialog::Recovery);
         }
     }
     pub(super) fn desktop(&mut self, root: &mut egui::Ui) {
@@ -1297,134 +1248,18 @@ impl App {
             self.stop();
             self.gesture_lab.cancel();
         }
-        egui::Panel::left("navigation")
-            .exact_size(196.0)
-            .show(root, |ui| {
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    desktop_style::brand_mark(ui);
-                    ui.vertical(|ui| {
-                        ui.label(desktop_style::semibold("屏跃", 22.0));
-                        ui.label(egui::RichText::new("LINKO").size(10.0).weak());
-                    });
-                });
-                ui.add_space(28.0);
-                for (page, label) in [
-                    (Page::Devices, "设备"),
-                    (Page::Displays, "屏幕布局"),
-                    (Page::Transfers, "文件传输"),
-                    (Page::Clipboard, "剪贴板"),
-                    (Page::Shortcuts, "快捷键"),
-                    (Page::Settings, "设置"),
-                ] {
-                    if page == Page::Settings {
-                        ui.separator();
-                        ui.add_space(12.0);
-                    }
-                    let selected = self.page == page
-                        || (page == Page::Shortcuts
-                            && matches!(
-                                self.page,
-                                Page::Home | Page::GestureLab | Page::GestureRules
-                            ));
-                    let response = desktop_style::navigation(ui, label, selected);
-                    let key = match page {
-                        Page::Devices => "nav_devices",
-                        Page::Displays => "nav_layout",
-                        Page::Shortcuts => "nav_shortcuts",
-                        Page::Settings => "nav_settings",
-                        Page::Transfers => "nav_files",
-                        Page::Clipboard => "nav_clipboard",
-                        _ => unreachable!("only product navigation entries are rendered here"),
-                    };
-                    self.record_layout_control(key, &response, ui.clip_rect());
-                    if response.clicked() {
-                        self.navigate_to(page);
-                        self.device_tab = DeviceTab::Device;
-                    }
-                    ui.add_space(2.0);
-                }
-                ui.allocate_ui_with_layout(
-                    ui.available_size(),
-                    egui::Layout::bottom_up(egui::Align::LEFT),
-                    |ui| {
-                        ui.small("简体中文 · 主屏协作");
-                        ui.small(format!("{DISPLAY_VERSION} · 开发预览"));
-                        ui.separator();
-                    },
-                );
-            });
-        let workspace_header = matches!(self.page, Page::Devices | Page::Displays);
+        let window_width = ctx.viewport_rect().width();
+        // The title bar spans the window, so the safety controls never move with the sidebar.
         egui::Panel::top("global-actions")
-            .exact_size(if workspace_header { 96.0 } else { 52.0 })
+            .exact_size(52.0)
             .resizable(false)
             .show_separator_line(false)
             .frame(
                 egui::Frame::NONE
                     .fill(root.visuals().panel_fill)
-                    .inner_margin(egui::Margin::symmetric(
-                        24,
-                        if workspace_header { 12 } else { 6 },
-                    )),
+                    .inner_margin(egui::Margin::symmetric(16, 6)),
             )
-            .show(root, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.allocate_ui_with_layout(
-                    Vec2::new(ui.available_width(), 40.0),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        if workspace_header {
-                            ui.heading(desktop_style::heading_text(
-                                if self.page == Page::Devices {
-                                    "设备"
-                                } else {
-                                    "屏幕布局"
-                                },
-                            ));
-                        }
-                        ui.allocate_ui_with_layout(
-                            Vec2::new(ui.available_width(), 40.0),
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| self.safety_controls(ui),
-                        );
-                    },
-                );
-                if workspace_header {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), 24.0),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let subtitle = if self.page == Page::Devices {
-                                "管理已记住的电脑与独立协作许可。"
-                            } else {
-                                "按桌面位置摆放主屏，设置键鼠的跨屏方向。"
-                            };
-                            let width = (ui.available_width() - 152.0).max(1.0);
-                            left_text_slot(
-                                ui,
-                                width,
-                                24.0,
-                                egui::RichText::new(subtitle).size(14.0).weak(),
-                            )
-                            .on_hover_text(subtitle);
-                            if ui
-                                .add_sized(
-                                    [140.0, 24.0],
-                                    egui::Button::new(if self.connection_details_open {
-                                        "收起连接详情"
-                                    } else {
-                                        "连接与身份详情"
-                                    })
-                                    .small(),
-                                )
-                                .clicked()
-                            {
-                                self.connection_details_open = !self.connection_details_open;
-                            }
-                        },
-                    );
-                }
-            });
+            .show(root, |ui| self.title_bar(ui, window_width));
         egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.small("Linko / 屏跃");
@@ -1441,19 +1276,43 @@ impl App {
                 }
             });
         });
+        let expanded = self.sidebar_expanded(window_width);
+        let sidebar_mix = motion::sidebar_mix(&ctx, egui::Id::unique("linko-sidebar"), expanded);
+        egui::Panel::left("navigation")
+            .exact_size(motion::sidebar_width_for(sidebar_mix))
+            .resizable(false)
+            .frame(
+                egui::Frame::NONE
+                    .fill(root.visuals().panel_fill)
+                    .inner_margin(egui::Margin::symmetric(shell_ui::SIDEBAR_MARGIN, 8)),
+            )
+            .show(root, |ui| self.sidebar(ui, sidebar_mix));
         if self.page != Page::GestureLab && self.page != Page::GestureRules
             || self.child.is_some()
             || self.mouse_tab != MouseTab::Practice
         {
             self.gesture_lab.cancel();
         }
+        // M4: the arriving view slides in from the right and fades in. Margins move in
+        // opposite directions, so the content width and its wrapping stay constant.
+        let now = ctx.input(|input| input.time);
+        let view = shell_ui::view_key(self.page);
+        self.page_motion
+            .observe(view, now, desktop_style::tokens::VIEW_SWITCH_SECS);
+        let progress = self.page_motion.tick(&ctx);
+        let slide = motion::slide_offset(progress, desktop_style::tokens::VIEW_SLIDE_PX);
+        let slide = slide.round() as i8;
+        let mut margin = egui::Margin::symmetric(24, 16);
+        margin.left += slide;
+        margin.right -= slide;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .inner_margin(egui::Margin::symmetric(24, 16))
+                    .inner_margin(margin)
                     .fill(root.visuals().panel_fill),
             )
             .show(root, |ui| {
+                ui.multiply_opacity(shell_ui::view_alpha(progress));
                 egui::ScrollArea::vertical().show(ui, |ui| match self.page {
                     Page::Home => self.home(ui),
                     Page::Devices => self.devices(ui),
@@ -1478,6 +1337,8 @@ impl App {
         pairing.ui(self, &ctx);
         self.pairing_open = pairing.blocks_actions();
         self.pairing_panel = pairing;
+        // Report ordinary geometry only while the sidebar rests, so scripted clicks land on
+        // controls that keep their place.
         let report = if self.layout_report.is_none() {
             None
         } else if self.recording_mode {
@@ -1485,7 +1346,8 @@ impl App {
                 let rect = |r: egui::Rect| [r.min.x, r.min.y, r.width(), r.height()];
                 serde_json::json!({"version":1,"canvas":rect(canvas),"save":rect(save),"scope":"isolated_gui_widget_geometry"})
             })
-        } else if self.layout_geometry.contains_key("nav_layout")
+        } else if (sidebar_mix <= 0.0 || sidebar_mix >= 1.0)
+            && self.layout_geometry.contains_key("nav_layout")
             && self.layout_geometry.contains_key("add_device")
             && self.layout_geometry.contains_key("primary_action")
         {
@@ -1534,6 +1396,410 @@ pub(super) fn left_text_slot(
     .inner
 }
 
+/// Icon side of a safety dialog point, in points.
+const POINT_ICON: f32 = desktop_style::tokens::ICON_SMALL;
+
+/// One sentence of a safety dialog with its icon. The text is the content; the icon only
+/// helps scanning, so a point can never be painted as an icon alone.
+#[derive(Clone, Copy)]
+pub(super) struct SafetyPoint {
+    pub(super) icon: Icon,
+    pub(super) text: &'static str,
+}
+
+impl SafetyPoint {
+    /// Warnings carry the warning color; every other point uses the accent color.
+    fn ink(self, dark: bool) -> egui::Color32 {
+        let tone = if self.icon == Icon::Warning {
+            desktop_style::Tone::Warning
+        } else {
+            desktop_style::Tone::Accent
+        };
+        desktop_style::status_colors(dark, tone).1
+    }
+}
+
+/// Paint `point` as an icon followed by its wrapped sentence.
+pub(super) fn safety_point(ui: &mut egui::Ui, point: SafetyPoint) -> egui::Response {
+    let ink = point.ink(ui.visuals().dark_mode);
+    icon_row(ui, point.text, |painter, rect| {
+        point.icon.paint(painter, rect, ink);
+    })
+}
+
+/// A row with a fixed icon cell and text that wraps in the remaining width. `paint` draws
+/// the icon; it is skipped while the cell is scrolled out of view.
+pub(super) fn icon_row(
+    ui: &mut egui::Ui,
+    text: impl Into<egui::WidgetText>,
+    paint: impl FnOnce(&egui::Painter, egui::Rect),
+) -> egui::Response {
+    let width = ui.available_width();
+    let line = ui.text_style_height(&egui::TextStyle::Body).max(POINT_ICON);
+    ui.horizontal_top(|ui| {
+        let cell = Vec2::new(POINT_ICON, line);
+        let (rect, _) = ui.allocate_exact_size(cell, egui::Sense::hover());
+        if ui.is_rect_visible(rect) {
+            let icon = egui::Rect::from_center_size(rect.center(), Vec2::splat(POINT_ICON));
+            paint(ui.painter(), icon);
+        }
+        let text_width = (width - POINT_ICON - ui.spacing().item_spacing.x).max(1.0);
+        ui.vertical(|ui| {
+            ui.set_width(text_width);
+            ui.label(text)
+        })
+        .inner
+    })
+    .inner
+}
+
+/// Height of one segment of a segmented control, in points.
+const SEGMENT_HEIGHT: f32 = 32.0;
+/// Width around a segment label: both side paddings, the icon and the icon-to-text gap.
+const SEGMENT_PADDING: f32 = tokens::ICON_SMALL + tokens::SPACE_SM + 2.0 * tokens::SPACE_MD;
+
+/// Settings sections with their icons, in reading order.
+const SETTINGS_SECTIONS: [(SettingsSection, Icon, &str); 3] = [
+    (SettingsSection::General, Icon::Sliders, "常规"),
+    (SettingsSection::Permissions, Icon::Lock, "系统权限"),
+    (SettingsSection::Advanced, Icon::Log, "诊断与资料"),
+];
+/// Appearance choices; the value is the stored dark mode flag.
+const APPEARANCES: [(bool, Icon, &str); 2] =
+    [(false, Icon::Sun, "浅色"), (true, Icon::Moon, "深色")];
+
+/// Segmented control. Every segment shows its icon and its label, and the label is its
+/// accessible name, so an icon never stands alone. Returns true when a click changed
+/// `current`. Hover and selection fade once (M1, M2) and then ask for no more frames.
+fn segmented<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    current: &mut T,
+    options: &[(T, Icon, &str)],
+) -> bool {
+    let mut changed = false;
+    let track = egui::Frame::NONE
+        .fill(ui.visuals().faint_bg_color)
+        .corner_radius(egui::CornerRadius::same(tokens::RADIUS_CONTROL))
+        .inner_margin(egui::Margin::same(3));
+    track.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = tokens::SPACE_XS;
+            for &(value, icon, label) in options {
+                let selected = *current == value;
+                if segment(ui, icon, label, selected).clicked() && !selected {
+                    *current = value;
+                    changed = true;
+                }
+            }
+        });
+    });
+    changed
+}
+
+fn segment(ui: &mut egui::Ui, icon: Icon, label: &str, selected: bool) -> egui::Response {
+    let ink = if selected {
+        desktop_style::selection_colors(ui).1
+    } else {
+        ui.visuals().text_color()
+    };
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, ink);
+    let size = Vec2::new(galley.size().x + SEGMENT_PADDING, SEGMENT_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let enabled = ui.is_enabled();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, selected, label)
+    });
+    if ui.is_rect_visible(rect) {
+        let ctx = ui.ctx();
+        let hovered = response.hovered() && enabled;
+        let hover = motion::hover_mix(ctx, response.id.with("hover"), hovered);
+        let select = motion::select_mix(ctx, response.id.with("select"), selected);
+        let radius = f32::from(tokens::RADIUS_CONTROL) - 2.0;
+        let painter = ui.painter();
+        let hover_fill = ui.visuals().widgets.hovered.weak_bg_fill;
+        painter.rect_filled(rect, radius, tokens::faded(hover_fill, hover));
+        let select_fill = desktop_style::selection_colors(ui).0;
+        painter.rect_filled(rect, radius, tokens::faded(select_fill, select));
+        // Selection also draws an outline, so it never differs from hover by color alone.
+        let accent = tokens::accent_color(ui.visuals().dark_mode);
+        let ring = if response.has_focus() {
+            egui::Stroke::new(1.5, accent)
+        } else {
+            egui::Stroke::new(1.0, tokens::faded(accent, select))
+        };
+        painter.rect_stroke(rect.shrink(0.5), radius, ring, egui::StrokeKind::Inside);
+        let icon_center = egui::pos2(
+            rect.left() + tokens::SPACE_MD + tokens::ICON_SMALL / 2.0,
+            rect.center().y,
+        );
+        let icon_rect = egui::Rect::from_center_size(icon_center, Vec2::splat(tokens::ICON_SMALL));
+        icon.paint(painter, icon_rect, ink);
+        let text = egui::pos2(
+            icon_rect.right() + tokens::SPACE_SM,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        painter.galley(text, galley, ink);
+    }
+    response
+}
+
+/// A key combination of the shortcuts page: its keys, painted as key caps, and its effect.
+struct Shortcut {
+    keys: &'static [&'static str],
+    action: &'static str,
+}
+
+static SHORTCUTS: [Shortcut; 2] = [
+    Shortcut {
+        keys: &["Ctrl", "Alt", "Right"],
+        action: "切换控制目标",
+    },
+    Shortcut {
+        keys: &["Ctrl", "Alt", "Esc"],
+        action: "紧急恢复本机",
+    },
+];
+
+/// Height of a key cap and the space on each side of its name, in points.
+const KEYCAP_HEIGHT: f32 = 26.0;
+const KEYCAP_PADDING: f32 = 10.0;
+/// Depth of a key cap: the darker band painted below its face, in points.
+const KEYCAP_DEPTH: f32 = 2.0;
+
+/// Key caps joined by plus signs, then the effect of the combination as text.
+fn shortcut_row(ui: &mut egui::Ui, shortcut: &Shortcut) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = tokens::SPACE_XS;
+        for (index, key) in shortcut.keys.iter().enumerate() {
+            if index > 0 {
+                ui.weak("+");
+            }
+            keycap(ui, key);
+        }
+        ui.add_space(tokens::SPACE_MD);
+        ui.label(shortcut.action);
+    });
+}
+
+/// One raised key with its name centered on the face. The name is also the accessible
+/// label, so the graphic never replaces the text.
+fn keycap(ui: &mut egui::Ui, key: &str) -> egui::Response {
+    let ink = ui.visuals().text_color();
+    let font = egui::FontId::monospace(13.0);
+    let galley = ui.painter().layout_no_wrap(key.to_owned(), font, ink);
+    let width = (galley.size().x + 2.0 * KEYCAP_PADDING).max(KEYCAP_HEIGHT);
+    let size = Vec2::new(width, KEYCAP_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, key));
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let radius = f32::from(tokens::RADIUS_CHIP);
+        let line = tokens::line_color(ui.visuals().dark_mode);
+        painter.rect_filled(rect, radius, line);
+        let face = egui::Rect::from_min_max(rect.min, rect.max - Vec2::new(0.0, KEYCAP_DEPTH));
+        painter.rect_filled(face, radius, ui.visuals().faint_bg_color);
+        let stroke = egui::Stroke::new(1.0, line);
+        painter.rect_stroke(face, radius, stroke, egui::StrokeKind::Inside);
+        let text = face.center() - galley.size() / 2.0;
+        painter.galley(text, galley, ink);
+    }
+    response
+}
+
+static NATIVE_START_RISK: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "这会启动真实原生键鼠捕获与注入。",
+    },
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "实际工作进程将重新检查系统权限。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "连接/认证不代表对端允许本机控制。",
+    },
+];
+static NATIVE_START_WAIT: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "本次会等待另一台电脑约一分钟，可随时停止。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "连接并重新验权后才开始捕获键鼠。",
+    },
+    SafetyPoint {
+        icon: Icon::Stop,
+        text: "这不会开启断线自动重连。",
+    },
+];
+static NATIVE_START_RECEIVE_ALLOWED: SafetyPoint = SafetyPoint {
+    icon: Icon::Arrow(icons::Direction::Left),
+    text: "本机接收偏好：允许已登记对端控制本机。",
+};
+static NATIVE_START_RECEIVE_DENIED: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "本机接收偏好：不允许对端控制本机。",
+    },
+    SafetyPoint {
+        icon: Icon::Arrow(icons::Direction::Right),
+        text: "可请求控制已授权本机的对端。",
+    },
+];
+static NATIVE_START_REPLACE: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Stop,
+        text: "当前仅通信会话将先停止。",
+    },
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "清理成功后再以键鼠模式重连；失败不自动继续。",
+    },
+];
+static NATIVE_START_SHORTCUTS: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "Ctrl+Alt+Right 切换。",
+    },
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "Ctrl+Alt+Esc 紧急恢复。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "实机兼容性、DPI、输入法与权限变化仍未完成验收。",
+    },
+];
+static NATIVE_START_RETURN: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Arrow(icons::Direction::Left),
+        text: "接收端首次物理动作仅用于收回控制，不执行或回放。",
+    },
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "切回本机后先松开物理按键／鼠标按钮，再继续操作。",
+    },
+];
+
+/// W3 explanation in its original order. Conditional groups appear under the same
+/// conditions as the sentences they replace.
+pub(super) fn native_start_points(
+    allow: bool,
+    waits: bool,
+    replaces_session: bool,
+) -> Vec<SafetyPoint> {
+    let mut points = NATIVE_START_RISK.to_vec();
+    if waits {
+        points.extend_from_slice(&NATIVE_START_WAIT);
+    }
+    if allow {
+        points.push(NATIVE_START_RECEIVE_ALLOWED);
+    } else {
+        points.extend_from_slice(&NATIVE_START_RECEIVE_DENIED);
+    }
+    if replaces_session {
+        points.extend_from_slice(&NATIVE_START_REPLACE);
+    }
+    points.extend_from_slice(&NATIVE_START_SHORTCUTS);
+    points.extend_from_slice(&NATIVE_START_RETURN);
+    points
+}
+
+static REVOKE_POINTS: [SafetyPoint; 2] = [
+    SafetyPoint {
+        icon: Icon::Stop,
+        text: "停止会话并清除对端信任与本机接收许可。",
+    },
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "保留本机身份；下次需重新核验。",
+    },
+];
+static RESET_POINTS: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "先备份设置和设备登记，再恢复默认并撤销信任。",
+    },
+    SafetyPoint {
+        icon: Icon::Device,
+        text: "本机身份保持。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "无效或未来版本只读保留。",
+    },
+];
+static FORCE_STOP_POINTS: [SafetyPoint; 3] = [
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "仅在正常停止无响应时使用。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "强制结束不能确认输入已释放。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "之后本窗口只允许通信诊断。",
+    },
+];
+static RECOVERY_POINTS: [SafetyPoint; 10] = [
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "松开物理按键/鼠标按钮，检查两端提示与系统权限。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "屏跃不会关闭安全防护，也不把退出当恢复成功。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "进程报告只表示软件路由与清理请求。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "它不代表OS或应用效果已确认。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "恢复未确认时保留警告。",
+    },
+    SafetyPoint {
+        icon: Icon::Lock,
+        text: "可运行仅通信诊断；新的原生键鼠会话保持禁止。",
+    },
+    SafetyPoint {
+        icon: Icon::Recover,
+        text: "清理失败且原生捕获仍可用时，可请求强制返回：",
+    },
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "先松开全部物理按键／按钮；",
+    },
+    SafetyPoint {
+        icon: Icon::Keyboard,
+        text: "再重新按下并松开Ctrl+Alt+Esc。",
+    },
+    SafetyPoint {
+        icon: Icon::Warning,
+        text: "强制返回仍保留未知警告，不证明系统按键已释放。",
+    },
+];
+
+/// W4 explanation for `dialog`, in the original sentence order.
+fn dialog_points(dialog: Dialog) -> &'static [SafetyPoint] {
+    match dialog {
+        Dialog::NativeStart => &[],
+        Dialog::Revoke => &REVOKE_POINTS,
+        Dialog::Reset => &RESET_POINTS,
+        Dialog::ForceStop => &FORCE_STOP_POINTS,
+        Dialog::Recovery => &RECOVERY_POINTS,
+    }
+}
+
 pub(super) fn local_device_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "这台 Mac"
@@ -1542,22 +1808,6 @@ pub(super) fn local_device_name() -> &'static str {
     } else {
         "这台电脑"
     }
-}
-fn screen_rects(canvas: egui::Rect, edge: &str) -> (egui::Rect, egui::Rect) {
-    let scale = (canvas.width() / 470.0)
-        .min(canvas.height() / 260.0)
-        .clamp(0.0, 1.0);
-    let size = Vec2::new(166.0, 112.0) * scale;
-    let offset = match edge {
-        "left" => Vec2::new(-(size.x + 26.0 * scale) / 2.0, 0.0),
-        "top" => Vec2::new(0.0, -(size.y + 14.0 * scale) / 2.0),
-        "bottom" => Vec2::new(0.0, (size.y + 14.0 * scale) / 2.0),
-        _ => Vec2::new((size.x + 26.0 * scale) / 2.0, 0.0),
-    };
-    (
-        egui::Rect::from_center_size(canvas.center() - offset, size),
-        egui::Rect::from_center_size(canvas.center() + offset, size),
-    )
 }
 fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
     if !center.x.is_finite() || !center.y.is_finite() || local.expand(10.0).contains(center) {
@@ -1696,13 +1946,19 @@ mod layout_tests {
         assert!(draft.is_none());
     }
     #[test]
-    fn relative_screens_fit_the_canvas_in_all_directions_and_small_windows() {
-        for width in [200.0, 320.0, 600.0, 1000.0] {
-            let canvas = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), Vec2::new(width, 260.0));
-            for edge in ["left", "right", "top", "bottom"] {
-                let (local, peer) = screen_rects(canvas, edge);
-                assert!(canvas.contains_rect(local));
-                assert!(canvas.contains_rect(peer));
+    fn adjacent_screens_drop_on_their_own_edge_at_every_size() {
+        // The canvas geometry itself is covered by the workspace canvas tests; this keeps
+        // the drop rule for a peer screen placed beside the local one in each direction.
+        for side in [24.0, 60.0, 166.0, 300.0] {
+            let local = egui::Rect::from_center_size(egui::pos2(400.0, 300.0), Vec2::splat(side));
+            let gap = side + 2.0;
+            for (edge, offset) in [
+                ("left", Vec2::new(-gap, 0.0)),
+                ("right", Vec2::new(gap, 0.0)),
+                ("top", Vec2::new(0.0, -gap)),
+                ("bottom", Vec2::new(0.0, gap)),
+            ] {
+                let peer = local.translate(offset);
                 assert_eq!(dropped_edge(peer.center(), local), Some(edge));
                 assert_eq!(dropped_edge(local.center(), local), None);
                 assert!(!local.intersects(peer));
@@ -1721,5 +1977,366 @@ mod layout_tests {
         ] {
             assert_eq!(dropped_edge(center, local), None);
         }
+    }
+}
+
+/// Shared by the dialog tests here and in `worker_permissions`.
+#[cfg(test)]
+pub(super) mod safety_dialog_tests {
+    use super::*;
+
+    /// Text and non-text shapes of one frame. Texts keep the clip they were painted with.
+    pub(crate) struct Painted {
+        texts: Vec<(String, egui::Rect, egui::Rect)>,
+        marks: Vec<egui::Rect>,
+    }
+
+    fn collect(shape: &egui::epaint::Shape, clip: egui::Rect, painted: &mut Painted) {
+        match shape {
+            egui::epaint::Shape::Text(text) => {
+                let bounds = text.visual_bounding_rect();
+                painted
+                    .texts
+                    .push((text.galley.job.text.clone(), bounds, clip));
+            }
+            egui::epaint::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect(shape, clip, painted);
+                }
+            }
+            other => painted.marks.push(other.visual_bounding_rect()),
+        }
+    }
+
+    impl Painted {
+        pub(crate) fn of(output: egui::FullOutput) -> Self {
+            let mut painted = Self {
+                texts: Vec::new(),
+                marks: Vec::new(),
+            };
+            for clipped in &output.shapes {
+                collect(&clipped.shape, clipped.clip_rect, &mut painted);
+            }
+            output.drop_without_applying_deltas();
+            painted
+        }
+
+        /// Bounds and clip of the painted text equal to `label`.
+        pub(crate) fn text(&self, label: &str) -> Option<(egui::Rect, egui::Rect)> {
+            let found = self.texts.iter().find(|(text, _, _)| text == label);
+            found.map(|(_, bounds, clip)| (*bounds, *clip))
+        }
+
+        /// True when an icon sized shape sits in the cell just left of `text`.
+        fn icon_before(&self, text: egui::Rect) -> bool {
+            self.marks.iter().any(|mark| {
+                mark.is_positive()
+                    && mark.width() <= POINT_ICON + 2.0
+                    && mark.height() <= POINT_ICON + 2.0
+                    && mark.max.x <= text.min.x
+                    && mark.min.x >= text.min.x - 2.0 * POINT_ICON - 12.0
+                    && mark.min.y < text.min.y + 20.0
+                    && mark.max.y > text.min.y - 6.0
+            })
+        }
+
+        /// Every label is painted inside its clip with an icon beside its first line.
+        pub(crate) fn assert_points(&self, labels: &[&str]) {
+            assert!(!labels.is_empty());
+            for label in labels {
+                let Some((bounds, clip)) = self.text(label) else {
+                    panic!("{label} absent");
+                };
+                assert!(clip.contains_rect(bounds), "{label} clipped");
+                assert!(self.icon_before(bounds), "{label} has no icon");
+            }
+        }
+    }
+
+    pub(crate) fn texts_of(points: &[SafetyPoint]) -> Vec<&'static str> {
+        points.iter().map(|point| point.text).collect()
+    }
+
+    /// Text present, at most 30 characters: a point never degrades to an icon alone.
+    pub(crate) fn assert_short_sentences(points: &[SafetyPoint]) {
+        for point in points {
+            let count = point.text.chars().count();
+            assert!(!point.text.trim().is_empty(), "a point without text");
+            assert!(count <= 30, "{} has {count} characters", point.text);
+        }
+    }
+
+    fn tall_frame(ctx: &egui::Context, run: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {
+        let size = Vec2::new(580.0, 3000.0);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            ..Default::default()
+        };
+        ctx.run_ui(input, run)
+    }
+
+    #[test]
+    fn every_safety_point_keeps_a_short_sentence_and_its_conditions() {
+        for allow in [false, true] {
+            for waits in [false, true] {
+                for replaces in [false, true] {
+                    let points = native_start_points(allow, waits, replaces);
+                    assert_short_sentences(&points);
+                    let texts = texts_of(&points);
+                    let has = |text: &str| texts.iter().copied().any(|item| item == text);
+                    assert!(has("这会启动真实原生键鼠捕获与注入。"));
+                    assert!(has("连接/认证不代表对端允许本机控制。"));
+                    assert!(has("Ctrl+Alt+Esc 紧急恢复。"));
+                    assert!(has("实机兼容性、DPI、输入法与权限变化仍未完成验收。"));
+                    assert!(has("接收端首次物理动作仅用于收回控制，不执行或回放。"));
+                    assert_eq!(has("这不会开启断线自动重连。"), waits);
+                    assert_eq!(
+                        has("清理成功后再以键鼠模式重连；失败不自动继续。"),
+                        replaces
+                    );
+                    assert_eq!(has("本机接收偏好：允许已登记对端控制本机。"), allow);
+                    assert_eq!(has("本机接收偏好：不允许对端控制本机。"), !allow);
+                    assert_eq!(has("可请求控制已授权本机的对端。"), !allow);
+                }
+            }
+        }
+        assert!(dialog_points(Dialog::NativeStart).is_empty());
+        for dialog in [
+            Dialog::Revoke,
+            Dialog::Reset,
+            Dialog::ForceStop,
+            Dialog::Recovery,
+        ] {
+            assert!(!dialog_points(dialog).is_empty());
+            assert_short_sentences(dialog_points(dialog));
+        }
+    }
+
+    #[test]
+    fn every_safety_point_renders_its_icon_beside_its_text() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.dialog = Some(Dialog::NativeStart);
+        tall_frame(&ctx, |ui| app.native_start_contents(ui)).drop_without_applying_deltas();
+        let painted = Painted::of(tall_frame(&ctx, |ui| app.native_start_contents(ui)));
+        let waits = !app.config.listen && !app.config.reconnect;
+        let points = native_start_points(app.config.allow, waits, app.child.is_some());
+        painted.assert_points(&texts_of(&points));
+        for dialog in [
+            Dialog::Revoke,
+            Dialog::Reset,
+            Dialog::ForceStop,
+            Dialog::Recovery,
+        ] {
+            app.dialog = Some(dialog);
+            tall_frame(&ctx, |ui| app.dialog_contents(ui, dialog)).drop_without_applying_deltas();
+            let painted = Painted::of(tall_frame(&ctx, |ui| app.dialog_contents(ui, dialog)));
+            painted.assert_points(&texts_of(dialog_points(dialog)));
+            assert!(painted.text("立即停止并恢复本机").is_some());
+            assert_eq!(app.dialog, Some(dialog));
+        }
+        assert!(app.config == before && app.child.is_none() && !app.exit_confirmed);
+        assert!(!app.identity_dir().exists() && !app.dir.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod subpage_tests {
+    use super::*;
+
+    /// Painted texts with their bounds, and the bounds of every other shape.
+    struct Shapes {
+        texts: Vec<(String, egui::Rect)>,
+        marks: Vec<egui::Rect>,
+    }
+
+    impl Shapes {
+        fn of(output: egui::FullOutput) -> Self {
+            fn collect(shape: &egui::epaint::Shape, shapes: &mut Shapes) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => {
+                        let bounds = text.visual_bounding_rect();
+                        shapes.texts.push((text.galley.job.text.clone(), bounds));
+                    }
+                    egui::epaint::Shape::Vec(list) => {
+                        for shape in list {
+                            collect(shape, shapes);
+                        }
+                    }
+                    other => shapes.marks.push(other.visual_bounding_rect()),
+                }
+            }
+            let mut shapes = Self {
+                texts: Vec::new(),
+                marks: Vec::new(),
+            };
+            for clipped in &output.shapes {
+                collect(&clipped.shape, &mut shapes);
+            }
+            output.drop_without_applying_deltas();
+            shapes
+        }
+
+        /// Bounds of the lowest painted text equal to `label`; the title bar comes first.
+        fn lowest(&self, label: &str) -> Option<egui::Rect> {
+            let found = self.texts.iter().filter(|(text, _)| text == label);
+            let bounds = found.map(|(_, bounds)| *bounds);
+            bounds.max_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        }
+
+        /// True when a key cap sized shape holds `text` on its face.
+        fn key_cap_around(&self, text: egui::Rect) -> bool {
+            self.marks.iter().any(|mark| {
+                mark.contains_rect(text)
+                    && mark.height() <= KEYCAP_HEIGHT + 1.0
+                    && mark.width() <= text.width() + 2.0 * KEYCAP_PADDING + 8.0
+            })
+        }
+    }
+
+    fn frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1180.0, 820.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |root| app.desktop(root),
+        )
+    }
+
+    /// Frames without input until the view switch motion has finished.
+    fn settle(app: &mut App, ctx: &egui::Context) {
+        for _ in 0..20 {
+            frame(app, ctx, vec![]).drop_without_applying_deltas();
+        }
+    }
+
+    fn click_text(app: &mut App, ctx: &egui::Context, label: &str) -> Result<()> {
+        let shapes = Shapes::of(frame(app, ctx, vec![]));
+        let at = shapes.lowest(label).context("text absent")?.center();
+        for pressed in [true, false] {
+            let events = vec![
+                egui::Event::PointerMoved(at),
+                egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ];
+            frame(app, ctx, events).drop_without_applying_deltas();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn settings_segments_switch_without_writing_and_appearance_saves() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let original = app.config.clone();
+        let path = fixture.path.join("settings.json");
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.navigate_to(Page::Settings);
+        settle(&mut app, &ctx);
+        for (section, label) in [
+            (SettingsSection::Permissions, "系统权限"),
+            (SettingsSection::Advanced, "诊断与资料"),
+            (SettingsSection::General, "常规"),
+        ] {
+            click_text(&mut app, &ctx, label)?;
+            assert!(app.settings_section == section, "{label} did not switch");
+            assert!(app.page == Page::Settings && app.config == original);
+            assert!(!path.exists(), "switching {label} wrote the settings");
+            assert!(app.child.is_none() && !app.worker_permissions.needs_poll());
+        }
+        // Appearance keeps its meaning: the choice applies and is saved at once.
+        click_text(&mut app, &ctx, "深色")?;
+        assert!(app.config.dark);
+        let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        assert_eq!(stored["data"]["dark"], true);
+        assert!(!app.config.native && !app.config.allow && !app.config.reconnect);
+        assert!(app.config.fingerprint.is_none() && app.child.is_none());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn shortcut_key_caps_pair_every_key_with_its_action_text() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.navigate_to(Page::Shortcuts);
+        settle(&mut app, &ctx);
+        let shapes = Shapes::of(frame(&mut app, &ctx, vec![]));
+        for shortcut in &SHORTCUTS {
+            let action = shapes.lowest(shortcut.action).context("no action")?;
+            let mut keys: Vec<_> = shapes
+                .texts
+                .iter()
+                .filter(|(text, bounds)| {
+                    shortcut.keys.contains(&text.as_str())
+                        && (bounds.center().y - action.center().y).abs() < 6.0
+                        && bounds.max.x < action.min.x
+                })
+                .collect();
+            keys.sort_by(|a, b| a.1.min.x.total_cmp(&b.1.min.x));
+            let names: Vec<&str> = keys.iter().map(|(text, _)| text.as_str()).collect();
+            assert_eq!(names, shortcut.keys, "{}", shortcut.action);
+            for (key, bounds) in keys {
+                assert!(shapes.key_cap_around(*bounds), "{key} has no key cap");
+            }
+        }
+        for sentence in [
+            "仅在已明确开启的键鼠会话中生效。",
+            "切回后先松开物理按键与鼠标按钮。",
+        ] {
+            assert!(shapes.lowest(sentence).is_some(), "{sentence} absent");
+        }
+        assert!(app.child.is_none() && !app.config.native && !app.config.allow);
+        assert!(!fixture.path.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn former_layout_routes_still_open_the_home_canvas() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        // Rendering metadata only; this value never authenticates a peer.
+        app.config.fingerprint = Some("layout-presentation-only".into());
+        let original = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        // Setup completion and pairing completion leave the layout tab selected.
+        for (page, tab) in [
+            (Page::Devices, DeviceTab::Layout),
+            (Page::Displays, DeviceTab::Layout),
+            (Page::Displays, DeviceTab::Device),
+        ] {
+            app.page = page;
+            app.device_tab = tab;
+            let shapes = Shapes::of(frame(&mut app, &ctx, vec![]));
+            let canvas = shapes.lowest("左侧").is_some();
+            assert!(canvas, "canvas direction control absent");
+            assert!(app.config == original && app.child.is_none() && !app.pairing_open);
+        }
+        assert!(!fixture.path.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
 }
