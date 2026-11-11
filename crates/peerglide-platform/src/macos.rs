@@ -1,6 +1,7 @@
 //! CoreGraphics event tap and tagged event injection. No permission bypasses.
 use super::*;
-use anyhow::ensure;
+use crate::display_layout::{Bounds, Display, DisplayId, Layout, Rotation};
+use anyhow::{ensure, Context};
 use std::{cell::RefCell, ffi::c_void, ptr::null_mut, sync::Mutex};
 type Ref = *mut c_void;
 #[repr(C)]
@@ -27,6 +28,11 @@ extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> Rect;
+    fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
+    fn CGDisplayRotation(display: u32) -> f64;
+    fn CGDisplayCopyDisplayMode(display: u32) -> Ref;
+    fn CGDisplayModeGetWidth(mode: Ref) -> usize;
+    fn CGDisplayModeGetPixelWidth(mode: Ref) -> usize;
     fn CGEventTapCreate(
         location: u32,
         place: u32,
@@ -79,6 +85,80 @@ extern "C" {
     static kCFRunLoopDefaultMode: Ref;
     fn CFRelease(value: *const c_void);
 }
+const MAX_ACTIVE_DISPLAYS: usize = 64;
+
+fn active_display_ids() -> Result<Vec<u32>> {
+    // One extra element detects a truncated list instead of accepting a partial desktop.
+    let mut ids = [0; MAX_ACTIVE_DISPLAYS + 1];
+    let mut count = 0;
+    // SAFETY: ids has room for the requested capacity and count is writable.
+    let result = unsafe { CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut count) };
+    ensure!(result == 0, "macOS display enumeration failed ({result})");
+    let count = count as usize;
+    ensure!(
+        (1..=MAX_ACTIVE_DISPLAYS).contains(&count),
+        "macOS display count outside the snapshot limit"
+    );
+    Ok(ids[..count].to_vec())
+}
+
+fn display_metrics(
+    id: u32,
+    rect: Rect,
+    angle: f64,
+    width: usize,
+    pixel_width: usize,
+) -> Result<Display> {
+    let rotation = match angle.rem_euclid(360.0) {
+        0.0 => Rotation::Upright,
+        90.0 => Rotation::Clockwise90,
+        180.0 => Rotation::Clockwise180,
+        270.0 => Rotation::Clockwise270,
+        _ => anyhow::bail!("unsupported macOS display rotation"),
+    };
+    ensure!(width > 0 && pixel_width > 0, "invalid macOS display mode");
+    Ok(Display {
+        id: DisplayId(id),
+        bounds: Bounds {
+            left: rect.origin.x,
+            top: rect.origin.y,
+            right: rect.origin.x + rect.size.width,
+            bottom: rect.origin.y + rect.size.height,
+        },
+        scale: pixel_width as f64 / width as f64,
+        rotation,
+    })
+}
+
+fn active_display(id: u32) -> Result<Display> {
+    // SAFETY: the display ID came from CoreGraphics. Copy returns either a
+    // retained mode or null. Release the retained mode after querying it.
+    let (rect, angle, width, pixel_width) = unsafe {
+        let mode = CGDisplayCopyDisplayMode(id);
+        ensure!(!mode.is_null(), "macOS display mode changed during enumeration");
+        let metrics = (
+            CGDisplayBounds(id),
+            CGDisplayRotation(id),
+            CGDisplayModeGetWidth(mode),
+            CGDisplayModeGetPixelWidth(mode),
+        );
+        CFRelease(mode);
+        metrics
+    };
+    display_metrics(id, rect, angle, width, pixel_width)
+}
+
+pub(super) fn read_display_layout() -> Result<Layout> {
+    let ids = active_display_ids()?;
+    let primary = DisplayId(*ids.first().context("no active macOS display")?);
+    let displays = ids
+        .iter()
+        .map(|id| active_display(*id))
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(ids == active_display_ids()?, "macOS display set changed during enumeration");
+    Layout::new(primary, displays).map_err(|error| anyhow::anyhow!("invalid macOS layout: {error:?}"))
+}
+
 // ABI from Apple's CFRunLoop.h, version-0 source. The perform callback has
 // no input/state work; it just makes RunInMode(returnAfterSource=true) return.
 #[repr(C)]
@@ -848,5 +928,31 @@ mod tests {
         assert_eq!(modifier_flags(0x11), 1 << 18);
         assert_eq!(modifier_flags(0x10), 1 << 18);
         assert_eq!(modifier_flags(0), 0);
+    }
+}
+
+#[cfg(test)]
+mod display_layout_tests {
+    use super::*;
+
+    #[test]
+    fn macos_display_metrics_keep_oriented_bounds_and_backing_scale() -> Result<()> {
+        let rect = Rect {
+            origin: Point { x: -700.0, y: 30.0 },
+            size: Size {
+                width: 700.0,
+                height: 1200.0,
+            },
+        };
+        let display = display_metrics(19, rect, 90.0, 700, 1400)?;
+        assert_eq!(display.id, DisplayId(19));
+        assert!((display.bounds.left + 700.0).abs() < f64::EPSILON);
+        assert!(display.bounds.right.abs() < f64::EPSILON);
+        assert!((display.bounds.bottom - 1230.0).abs() < f64::EPSILON);
+        assert!((display.scale - 2.0).abs() < f64::EPSILON);
+        assert_eq!(display.rotation, Rotation::Clockwise90);
+        assert!(display_metrics(19, rect, 45.0, 700, 1400).is_err());
+        assert!(display_metrics(19, rect, 0.0, 0, 1400).is_err());
+        Ok(())
     }
 }
