@@ -11,6 +11,7 @@ use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub mod data;
+mod data_frames;
 pub mod pairing;
 
 pub struct Identity {
