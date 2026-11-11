@@ -868,14 +868,12 @@ pub(super) async fn run_with_diagnostics(
             },
             d=c.read_datagram()=>{
                 let d=match d {Ok(d)=>d,Err(_) if normal_close(&c)=>return Ok(()),Err(e)=>return Err(e.into())};
-                count(Count::Received);
-                let now=now_ms();
-                match decode::<Motion>(&d) {
-                    Ok(m) if m.valid()=>{
-                    if !recovery.receiver.accepts(m.lease,now) {
-                        count(Count::LeaseRejected);
-                    } else if recovery.receiver.motion(m,now) {
-                    let result=recovery.pointer(m.x,m.y).await;
+                if let Some(m)=read_motion_batch(&c,&mut recovery.receiver,&d,&count).await {
+                    let result=if recovery.receiver.accepts(m.lease,now_ms()) {
+                        recovery.pointer(m.x,m.y).await
+                    } else {
+                        Ok(false)
+                    };
                     count(match &result {
                         Ok(true)=>Count::PointerAccepted,
                         Ok(false)=>Count::PointerRetired,
@@ -883,9 +881,6 @@ pub(super) async fn run_with_diagnostics(
                     });
                     if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                     input_status.checked(result)?;
-                    } else {count(Count::ReplayRejected);}
-                    },
-                    _=>count(Count::DecodeRejected),
                 }
             },
             e=input.recv(),if native=>{
@@ -1105,6 +1100,54 @@ fn layout_hint_once(
     let withdraws = previous.is_some_and(|(l, p)| p != l.opposite());
     (hint.mismatched() || withdraws).then_some(hint)
 }
+// Bound the work before returning to the select loop for reliable input and stop.
+const MOTION_RECEIVE_BATCH: usize = 32;
+
+async fn read_motion_batch(
+    connection: &quinn::Connection,
+    receiver: &mut Receiver,
+    first: &[u8],
+    count: &impl Fn(Count),
+) -> Option<Motion> {
+    let mut latest = None;
+    observe_motion_datagram(receiver, &mut latest, first, now_ms(), count);
+    for _ in 1..MOTION_RECEIVE_BATCH {
+        // Poll once and take immediately ready packets without awaiting new motion.
+        let next = tokio::select! {
+            biased;
+            result = connection.read_datagram() => result.ok(),
+            _ = std::future::ready(()) => None,
+        };
+        let Some(datagram) = next else { break };
+        observe_motion_datagram(receiver, &mut latest, &datagram, now_ms(), count);
+    }
+    latest
+}
+
+fn observe_motion_datagram(
+    receiver: &mut Receiver,
+    latest: &mut Option<Motion>,
+    datagram: &[u8],
+    now: u64,
+    count: &impl Fn(Count),
+) {
+    count(Count::Received);
+    let motion = match decode::<Motion>(datagram) {
+        Ok(motion) if motion.valid() => motion,
+        _ => {
+            count(Count::DecodeRejected);
+            return;
+        }
+    };
+    if !receiver.accepts(motion.lease, now) {
+        count(Count::LeaseRejected);
+    } else if !receiver.motion(motion, now) {
+        count(Count::ReplayRejected);
+    } else if latest.replace(motion).is_some() {
+        count(Count::PointerCoalesced);
+    }
+}
+
 fn primary_edge_entry(
     gate: &mut EdgeGate,
     edge: Edge,
@@ -1516,6 +1559,33 @@ mod tests {
                 WorkerInputState::RecoveryUnconfirmed,
             ]
         );
+    }
+
+    #[test]
+    fn receive_batch_keeps_the_highest_valid_sequence_for_the_active_lease() -> Result<()> {
+        let mut receiver = Receiver::default();
+        let mut latest = None;
+        let diagnostics = InputDiagnostics::default();
+        let count = |kind| diagnostics.increment(kind);
+        assert!(receiver.acquire(7, 100, true));
+        for (lease, sequence) in [(7, 1), (7, 3), (7, 2), (8, 4)] {
+            let payload = encode(&Motion {
+                lease,
+                sequence,
+                x: 0.5,
+                y: 0.5,
+            })?;
+            observe_motion_datagram(&mut receiver, &mut latest, &payload, 101, &count);
+        }
+        observe_motion_datagram(&mut receiver, &mut latest, b"invalid", 101, &count);
+        assert_eq!(latest.map(|motion| motion.sequence), Some(3));
+        let summary = diagnostics
+            .snapshot(peerglide_platform::input_diagnostics::Phase::Sample)
+            .to_string();
+        for field in ["rx=5", "decode=1", "lease=1", "replay=1", "rx_coalesced=1"] {
+            assert!(summary.split_ascii_whitespace().any(|value| value == field));
+        }
+        Ok(())
     }
 
     #[test]
