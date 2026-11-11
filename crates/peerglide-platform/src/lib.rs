@@ -11,6 +11,8 @@ pub mod application_menu;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
 pub mod context;
+#[cfg(any(windows, target_os = "macos", test))]
+mod held_inputs;
 #[cfg(any(windows, test))]
 mod inject_thread;
 pub mod input_diagnostics;
@@ -1177,8 +1179,8 @@ struct HookState {
     local_gestures: Option<gesture_capture::CallbackBroker>,
     tx: mpsc::Sender<Captured>,
     gate: CaptureGate,
-    keys: std::collections::BTreeSet<u16>,
-    buttons: std::collections::BTreeSet<u8>,
+    keys: held_inputs::HeldKeys,
+    buttons: held_inputs::HeldButtons,
     toggle_armed: bool,
     target: InputCapabilities,
 }
@@ -1190,7 +1192,7 @@ enum PairOwner {
     Local(CaptureEpoch),
     Remote(CaptureEpoch),
     Consumed(CaptureRoute),
-    // Protected pairs are fixed-table holds, never added to the legacy sets.
+    // Protected pairs are fixed-table holds, separate from the physical hold sets.
     Protected(CaptureRoute),
 }
 #[cfg(any(windows, target_os = "macos"))]

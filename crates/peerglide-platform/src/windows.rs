@@ -212,8 +212,8 @@ fn capture_impl(
                 local_gestures,
                 tx,
                 gate,
-                keys,
-                buttons,
+                keys: keys.into_iter().collect(),
+                buttons: buttons.into_iter().collect(),
                 toggle_armed: false,
                 target,
             };
@@ -454,8 +454,8 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                 }
                 if let Some(broker) = s.local_gestures.as_mut() {
                     let remote = s.gate.active();
-                    // Fixed native short path only: no legacy BTreeSet, tokio
-                    // channel, cursor query, wheel state or recognition here.
+                    // Fixed native short path only: no KVM channel, cursor query,
+                    // wheel state or recognition here.
                     let point = gesture_capture::RawPoint {
                         x: f64::from(e.pt.x),
                         y: f64::from(e.pt.y),
@@ -1104,7 +1104,9 @@ mod tests {
                 tx,
                 gate: CaptureGate::default(),
                 keys: Default::default(),
-                buttons: sampled_buttons(|observed| observed == i32::from(vk)),
+                buttons: sampled_buttons(|observed| observed == i32::from(vk))
+                    .into_iter()
+                    .collect(),
                 toggle_armed: false,
                 target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
             };
@@ -1134,7 +1136,7 @@ mod tests {
             local_gestures: None,
             tx,
             gate: CaptureGate::default(),
-            keys: [STARTUP_VK | VK_RIGHT, 0xe0, 0xe2].into(),
+            keys: [STARTUP_VK | VK_RIGHT, 0xe0, 0xe2].into_iter().collect(),
             buttons: Default::default(),
             toggle_armed: false,
             target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
@@ -1153,7 +1155,7 @@ mod tests {
             local_gestures: None,
             tx,
             gate: CaptureGate::default(),
-            keys: [STARTUP_VK | VK_RETURN].into(),
+            keys: [STARTUP_VK | VK_RETURN].into_iter().collect(),
             buttons: Default::default(),
             toggle_armed: false,
             target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
