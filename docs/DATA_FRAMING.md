@@ -25,6 +25,11 @@ and obtains explicit per-offer approval before it admits a chunk body or writes
 to disk. A sender may use the accepted offset only if it fits the manifest for
 that exact offer. Acceptance does not imply file publication.
 
+File chunk scheduling allows one 256 KiB chunk per 31.25 ms in each
+direction. Idle time never builds a burst allowance. The application limit
+coexists with QUIC flow control and the separate input connection. Real
+concurrent input latency is a cross-host acceptance item.
+
 A clipboard receipt indicates that the peer has a pending text snapshot. An
 import result reports the local clipboard outcome separately. Neither allows
 the peer to request system actions. Clipboard or file bytes stay out of logs.
