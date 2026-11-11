@@ -15,6 +15,7 @@ pub mod data;
 mod data_frames;
 mod data_session;
 pub mod file_transfer;
+pub mod file_worker;
 pub mod pairing;
 
 pub struct Identity {
