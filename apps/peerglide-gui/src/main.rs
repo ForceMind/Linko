@@ -943,8 +943,7 @@ impl App {
         );
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         anyhow::ensure!(self.child.is_none(), "已有会话正在运行");
-        let local =
-            Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
+        let local = Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
         let cert = self.verified_peer_certificate()?;
         if !self.config.listen || probe {
             self.config
