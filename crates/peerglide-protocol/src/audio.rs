@@ -24,8 +24,9 @@ impl Frame {
         let mut bytes = [0; FRAME_BYTES];
         bytes[..MAGIC.len()].copy_from_slice(MAGIC);
         bytes[MAGIC.len()..HEADER].copy_from_slice(&self.sequence.to_le_bytes());
-        for (word, sample) in bytes[HEADER..].chunks_exact_mut(2).zip(self.samples.iter()) {
-            word.copy_from_slice(&sample.to_le_bytes());
+        let (words, _) = bytes[HEADER..].as_chunks_mut::<2>();
+        for (word, sample) in words.iter_mut().zip(self.samples.iter()) {
+            *word = sample.to_le_bytes();
         }
         Some(bytes)
     }
@@ -39,8 +40,9 @@ impl Frame {
             return None;
         }
         let mut samples = [0; SAMPLES];
-        for (sample, word) in samples.iter_mut().zip(bytes[HEADER..].chunks_exact(2)) {
-            *sample = i16::from_le_bytes([word[0], word[1]]);
+        let (words, _) = bytes[HEADER..].as_chunks::<2>();
+        for (sample, word) in samples.iter_mut().zip(words) {
+            *sample = i16::from_le_bytes(*word);
         }
         Some(Self { sequence, samples })
     }
