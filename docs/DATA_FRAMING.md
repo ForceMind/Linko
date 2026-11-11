@@ -1,7 +1,7 @@
 # Isolated data framing v1
 
 codec::Frame reads/writes Unicode text, a file manifest offer, a bounded file
-chunk or cancellation. Fixed 12-byte PGD1 header, closed kind/flags/reserved
+chunk, cancellation or a clipboard receipt. Fixed 12-byte PGD1 header, closed kind/flags/reserved
 fields and per-kind body limits are checked before allocating a body. Invalid,
 unknown, truncated or oversized frames terminate the stream. Never resynchronize
 by scanning for magic in payloads. Writer validates before emitting any bytes;
