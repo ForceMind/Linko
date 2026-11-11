@@ -10,6 +10,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+pub mod audio;
 pub mod clipboard_worker;
 pub mod data;
 mod data_frames;
@@ -231,7 +232,7 @@ pub fn validate_certificate(certificate: &[u8]) -> Result<()> {
     roots(certificate)?;
     Ok(())
 }
-fn transport(motion: bool) -> Arc<quinn::TransportConfig> {
+fn transport(alpn: &[u8]) -> Arc<quinn::TransportConfig> {
     let mut t = quinn::TransportConfig::default();
     t.max_concurrent_bidi_streams(1u8.into())
         .max_concurrent_uni_streams(0u8.into());
@@ -239,14 +240,18 @@ fn transport(motion: bool) -> Arc<quinn::TransportConfig> {
         Duration::from_secs(4).try_into().expect("constant timeout"),
     ));
     t.keep_alive_interval(Some(Duration::from_millis(400)));
-    if motion {
+    if alpn == audio::ALPN {
+        let frame = peerglide_protocol::audio::FRAME_BYTES;
+        t.datagram_receive_buffer_size(Some(16 * frame));
+        t.datagram_send_buffer_size(4 * frame);
+    } else if alpn == data::ALPN {
+        t.datagram_receive_buffer_size(None);
+        t.datagram_send_buffer_size(0);
+    } else {
         t.datagram_receive_buffer_size(Some(64 * 1024));
         // Motion carries an absolute cursor position. Bound the queue so a
         // stalled link discards older positions before accumulating a backlog.
         t.datagram_send_buffer_size(16 * 1024);
-    } else {
-        t.datagram_receive_buffer_size(None);
-        t.datagram_send_buffer_size(0);
     }
     t.receive_window((64 * 1024u32).into());
     t.stream_receive_window((16 * 1024u32).into());
@@ -269,7 +274,7 @@ fn endpoint_alpn(
         .with_client_auth_cert(vec![identity.cert()], identity.key())?;
     client.alpn_protocols = vec![alpn.to_vec()];
     let mut c = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client)?));
-    c.transport_config(transport(alpn != data::ALPN));
+    c.transport_config(transport(alpn));
     let mut e = Endpoint::server(server, addr)?;
     e.set_default_client_config(c);
     Ok(e)
@@ -292,7 +297,7 @@ fn server_config(
     server.alpn_protocols = vec![alpn.to_vec()];
     let mut config =
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server)?));
-    config.transport_config(transport(alpn != data::ALPN));
+    config.transport_config(transport(alpn));
     Ok(config)
 }
 
