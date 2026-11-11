@@ -21,6 +21,28 @@ use peerglide_platform::windows_audio as native;
 #[cfg(target_os = "macos")]
 use peerglide_platform::macos_audio as native;
 
+#[cfg(windows)]
+pub(super) fn list_outputs() -> Result<()> {
+    for device in native::output_devices() {
+        print_device(&device.id.to_string(), &device.name);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn list_outputs() -> Result<()> {
+    for device in native::output_devices()? {
+        print_device(&device.uid, &device.name);
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn print_device(id: &str, name: &str) {
+    let name: String = name.chars().filter(|character| !character.is_control()).collect();
+    println!("{id}\t{name}");
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 pub(super) async fn run(
     identity: &Path,

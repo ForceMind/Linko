@@ -73,7 +73,135 @@ extern "C" {
         encoding: u32,
         external: u8,
     ) -> CFRef;
+    fn CFStringGetCString(
+        value: CFRef,
+        output: *mut std::ffi::c_char,
+        capacity: isize,
+        encoding: u32,
+    ) -> u8;
     fn CFRelease(object: CFRef);
+}
+
+#[repr(C)]
+struct Property {
+    selector: u32,
+    scope: u32,
+    element: u32,
+}
+
+impl Property {
+    const fn new(selector: [u8; 4], scope: [u8; 4]) -> Self {
+        Self {
+            selector: u32::from_be_bytes(selector),
+            scope: u32::from_be_bytes(scope),
+            element: 0,
+        }
+    }
+}
+
+#[link(name = "CoreAudio", kind = "framework")]
+extern "C" {
+    fn AudioObjectGetPropertyDataSize(
+        id: u32,
+        property: *const Property,
+        qualifier_size: u32,
+        qualifier: *const c_void,
+        size: *mut u32,
+    ) -> i32;
+    fn AudioObjectGetPropertyData(
+        id: u32,
+        property: *const Property,
+        qualifier_size: u32,
+        qualifier: *const c_void,
+        size: *mut u32,
+        value: *mut c_void,
+    ) -> i32;
+}
+
+pub struct OutputDevice {
+    pub uid: String,
+    pub name: String,
+}
+
+pub fn output_devices() -> Result<Vec<OutputDevice>> {
+    const SYSTEM: u32 = 1;
+    const LIMIT: usize = 64;
+    let property = Property::new(*b"dev#", *b"glob");
+    let mut ids = [0u32; LIMIT];
+    let capacity = size_of::<[u32; LIMIT]>() as u32;
+    let mut bytes = capacity;
+    // SAFETY: ids has room for capacity bytes. The property describes a list
+    // of AudioDeviceIDs on the system object and has no qualifier.
+    check(
+        unsafe {
+            AudioObjectGetPropertyData(
+                SYSTEM,
+                &property,
+                0,
+                null(),
+                &mut bytes,
+                ids.as_mut_ptr().cast(),
+            )
+        },
+        "list devices",
+    )?;
+    ensure!(
+        bytes <= capacity && bytes.is_multiple_of(size_of::<u32>() as u32),
+        "macOS audio device list outside bounds"
+    );
+    let streams = Property::new(*b"stm#", *b"outp");
+    Ok(ids[..bytes as usize / size_of::<u32>()]
+        .iter()
+        .filter_map(|&id| {
+            let mut output_bytes = 0;
+            // SAFETY: the size slot is writable. This does not start a device.
+            let status =
+                unsafe { AudioObjectGetPropertyDataSize(id, &streams, 0, null(), &mut output_bytes) };
+            if status != 0 || output_bytes == 0 {
+                return None;
+            }
+            let uid = device_string(id, Property::new(*b"uid ", *b"glob"))?;
+            if uid.chars().any(char::is_control) {
+                return None;
+            }
+            let name = device_string(id, Property::new(*b"lnam", *b"glob"))
+                .unwrap_or_else(|| "macOS audio output".into());
+            Some(OutputDevice { uid, name })
+        })
+        .collect())
+}
+
+fn device_string(id: u32, property: Property) -> Option<String> {
+    let mut value: CFRef = null();
+    let mut size = size_of::<CFRef>() as u32;
+    // SAFETY: the selected property returns one retained CFString.
+    let status = unsafe {
+        AudioObjectGetPropertyData(id, &property, 0, null(), &mut size, (&raw mut value).cast())
+    };
+    if status != 0 || value.is_null() {
+        return None;
+    }
+    let mut bytes = [0u8; 513];
+    // SAFETY: a successful CoreAudio string property gives a live CFString.
+    let copied = unsafe {
+        let copied = size == size_of::<CFRef>() as u32
+            && CFStringGetCString(value, bytes.as_mut_ptr().cast(), bytes.len() as isize, UTF8) != 0;
+        CFRelease(value);
+        copied
+    };
+    if copied {
+        bounded_utf8(&bytes)
+    } else {
+        None
+    }
+}
+
+fn bounded_utf8(bytes: &[u8]) -> Option<String> {
+    let end = bytes.iter().position(|byte| *byte == 0)?;
+    if end == 0 {
+        return None;
+    }
+    std::str::from_utf8(&bytes[..end]).ok().map(str::to_owned)
 }
 
 #[derive(Default)]
@@ -266,6 +394,14 @@ mod tests {
         assert_eq!(available.take(), Some(1));
         assert_eq!(available.take(), Some(3));
         assert!(available.take().is_none());
+    }
+
+    #[test]
+    fn device_names_must_fit_and_decode_without_unterminated_bytes() {
+        assert_eq!(bounded_utf8(b"Desk audio\0unused").as_deref(), Some("Desk audio"));
+        assert!(bounded_utf8(b"not terminated").is_none());
+        assert!(bounded_utf8(b"\xff\0").is_none());
+        assert!(bounded_utf8(b"\0").is_none());
     }
 
     #[test]

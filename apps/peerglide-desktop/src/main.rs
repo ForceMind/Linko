@@ -122,6 +122,9 @@ enum Command {
     },
     /// Accept a connection from exactly the enrolled certificate. No input permission by default.
     Listen(Options),
+    /// List the local playback devices without opening an audio stream.
+    #[cfg(any(windows, target_os = "macos"))]
+    AudioOutputDevices,
     /// Play audio from one explicitly verified computer on this computer.
     #[cfg(any(windows, target_os = "macos"))]
     PlayAudio {
@@ -228,6 +231,8 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Listen(o) => run(o, None, false).await,
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::AudioOutputDevices => audio_playback::list_outputs(),
         #[cfg(any(windows, target_os = "macos"))]
         Command::PlayAudio {
             identity,
