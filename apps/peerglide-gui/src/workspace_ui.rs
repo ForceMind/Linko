@@ -533,12 +533,13 @@ impl App {
         let registered = self.config.fingerprint.is_some();
         let running = self.child.is_some();
         let (value, tone) = self.connection_short();
-        let stop_width = if running {
+        let inline_stop = running && stop_fits_inline(ui.available_width());
+        let stop_width = if inline_stop {
             canvas_button_width(ui, Some(STOP_WORD))
         } else {
             0.0
         };
-        let stop = context_row(
+        let mut stop = context_row(
             ui,
             ContextRow {
                 key: "connection",
@@ -549,16 +550,16 @@ impl App {
                 full: self.peer_connection_label(),
                 trailing: stop_width,
             },
-            |ui| {
-                if !running {
-                    return false;
-                }
-                let id = context_control_id("stop");
-                let word = Some(STOP_WORD);
-                let stop = canvas_button(ui, id, Icon::Stop, "停止并断开", word, false);
-                stop.clicked()
-            },
+            |ui| inline_stop && stop_control(ui),
         );
+        if running && !inline_stop {
+            // A narrow column keeps the whole row for the readable state word.
+            let line = |ui: &mut egui::Ui| {
+                ui.add_space(tokens::ICON_SMALL);
+                stop_control(ui)
+            };
+            stop = ui.horizontal(line).inner;
+        }
         if stop {
             self.stop();
         }
@@ -869,6 +870,22 @@ fn card_metadata(ui: &mut egui::Ui, label: &str, value: &str) {
                 .on_hover_text(value);
         },
     );
+}
+
+/// Row width from which the stop button shares the connection row. Below it, such as the
+/// 204 points of a 920 wide window with the sidebar open, the button takes its own line so
+/// a three character state word keeps its room.
+const STOP_INLINE_MIN_W: f32 = 250.0;
+
+fn stop_fits_inline(row_width: f32) -> bool {
+    row_width >= STOP_INLINE_MIN_W
+}
+
+/// The connection row's stop button; its name keeps the full action.
+fn stop_control(ui: &mut egui::Ui) -> bool {
+    let id = context_control_id("stop");
+    let word = Some(STOP_WORD);
+    canvas_button(ui, id, Icon::Stop, "停止并断开", word, false).clicked()
 }
 
 /// One status row of the context column.
@@ -1936,6 +1953,18 @@ mod tests {
         drop(app);
         fixture.close()?;
         Ok(())
+    }
+    #[test]
+    fn the_stop_button_leaves_the_state_word_room_in_a_compact_column() {
+        // A 920 wide window with the sidebar open leaves 204 points inside the card:
+        // the icon, label and value shape take about 116, the button about 82 more.
+        let fixed = 2.0 * tokens::ICON_SMALL + CONTEXT_LABEL_W + 24.0;
+        let button = 82.0;
+        let word = 3.0 * 14.0;
+        assert!(204.0 - fixed - button < word, "the compact case needs its own line");
+        assert!(!stop_fits_inline(204.0));
+        assert!(stop_fits_inline(300.0));
+        assert!(STOP_INLINE_MIN_W - fixed - button >= word);
     }
     #[test]
     fn context_rows_pair_each_icon_with_its_label_and_value() -> Result<()> {
