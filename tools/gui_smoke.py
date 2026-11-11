@@ -9,7 +9,9 @@ import tempfile
 import sys
 import time
 
-from gui_worker_resource_smoke import capture_owned_window, owned_x11_window, require_isolated_x11
+from gui_worker_resource_smoke import (
+    capture_owned_window, capture_workspace, owned_x11_window, require_isolated_x11,
+)
 
 # Keep both successful and failed isolated-render evidence for Chinese text/layout.
 
@@ -50,6 +52,10 @@ def main():
                     assert not (fallback / "peerglide").exists(), "explicit directory must not touch the default profile"
                     time.sleep(1)
                     run_external(["xdotool", "windowfocus", "--sync", window], check=True)
+                    if name == "gesture-lab":
+                        # Allow both the canvas and Save to be fully visible while drawing.
+                        run_external(["xdotool", "windowsize", "--sync", window, "1280", "880"], check=True)
+                        time.sleep(0.4)
                     if name in {"home", "gesture-lab"}:
                         for _ in range(30):
                             if geometry.exists():
@@ -109,8 +115,14 @@ def main():
                     dest.mkdir(exist_ok=True)
                     # Revalidate PID ownership and capture only original app-window pixels.
                     path = dest / f"peerglide-{name}.png"
-                    capture_owned_window(gui, path, window)
+                    if name == "gesture-lab":
+                        run_external(["xdotool", "windowsize", "--sync", window, "1280", "800"], check=True)
+                        time.sleep(0.4)
+                        run_external(["xdotool", "mousemove", "--window", window, "1100", "430",
+                                      "click", "--repeat", "6", "5"], check=True)
+                    capture_workspace(gui, path)
                     if name == "home":
+                        time.sleep(0.4)
                         # Scale-1 fresh unpaired workspace, owned Xvfb window only.
                         # Read these screenshots before claiming page/modal proof.
                         assert layout["version"] == 2
@@ -122,14 +134,16 @@ def main():
                             run_external(["xdotool", "mousemove", "--window", window,
                                           str(round(x + width / 2)), str(round(y + height / 2)), "click", "1"], check=True)
                         click_control("nav_settings")
+                        # Keep the pointer away from the appearance control in both captures.
+                        run_external(["xdotool", "mousemove", "--window", window, "2", "54"], check=True)
+                        capture_workspace(gui, dest / "peerglide-settings.png")
                         time.sleep(0.4)
-                        capture_owned_window(gui, dest / "peerglide-settings.png", window)
                         click_control("nav_layout")
                         time.sleep(0.3)
                         click_control("add_device")
                         time.sleep(0.4)
                         assert not (profile / "identity").exists(), "opening add must not create identity or click through"
-                        capture_owned_window(gui, dest / "peerglide-add-device.png", window)
+                        capture_workspace(gui, dest / "peerglide-add-device.png")
                     run_external(["xdotool", "windowclose", window], check=True)
                     try:
                         gui.wait(timeout=3)

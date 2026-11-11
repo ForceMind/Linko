@@ -356,13 +356,16 @@ fn moon_outline(grid: Grid) -> Vec<Pos2> {
         266.0_f32.to_radians(),
         20,
     );
-    points.extend(arc_points(
+    let inner_arc = arc_points(
         grid.at(11.0, 5.0),
         4.2 * grid.unit,
         216.3_f32.to_radians(),
         53.7_f32.to_radians(),
         12,
-    ));
+    );
+    // The outer arc already supplies both tips. The rounded angles give the
+    // inner arc almost identical endpoints, producing spikes at the joins.
+    points.extend_from_slice(&inner_arc[1..inner_arc.len() - 1]);
     points
 }
 
@@ -597,6 +600,18 @@ mod tests {
             for point in path {
                 assert!(inset.contains(point), "{point:?} leaves the margin");
             }
+        }
+    }
+
+    #[test]
+    fn moon_uses_one_point_at_each_crescent_tip() {
+        let grid = Grid::new(square());
+        let outline = moon_outline(grid);
+        for (start, end) in outline.iter().zip(outline.iter().cycle().skip(1)) {
+            assert!(
+                start.distance(*end) > grid.unit * 0.5,
+                "near-duplicate points at the moon stroke join: {start:?} and {end:?}"
+            );
         }
     }
 
