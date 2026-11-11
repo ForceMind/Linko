@@ -220,9 +220,11 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Listen(o) => run(o, None, false).await,
-        Command::ListenPeers { identity, peer_cert, bind } => {
-            multi_peer::run(&identity, &peer_cert, bind).await
-        }
+        Command::ListenPeers {
+            identity,
+            peer_cert,
+            bind,
+        } => multi_peer::run(&identity, &peer_cert, bind).await,
         Command::Connect {
             address,
             options,

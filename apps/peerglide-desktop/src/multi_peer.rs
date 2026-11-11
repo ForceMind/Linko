@@ -22,7 +22,10 @@ pub(super) async fn run(identity: &Path, certificates: &[PathBuf], bind: SocketA
         .map(|path| transport::read_certificate(path))
         .collect::<Result<Vec<_>>>()?;
     let listener = Listener::bind(bind, &identity, peers)?;
-    println!("Listening for authenticated diagnostic peers on {}.", listener.local_addr()?);
+    println!(
+        "Listening for authenticated diagnostic peers on {}.",
+        listener.local_addr()?
+    );
     listen(&listener, tokio::signal::ctrl_c()).await
 }
 
@@ -63,12 +66,10 @@ where
 }
 
 async fn serve(connection: &quinn::Connection) -> Result<()> {
-    let (mut send, mut receive) = tokio::time::timeout(
-        Duration::from_secs(5),
-        connection.accept_bi(),
-    )
-    .await
-    .context("diagnostic stream timed out")??;
+    let (mut send, mut receive) =
+        tokio::time::timeout(Duration::from_secs(5), connection.accept_bi())
+            .await
+            .context("diagnostic stream timed out")??;
     exchange_hello(&mut send, &mut receive, InputCapabilities::default()).await?;
     loop {
         let reply = match transport::receive(&mut receive).await? {
@@ -144,10 +145,17 @@ mod tests {
             exchange_hello(&mut send, &mut receive, InputCapabilities::default()).await?;
         assert!(!capabilities.motion());
         transport::send(&mut send, &Message::Ping { lease: 0 }).await?;
-        assert!(matches!(transport::receive(&mut receive).await?, Message::Pong { lease: 0 }));
+        assert!(matches!(
+            transport::receive(&mut receive).await?,
+            Message::Pong { lease: 0 }
+        ));
         transport::send(
             &mut send,
-            &Message::Acquire { lease, edge: Edge::Right, along: 0.5 },
+            &Message::Acquire {
+                lease,
+                edge: Edge::Right,
+                along: 0.5,
+            },
         )
         .await?;
         assert!(matches!(
