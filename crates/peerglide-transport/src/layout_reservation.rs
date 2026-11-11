@@ -3,7 +3,10 @@ use crate::{endpoint_alpn, layout_binding::Binding, verify_peer, Identity};
 use anyhow::{ensure, Context, Result};
 use peerglide_protocol::{Edge, LEASE_MS};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};
-use std::{net::SocketAddr, time::{Duration, Instant}};
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 pub(super) const ALPN: &[u8] = b"peerglide-layout/1";
 const MAGIC: &[u8; 4] = b"PGL1";
@@ -39,8 +42,10 @@ impl Request {
     }
 
     fn decode(bytes: [u8; REQUEST_BYTES]) -> Result<(Self, [u8; 32])> {
-        ensure!(&bytes[..4] == MAGIC && bytes[4] == 1 && bytes[6..8] == [0; 2],
-            "invalid display request header");
+        ensure!(
+            &bytes[..4] == MAGIC && bytes[4] == 1 && bytes[6..8] == [0; 2],
+            "invalid display request header"
+        );
         let request = Self {
             lease: read_word(&bytes[8..16])?,
             display: read_word(&bytes[16..24])?,
@@ -82,7 +87,10 @@ impl Granted {
 }
 
 pub fn endpoint(address: SocketAddr, local: &Identity, pinned_peer: &[u8]) -> Result<Endpoint> {
-    ensure!(local.certificate.as_slice() != pinned_peer, "layout peer must be distinct");
+    ensure!(
+        local.certificate.as_slice() != pinned_peer,
+        "layout peer must be distinct"
+    );
     endpoint_alpn(address, local, pinned_peer, ALPN)
 }
 
@@ -105,9 +113,14 @@ pub async fn reserve(
         let mut reply = [0; REPLY_BYTES];
         receive.read_exact(&mut reply).await?;
         require_end(&mut receive).await?;
-        ensure!(&reply[..4] == MAGIC && reply[4] == 2 && reply[6..8] == [0; 2],
-            "invalid display reply header");
-        ensure!(read_word(&reply[8..16])? == request.lease, "display reply lease differs");
+        ensure!(
+            &reply[..4] == MAGIC && reply[4] == 2 && reply[6..8] == [0; 2],
+            "invalid display reply header"
+        );
+        ensure!(
+            read_word(&reply[8..16])? == request.lease,
+            "display reply lease differs"
+        );
         let generation = read_word(&reply[16..])?;
         match (reply[5], generation) {
             (0, 0) => Ok(None),
@@ -137,13 +150,15 @@ pub async fn accept(
         require_end(&mut receive).await?;
         let (request, proof) = Request::decode(bytes)?;
         let grant = if binding.matches(input, pinned_peer, &proof)? {
-            choose(request).filter(|generation| *generation != 0).map(|generation| Granted {
-                request,
-                binding,
-                proof,
-                generation,
-                expires: Instant::now() + RESERVATION_TIMEOUT,
-            })
+            choose(request)
+                .filter(|generation| *generation != 0)
+                .map(|generation| Granted {
+                    request,
+                    binding,
+                    proof,
+                    generation,
+                    expires: Instant::now() + RESERVATION_TIMEOUT,
+                })
         } else {
             None
         };
@@ -168,18 +183,27 @@ fn verify_sidecar(connection: &Connection, pinned_peer: &[u8]) -> Result<()> {
         .context("display handshake unavailable")?
         .downcast::<HandshakeData>()
         .map_err(|_| anyhow::anyhow!("unexpected display handshake"))?;
-    ensure!(handshake.protocol.as_deref() == Some(ALPN), "unexpected display ALPN");
+    ensure!(
+        handshake.protocol.as_deref() == Some(ALPN),
+        "unexpected display ALPN"
+    );
     verify_peer(connection, pinned_peer)
 }
 
 fn require_first(send: &SendStream, receive: &RecvStream) -> Result<()> {
-    ensure!(send.id().index() == 0 && receive.id().index() == 0, "display stream already used");
+    ensure!(
+        send.id().index() == 0 && receive.id().index() == 0,
+        "display stream already used"
+    );
     Ok(())
 }
 
 async fn require_end(receive: &mut RecvStream) -> Result<()> {
     let mut extra = [0];
-    ensure!(receive.read(&mut extra).await?.is_none(), "unexpected display trailing bytes");
+    ensure!(
+        receive.read(&mut extra).await?.is_none(),
+        "unexpected display trailing bytes"
+    );
     Ok(())
 }
 
@@ -282,11 +306,21 @@ mod tests {
 
     #[test]
     fn request_has_closed_shape_and_finite_fraction() -> Result<()> {
-        let request = Request { lease: 1, display: 2, edge: Edge::Top, fraction: 0.0 };
+        let request = Request {
+            lease: 1,
+            display: 2,
+            edge: Edge::Top,
+            fraction: 0.0,
+        };
         let mut frame = request.encode([1; 32])?;
         frame[7] = 1;
         assert!(Request::decode(frame).is_err());
-        assert!(Request { fraction: f64::NAN, ..request }.encode([1; 32]).is_err());
+        assert!(Request {
+            fraction: f64::NAN,
+            ..request
+        }
+        .encode([1; 32])
+        .is_err());
         Ok(())
     }
 }
