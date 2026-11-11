@@ -64,7 +64,10 @@ impl Cancellation {
 
     fn check(&self) -> io::Result<()> {
         if self.0.load(Ordering::Acquire) {
-            return Err(io::Error::new(io::ErrorKind::Interrupted, "file task stopped"));
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "file task stopped",
+            ));
         }
         Ok(())
     }
@@ -111,10 +114,7 @@ pub struct Offer {
 
 pub enum Decision {
     Decline,
-    Accept {
-        directory: PathBuf,
-        resume: bool,
-    },
+    Accept { directory: PathBuf, resume: bool },
 }
 
 /// The local disk outcome is independent of the peer receiving a receipt.
@@ -250,7 +250,10 @@ pub async fn send(
     let terminal = async {
         let received = receive.read_file(&[Kind::FileResult], GRANT).await?;
         consent.apply_received(received, |frame| match frame {
-            Frame::FileResult { id: received, outcome } if received == id => Ok(outcome),
+            Frame::FileResult {
+                id: received,
+                outcome,
+            } if received == id => Ok(outcome),
             _ => anyhow::bail!("file result differs from the offered transfer"),
         })
     };
@@ -385,10 +388,7 @@ where
                 id: received,
                 index,
                 bytes,
-            } if received == id && index as usize == expected =>
-            {
-                Ok(Some(bytes))
-            }
+            } if received == id && index as usize == expected => Ok(Some(bytes)),
             _ => anyhow::bail!("file chunk differs from the accepted offer"),
         })?;
         let Some(bytes) = bytes else {
@@ -412,11 +412,9 @@ where
     }
     let outcome = tokio::task::spawn_blocking({
         let guard = guard.clone();
-        move || {
-            match manager.commit_checked(id, || guard.elapsed_ms(), || guard.check()) {
-                Ok(_) => FileOutcome::Committed,
-                Err(_) => FileOutcome::Unknown,
-            }
+        move || match manager.commit_checked(id, || guard.elapsed_ms(), || guard.check()) {
+            Ok(_) => FileOutcome::Committed,
+            Err(_) => FileOutcome::Unknown,
         }
     })
     .await?;
@@ -520,7 +518,12 @@ mod tests {
                 )
                 .map_err(|error| anyhow::anyhow!("test grant: {error:?}"))?;
             manager
-                .accept(PeerBinding::new(digest, id), prepared.manifest.clone(), false, 0)
+                .accept(
+                    PeerBinding::new(digest, id),
+                    prepared.manifest.clone(),
+                    false,
+                    0,
+                )
                 .map_err(|error| anyhow::anyhow!("test admission: {error:?}"))?;
             manager
                 .write_chunk(id, 0, &contents[..CHUNK_BYTES], 1)
@@ -532,7 +535,8 @@ mod tests {
         let (client, server) = tokio::try_join!(
             async {
                 Ok::<_, anyhow::Error>(
-                    left.connect(right.local_addr()?, "peerglide.local")?.await?,
+                    left.connect(right.local_addr()?, "peerglide.local")?
+                        .await?,
                 )
             },
             async {
@@ -557,10 +561,7 @@ mod tests {
                         assert!(fs::read_dir(&directory)?.next().is_none());
                     }
                     if approve {
-                        Ok(Decision::Accept {
-                            directory,
-                            resume,
-                        })
+                        Ok(Decision::Accept { directory, resume })
                     } else {
                         Ok(Decision::Decline)
                     }
@@ -587,7 +588,11 @@ mod tests {
                 first_progress,
                 Some(if resume { CHUNK_BYTES as u64 } else { 0 })
             );
-            assert!(last_progress.context("missing disk progress")?.chunks_complete);
+            assert!(
+                last_progress
+                    .context("missing disk progress")?
+                    .chunks_complete
+            );
             assert_eq!(fs::read(destination.join("example.bin"))?, contents);
         } else {
             assert_eq!(sent, FileOutcome::Declined);

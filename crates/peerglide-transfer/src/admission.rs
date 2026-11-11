@@ -128,7 +128,11 @@ fn open_lock(root: &Path, write: bool) -> io::Result<Option<File>> {
         Err(error) => return Err(error),
     }
     let mut options = OpenOptions::new();
-    options.read(true).write(write).create(write).truncate(false);
+    options
+        .read(true)
+        .write(write)
+        .create(write)
+        .truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
@@ -163,10 +167,11 @@ pub fn receive_history(root: &Path) -> io::Result<History> {
     let entries = combined
         .into_iter()
         .map(|(key, record)| {
-            let (name, state) = details.remove(&key).map_or(
-                (None, HistoryState::Reserved),
-                |entry| (Some(entry.name), entry.state),
-            );
+            let (name, state) = details
+                .remove(&key)
+                .map_or((None, HistoryState::Reserved), |entry| {
+                    (Some(entry.name), entry.state)
+                });
             HistoryEntry {
                 id: record.binding.transfer_id,
                 size: record.bytes,

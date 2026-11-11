@@ -762,6 +762,7 @@ mod commit_regressions {
 mod admission;
 pub use admission::{receive_history, History, HistoryEntry, HistoryState, Inventory};
 pub mod clipboard;
+pub mod clipboard_image;
 pub mod codec;
 pub mod data_policy;
 pub mod manager;

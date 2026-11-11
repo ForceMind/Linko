@@ -2281,6 +2281,7 @@ name = "peerglide-transfer"
 version = "0.3.23-dev"
 dependencies = [
  "blake3",
+ "png",
  "serde",
  "serde_json",
 ]

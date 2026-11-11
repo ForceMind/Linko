@@ -180,10 +180,7 @@ impl Panel {
             },
             Approval::Decline => Decision::Decline,
         };
-        active
-            .job
-            .decide(decision)
-            .context("本次文件请求已结束")?;
+        active.job.decide(decision).context("本次文件请求已结束")?;
         active.offer = None;
         self.notice = "正在处理本次文件请求。".into();
         Ok(())
@@ -200,7 +197,7 @@ impl Panel {
                 if files.len() != 1 {
                     return None;
                 }
-                files[0].path.as_ref()?.to_str().map(str::to_owned)
+                files[0].path().to_str().map(str::to_owned)
             });
             if let Some(path) = dropped {
                 self.source = path;
@@ -217,8 +214,7 @@ impl Panel {
             ui.label("接收端地址");
             ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
             ui.add(
-                egui::TextEdit::singleline(&mut self.resume)
-                    .hint_text("续传编号，首次发送留空"),
+                egui::TextEdit::singleline(&mut self.resume).hint_text("续传编号，首次发送留空"),
             );
             if ui.button("发送选定文件").clicked() {
                 let result = self.start(app, true);

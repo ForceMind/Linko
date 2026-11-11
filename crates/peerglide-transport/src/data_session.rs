@@ -206,8 +206,9 @@ impl Consent {
         let Frame::Text { sequence, .. } = admitted.frame else {
             anyhow::bail!("expected a clipboard text frame");
         };
-        self.policy
-            .check(|session, now| session.validate(&admitted.permit, Capability::TextReceive, now))?;
+        self.policy.check(|session, now| {
+            session.validate(&admitted.permit, Capability::TextReceive, now)
+        })?;
         Ok(ClipboardCompletion {
             sequence,
             outcome: TextOutcome::Declined,
@@ -261,14 +262,22 @@ impl Sender {
         let Frame::Text { sequence, .. } = &admitted.frame else {
             anyhow::bail!("expected a clipboard text frame");
         };
-        ensure!(!admitted.acknowledged, "clipboard frame already acknowledged");
+        ensure!(
+            !admitted.acknowledged,
+            "clipboard frame already acknowledged"
+        );
         let policy = &self.policy;
         self.frames
-            .write_checked(&Frame::TextReceived { sequence: *sequence }, |_| {
-                policy.check(|clipboard, now| {
-                    clipboard.validate(&admitted.permit, Capability::TextReceive, now)
-                })
-            })
+            .write_checked(
+                &Frame::TextReceived {
+                    sequence: *sequence,
+                },
+                |_| {
+                    policy.check(|clipboard, now| {
+                        clipboard.validate(&admitted.permit, Capability::TextReceive, now)
+                    })
+                },
+            )
             .await?;
         admitted.acknowledged = true;
         Ok(())

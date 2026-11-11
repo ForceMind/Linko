@@ -55,9 +55,11 @@ impl Panel {
     }
 
     pub(super) fn tick(&mut self, app: &App) {
-        if self.active.as_ref().is_some_and(|active| {
-            !active.stopping && !active.pin.matches(app)
-        }) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.stopping && !active.pin.matches(app))
+        {
             self.stop();
         }
         let Some(active) = self.active.as_mut() else {
@@ -127,7 +129,8 @@ impl Panel {
                 wake,
             )
         } else {
-            let bind = data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?;
+            let bind =
+                data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?;
             let revision = self
                 .clipboard()?
                 .revision()
@@ -220,9 +223,11 @@ impl Panel {
                 }
             });
         }
-        if let Some(label) = self.local_outcome.map(outcome_label).filter(|label| {
-            self.notice != *label
-        }) {
+        if let Some(label) = self
+            .local_outcome
+            .map(outcome_label)
+            .filter(|label| self.notice != *label)
+        {
             ui.label(label);
         }
         if !self.notice.is_empty() {

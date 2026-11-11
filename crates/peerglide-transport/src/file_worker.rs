@@ -1,4 +1,5 @@
 //! One local file job with a bounded event queue and a dedicated runtime.
+pub use crate::file_transfer::{Decision, Offer, ReceiveResult};
 use crate::{
     data,
     file_transfer::{self, Cancellation, ReceiveOptions, Source},
@@ -6,7 +7,6 @@ use crate::{
 };
 use anyhow::{ensure, Context, Result};
 pub use peerglide_transfer::{codec::FileOutcome, History, HistoryState, MAX_FILE_BYTES};
-pub use crate::file_transfer::{Decision, Offer, ReceiveResult};
 use std::{
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -71,7 +71,10 @@ impl Job {
     }
 
     pub fn decide(&mut self, decision: Decision) -> Result<()> {
-        ensure!(self.offer_pending && !*self.stop.borrow(), "no file approval pending");
+        ensure!(
+            self.offer_pending && !*self.stop.borrow(),
+            "no file approval pending"
+        );
         self.offer_pending = false;
         self.decision
             .take()
