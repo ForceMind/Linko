@@ -1,7 +1,10 @@
-//! Plain-text Win32 clipboard operations on the creating UI thread.
-use super::TextSnapshot;
+//! Explicit Win32 clipboard operations on the creating UI thread.
+use super::{ImageSnapshot, TextSnapshot};
 use anyhow::{ensure, Context, Result};
-use peerglide_transfer::clipboard::{Backend, Origin, WriteResult, MAX_TEXT_BYTES};
+use peerglide_transfer::{
+    clipboard::{Backend, Origin, WriteResult, MAX_TEXT_BYTES},
+    clipboard_image::{Image, ImageBackend, MAX_PNG_BYTES},
+};
 use std::{
     mem::size_of,
     ptr::{null, null_mut},
@@ -13,11 +16,13 @@ use windows_sys::{
         System::{
             DataExchange::{
                 CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
-                GetClipboardSequenceNumber, OpenClipboard, SetClipboardData,
+                GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
             },
             LibraryLoader::GetModuleHandleW,
-            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE},
-            Ole::{CF_LOCALE, CF_OEMTEXT, CF_TEXT, CF_UNICODETEXT},
+            Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT},
+            Ole::{
+                CF_BITMAP, CF_DIB, CF_DIBV5, CF_LOCALE, CF_OEMTEXT, CF_PALETTE, CF_TEXT, CF_UNICODETEXT,
+            },
         },
         UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HWND_MESSAGE},
     },
@@ -112,30 +117,68 @@ impl NativeClipboard {
         Ok(text.map(|text| TextSnapshot {
             revision,
             text,
-            origin: if self.imported_revision == Some(revision) {
-                Origin::Imported
-            } else {
-                Origin::Local
-            },
+            origin: self.origin(revision),
         }))
     }
-}
 
-impl Drop for NativeClipboard {
-    fn drop(&mut self) {
-        // SAFETY: this instance owns the live window on its creating thread.
-        unsafe { DestroyWindow(self.window) };
-    }
-}
-
-impl Backend for NativeClipboard {
-    fn compare_and_write(&mut self, expected_revision: u64, text: &str) -> WriteResult {
-        if text.is_empty() || text.len() > MAX_TEXT_BYTES || text.contains('\0') {
-            return WriteResult::Failed;
-        }
-        let Some(mut payload) = OwnedMemory::encode(text) else {
-            return WriteResult::Failed;
+    pub fn image_snapshot(&self) -> Result<Option<ImageSnapshot>> {
+        let png = png_format().context("PNG clipboard format unavailable")?;
+        let _access = Access::open(self.window).context("clipboard is busy")?;
+        let Some(revision) = sequence() else {
+            return Ok(None);
         };
+        let allowed = [
+            png,
+            u32::from(CF_BITMAP),
+            u32::from(CF_DIB),
+            u32::from(CF_DIBV5),
+            u32::from(CF_PALETTE),
+        ];
+        if !only_formats(&allowed, |format| format == png) {
+            return Ok(None);
+        }
+        // SAFETY: registered clipboard data is a borrowed HGLOBAL valid during Access.
+        let handle = unsafe { GetClipboardData(png) };
+        if handle.is_null() {
+            return Ok(None);
+        }
+        // SAFETY: the clipboard continues to own this live allocation.
+        let allocation = unsafe { GlobalSize(handle) }.min(MAX_PNG_BYTES);
+        let memory = LockedMemory::lock(handle).context("clipboard image unavailable")?;
+        let pointer = memory.pointer.cast::<u8>();
+        // SAFETY: the parser reads header bytes only within the bounded lock.
+        let length = png_length(allocation, |index| unsafe { pointer.add(index).read() });
+        let Some(length) = length else {
+            return Ok(None);
+        };
+        // SAFETY: only the declared PNG through IEND is copied. Padding after
+        // it is outside the format and never enters the snapshot.
+        let bytes = unsafe { std::slice::from_raw_parts(pointer, length) };
+        let png = bytes.to_vec();
+        if sequence() != Some(revision) {
+            return Ok(None);
+        }
+        Ok(Some(ImageSnapshot {
+            revision,
+            png,
+            origin: self.origin(revision),
+        }))
+    }
+
+    fn origin(&self, revision: u64) -> Origin {
+        if self.imported_revision == Some(revision) {
+            Origin::Imported
+        } else {
+            Origin::Local
+        }
+    }
+
+    fn write_payload(
+        &mut self,
+        expected_revision: u64,
+        format: u32,
+        mut payload: OwnedMemory,
+    ) -> WriteResult {
         let Some(_access) = Access::open(self.window) else {
             return WriteResult::Failed;
         };
@@ -152,12 +195,43 @@ impl Backend for NativeClipboard {
             return WriteResult::Failed;
         }
         self.imported_revision = None;
-        if unsafe { SetClipboardData(UNICODE_FORMAT, payload.0) }.is_null() {
+        if unsafe { SetClipboardData(format, payload.0) }.is_null() {
             return WriteResult::UnknownOutcome;
         }
         payload.0 = null_mut();
         self.imported_revision = sequence();
         WriteResult::Submitted
+    }
+}
+
+impl Drop for NativeClipboard {
+    fn drop(&mut self) {
+        // SAFETY: this instance owns the live window on its creating thread.
+        unsafe { DestroyWindow(self.window) };
+    }
+}
+
+impl Backend for NativeClipboard {
+    fn compare_and_write(&mut self, expected_revision: u64, text: &str) -> WriteResult {
+        if text.is_empty() || text.len() > MAX_TEXT_BYTES || text.contains('\0') {
+            return WriteResult::Failed;
+        }
+        let Some(payload) = OwnedMemory::encode(text) else {
+            return WriteResult::Failed;
+        };
+        self.write_payload(expected_revision, UNICODE_FORMAT, payload)
+    }
+}
+
+impl ImageBackend for NativeClipboard {
+    fn compare_and_write_image(&mut self, expected_revision: u64, image: &Image) -> WriteResult {
+        let Some(format) = png_format() else {
+            return WriteResult::Failed;
+        };
+        let Some(payload) = OwnedMemory::copy(image.as_png()) else {
+            return WriteResult::Failed;
+        };
+        self.write_payload(expected_revision, format, payload)
     }
 }
 
@@ -182,17 +256,24 @@ impl Drop for Access {
 struct OwnedMemory(HGLOBAL);
 impl OwnedMemory {
     fn encode(text: &str) -> Option<Self> {
-        let words: Vec<_> = text.encode_utf16().chain(std::iter::once(0)).collect();
-        let bytes = words.len().checked_mul(size_of::<u16>())?;
+        let bytes: Vec<_> = text
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .flat_map(u16::to_ne_bytes)
+            .collect();
+        Self::copy(&bytes)
+    }
+
+    fn copy(bytes: &[u8]) -> Option<Self> {
         // SAFETY: bounded native allocation, owned until transfer to the OS.
-        let memory = Self(unsafe { GlobalAlloc(GMEM_MOVEABLE, bytes) });
+        let memory = Self(unsafe { GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len()) });
         if memory.0.is_null() {
             return None;
         }
         let locked = LockedMemory::lock(memory.0)?;
-        // SAFETY: locked memory has exactly the requested room for the words.
+        // SAFETY: locked memory has room for all of the requested bytes.
         unsafe {
-            std::ptr::copy_nonoverlapping(words.as_ptr(), locked.pointer.cast(), words.len());
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), locked.pointer.cast(), bytes.len());
         }
         drop(locked);
         Some(memory)
@@ -235,24 +316,62 @@ fn sequence() -> Option<u64> {
     (revision != 0).then_some(u64::from(revision))
 }
 
+/// Find the declared end without examining pixels, metadata or trailing
+/// allocation padding. Full PNG validation runs on the data worker.
+fn png_length(allocation: usize, read: impl Fn(usize) -> u8) -> Option<usize> {
+    const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if allocation < SIGNATURE.len()
+        || SIGNATURE.iter().enumerate().any(|(index, expected)| read(index) != *expected)
+    {
+        return None;
+    }
+    let mut offset = SIGNATURE.len();
+    for _ in 0..4096 {
+        let header_end = offset.checked_add(8)?;
+        if header_end > allocation {
+            return None;
+        }
+        let size = u32::from_be_bytes(std::array::from_fn(|index| read(offset + index)));
+        let kind: [u8; 4] = std::array::from_fn(|index| read(offset + 4 + index));
+        let end = header_end.checked_add(size as usize)?.checked_add(4)?;
+        if end > allocation {
+            return None;
+        }
+        if &kind == b"IEND" {
+            return (size == 0).then_some(end);
+        }
+        offset = end;
+    }
+    None
+}
+
+fn png_format() -> Option<u32> {
+    // SAFETY: the format name is a process-lifetime NUL-terminated wide string.
+    let format = unsafe { RegisterClipboardFormatW(w!("PNG")) };
+    (format != 0).then_some(format)
+}
+
 fn plain_text_formats() -> bool {
+    only_formats(&PLAIN_FORMATS, |format| format != u32::from(CF_LOCALE))
+}
+
+fn only_formats(allowed: &[u32], is_content: impl Fn(u32) -> bool) -> bool {
     let mut format = 0;
-    let mut text = false;
-    // At most four known formats plus the end marker. Unknown/private formats
-    // (including password manager hints) reject without reading text.
-    for _ in 0..=PLAIN_FORMATS.len() {
+    let mut content = false;
+    // Unknown/private formats (including password-manager hints) stay local.
+    for _ in 0..=allowed.len() {
         // SAFETY: the clipboard is held by the caller on this thread.
         unsafe {
             SetLastError(0);
             format = EnumClipboardFormats(format);
             if format == 0 {
-                return GetLastError() == 0 && text;
+                return GetLastError() == 0 && content;
             }
         }
-        if !PLAIN_FORMATS.contains(&format) {
+        if !allowed.contains(&format) {
             return false;
         }
-        text |= format != u32::from(CF_LOCALE);
+        content |= is_content(format);
     }
     false
 }
@@ -266,6 +385,15 @@ fn plain_unicode(words: &[u16]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_extent_stops_before_padding_and_rejects_truncated_chunks() {
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\0IEND\0\0\0\0padding";
+        assert_eq!(png_length(png.len(), |index| png[index]), Some(20));
+        assert!(png_length(19, |index| png[index]).is_none());
+        let oversized = b"\x89PNG\r\n\x1a\n\xff\xff\xff\xffIDAT";
+        assert!(png_length(oversized.len(), |index| oversized[index]).is_none());
+    }
 
     #[test]
     fn clipboard_unicode_requires_termination_and_bounds_utf8() {
