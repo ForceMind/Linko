@@ -383,13 +383,9 @@ impl App {
             self.context_primary(ui);
         });
         ui.add_space(gap);
-        // Not connected capabilities stay labelled (decision 2); the page explains them.
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("文件 · 剪贴板 未接通").small().weak());
-            if ui.small_button("说明").clicked() {
-                self.navigate_to(Page::Transfers);
-            }
-        });
+        if ui.small_button("文件与剪贴板").clicked() {
+            self.navigate_to(Page::Transfers);
+        }
         self.details_drawer(ui, gap, margin);
     }
 
@@ -1340,7 +1336,7 @@ mod tests {
                     "键鼠",
                     "接收控制",
                     "本机权限",
-                    "文件 · 剪贴板 未接通",
+                    "文件与剪贴板",
                     "两台主屏的相对方向；另一端需设置相反方向。",
                 ]
                 .into_iter()
@@ -2118,7 +2114,7 @@ mod tests {
             (Page::GestureRules, "规则与应用"),
             (Page::Shortcuts, "返回"),
             (Page::Displays, "返回"),
-            (Page::Transfers, "说明"),
+            (Page::Transfers, "文件与剪贴板"),
             (Page::Clipboard, "剪贴板"),
             (Page::Transfers, "文件传输"),
             (Page::Displays, "返回"),
@@ -2140,7 +2136,7 @@ mod tests {
                 })
                 .collect();
             output.drop_without_applying_deltas();
-            let at = at.context("navigation entry absent")?;
+            let at = at.with_context(|| format!("navigation entry absent: {label}"))?;
             for control in safety_controls {
                 let center = control.context("fixed safety control absent")?;
                 assert!(
@@ -2152,6 +2148,7 @@ mod tests {
             click(&mut app, &ctx, at);
             assert!(app.page == page && !app.native_confirmation && app.screen_drag.is_none());
             assert!(app.child.is_none() && !app.worker_permissions.needs_poll());
+            assert!(!app.data_job_active());
             assert!(!app.config.native && !app.config.allow && !app.pairing_open);
         }
         app.native_confirmation = true;

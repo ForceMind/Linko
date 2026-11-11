@@ -116,6 +116,19 @@ impl Manager {
         resume: bool,
         now: u64,
     ) -> Result<(), Error> {
+        self.accept_checked(binding, manifest, resume, now, || Ok(()))
+    }
+
+    /// As with `accept`, the owner must already have an explicit per-offer
+    /// decision. A stop during admission preserves any durable reservation.
+    pub fn accept_checked(
+        &mut self,
+        binding: PeerBinding,
+        manifest: Manifest,
+        resume: bool,
+        now: u64,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> Result<(), Error> {
         manifest.validate()?;
         let permit = self
             .session
@@ -133,6 +146,7 @@ impl Manager {
         if active >= MAX_ACTIVE || self.entries.len() >= MAX_ATTEMPTS {
             return Err(Error::Quota);
         }
+        check()?;
         // Sync the durable reservation before creating or extending staged data.
         if !self
             .ledger
@@ -142,9 +156,9 @@ impl Manager {
         }
         let total_bytes = manifest.size();
         let result = if resume {
-            Receiver::resume(&self.root, binding, manifest)
+            Receiver::resume_checked(&self.root, binding, manifest, check)
         } else {
-            Receiver::create(&self.root, binding, manifest)
+            check().and_then(|()| Receiver::create(&self.root, binding, manifest))
         };
         let summary = match &result {
             Ok(receiver) => Summary {
@@ -202,11 +216,19 @@ impl Manager {
 
     /// A fresh clock is queried at every low-level publication boundary, after
     /// potentially slow whole-file hashing/sync. Never resets the grant deadline.
-    pub fn commit(
+    pub fn commit(&mut self, id: [u8; 16], clock: impl FnMut() -> u64) -> Result<PathBuf, Error> {
+        self.commit_checked(id, clock, || Ok(()))
+    }
+
+    /// Check transport cancellation and local file permission during verification
+    /// and before publication. The callback must be bounded and must not perform I/O.
+    pub fn commit_checked(
         &mut self,
         id: [u8; 16],
         mut clock: impl FnMut() -> u64,
+        mut check: impl FnMut() -> io::Result<()>,
     ) -> Result<PathBuf, Error> {
+        check()?;
         let entry = self.entries.get_mut(&id).ok_or(Error::UnknownId)?;
         if let Err(error) = self
             .session
@@ -230,6 +252,7 @@ impl Manager {
         let receiver = entry.receiver.take().ok_or(Error::Inactive)?;
         entry.summary.state = State::UnknownOutcome;
         let result = receiver.commit_checked(&self.root, || {
+            check()?;
             self.session
                 .validate(&entry.permit, Capability::FileReceive, clock())
                 .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "file grant expired"))
@@ -252,6 +275,16 @@ impl Manager {
         entry.receiver.take();
         entry.summary.state = State::Cancelled;
         Ok(())
+    }
+
+    pub fn next_chunk(&self, id: [u8; 16]) -> Result<usize, Error> {
+        self.entries
+            .get(&id)
+            .ok_or(Error::UnknownId)?
+            .receiver
+            .as_ref()
+            .map(Receiver::next_chunk)
+            .ok_or(Error::Inactive)
     }
 
     pub fn summary(&self, id: [u8; 16]) -> Option<Summary> {
@@ -392,7 +425,7 @@ mod tests {
         assert!(manager
             .commit([1; 16], || {
                 checks += 1;
-                if checks < 3 {
+                if checks < 5 {
                     2
                 } else {
                     1000
@@ -405,6 +438,47 @@ mod tests {
             State::UnknownOutcome
         );
         assert!(manager.commit([1; 16], || 1001).is_err());
+    }
+
+    #[test]
+    fn stop_during_verification_keeps_existing_destination_and_staging() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(100);
+        grant(&mut manager);
+        let destination = manager.root.join("source.txt");
+        fs::write(&destination, b"keep").unwrap();
+        manager
+            .accept(binding(1), manifest.clone(), false, 0)
+            .unwrap();
+        manager.write_chunk([1; 16], 0, b"file data", 1).unwrap();
+
+        let mut checks = 0;
+        let result = manager.commit_checked(
+            [1; 16],
+            || 2,
+            || {
+                checks += 1;
+                if checks < 4 {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"))
+                }
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::Interrupted
+        ));
+        assert_eq!(fs::read(&destination).unwrap(), b"keep");
+
+        let root = manager.root.clone();
+        drop(manager);
+        let mut resumed = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).unwrap();
+        grant(&mut resumed);
+        resumed.accept(binding(1), manifest, true, 0).unwrap();
+        assert_eq!(resumed.next_chunk([1; 16]).unwrap(), 1);
+        assert!(resumed.commit([1; 16], || 1).is_err());
+        assert_eq!(fs::read(destination).unwrap(), b"keep");
     }
 
     #[test]
@@ -434,6 +508,7 @@ mod tests {
         grant(&mut resumed);
         resumed.accept(binding(1), manifest, true, 0).unwrap();
         assert_eq!(resumed.summary([1; 16]).unwrap().verified_bytes, 9);
+        assert_eq!(resumed.next_chunk([1; 16]).unwrap(), 1);
         assert!(resumed.commit([1; 16], || 1).is_ok());
     }
 
@@ -473,6 +548,41 @@ mod tests {
         }
         let path = manager.commit([1; 16], || 2).unwrap();
         assert_eq!(fs::read(path).unwrap(), b"file data");
+    }
+
+    #[test]
+    fn history_leaves_untouched_directories_and_legacy_records_unchanged() {
+        use crate::{receive_history, HistoryState};
+
+        let fixture = Fixture::new();
+        let untouched = fixture.0.join("untouched");
+        fs::create_dir(&untouched).unwrap();
+        assert!(receive_history(&untouched).unwrap().entries.is_empty());
+        assert_eq!(fs::read_dir(&untouched).unwrap().count(), 0);
+
+        let (manager, manifest) = fixture.setup(100);
+        let root = manager.root.clone();
+        assert!(receive_history(&root).is_err());
+        drop(manager);
+        let staged = Receiver::create(&root, binding(1), manifest.clone()).unwrap();
+        drop(staged);
+        let unconfirmed = Receiver::create(&root, binding(2), manifest).unwrap();
+        fs::write(unconfirmed.dir.join("committing"), []).unwrap();
+        drop(unconfirmed);
+        let before = fs::read_dir(&root).unwrap().count();
+        let history = receive_history(&root).unwrap();
+        assert_eq!(history.inventory.reserved_bytes, 18);
+        assert_eq!(history.inventory.reservations, 2);
+        for (id, state) in [
+            ([1; 16], HistoryState::Staged),
+            ([2; 16], HistoryState::PublicationUnconfirmed),
+        ] {
+            let entry = history.entries.iter().find(|entry| entry.id == id).unwrap();
+            assert_eq!(entry.state, state);
+            assert_eq!(entry.name.as_deref(), Some("source.txt"));
+            assert_eq!(entry.size, 9);
+        }
+        assert_eq!(fs::read_dir(&root).unwrap().count(), before);
     }
 
     #[test]

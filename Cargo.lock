@@ -2264,6 +2264,7 @@ dependencies = [
  "peerglide-core",
  "peerglide-gestures",
  "peerglide-protocol",
+ "peerglide-transfer",
  "tokio",
  "windows-sys 0.61.2",
 ]
@@ -2282,6 +2283,7 @@ name = "peerglide-transfer"
 version = "0.3.23-dev"
 dependencies = [
  "blake3",
+ "png",
  "serde",
  "serde_json",
 ]
@@ -2294,6 +2296,7 @@ dependencies = [
  "blake3",
  "opaque-ke",
  "peerglide-protocol",
+ "peerglide-transfer",
  "quinn",
  "rand 0.8.8",
  "rcgen",
