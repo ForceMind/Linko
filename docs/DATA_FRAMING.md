@@ -6,6 +6,9 @@ fields and per-kind body limits are checked before allocating a body. Invalid,
 unknown, truncated or oversized frames terminate the stream. Never resynchronize
 by scanning for magic in payloads. Writer validates before emitting any bytes;
 partial I/O failure is uncertain and must not trigger blind retries.
+The validated header exposes a bounded kind and length to the transport. The
+reader can reject a direction or exhausted budget before allocating or reading
+the body. An async adapter can use the same header and exact-body decoder.
 
 The codec uses Read/Write and handles fragmented/back-to-back frames. Tests cover
 header-only oversize rejection, truncation at each byte, bad UTF-8/sequence/index,
