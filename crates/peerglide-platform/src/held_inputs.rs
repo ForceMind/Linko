@@ -62,12 +62,18 @@ impl<T: Copy + Into<usize>, const WORDS: usize> HeldSet<T, WORDS> {
     }
 }
 
+impl<T: Copy + Into<usize>, const WORDS: usize> Extend<T> for HeldSet<T, WORDS> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, values: I) {
+        for value in values {
+            self.insert(value);
+        }
+    }
+}
+
 impl<T: Copy + Into<usize>, const WORDS: usize> FromIterator<T> for HeldSet<T, WORDS> {
     fn from_iter<I: IntoIterator<Item = T>>(values: I) -> Self {
         let mut held = Self::default();
-        for value in values {
-            held.insert(value);
-        }
+        held.extend(values);
         held
     }
 }
