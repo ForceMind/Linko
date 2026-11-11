@@ -2859,7 +2859,7 @@ mod hook_tests {
     }
     #[test]
     fn queue_overflow_disables_capture() {
-        let (s, _rx) = state(1);
+        let (mut s, _rx) = state(1);
         assert!(s.gate.try_activate());
         s.emit(Captured::Emergency);
         s.emit(Captured::Emergency);
