@@ -120,7 +120,7 @@ impl OneShot {
     }
 }
 
-/// Replays a one-shot whenever an observed key changes (M5, M6). The first observation only
+/// Replays a one-shot when an observed key changes (M5). The first observation only
 /// records the key, so nothing animates on first paint or while the content stays the same.
 #[derive(Clone, Debug)]
 pub(super) struct Retrigger<K> {
@@ -158,6 +158,20 @@ impl<K: PartialEq> Retrigger<K> {
 
     pub(super) fn tick(&self, ctx: &egui::Context) -> f32 {
         self.shot.tick(ctx)
+    }
+}
+
+impl Retrigger<bool> {
+    /// Play a badge pop only when emphasis appears after an observed absence.
+    pub(super) fn observe_appearance(&mut self, present: bool, now: f64, secs: f32) -> bool {
+        let appeared = self.key == Some(false) && present;
+        if appeared {
+            self.shot = OneShot::start(now, secs);
+        } else if !present {
+            self.shot = OneShot::finished();
+        }
+        self.key = Some(present);
+        appeared
     }
 }
 
@@ -696,6 +710,28 @@ mod tests {
         assert_eq!(capsule.progress(3.5), 1.0);
         assert!(!capsule.observe("recovering", 4.0, 0.18));
         assert_eq!(capsule.progress(4.0), 1.0);
+    }
+
+    #[test]
+    fn status_motion_tracks_title_tone_and_only_new_badge_emphasis() {
+        use crate::desktop_style::Tone;
+        let mut capsule = Retrigger::default();
+        assert!(!capsule.observe(("Connected", Tone::Good), 1.0, 0.18));
+        assert!(capsule.observe(("Connected", Tone::Warning), 2.0, 0.18));
+        assert!(capsule.observe(("Waiting", Tone::Warning), 3.0, 0.18));
+        assert!(!capsule.observe(("Waiting", Tone::Warning), 4.0, 0.18));
+
+        let mut badge = Retrigger::default();
+        assert!(!badge.observe_appearance(true, 1.0, 0.2));
+        assert_eq!(badge.progress(1.0), 1.0);
+        assert!(!badge.observe_appearance(false, 2.0, 0.2));
+        assert!(badge.observe_appearance(true, 3.0, 0.2));
+        assert!(!badge.observe_appearance(true, 3.05, 0.2));
+        assert!(badge.progress(3.05) < 1.0);
+        assert!(!badge.observe_appearance(false, 3.06, 0.2));
+        assert_eq!(badge.progress(3.06), 1.0);
+        assert!(badge.observe_appearance(true, 4.0, 0.2));
+        assert_eq!(badge.progress(5.0), 1.0);
     }
 
     #[test]

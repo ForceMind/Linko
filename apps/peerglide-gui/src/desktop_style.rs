@@ -2,7 +2,7 @@
 //! No runtime state, native queries, external assets or repaint timers live here.
 use eframe::egui::{self, Color32, FontId, RichText, Stroke, TextStyle};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tone {
     Neutral,
     Good,

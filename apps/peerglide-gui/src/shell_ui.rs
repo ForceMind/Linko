@@ -75,7 +75,7 @@ impl App {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|input| input.time);
         self.capsule_motion
-            .observe(view.short, now, tokens::CAPSULE_SECS);
+            .observe((view.title, view.tone), now, tokens::CAPSULE_SECS);
         let progress = self.capsule_motion.tick(&ctx);
         let (fill, ink) = desktop_style::status_colors(ui.visuals().dark_mode, view.tone);
         let font = egui::FontId::new(13.0, egui::FontFamily::Name("linko-semibold".into()));
