@@ -50,6 +50,8 @@ pub mod windows_audio;
 pub mod windows_audio_capture;
 #[cfg(windows)]
 mod windows_display;
+#[cfg(all(windows, target_env = "msvc"))]
+pub mod windows_native_drop;
 #[cfg(target_os = "macos")]
 use macos as native;
 #[cfg(windows)]
