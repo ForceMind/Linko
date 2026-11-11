@@ -83,6 +83,12 @@ jobs:
           path: dist/peerglide-*.png
           if-no-files-found: error
       - run: python tools/package.py
+        env:
+          LINKO_REVIEW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify portable package source, checksum and executable architecture
+        run: python tools/verify_portable_package.py
+        env:
+          LINKO_REVIEW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify extracted macOS identity and tamper rejection
         if: runner.os == 'macOS'
         run: python tools/verify_macos_package.py
