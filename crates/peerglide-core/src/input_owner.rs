@@ -62,12 +62,7 @@ pub struct Owner {
 }
 
 impl Owner {
-    pub fn reserve(
-        &mut self,
-        route: Route,
-        now: u64,
-        authorized: bool,
-    ) -> Result<Ticket, Denial> {
+    pub fn reserve(&mut self, route: Route, now: u64, authorized: bool) -> Result<Ticket, Denial> {
         if !authorized {
             return Err(Denial::Unauthorized);
         }
@@ -138,7 +133,10 @@ impl Owner {
     pub fn expire(&mut self, now: u64) -> Option<Ticket> {
         let ticket = match self.state {
             State::Active { ticket, deadline } | State::Pending { ticket, deadline }
-                if now >= deadline => ticket,
+                if now >= deadline =>
+            {
+                ticket
+            }
             _ => return None,
         };
         self.release(ticket);
@@ -149,7 +147,10 @@ impl Owner {
     pub fn disconnect(&mut self, connection: u64) -> Option<Ticket> {
         let ticket = match self.state {
             State::Active { ticket, .. } | State::Pending { ticket, .. }
-                if ticket.route.connection == connection => ticket,
+                if ticket.route.connection == connection =>
+            {
+                ticket
+            }
             _ => return None,
         };
         self.release(ticket);
@@ -158,9 +159,12 @@ impl Owner {
 
     pub fn release(&mut self, ticket: Ticket) -> bool {
         match self.state {
-            State::Active { ticket: current, .. } | State::Pending { ticket: current, .. }
-                if current == ticket =>
-            {
+            State::Active {
+                ticket: current, ..
+            }
+            | State::Pending {
+                ticket: current, ..
+            } if current == ticket => {
                 self.state = State::Recovering(ticket);
                 true
             }
@@ -195,7 +199,10 @@ mod tests {
         let mut owner = Owner::default();
         let inbound = route(1, Direction::Receiving);
         let outbound = route(2, Direction::Sending);
-        assert_eq!(owner.reserve(inbound, 0, false).err(), Some(Denial::Unauthorized));
+        assert_eq!(
+            owner.reserve(inbound, 0, false).err(),
+            Some(Denial::Unauthorized)
+        );
         let first = owner.reserve(inbound, 0, true).unwrap();
         assert_eq!(owner.reserve(outbound, 1, true).err(), Some(Denial::Busy));
         assert!(!owner.allows(first, 1, true));
@@ -219,7 +226,10 @@ mod tests {
         let request = route(8, Direction::Receiving);
         let pending = owner.reserve(request, 0, true).unwrap();
         assert!(!owner.commit(pending, LEASE_MS, true));
-        assert_eq!(owner.reserve(request, LEASE_MS, true).err(), Some(Denial::Busy));
+        assert_eq!(
+            owner.reserve(request, LEASE_MS, true).err(),
+            Some(Denial::Busy)
+        );
         assert!(owner.recovered(pending));
 
         let current = owner.reserve(request, LEASE_MS, true).unwrap();
