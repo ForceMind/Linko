@@ -255,8 +255,8 @@ pub(super) fn capture_receiving(
                 toggle_route: None,
                 tx,
                 gate,
-                keys: initial_keys(),
-                buttons: initial_buttons(),
+                keys: initial_keys().into_iter().collect(),
+                buttons: initial_buttons().into_iter().collect(),
                 toggle_armed: false,
                 target,
             };
@@ -811,7 +811,7 @@ mod tests {
                 tx,
                 gate: CaptureGate::default(),
                 keys: Default::default(),
-                buttons: sampled_buttons(1u64 << number),
+                buttons: sampled_buttons(1u64 << number).into_iter().collect(),
                 toggle_armed: false,
                 target: InputCapabilities::new(&key_usages(), true, 7, true).unwrap(),
             };
