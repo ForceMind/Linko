@@ -15,7 +15,10 @@ impl Packet {
         }
     }
 
-    fn fill(&mut self, mut read: impl FnMut(&mut [i16]) -> Result<usize>) -> Result<[i16; SAMPLES]> {
+    fn fill(
+        &mut self,
+        mut read: impl FnMut(&mut [i16]) -> Result<usize>,
+    ) -> Result<[i16; SAMPLES]> {
         let mut fresh = false;
         while self.length < SAMPLES {
             let available = &mut self.samples[self.length..];
@@ -52,7 +55,10 @@ pub(super) async fn share_system(
     use peerglide_transport::{self as transport, audio};
     use std::{
         net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-        sync::{atomic::{AtomicBool, Ordering}, Arc},
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
         time::Duration,
     };
 
@@ -155,7 +161,9 @@ fn capture_samples(
         }
         Ok(())
     })();
-    capture.stop().context("local system audio cleanup failed")?;
+    capture
+        .stop()
+        .context("local system audio cleanup failed")?;
     result
 }
 

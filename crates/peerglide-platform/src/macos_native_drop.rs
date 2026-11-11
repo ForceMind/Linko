@@ -87,7 +87,10 @@ mod tests {
 
     #[test]
     fn path_limits_and_unknown_outcomes_are_preserved() {
-        assert_eq!(bounded_path(Path::new("/tmp/屏跃.txt")).unwrap(), "/tmp/屏跃.txt");
+        assert_eq!(
+            bounded_path(Path::new("/tmp/屏跃.txt")).unwrap(),
+            "/tmp/屏跃.txt"
+        );
         assert!(bounded_path(Path::new("/tmp/invalid\0file")).is_err());
         assert!(bounded_path(Path::new(&"x".repeat(4097))).is_err());
         assert_eq!(decode_outcome(0), None);

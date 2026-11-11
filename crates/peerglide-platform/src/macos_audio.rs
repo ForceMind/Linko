@@ -1,7 +1,7 @@
 //! Explicit local playback with a bounded AudioQueue and no callback I/O.
 use crate::audio_output::scale_sample;
 use anyhow::{ensure, Result};
-use peerglide_protocol::audio::{CHANNELS, SAMPLE_RATE, SAMPLES};
+use peerglide_protocol::audio::{CHANNELS, SAMPLES, SAMPLE_RATE};
 use std::{
     ffi::c_void,
     mem::size_of,
@@ -155,8 +155,9 @@ pub fn output_devices() -> Result<Vec<OutputDevice>> {
         .filter_map(|&id| {
             let mut output_bytes = 0;
             // SAFETY: the size slot is writable. This does not start a device.
-            let status =
-                unsafe { AudioObjectGetPropertyDataSize(id, &streams, 0, null(), &mut output_bytes) };
+            let status = unsafe {
+                AudioObjectGetPropertyDataSize(id, &streams, 0, null(), &mut output_bytes)
+            };
             if status != 0 || output_bytes == 0 {
                 return None;
             }
@@ -185,7 +186,8 @@ fn device_string(id: u32, property: Property) -> Option<String> {
     // SAFETY: a successful CoreAudio string property gives a live CFString.
     let copied = unsafe {
         let copied = size == size_of::<CFRef>() as u32
-            && CFStringGetCString(value, bytes.as_mut_ptr().cast(), bytes.len() as isize, UTF8) != 0;
+            && CFStringGetCString(value, bytes.as_mut_ptr().cast(), bytes.len() as isize, UTF8)
+                != 0;
         CFRelease(value);
         copied
     };
@@ -293,16 +295,23 @@ impl Player {
     }
 
     fn select_device(&self, uid: &str) -> Result<()> {
-        ensure!(!uid.is_empty() && uid.len() <= 512 && !uid.contains('\0'), "invalid audio device UID");
+        ensure!(
+            !uid.is_empty() && uid.len() <= 512 && !uid.contains('\0'),
+            "invalid audio device UID"
+        );
         // SAFETY: the byte slice and its explicit length are valid for the call.
-        let value = unsafe {
-            CFStringCreateWithBytes(null(), uid.as_ptr(), uid.len() as isize, UTF8, 0)
-        };
+        let value =
+            unsafe { CFStringCreateWithBytes(null(), uid.as_ptr(), uid.len() as isize, UTF8, 0) };
         ensure!(!value.is_null(), "macOS audio device UID unavailable");
         // SAFETY: AudioQueue accepts a pointer to the retained CFStringRef value.
         let result = unsafe {
             let property = (&raw const value).cast();
-            let result = AudioQueueSetProperty(self.queue, CURRENT_DEVICE, property, size_of::<CFRef>() as u32);
+            let result = AudioQueueSetProperty(
+                self.queue,
+                CURRENT_DEVICE,
+                property,
+                size_of::<CFRef>() as u32,
+            );
             CFRelease(value);
             result
         };
@@ -310,16 +319,26 @@ impl Player {
     }
 
     pub fn submit(&mut self, samples: &[i16; SAMPLES], volume_percent: u8) -> Result<bool> {
-        ensure!(!self.queue.is_null() && !self.stopping, "macOS audio output stopped");
+        ensure!(
+            !self.queue.is_null() && !self.stopping,
+            "macOS audio output stopped"
+        );
         ensure!(volume_percent <= 100, "audio volume outside limits");
-        let Some(index) = self.available.as_ref().and_then(|available| available.take()) else {
+        let Some(index) = self
+            .available
+            .as_ref()
+            .and_then(|available| available.take())
+        else {
             return Ok(false);
         };
         let buffer = self.buffers[index];
         // SAFETY: the callback returned this live buffer to the sole owner.
         // AudioQueue cannot access the payload again until enqueue succeeds.
         unsafe {
-            ensure!((*buffer).capacity >= BUFFER_BYTES && !(*buffer).data.is_null(), "macOS audio buffer invalid");
+            ensure!(
+                (*buffer).capacity >= BUFFER_BYTES && !(*buffer).data.is_null(),
+                "macOS audio buffer invalid"
+            );
             let pcm = samples.map(|sample| scale_sample(sample, volume_percent));
             std::ptr::copy_nonoverlapping(
                 pcm.as_ptr().cast::<u8>(),
@@ -327,7 +346,10 @@ impl Player {
                 BUFFER_BYTES as usize,
             );
             (*buffer).length = BUFFER_BYTES;
-            check(AudioQueueEnqueueBuffer(self.queue, buffer, 0, null()), "queue")?;
+            check(
+                AudioQueueEnqueueBuffer(self.queue, buffer, 0, null()),
+                "queue",
+            )?;
         }
         if !self.started {
             // SAFETY: the owned queue has an initial PCM buffer.
@@ -398,7 +420,10 @@ mod tests {
 
     #[test]
     fn device_names_must_fit_and_decode_without_unterminated_bytes() {
-        assert_eq!(bounded_utf8(b"Desk audio\0unused").as_deref(), Some("Desk audio"));
+        assert_eq!(
+            bounded_utf8(b"Desk audio\0unused").as_deref(),
+            Some("Desk audio")
+        );
         assert!(bounded_utf8(b"not terminated").is_none());
         assert!(bounded_utf8(b"\xff\0").is_none());
         assert!(bounded_utf8(b"\0").is_none());

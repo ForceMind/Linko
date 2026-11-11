@@ -8,12 +8,7 @@ extern "C" {
     #[link_name = "linko_wasapi_open"]
     fn native_open(output: *mut *mut c_void) -> i32;
     #[link_name = "linko_wasapi_read"]
-    fn native_read(
-        owner: *mut c_void,
-        output: *mut i16,
-        capacity: u32,
-        written: *mut u32,
-    ) -> i32;
+    fn native_read(owner: *mut c_void, output: *mut i16, capacity: u32, written: *mut u32) -> i32;
     #[link_name = "linko_wasapi_stop"]
     fn native_stop(owner: *mut c_void) -> i32;
     #[link_name = "linko_wasapi_drop"]
@@ -25,12 +20,7 @@ extern "C" {
     #[link_name = "linko_mac_audio_open"]
     fn native_open(output: *mut *mut c_void) -> i32;
     #[link_name = "linko_mac_audio_read"]
-    fn native_read(
-        owner: *mut c_void,
-        output: *mut i16,
-        capacity: u32,
-        written: *mut u32,
-    ) -> i32;
+    fn native_read(owner: *mut c_void, output: *mut i16, capacity: u32, written: *mut u32) -> i32;
     #[link_name = "linko_mac_audio_stop"]
     fn native_stop(owner: *mut c_void) -> i32;
     #[link_name = "linko_mac_audio_drop"]
@@ -61,10 +51,12 @@ impl SystemAudio {
         let mut frames = 0;
         // SAFETY: the live capture belongs to this thread. output is sized for
         // capacity stereo frames, and the native adapter honors that bound.
-        let result =
-            unsafe { native_read(self.owner, output.as_mut_ptr(), capacity, &mut frames) };
+        let result = unsafe { native_read(self.owner, output.as_mut_ptr(), capacity, &mut frames) };
         check(result, "read")?;
-        ensure!(frames <= capacity, "system capture returned oversized audio");
+        ensure!(
+            frames <= capacity,
+            "system capture returned oversized audio"
+        );
         Ok(frames as usize * CHANNELS)
     }
 
@@ -82,7 +74,10 @@ impl Drop for SystemAudio {
 }
 
 fn check(result: i32, operation: &'static str) -> Result<()> {
-    ensure!(result >= 0, "system audio {operation} failed ({result:#010x})");
+    ensure!(
+        result >= 0,
+        "system audio {operation} failed ({result:#010x})"
+    );
     Ok(())
 }
 
