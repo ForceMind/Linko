@@ -118,7 +118,7 @@ fn display_metrics(
     };
     ensure!(width > 0 && pixel_width > 0, "invalid macOS display mode");
     Ok(Display {
-        id: DisplayId(id),
+        id: DisplayId(u64::from(id)),
         bounds: Bounds {
             left: rect.origin.x,
             top: rect.origin.y,
@@ -150,7 +150,9 @@ fn active_display(id: u32) -> Result<Display> {
 
 pub(super) fn read_display_layout() -> Result<Layout> {
     let ids = active_display_ids()?;
-    let primary = DisplayId(*ids.first().context("no active macOS display")?);
+    let primary = DisplayId(u64::from(
+        *ids.first().context("no active macOS display")?,
+    ));
     let displays = ids
         .iter()
         .map(|id| active_display(*id))
