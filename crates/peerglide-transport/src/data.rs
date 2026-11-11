@@ -384,7 +384,10 @@ mod tests {
             },
             60_000,
         )?;
-        assert!(peer_send.write_text("未授予发送", share, origin).await.is_err());
+        assert!(peer_send
+            .write_text("未授予发送", share, origin)
+            .await
+            .is_err());
         assert!(send
             .write_text("仅本机", Classification::LocalOnly, origin)
             .await
