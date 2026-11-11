@@ -501,6 +501,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_responses_use_reverse_direction_and_chunks_wait_for_the_correct_phase() -> Result<()>
+    {
+        use peerglide_transfer::{
+            codec::{FileOutcome, Frame, Kind},
+            data_policy::Permissions,
+        };
+
+        let source = Identity::generate()?;
+        let destination = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let left = endpoint(bind, &source, &destination.certificate)?;
+        let right = endpoint(bind, &destination, &source.certificate)?;
+        let (connector, listener) = connect(&left, &right).await?;
+        let (outbound, inbound) = tokio::try_join!(
+            open(&connector, &destination.certificate, TEXT_AND_FILES),
+            accept(&listener, &source.certificate, TEXT_AND_FILES)
+        )?;
+        let (mut source_consent, mut source_send, mut source_receive) =
+            outbound.into_session(4096, 4096)?;
+        let (mut destination_consent, mut destination_send, mut destination_receive) =
+            inbound.into_session(4096, 4096)?;
+        source_consent.grant(
+            Permissions {
+                file_send: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        let id = [21; 16];
+        let response = Frame::FileResult {
+            id,
+            outcome: FileOutcome::Declined,
+        };
+        assert!(destination_send.write(&response).await.is_err());
+        assert!(source_send.write(&response).await.is_err());
+        destination_consent.grant(
+            Permissions {
+                file_receive: true,
+                ..Permissions::default()
+            },
+            60_000,
+        )?;
+        let timeout = Duration::from_secs(5);
+        let ((), admitted) = tokio::try_join!(
+            destination_send.write(&response),
+            source_receive.read_file(&[Kind::FileResult], timeout)
+        )?;
+        assert!(source_consent.apply_received(admitted, |frame| Ok(matches!(
+            frame,
+            Frame::FileResult { id: received, outcome: FileOutcome::Declined } if received == id
+        )))?);
+        source_send
+            .write(&Frame::Chunk {
+                id,
+                index: 0,
+                bytes: vec![5],
+            })
+            .await?;
+        let error = destination_receive
+            .read_file(&[Kind::Offer], timeout)
+            .await
+            .err()
+            .context("unexpectedly admitted a chunk before an offer")?;
+        assert_eq!(
+            error.to_string(),
+            "unexpected frame for the current file transfer phase"
+        );
+        assert!(listener.close_reason().is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn input_and_data_connections_cannot_be_crossed() -> Result<()> {
         let local = Identity::generate()?;
         let peer = Identity::generate()?;
