@@ -1,5 +1,5 @@
 //! One local file job with a bounded event queue and a dedicated runtime.
-pub use crate::file_transfer::{Decision, Offer, ReceiveResult};
+pub use crate::file_transfer::{Decision, Offer, PreparedDropPath, ReceiveResult, ReceivedFile};
 use crate::{
     data,
     file_transfer::{self, Cancellation, ReceiveOptions, Source},
@@ -383,6 +383,7 @@ mod tests {
             Event::Received(ReceiveResult {
                 outcome: FileOutcome::Committed,
                 report_queued: true,
+                ..
             })
         ));
         let progress = receiver.progress().context("missing verified progress")?;

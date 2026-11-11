@@ -13,7 +13,7 @@ use std::{
     fs::File,
     future::Future,
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -122,6 +122,46 @@ pub enum Decision {
 pub struct ReceiveResult {
     pub outcome: FileOutcome,
     pub report_queued: bool,
+    pub file: Option<ReceivedFile>,
+}
+
+/// The published local file and the exact verified transfer manifest.
+pub struct ReceivedFile {
+    path: PathBuf,
+    manifest: Manifest,
+}
+
+/// A file rechecked before the native adapter can offer its local path.
+/// The cooperating owner keeps the same open file during the drag. A hostile
+/// local filesystem or writers ignoring OS share rules are outside the transfer.
+pub struct PreparedDropPath {
+    path: PathBuf,
+    _source: File,
+}
+
+impl ReceivedFile {
+    pub fn name(&self) -> &str {
+        self.manifest.name()
+    }
+
+    /// Run on the local storage worker, outside native input or drag callbacks.
+    pub fn prepare_drop(&self, check: impl FnMut() -> io::Result<()>) -> Result<PreparedDropPath> {
+        let (actual, source) = Manifest::open_checked(&self.path, check)?;
+        ensure!(
+            actual == self.manifest,
+            "received file changed before native drop"
+        );
+        Ok(PreparedDropPath {
+            path: self.path.clone(),
+            _source: source,
+        })
+    }
+}
+
+impl PreparedDropPath {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// A locally selected file and its frozen manifest. The data job owns the
@@ -332,6 +372,7 @@ where
     // the transfer ID and local directory supplied by the controller.
     let peer = consent.file_receive_peer()?;
     let total_chunks = manifest.chunks();
+    let verified_manifest = manifest.clone();
     let storage = tokio::task::spawn_blocking({
         let guard = guard.clone();
         move || -> Result<(Manager, usize, Progress)> {
@@ -411,15 +452,26 @@ where
             Err(_) => return Ok(report(connection, &mut send, id, FileOutcome::Failed).await),
         }
     }
-    let outcome = tokio::task::spawn_blocking({
+    let published = tokio::task::spawn_blocking({
         let guard = guard.clone();
-        move || match manager.commit_checked(id, || guard.elapsed_ms(), || guard.check()) {
-            Ok(_) => FileOutcome::Committed,
-            Err(_) => FileOutcome::Unknown,
+        move || {
+            manager
+                .commit_checked(id, || guard.elapsed_ms(), || guard.check())
+                .ok()
         }
     })
     .await?;
-    Ok(report(connection, &mut send, id, outcome).await)
+    let outcome = if published.is_some() {
+        FileOutcome::Committed
+    } else {
+        FileOutcome::Unknown
+    };
+    let mut result = report(connection, &mut send, id, outcome).await;
+    result.file = published.map(|path| ReceivedFile {
+        path,
+        manifest: verified_manifest,
+    });
+    Ok(result)
 }
 
 async fn report(
@@ -436,6 +488,7 @@ async fn report(
     ReceiveResult {
         outcome,
         report_queued,
+        file: None,
     }
 }
 
@@ -594,9 +647,18 @@ mod tests {
                     .context("missing disk progress")?
                     .chunks_complete
             );
-            assert_eq!(fs::read(destination.join("example.bin"))?, contents);
+            let path = destination.join("example.bin");
+            assert_eq!(fs::read(&path)?, contents);
+            let file = received.file.context("missing verified local copy")?;
+            assert_eq!(file.name(), "example.bin");
+            let prepared = file.prepare_drop(|| Ok(()))?;
+            assert_eq!(fs::canonicalize(prepared.path())?, fs::canonicalize(&path)?);
+            drop(prepared);
+            fs::write(&path, vec![0x7f; contents.len()])?;
+            assert!(file.prepare_drop(|| Ok(())).is_err());
         } else {
             assert_eq!(sent, FileOutcome::Declined);
+            assert!(received.file.is_none());
             assert!(last_progress.is_none());
             assert!(fs::read_dir(destination)?.next().is_none());
         }

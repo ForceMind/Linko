@@ -250,12 +250,23 @@ mod tests {
         let mut owner = Admission::default();
         let ctx = context();
         let ticket = owner.begin(ctx, [1; 16], Content::File, 0, true).unwrap();
-        assert_eq!(owner.submit(ticket, ctx, 1, true, Effect::Copy), Err(Error::WrongState));
+        assert_eq!(
+            owner.submit(ticket, ctx, 1, true, Effect::Copy),
+            Err(Error::WrongState)
+        );
         owner.verified(ticket, ctx, 2, true).unwrap();
-        assert_eq!(owner.submit(ticket, ctx, 3, true, Effect::Move), Err(Error::UnsupportedEffect));
-        assert_eq!(owner.submit(ticket, ctx, 4, true, Effect::Link), Err(Error::UnsupportedEffect));
+        assert_eq!(
+            owner.submit(ticket, ctx, 3, true, Effect::Move),
+            Err(Error::UnsupportedEffect)
+        );
+        assert_eq!(
+            owner.submit(ticket, ctx, 4, true, Effect::Link),
+            Err(Error::UnsupportedEffect)
+        );
         owner.submit(ticket, ctx, 5, true, Effect::Copy).unwrap();
-        owner.complete(ticket, ctx, 6, true, NativeOutcome::Copied).unwrap();
+        owner
+            .complete(ticket, ctx, 6, true, NativeOutcome::Copied)
+            .unwrap();
         assert_eq!(owner.state(), Some(State::Copied));
     }
 
@@ -265,12 +276,21 @@ mod tests {
         let ctx = context();
         let ticket = owner.begin(ctx, [1; 16], Content::Text, 0, true).unwrap();
         owner.verified(ticket, ctx, 1, true).unwrap();
-        let blurred = Context { focused: false, ..ctx };
-        assert_eq!(owner.submit(ticket, blurred, 2, true, Effect::Copy), Err(Error::InvalidContext));
+        let blurred = Context {
+            focused: false,
+            ..ctx
+        };
+        assert_eq!(
+            owner.submit(ticket, blurred, 2, true, Effect::Copy),
+            Err(Error::InvalidContext)
+        );
         assert_eq!(owner.state(), Some(State::Cancelled));
 
         let next = owner.begin(ctx, [2; 16], Content::Image, 3, true).unwrap();
-        assert_eq!(owner.verified(next, ctx, 3 + MAX_LIFETIME_MS, true), Err(Error::InvalidContext));
+        assert_eq!(
+            owner.verified(next, ctx, 3 + MAX_LIFETIME_MS, true),
+            Err(Error::InvalidContext)
+        );
         assert_eq!(owner.state(), Some(State::Cancelled));
     }
 
@@ -281,15 +301,27 @@ mod tests {
         let ticket = owner.begin(ctx, [1; 16], Content::File, 0, true).unwrap();
         owner.verified(ticket, ctx, 1, true).unwrap();
         owner.submit(ticket, ctx, 2, true, Effect::Copy).unwrap();
-        let other = Context { connection: 5, ..ctx };
-        assert_eq!(owner.complete(ticket, other, 3, true, NativeOutcome::Copied), Err(Error::InvalidContext));
+        let other = Context {
+            connection: 5,
+            ..ctx
+        };
+        assert_eq!(
+            owner.complete(ticket, other, 3, true, NativeOutcome::Copied),
+            Err(Error::InvalidContext)
+        );
         assert_eq!(owner.state(), Some(State::Unknown));
-        assert_eq!(owner.complete(ticket, ctx, 4, true, NativeOutcome::Copied), Err(Error::WrongState));
+        assert_eq!(
+            owner.complete(ticket, ctx, 4, true, NativeOutcome::Copied),
+            Err(Error::WrongState)
+        );
         assert!(owner.begin(ctx, [2; 16], Content::File, 4, true).is_err());
         owner.acknowledge_unknown(ticket).unwrap();
         let next = owner.begin(ctx, [2; 16], Content::File, 5, true).unwrap();
         assert_eq!(owner.cancel(ticket), Err(Error::StaleTicket));
-        assert_eq!(owner.verified(next, ctx, 6, false), Err(Error::Unauthorized));
+        assert_eq!(
+            owner.verified(next, ctx, 6, false),
+            Err(Error::Unauthorized)
+        );
         assert_eq!(owner.state(), Some(State::Cancelled));
     }
 }
