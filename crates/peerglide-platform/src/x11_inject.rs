@@ -5,7 +5,8 @@ use x11rb::{
     connection::Connection as _,
     protocol::{
         xproto::{
-            ConnectionExt as _, Window, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
+            ConnectionExt as _, Window, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT,
+            MOTION_NOTIFY_EVENT,
         },
         xtest::ConnectionExt as _,
     },
@@ -74,7 +75,10 @@ impl Injector {
             "X11 injection is unavailable in a Wayland session"
         );
         let display = std::env::var("DISPLAY").context("local X11 display unavailable")?;
-        ensure!(local_display(&display), "only a local X11 display is supported");
+        ensure!(
+            local_display(&display),
+            "only a local X11 display is supported"
+        );
         let (connection, screen) = x11rb::connect(Some(&display))
             .map_err(|_| anyhow::anyhow!("could not connect to the local X11 display"))?;
         let version = connection
@@ -94,7 +98,12 @@ impl Injector {
             .reply()
             .map_err(|_| anyhow::anyhow!("local X11 root geometry unavailable"))?;
         ensure!(
-            coordinates(ReceivePoint { x: 0.0, y: 0.0 }, geometry.width, geometry.height).is_some(),
+            coordinates(
+                ReceivePoint { x: 0.0, y: 0.0 },
+                geometry.width,
+                geometry.height
+            )
+            .is_some(),
             "X11 root exceeds XTEST coordinate limits"
         );
         Ok(Self {
@@ -107,8 +116,8 @@ impl Injector {
     }
 
     pub fn pointer(&self, point: ReceivePoint) -> Result<()> {
-        let (x, y) = coordinates(point, self.width, self.height)
-            .context("invalid X11 pointer position")?;
+        let (x, y) =
+            coordinates(point, self.width, self.height).context("invalid X11 pointer position")?;
         // Refuse a stale geometry instead of interpreting a position in a new root.
         let geometry = self.connection.get_geometry(self.root)?.reply()?;
         ensure!(
@@ -208,7 +217,15 @@ mod tests {
             coordinates(ReceivePoint { x: 1.0, y: 0.5 }, 1920, 1081),
             Some((1919, 540))
         );
-        assert!(coordinates(ReceivePoint { x: f64::NAN, y: 0.0 }, 1920, 1080).is_none());
+        assert!(coordinates(
+            ReceivePoint {
+                x: f64::NAN,
+                y: 0.0
+            },
+            1920,
+            1080
+        )
+        .is_none());
         assert!(coordinates(ReceivePoint { x: 1.0, y: 1.0 }, 32769, 1080).is_none());
         assert!(coordinates(ReceivePoint { x: 1.0, y: 1.0 }, 0, 1080).is_none());
     }
@@ -217,20 +234,24 @@ mod tests {
     fn cleanup_releases_only_owned_buttons_and_retains_uncertain_release() -> Result<()> {
         let mut buttons = Buttons::new();
         assert!(!buttons.apply(1, false, |_, _| unreachable!())?);
-        assert!(buttons.apply(2, true, |button, down| {
-            assert_eq!((button, down), (3, true));
-            anyhow::bail!("test unknown submission")
-        }).is_err());
+        assert!(buttons
+            .apply(2, true, |button, down| {
+                assert_eq!((button, down), (3, true));
+                anyhow::bail!("test unknown submission")
+            })
+            .is_err());
         assert!(buttons.apply(3, true, |button, down| {
             assert_eq!((button, down), (2, true));
             Ok(())
         })?);
         let mut released = Vec::new();
-        assert!(buttons.release(|button, down| {
-            released.push((button, down));
-            ensure!(button != 3, "test release failed");
-            Ok(())
-        }).is_err());
+        assert!(buttons
+            .release(|button, down| {
+                released.push((button, down));
+                ensure!(button != 3, "test release failed");
+                Ok(())
+            })
+            .is_err());
         assert_eq!(released, [(3, false), (2, false)]);
         released.clear();
         buttons.release(|button, down| {
