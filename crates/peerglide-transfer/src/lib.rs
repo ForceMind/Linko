@@ -765,4 +765,5 @@ pub mod clipboard;
 pub mod clipboard_image;
 pub mod codec;
 pub mod data_policy;
+pub mod drop_admission;
 pub mod manager;
