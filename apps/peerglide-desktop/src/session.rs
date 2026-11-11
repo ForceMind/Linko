@@ -1614,7 +1614,10 @@ mod tests {
             y: 0.5,
         };
         outbox.latest = Some(first);
-        assert_eq!(outbox.take_due(start).map(|motion| motion.sequence), Some(1));
+        assert_eq!(
+            outbox.take_due(start).map(|motion| motion.sequence),
+            Some(1)
+        );
         outbox.latest = Some(Motion {
             sequence: 2,
             x: 0.5,
