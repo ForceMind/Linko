@@ -1,5 +1,6 @@
 mod input_diagnostics;
 mod layout_control;
+mod multi_peer;
 mod pairing_worker;
 mod reconnect;
 mod session;
@@ -120,6 +121,16 @@ enum Command {
     },
     /// Accept a connection from exactly the enrolled certificate. No input permission by default.
     Listen(Options),
+    /// Verify communication with several enrolled peers on one listener.
+    ListenPeers {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        /// Repeat for each independently enrolled public certificate.
+        #[arg(long, required = true)]
+        peer_cert: Vec<PathBuf>,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -209,6 +220,9 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Listen(o) => run(o, None, false).await,
+        Command::ListenPeers { identity, peer_cert, bind } => {
+            multi_peer::run(&identity, &peer_cert, bind).await
+        }
         Command::Connect {
             address,
             options,
@@ -650,22 +664,7 @@ async fn run_inner(
     } else {
         InputCapabilities::default()
     };
-    transport::send(
-        &mut tx,
-        &Message::Hello {
-            version: VERSION,
-            capabilities: local.clone(),
-        },
-    )
-    .await?;
-    let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??;
-    let peer_capabilities = match hello {
-        Message::Hello {
-            version: VERSION,
-            capabilities,
-        } if capabilities.valid() => capabilities,
-        _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
-    };
+    let peer_capabilities = exchange_hello(&mut tx, &mut rx, local.clone()).await?;
     Ok::<_, anyhow::Error>((c, tx, rx, local, peer_capabilities))
         } => Some(result),
     };
@@ -747,6 +746,29 @@ async fn run_inner(
         }
     }
     Ok(())
+}
+
+async fn exchange_hello(
+    tx: &mut quinn::SendStream,
+    rx: &mut quinn::RecvStream,
+    local: InputCapabilities,
+) -> Result<InputCapabilities> {
+    transport::send(
+        tx,
+        &Message::Hello {
+            version: VERSION,
+            capabilities: local,
+        },
+    )
+    .await?;
+    let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(rx)).await??;
+    match hello {
+        Message::Hello {
+            version: VERSION,
+            capabilities,
+        } if capabilities.valid() => Ok(capabilities),
+        _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
+    }
 }
 
 #[cfg(test)]

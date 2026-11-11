@@ -60,3 +60,13 @@ app/terminal running the prototype, followed by restart. Secure Input remains
 outside its control. Windows input cannot cross privilege boundaries or control
 UAC/secure desktop. Keep OS security protections enabled.
 
+
+## 多台可信电脑的通信诊断
+
+```text
+peerglide listen-peers --identity PATH --bind 0.0.0.0:24870 --peer-cert A.der --peer-cert B.der
+```
+
+每个证书必须分别线下核对。对方使用已有的 `connect --probe` 检查
+同一个端口。监听可保持多条 v5 诊断连接，实际键鼠许可始终关闭。
+Ctrl+C 停止监听及这些连接。
