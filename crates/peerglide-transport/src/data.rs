@@ -1,6 +1,6 @@
 //! Independent data negotiation over pinned mutual TLS. Capability is not consent.
 use super::data_frames::{FrameReceiver, FrameSender};
-pub use super::data_session::{AdmittedFrame, Consent, Receiver, Sender};
+pub use super::data_session::{AdmittedFrame, ClipboardCompletion, Consent, Receiver, Sender};
 use super::{endpoint_alpn, verify_peer, Identity};
 use anyhow::{ensure, Context, Result};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};

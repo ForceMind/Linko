@@ -13,7 +13,7 @@ use quinn::Connection;
 use rand::RngCore;
 use std::{
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 struct Policy {
@@ -342,9 +342,16 @@ impl Receiver {
 
     async fn read_text_response(&mut self, expected: Kind) -> Result<Frame> {
         let policy = &self.policy;
+        // A fixed-size import result may wait for a person's local decision.
+        // All other frames, including the initial receipt, keep the short limit.
+        let timeout = if expected == Kind::TextResult {
+            Duration::from_secs(45)
+        } else {
+            Duration::from_secs(5)
+        };
         let (frame, permit) = self
             .frames
-            .read_checked(|header| {
+            .read_checked_before(timeout, |header| {
                 ensure!(header.kind() == expected, "unexpected clipboard response");
                 policy.check(|clipboard, now| clipboard.authorize(Capability::TextSend, now))
             })

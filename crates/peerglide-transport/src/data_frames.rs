@@ -119,11 +119,19 @@ impl FrameReceiver {
         &mut self,
         admit: impl FnOnce(Header) -> Result<T>,
     ) -> Result<(Frame, T)> {
+        self.read_checked_before(FRAME_TIMEOUT, admit).await
+    }
+
+    pub(super) async fn read_checked_before<T>(
+        &mut self,
+        timeout: Duration,
+        admit: impl FnOnce(Header) -> Result<T>,
+    ) -> Result<(Frame, T)> {
         let attempt = FrameAttempt(Some(&self.connection));
         let stream = &mut self.stream;
         let remaining = &mut self.remaining;
         let capabilities = self.capabilities;
-        let result = tokio::time::timeout(FRAME_TIMEOUT, async {
+        let result = tokio::time::timeout(timeout, async {
             let mut bytes = [0; HEADER_BYTES];
             stream.read_exact(&mut bytes).await?;
             let header = Header::parse(bytes)?;
