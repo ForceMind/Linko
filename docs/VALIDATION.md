@@ -2640,3 +2640,19 @@ Ubuntu 本次峰值低约 6.6–6.9 MiB，macOS 空身份本次峰值较高。
 [调整前报告](https://github.com/ForceMind/Linko/actions/runs/43102956952) ·
 [调整后报告](https://github.com/ForceMind/Linko/actions/runs/43110989149) ·
 [工作区 CI](https://github.com/ForceMind/Linko/actions/runs/43110989136)
+
+## 2026-11-12 集成草稿的同源包证据
+
+PR180 审阅提交 `7916b5e4eada6fe8580eb164fd4943ba0cb83b12` 的
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43113699213)
+通过。读出两个便携 ZIP 的 `BUILD_SOURCE.json`，同为
+`2026.11.12-0640`，实际检出 `f359802b2bd47f80c7690756bf4e4946b4c229b2`，
+源码树 `9f0e81bf3fc04197ef4e1136f2e5acbc2c40dc89` 与审阅提交一致。
+两份内层 ZIP SHA-256 均与各自同名摘要一致。
+[Windows](https://github.com/ForceMind/Linko/actions/runs/43113699213/artifacts/13898495834) ·
+[macOS](https://github.com/ForceMind/Linko/actions/runs/43113699213/artifacts/13898306373)
+
+随后加入音频协议、F15 与便携回滚的集成提交 `cfdeb3e` 的
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43116253905)
+通过。便携回滚在 runner 隔离目录验证。实际系统音频、原生拖放、
+多设备路由、安装和 #3/C06 按最终候选记录。
