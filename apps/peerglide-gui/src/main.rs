@@ -701,7 +701,7 @@ impl App {
         self.validate_pairing_receipt()?;
         anyhow::ensure!(
             !self.pairing_pending(),
-            "本机登记尚待对端回执；请重新核验或撤销后再连接"
+            "本机登记还在等待另一台回执，请重新核验或撤销后再连接"
         );
         anyhow::ensure!(!self.pairing_open, "请先结束配对再开启会话");
         Ok(())
@@ -880,7 +880,7 @@ impl App {
             self.config
                 .address
                 .parse::<std::net::SocketAddr>()
-                .context("请输入对端 IP 地址和端口")?;
+                .context("请输入另一台的 IP 地址和端口")?;
         }
         if !self.resource_check_mode {
             self.save_config()?;
@@ -1206,7 +1206,7 @@ impl App {
                     }
                     Some(WorkerState::Listening) => {
                         self.connected = false;
-                        self.status = "等待对端连接".into();
+                        self.status = "等待另一台连接".into();
                     }
                     Some(WorkerState::ProbePassed) => {
                         self.connected = false;
@@ -1892,7 +1892,7 @@ mod tests {
         app.status = "已通过身份验证".into();
         assert_eq!(app.input_label(), "尚未开启键鼠会话");
         app.input_state = Some(WorkerInputState::ReceivingRemote);
-        assert_eq!(app.input_label(), "对端正在控制本机");
+        assert_eq!(app.input_label(), "另一台正在控制本机");
         app.recovery_blocked = true;
         assert_eq!(app.input_label(), "输入恢复未确认");
         app.native_confirmation = true;
@@ -3416,7 +3416,7 @@ mod lifecycle_tests {
         set_state(&mut app, WorkerState::Listening);
         app.poll();
         assert!(!app.connected);
-        assert_eq!(app.status, "等待对端连接");
+        assert_eq!(app.status, "等待另一台连接");
         set_state(&mut app, WorkerState::Reconnecting);
         app.poll();
         assert_eq!(app.status, "正在重连可信设备");

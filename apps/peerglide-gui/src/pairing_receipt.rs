@@ -101,7 +101,7 @@ impl Record {
         anyhow::ensure!(
             self.local_fingerprint == local_fingerprint
                 && peer_fingerprint == Some(self.peer_fingerprint.as_str()),
-            "配对收据与当前本机或对端身份不一致"
+            "配对收据与本机或另一台的当前身份不一致"
         );
         anyhow::ensure!(
             !self.is_pending() || !(allow || native || reconnect),

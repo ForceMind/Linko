@@ -161,7 +161,7 @@ impl Check {
         );
         let next = Config {
             fingerprint: Some(peerglide_transport::fingerprint(&self.peer)),
-            peer_name: "隔离通信对端".into(),
+            peer_name: "另一台（隔离通信）".into(),
             address: self.address.to_string(),
             listen: false,
             allow: false,
