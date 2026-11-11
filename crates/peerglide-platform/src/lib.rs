@@ -19,6 +19,8 @@ mod held_inputs;
 #[cfg(any(windows, test))]
 mod inject_thread;
 pub mod input_diagnostics;
+#[cfg(any(windows, target_os = "macos"))]
+mod pair_ledger;
 mod receive_driver;
 pub mod tray;
 #[cfg(target_os = "linux")]
@@ -39,6 +41,8 @@ mod gesture_worker_core;
 mod source_cursor;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
+#[cfg(any(windows, target_os = "macos"))]
+use pair_ledger::{PairLedger, PairOwner};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -1213,75 +1217,6 @@ struct HookState {
     target: InputCapabilities,
 }
 #[cfg(any(windows, target_os = "macos"))]
-#[derive(Clone, Copy, Default)]
-enum PairOwner {
-    #[default]
-    Empty,
-    Local(CaptureEpoch),
-    Remote(CaptureEpoch),
-    Consumed(CaptureRoute),
-    // Protected pairs are fixed-table holds, separate from the physical hold sets.
-    Protected(CaptureRoute),
-}
-#[cfg(any(windows, target_os = "macos"))]
-impl PairOwner {
-    fn route(self, fallback: CaptureRoute) -> CaptureRoute {
-        match self {
-            Self::Local(e) => CaptureRoute::Local(e),
-            Self::Remote(e) => CaptureRoute::Remote(e),
-            Self::Consumed(r) | Self::Protected(r) => r,
-            Self::Empty => CaptureRoute::Local(fallback.epoch()),
-        }
-    }
-    fn suppressed(self) -> bool {
-        matches!(
-            self,
-            Self::Remote(_) | Self::Consumed(_) | Self::Protected(_)
-        )
-    }
-}
-#[cfg(any(windows, target_os = "macos"))]
-struct PairLedger {
-    keys: [PairOwner; 256],
-    buttons: [PairOwner; 256],
-    unknown: [u64; 1024],
-    extra_held: usize,
-    force_armed: bool,
-    force_pending: bool,
-    debt: usize,
-}
-#[cfg(any(windows, target_os = "macos"))]
-impl Default for PairLedger {
-    fn default() -> Self {
-        Self {
-            keys: [PairOwner::Empty; 256],
-            buttons: [PairOwner::Empty; 256],
-            unknown: [0; 1024],
-            extra_held: 0,
-            force_armed: false,
-            force_pending: false,
-            debt: 0,
-        }
-    }
-}
-#[cfg(any(windows, target_os = "macos"))]
-impl PairLedger {
-    fn replace(&mut self, key: bool, index: usize, owner: PairOwner) {
-        let slot = if key {
-            &mut self.keys[index]
-        } else {
-            &mut self.buttons[index]
-        };
-        self.extra_held = self.extra_held - usize::from(matches!(slot, PairOwner::Protected(_)))
-            + usize::from(matches!(owner, PairOwner::Protected(_)));
-        self.debt = self.debt - usize::from(slot.suppressed()) + usize::from(owner.suppressed());
-        *slot = owner;
-    }
-    fn mouse_debt(&self) -> bool {
-        self.buttons.iter().any(|owner| owner.suppressed())
-    }
-}
-#[cfg(any(windows, target_os = "macos"))]
 impl HookState {
     fn keep_running(&mut self, stop: bool) -> bool {
         if !self.gate.0.healthy.load(Ordering::Acquire) {
@@ -1301,7 +1236,7 @@ impl HookState {
     fn suppressed_modifiers(&self) -> bool {
         self.pairs.keys[0xe0..=0xe7].iter().any(|owner| owner.suppressed())
             // Unknown keys cannot safely be proved non-modifiers.
-            || self.pairs.unknown.iter().any(|word| *word != 0)
+            || self.pairs.unknown_debt != 0
     }
     fn physical_key_held(&self, usage: u16) -> bool {
         self.keys.contains(&usage)
@@ -1586,10 +1521,12 @@ impl HookState {
         {
             if down && !consumed {
                 self.pairs.unknown[word] |= bit;
+                self.pairs.unknown_debt += 1;
                 self.pairs.debt += 1;
                 self.pairs.extra_held += 1;
             } else if !down && consumed {
                 self.pairs.unknown[word] &= !bit;
+                self.pairs.unknown_debt -= 1;
                 self.pairs.debt -= 1;
                 self.pairs.extra_held -= 1;
             }
@@ -2419,6 +2356,8 @@ mod hook_tests {
         assert!(s.key_routed(4, true, route));
         assert!(s.unsupported_button(4, true, route));
         assert!(s.unsupported_key(0x100, true));
+        assert!(s.unsupported_key(0x100, true));
+        assert_eq!(s.pairs.unknown_debt, 1);
         assert_eq!(s.pairs.debt, 3);
         assert!(!s.gate.idle());
         assert!(
@@ -2434,6 +2373,7 @@ mod hook_tests {
         assert!(s.key_routed(4, false, route));
         assert!(s.unsupported_button(4, false, route));
         assert!(s.unsupported_key(0x100, false));
+        assert_eq!(s.pairs.unknown_debt, 0);
         assert_eq!(s.pairs.debt, 0);
         assert!(s.gate.idle());
         assert!(rx.try_recv().is_err());
@@ -2584,6 +2524,22 @@ mod hook_tests {
                 route: CaptureRoute::Local(_)
             }
         ));
+    }
+    #[test]
+    fn mouse_debt_count_changes_only_on_button_ownership_transitions() {
+        let (mut state, _) = state(8);
+        let epoch = activate(&state);
+        state.pairs.replace(false, 1, PairOwner::Remote(epoch));
+        state.pairs.replace(false, 1, PairOwner::Remote(epoch));
+        state.pairs.replace(true, 4, PairOwner::Remote(epoch));
+        assert_eq!(state.pairs.mouse_debt, 1);
+        assert_eq!(state.pairs.debt, 2);
+        state.pairs.replace(false, 2, PairOwner::Remote(epoch));
+        state.pairs.replace(false, 1, PairOwner::Empty);
+        assert_eq!(state.pairs.mouse_debt, 1);
+        state.pairs.replace(false, 2, PairOwner::Local(epoch));
+        assert!(!state.pairs.mouse_debt());
+        assert_eq!(state.pairs.debt, 1);
     }
     #[test]
     fn all_basic_buttons_keep_pair_debt_until_the_original_up_and_old_up_never_matches_new_epoch() {
