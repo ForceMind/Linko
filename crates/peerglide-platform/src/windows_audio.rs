@@ -1,7 +1,7 @@
 //! Local WinMM output owner. Opens only on explicit local playback selection.
 use crate::audio_output::scale_sample;
 use anyhow::{ensure, Result};
-use peerglide_protocol::audio::{CHANNELS, SAMPLE_RATE, SAMPLES};
+use peerglide_protocol::audio::{CHANNELS, SAMPLES, SAMPLE_RATE};
 use std::{cell::UnsafeCell, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::Media::{
     Audio::{
@@ -37,7 +37,10 @@ pub fn output_devices() -> Vec<OutputDevice> {
                 return None;
             }
             let name = caps.szPname;
-            let end = name.iter().position(|word| *word == 0).unwrap_or(name.len());
+            let end = name
+                .iter()
+                .position(|word| *word == 0)
+                .unwrap_or(name.len());
             Some(OutputDevice {
                 id,
                 name: String::from_utf16_lossy(&name[..end]),
@@ -135,7 +138,10 @@ impl Player {
     /// False means all four buffers are still busy. The caller drops this
     /// period instead of queuing delayed audio or writing a live buffer.
     pub fn submit(&mut self, samples: &[i16; SAMPLES], volume_percent: u8) -> Result<bool> {
-        ensure!(!self.output.is_null() && !self.stopping, "Windows audio output stopped");
+        ensure!(
+            !self.output.is_null() && !self.stopping,
+            "Windows audio output stopped"
+        );
         ensure!(volume_percent <= 100, "audio volume outside limits");
         for buffer in self.buffers.iter_mut().flatten() {
             if buffer.retire(self.output)? {
@@ -154,7 +160,10 @@ impl Player {
         // SAFETY: this owner holds the output handle and all its queued memory.
         check(unsafe { waveOutReset(self.output) }, "reset")?;
         for buffer in self.buffers.iter_mut().flatten() {
-            ensure!(buffer.retire(self.output)?, "Windows audio buffer still owned by device");
+            ensure!(
+                buffer.retire(self.output)?,
+                "Windows audio buffer still owned by device"
+            );
         }
         // SAFETY: every successfully prepared buffer has been retired.
         check(unsafe { waveOutClose(self.output) }, "close")?;
@@ -191,7 +200,10 @@ fn pcm_format() -> WAVEFORMATEX {
 }
 
 fn check(result: u32, operation: &'static str) -> Result<()> {
-    ensure!(result == MMSYSERR_NOERROR, "Windows audio {operation} failed ({result})");
+    ensure!(
+        result == MMSYSERR_NOERROR,
+        "Windows audio {operation} failed ({result})"
+    );
     Ok(())
 }
 
