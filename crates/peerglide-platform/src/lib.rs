@@ -17,6 +17,8 @@ mod held_inputs;
 #[cfg(any(windows, test))]
 mod inject_thread;
 pub mod input_diagnostics;
+#[cfg(any(windows, target_os = "macos"))]
+mod pair_ledger;
 mod receive_driver;
 pub mod tray;
 pub use capture_events::{CaptureEventSender, CaptureEvents};
@@ -35,6 +37,8 @@ mod gesture_worker_core;
 mod source_cursor;
 #[cfg(any(windows, target_os = "macos"))]
 use capture_thread::CaptureThread;
+#[cfg(any(windows, target_os = "macos"))]
+use pair_ledger::{PairLedger, PairOwner};
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -1207,84 +1211,6 @@ struct HookState {
     buttons: held_inputs::HeldButtons,
     toggle_armed: bool,
     target: InputCapabilities,
-}
-#[cfg(any(windows, target_os = "macos"))]
-#[derive(Clone, Copy, Default)]
-enum PairOwner {
-    #[default]
-    Empty,
-    Local(CaptureEpoch),
-    Remote(CaptureEpoch),
-    Consumed(CaptureRoute),
-    // Protected pairs are fixed-table holds, separate from the physical hold sets.
-    Protected(CaptureRoute),
-}
-#[cfg(any(windows, target_os = "macos"))]
-impl PairOwner {
-    fn route(self, fallback: CaptureRoute) -> CaptureRoute {
-        match self {
-            Self::Local(e) => CaptureRoute::Local(e),
-            Self::Remote(e) => CaptureRoute::Remote(e),
-            Self::Consumed(r) | Self::Protected(r) => r,
-            Self::Empty => CaptureRoute::Local(fallback.epoch()),
-        }
-    }
-    fn suppressed(self) -> bool {
-        matches!(
-            self,
-            Self::Remote(_) | Self::Consumed(_) | Self::Protected(_)
-        )
-    }
-}
-#[cfg(any(windows, target_os = "macos"))]
-struct PairLedger {
-    keys: [PairOwner; 256],
-    buttons: [PairOwner; 256],
-    unknown: [u64; 1024],
-    extra_held: usize,
-    force_armed: bool,
-    force_pending: bool,
-    debt: usize,
-    mouse_debt: usize,
-    unknown_debt: usize,
-}
-#[cfg(any(windows, target_os = "macos"))]
-impl Default for PairLedger {
-    fn default() -> Self {
-        Self {
-            keys: [PairOwner::Empty; 256],
-            buttons: [PairOwner::Empty; 256],
-            unknown: [0; 1024],
-            extra_held: 0,
-            force_armed: false,
-            force_pending: false,
-            debt: 0,
-            mouse_debt: 0,
-            unknown_debt: 0,
-        }
-    }
-}
-#[cfg(any(windows, target_os = "macos"))]
-impl PairLedger {
-    fn replace(&mut self, key: bool, index: usize, owner: PairOwner) {
-        let slot = if key {
-            &mut self.keys[index]
-        } else {
-            &mut self.buttons[index]
-        };
-        self.extra_held = self.extra_held - usize::from(matches!(slot, PairOwner::Protected(_)))
-            + usize::from(matches!(owner, PairOwner::Protected(_)));
-        let old_debt = usize::from(slot.suppressed());
-        let new_debt = usize::from(owner.suppressed());
-        self.debt = self.debt - old_debt + new_debt;
-        if !key {
-            self.mouse_debt = self.mouse_debt - old_debt + new_debt;
-        }
-        *slot = owner;
-    }
-    fn mouse_debt(&self) -> bool {
-        self.mouse_debt != 0
-    }
 }
 #[cfg(any(windows, target_os = "macos"))]
 impl HookState {
