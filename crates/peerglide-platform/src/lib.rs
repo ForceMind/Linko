@@ -1482,6 +1482,15 @@ impl HookState {
         if self.reject_target(Input::Scroll { x, y }) {
             return false;
         }
+        if x == 0 && y == 0 {
+            // The native wheel accumulator still owns the remainder. This
+            // sample has nothing to forward and must not fill the queue.
+            let remote = route.remote();
+            if let Some(diagnostics) = self.gate.0.diagnostics.get().filter(|_| remote) {
+                diagnostics.increment(input_diagnostics::Count::ScrollZero);
+            }
+            return remote;
+        }
         self.emit(Captured::Input {
             event: Input::Scroll { x, y },
             route,
@@ -2711,6 +2720,42 @@ mod hook_tests {
         assert!(!s.key(4, false));
         assert!(s.gate.idle());
     }
+    #[test]
+    fn zero_scroll_never_consumes_capture_queue_capacity() {
+        let (mut state, mut events) = state(1);
+        let diagnostics = Arc::new(input_diagnostics::InputDiagnostics::default());
+        assert!(state.gate.0.diagnostics.set(diagnostics.clone()).is_ok());
+
+        assert!(!state.scroll(0, 0));
+        assert!(matches!(
+            events.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        let epoch = activate(&state);
+        assert!(state.scroll(0, 1));
+        assert!(state.scroll(0, 0));
+        assert!(state.gate.is_current(CaptureRoute::Remote(epoch)));
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Captured::Input {
+                event: Input::Scroll { x: 0, y: 1 },
+                route: CaptureRoute::Remote(queued),
+            } if queued == epoch
+        ));
+        assert!(matches!(
+            events.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(
+            diagnostics
+                .snapshot(input_diagnostics::Phase::Sample)
+                .to_string()
+                .split_ascii_whitespace()
+                .any(|field| field == "scr_zero=1")
+        );
+    }
+
     #[test]
     fn target_button_and_scroll_rejections_fail_open() {
         let (mut s, mut rx) = state(20);
