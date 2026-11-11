@@ -1245,6 +1245,8 @@ struct PairLedger {
     force_armed: bool,
     force_pending: bool,
     debt: usize,
+    mouse_debt: usize,
+    unknown_debt: usize,
 }
 #[cfg(any(windows, target_os = "macos"))]
 impl Default for PairLedger {
@@ -1257,6 +1259,8 @@ impl Default for PairLedger {
             force_armed: false,
             force_pending: false,
             debt: 0,
+            mouse_debt: 0,
+            unknown_debt: 0,
         }
     }
 }
@@ -1270,11 +1274,16 @@ impl PairLedger {
         };
         self.extra_held = self.extra_held - usize::from(matches!(slot, PairOwner::Protected(_)))
             + usize::from(matches!(owner, PairOwner::Protected(_)));
-        self.debt = self.debt - usize::from(slot.suppressed()) + usize::from(owner.suppressed());
+        let old_debt = usize::from(slot.suppressed());
+        let new_debt = usize::from(owner.suppressed());
+        self.debt = self.debt - old_debt + new_debt;
+        if !key {
+            self.mouse_debt = self.mouse_debt - old_debt + new_debt;
+        }
         *slot = owner;
     }
     fn mouse_debt(&self) -> bool {
-        self.buttons.iter().any(|owner| owner.suppressed())
+        self.mouse_debt != 0
     }
 }
 #[cfg(any(windows, target_os = "macos"))]
@@ -1297,7 +1306,7 @@ impl HookState {
     fn suppressed_modifiers(&self) -> bool {
         self.pairs.keys[0xe0..=0xe7].iter().any(|owner| owner.suppressed())
             // Unknown keys cannot safely be proved non-modifiers.
-            || self.pairs.unknown.iter().any(|word| *word != 0)
+            || self.pairs.unknown_debt != 0
     }
     fn physical_key_held(&self, usage: u16) -> bool {
         self.keys.contains(&usage)
@@ -1582,10 +1591,12 @@ impl HookState {
         {
             if down && !consumed {
                 self.pairs.unknown[word] |= bit;
+                self.pairs.unknown_debt += 1;
                 self.pairs.debt += 1;
                 self.pairs.extra_held += 1;
             } else if !down && consumed {
                 self.pairs.unknown[word] &= !bit;
+                self.pairs.unknown_debt -= 1;
                 self.pairs.debt -= 1;
                 self.pairs.extra_held -= 1;
             }
@@ -2415,6 +2426,8 @@ mod hook_tests {
         assert!(s.key_routed(4, true, route));
         assert!(s.unsupported_button(4, true, route));
         assert!(s.unsupported_key(0x100, true));
+        assert!(s.unsupported_key(0x100, true));
+        assert_eq!(s.pairs.unknown_debt, 1);
         assert_eq!(s.pairs.debt, 3);
         assert!(!s.gate.idle());
         assert!(
@@ -2430,6 +2443,7 @@ mod hook_tests {
         assert!(s.key_routed(4, false, route));
         assert!(s.unsupported_button(4, false, route));
         assert!(s.unsupported_key(0x100, false));
+        assert_eq!(s.pairs.unknown_debt, 0);
         assert_eq!(s.pairs.debt, 0);
         assert!(s.gate.idle());
         assert!(rx.try_recv().is_err());
@@ -2580,6 +2594,22 @@ mod hook_tests {
                 route: CaptureRoute::Local(_)
             }
         ));
+    }
+    #[test]
+    fn mouse_debt_count_changes_only_on_button_ownership_transitions() {
+        let (mut state, _) = state(8);
+        let epoch = activate(&state);
+        state.pairs.replace(false, 1, PairOwner::Remote(epoch));
+        state.pairs.replace(false, 1, PairOwner::Remote(epoch));
+        state.pairs.replace(true, 4, PairOwner::Remote(epoch));
+        assert_eq!(state.pairs.mouse_debt, 1);
+        assert_eq!(state.pairs.debt, 2);
+        state.pairs.replace(false, 2, PairOwner::Remote(epoch));
+        state.pairs.replace(false, 1, PairOwner::Empty);
+        assert_eq!(state.pairs.mouse_debt, 1);
+        state.pairs.replace(false, 2, PairOwner::Local(epoch));
+        assert!(!state.pairs.mouse_debt());
+        assert_eq!(state.pairs.debt, 1);
     }
     #[test]
     fn all_basic_buttons_keep_pair_debt_until_the_original_up_and_old_up_never_matches_new_epoch() {
