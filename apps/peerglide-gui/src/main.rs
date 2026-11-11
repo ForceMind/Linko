@@ -1452,8 +1452,8 @@ impl App {
         self.notice = "退出恢复入口发生变化，已请求停止键鼠。请确认恢复状态并重新打开屏跃。".into();
     }
     fn request_activity_tick(&self, ctx: &egui::Context) {
-        let background = self.window_hidden
-            || ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+        let background =
+            self.window_hidden || ctx.input(|input| input.viewport().minimized.unwrap_or(false));
         if let Some(interval) = self.activity_tick_interval(background) {
             ctx.request_repaint_after(interval);
         }
@@ -3355,16 +3355,28 @@ mod lifecycle_tests {
         let mut app = App::load(fixture.path.clone());
         app.child = Some(managed_child()?);
         app.active_mode = Some(SessionMode::Native);
-        assert_eq!(app.activity_tick_interval(false), Some(Duration::from_millis(100)));
-        assert_eq!(app.activity_tick_interval(true), Some(Duration::from_millis(500)));
+        assert_eq!(
+            app.activity_tick_interval(false),
+            Some(Duration::from_millis(100))
+        );
+        assert_eq!(
+            app.activity_tick_interval(true),
+            Some(Duration::from_millis(500))
+        );
 
         let snapshot = Arc::new(WorkerSnapshot::default());
         snapshot.2.store(true, Ordering::Release);
         app.worker_state = Some(snapshot);
-        assert_eq!(app.activity_tick_interval(true), Some(Duration::from_millis(100)));
+        assert_eq!(
+            app.activity_tick_interval(true),
+            Some(Duration::from_millis(100))
+        );
         app.worker_state = None;
         app.stop();
-        assert_eq!(app.activity_tick_interval(true), Some(Duration::from_millis(100)));
+        assert_eq!(
+            app.activity_tick_interval(true),
+            Some(Duration::from_millis(100))
+        );
         drop(app);
         fixture.close()
     }
