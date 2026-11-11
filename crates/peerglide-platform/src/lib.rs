@@ -20,6 +20,8 @@ mod held_inputs;
 mod inject_thread;
 pub mod input_diagnostics;
 mod receive_driver;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+pub mod system_audio_capture;
 pub mod tray;
 pub use capture_events::{CaptureEventSender, CaptureEvents};
 pub use receive_driver::{
@@ -46,8 +48,7 @@ pub mod macos_audio;
 mod windows;
 #[cfg(windows)]
 pub mod windows_audio;
-#[cfg(all(windows, target_env = "msvc"))]
-pub mod windows_audio_capture;
+
 #[cfg(windows)]
 mod windows_display;
 #[cfg(target_os = "macos")]

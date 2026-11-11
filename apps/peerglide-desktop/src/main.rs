@@ -1,6 +1,6 @@
 #[cfg(any(windows, target_os = "macos", test))]
 mod audio_playback;
-#[cfg(any(all(windows, target_env = "msvc"), test))]
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
 mod audio_source;
 mod input_diagnostics;
 mod layout_control;
@@ -144,8 +144,8 @@ enum Command {
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
     },
-    /// Share the current Windows default output with one verified computer.
-    #[cfg(all(windows, target_env = "msvc"))]
+    /// Share the local system audio with one verified computer.
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     ShareSystemAudio {
         address: SocketAddr,
         #[arg(long, default_value = "identity")]
@@ -263,7 +263,7 @@ async fn main() -> Result<()> {
             Duration::from_secs(duration_secs),
         )
         .await,
-        #[cfg(all(windows, target_env = "msvc"))]
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareSystemAudio {
             address,
             identity,

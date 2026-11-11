@@ -40,7 +40,7 @@ impl Packet {
     }
 }
 
-#[cfg(all(windows, target_env = "msvc"))]
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 pub(super) async fn share_system(
     identity: &std::path::Path,
     peer_certificate: &std::path::Path,
@@ -48,11 +48,11 @@ pub(super) async fn share_system(
     duration: std::time::Duration,
 ) -> Result<()> {
     use anyhow::Context;
-    use peerglide_platform::windows_audio_capture::SystemAudio;
     use peerglide_protocol::audio::Frame;
     use peerglide_transport::{self as transport, audio};
     use std::{
         net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+        sync::{atomic::{AtomicBool, Ordering}, Arc},
         time::Duration,
     };
 
@@ -86,19 +86,21 @@ pub(super) async fn share_system(
         }
         result = audio::open(&connection, &pin, audio::Direction::Send, duration) => result?,
     };
-    let mut capture = SystemAudio::open_after_explicit_consent()?;
-    let mut packet = Packet::new();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop_capture = stopped.clone();
+    let (samples, mut received) = tokio::sync::mpsc::channel(2);
+    let worker = std::thread::Builder::new()
+        .name("linko-system-audio".into())
+        .spawn(move || capture_samples(&stop_capture, samples))?;
     let mut sequence = 0u64;
-    let mut tick = tokio::time::interval(Duration::from_millis(5));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result = async {
         loop {
             tokio::select! {
                 biased;
                 result = &mut stop => return result.map_err(anyhow::Error::from),
                 _ = connection.closed() => anyhow::bail!("audio playback peer disconnected"),
-                _ = tick.tick() => {
-                    let samples = packet.fill(|output| capture.read(output))?;
+                packet = received.recv() => {
+                    let Some(samples) = packet else { return Ok(()); };
                     sequence = sequence.checked_add(1).context("audio sequence exhausted")?;
                     session.send(&Frame { sequence, samples })?;
                 }
@@ -106,7 +108,53 @@ pub(super) async fn share_system(
         }
     }
     .await;
+    stopped.store(true, Ordering::Release);
+    drop(received);
     session.stop();
+    tokio::task::spawn_blocking(move || {
+        worker
+            .join()
+            .map_err(|_| anyhow::anyhow!("local system audio worker ended unexpectedly"))?
+    })
+    .await??;
+    result
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+fn capture_samples(
+    stopped: &std::sync::atomic::AtomicBool,
+    samples: tokio::sync::mpsc::Sender<[i16; SAMPLES]>,
+) -> Result<()> {
+    use anyhow::Context;
+    use peerglide_platform::system_audio_capture::SystemAudio;
+    use std::{
+        sync::atomic::Ordering,
+        time::{Duration, Instant},
+    };
+    use tokio::sync::mpsc::error::TrySendError;
+
+    if stopped.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let mut capture = SystemAudio::open_after_explicit_consent()?;
+    let mut packet = Packet::new();
+    let period = Duration::from_millis(5);
+    let result = (|| -> Result<()> {
+        let mut next = Instant::now();
+        while !stopped.load(Ordering::Acquire) {
+            let pcm = packet.fill(|output| capture.read(output))?;
+            if matches!(samples.try_send(pcm), Err(TrySendError::Closed(_))) {
+                break;
+            }
+            let now = Instant::now();
+            next += period;
+            if next <= now {
+                next = now + period;
+            }
+            std::thread::sleep(next.saturating_duration_since(now));
+        }
+        Ok(())
+    })();
     capture.stop().context("local system audio cleanup failed")?;
     result
 }
