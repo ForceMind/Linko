@@ -26,6 +26,8 @@ pub use receive_driver::{
 #[cfg(any(windows, test))]
 pub mod gesture_capture;
 mod gesture_queue;
+#[cfg(test)]
+mod gesture_worker_core;
 #[cfg(any(target_os = "macos", test))]
 mod source_cursor;
 #[cfg(any(windows, target_os = "macos"))]

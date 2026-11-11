@@ -2261,6 +2261,8 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "peerglide-actions",
+ "peerglide-core",
+ "peerglide-gestures",
  "peerglide-protocol",
  "tokio",
  "windows-sys 0.61.2",
