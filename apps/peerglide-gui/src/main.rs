@@ -1465,21 +1465,22 @@ impl App {
         self.notice = "退出恢复入口发生变化，已请求停止键鼠。请确认恢复状态并重新打开屏跃。".into();
     }
     fn request_activity_tick(&self, ctx: &egui::Context) {
-        if self.activity_tick_active() {
-            ctx.request_repaint_after(Duration::from_millis(100));
+        let background =
+            self.window_hidden || ctx.input(|input| input.viewport().minimized.unwrap_or(false));
+        if let Some(interval) = self.activity_tick_interval(background) {
+            ctx.request_repaint_after(interval);
         }
     }
-    /// True while the 100 ms activity beat runs. Waiting indicators may step on this beat;
-    /// they never schedule their own.
+    /// Waiting indicators share this beat without scheduling their own timers.
     fn activity_tick_active(&self) -> bool {
-        // Stable communication is woken by stdout/stderr instead of painting
-        // at 10Hz. Keep Native health polling and EOF/stop reaping unchanged.
-        (self.child.is_some() && self.active_mode == Some(SessionMode::Native))
-            || (self
-                .worker_state
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.2.load(Ordering::Acquire))
-                && (self.child.is_some() || self.events.is_some()))
+        self.activity_tick_interval(false).is_some()
+    }
+    fn activity_tick_interval(&self, background: bool) -> Option<Duration> {
+        let urgent = (self
+            .worker_state
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.2.load(Ordering::Acquire))
+            && (self.child.is_some() || self.events.is_some()))
             || self.stopping.is_some()
             || self.pending_start.is_some()
             || self.layout_request.is_some()
@@ -1488,7 +1489,14 @@ impl App {
             || self.gesture_lab.needs_tick()
             || self.layout_report.is_some()
             || self.pairing_panel.needs_poll()
-            || self.data_job_active()
+            || self.data_job_active();
+        if urgent {
+            return Some(Duration::from_millis(100));
+        }
+        // Stable communication wakes via worker output. Stable native input
+        // still polls its worker, with a longer interval while in the background.
+        (self.child.is_some() && self.active_mode == Some(SessionMode::Native))
+            .then_some(Duration::from_millis(if background { 500 } else { 100 }))
     }
     #[cfg(any(windows, target_os = "macos"))]
     fn clipboard_job_active(&self) -> bool {
@@ -3388,6 +3396,38 @@ mod lifecycle_tests {
         fixture.close()?;
         Ok(())
     }
+    #[test]
+    fn stable_hidden_native_checks_slow_down_but_stop_and_eof_stay_urgent() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.child = Some(managed_child()?);
+        app.active_mode = Some(SessionMode::Native);
+        assert_eq!(
+            app.activity_tick_interval(false),
+            Some(Duration::from_millis(100))
+        );
+        assert_eq!(
+            app.activity_tick_interval(true),
+            Some(Duration::from_millis(500))
+        );
+
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        snapshot.2.store(true, Ordering::Release);
+        app.worker_state = Some(snapshot);
+        assert_eq!(
+            app.activity_tick_interval(true),
+            Some(Duration::from_millis(100))
+        );
+        app.worker_state = None;
+        app.stop();
+        assert_eq!(
+            app.activity_tick_interval(true),
+            Some(Duration::from_millis(100))
+        );
+        drop(app);
+        fixture.close()
+    }
+
     #[test]
     fn hidden_close_cancels_window_exit_until_cooperative_worker_stop() -> Result<()> {
         let fixture = super::tests::Fixture::new()?;
