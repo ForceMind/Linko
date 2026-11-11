@@ -161,10 +161,11 @@ impl Session {
     pub async fn receive(&self) -> Result<Frame> {
         self.check(Direction::Playback)?;
         let remaining = self.deadline.saturating_duration_since(Instant::now());
-        let result = tokio::time::timeout(READ_TIMEOUT.min(remaining), self.connection.read_datagram())
-            .await
-            .context("audio receive timed out")
-            .and_then(|received| received.map_err(Into::into));
+        let result =
+            tokio::time::timeout(READ_TIMEOUT.min(remaining), self.connection.read_datagram())
+                .await
+                .context("audio receive timed out")
+                .and_then(|received| received.map_err(Into::into));
         let decoded =
             result.and_then(|bytes| Frame::decode(&bytes).context("invalid audio datagram"));
         let frame = match decoded {
@@ -183,12 +184,18 @@ impl Session {
     }
 
     fn check(&self, direction: Direction) -> Result<()> {
-        ensure!(self.direction == direction, "audio direction is not authorized");
+        ensure!(
+            self.direction == direction,
+            "audio direction is not authorized"
+        );
         if Instant::now() >= self.deadline {
             self.stop();
             anyhow::bail!("audio consent expired");
         }
-        ensure!(self.connection.close_reason().is_none(), "audio session closed");
+        ensure!(
+            self.connection.close_reason().is_none(),
+            "audio session closed"
+        );
         Ok(())
     }
 }
@@ -214,7 +221,8 @@ mod tests {
         let (client, server) = tokio::try_join!(
             async {
                 Ok::<_, anyhow::Error>(
-                    left.connect(right.local_addr()?, "peerglide.local")?.await?,
+                    left.connect(right.local_addr()?, "peerglide.local")?
+                        .await?,
                 )
             },
             async {
@@ -250,7 +258,10 @@ mod tests {
         let right = crate::endpoint(bind, &sink, &source.certificate)?;
         let connection = left.connect(right.local_addr()?, "peerglide.local")?;
         let (outbound, inbound) = tokio::join!(connection, async {
-            let incoming = right.accept().await.context("missing rejected audio peer")?;
+            let incoming = right
+                .accept()
+                .await
+                .context("missing rejected audio peer")?;
             Ok::<_, anyhow::Error>(incoming.await?)
         });
         assert!(outbound.is_err() && inbound.is_err());
