@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -18,6 +19,7 @@ import zipfile
 import build_version
 import package
 import verify_macos_package
+import verify_portable_package
 
 
 MAIN_METADATA = ("Identifier=com.peerglide.PeerGlide\nSignature=adhoc\n"
@@ -386,6 +388,80 @@ class Packaging(unittest.TestCase):
                 with self.assertRaises(OSError):
                     package.build_package(root, "Linux", "x86_64", FakeCodesign())
             self.assertEqual(list((root / "dist").iterdir()), [])
+
+    @staticmethod
+    def portable_fixture(root, system, machine, wrong_cpu=False, extra=None):
+        version = "2026.11.12-0600"
+        archive = root / f"Linko-{version}-{system.lower()}-{machine.lower()}.zip"
+        source = package.build_source(root, version, system, machine)
+        if system == "Windows":
+            payload = bytearray(128 + 26)
+            payload[:2] = b"MZ"
+            struct.pack_into("<I", payload, 60, 128)
+            payload[128:132] = b"PE\0\0"
+            struct.pack_into("<H", payload, 132, 0xAA64 if wrong_cpu else 0x8664)
+            struct.pack_into("<HH", payload, 150, 0x0002, 0x20B)
+            binaries = ("Linko.exe", "peerglide.exe")
+        elif system == "Darwin":
+            payload = b"\xcf\xfa\xed\xfe" + struct.pack("<III", 0x0100000C, 0, 2)
+            contents = "Linko.app/Contents/"
+            binaries = (contents + "MacOS/peerglide-gui", contents + "MacOS/peerglide")
+        else:
+            payload = b"\x7fELF\x02\x01" + bytes(10) + struct.pack("<HH", 3, 62)
+            binaries = ("linko", "peerglide")
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
+            prefix = archive.stem + "/"
+            for name in ("README.md", "LICENSE", "SECURITY.md"):
+                zipped.writestr(prefix + name, "fixture")
+            zipped.writestr(prefix + package.SOURCE_MANIFEST, json.dumps(source))
+            if system == "Darwin":
+                zipped.writestr(prefix + contents + "Info.plist", plistlib.dumps(package.bundle_info(version)))
+            for name in binaries:
+                zipped.writestr(prefix + name, payload)
+            if extra is not None:
+                extra(zipped, prefix)
+        return archive, hashlib.sha256(archive.read_bytes()).hexdigest(), source
+
+    def test_portable_package_verifies_platform_and_bound_source(self):
+        for system, machine in (("Windows", "AMD64"), ("Darwin", "arm64"), ("Linux", "x86_64")):
+            with self.subTest(system=system), tempfile.TemporaryDirectory() as folder:
+                archive, digest, source = self.portable_fixture(Path(folder), system, machine)
+                verify_portable_package.verify(archive, digest, source)
+                with self.assertRaisesRegex(ValueError, "checksum differs"):
+                    verify_portable_package.verify(archive, "0" * 64, source)
+                with self.assertRaisesRegex(ValueError, "source record differs"):
+                    verify_portable_package.verify(archive, digest, dict(source, checkout_tree="0" * 40))
+
+    def test_portable_package_rejects_wrong_cpu_and_unsafe_members(self):
+        with tempfile.TemporaryDirectory() as folder:
+            args = self.portable_fixture(Path(folder), "Windows", "AMD64", wrong_cpu=True)
+            with self.assertRaisesRegex(ValueError, "architecture or type differs"):
+                verify_portable_package.verify(*args)
+
+        def add_symlink(zipped, prefix):
+            entry = zipfile.ZipInfo(prefix + "docs/link")
+            entry.create_system = 3
+            entry.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zipped.writestr(entry, "elsewhere")
+
+        for extra, error in (
+            (lambda zipped, root: zipped.writestr(root + "../outside", "fixture"), "unsafe"),
+            (lambda zipped, root: zipped.writestr(root + "readme.MD", "fixture"), "duplicate"),
+            (add_symlink, "regular file"),
+        ):
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as folder:
+                args = self.portable_fixture(Path(folder), "Linux", "x86_64", extra=extra)
+                with self.assertRaisesRegex(ValueError, error):
+                    verify_portable_package.verify(*args)
+
+    def test_portable_checksum_accepts_windows_line_endings_and_checks_name(self):
+        with tempfile.TemporaryDirectory() as folder:
+            checksum = Path(folder) / "test.sha256"
+            digest = "0" * 64
+            checksum.write_bytes(f"{digest}  Linko.zip\r\n".encode("ascii"))
+            self.assertEqual(verify_portable_package.read_checksum(checksum, "Linko.zip"), digest)
+            with self.assertRaisesRegex(ValueError, "does not name"):
+                verify_portable_package.read_checksum(checksum, "other.zip")
 
     def test_package_records_review_commit_and_actual_checkout_tree(self):
         with tempfile.TemporaryDirectory() as folder:
