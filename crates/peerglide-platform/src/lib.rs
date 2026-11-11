@@ -40,6 +40,8 @@ use capture_thread::CaptureThread;
 mod macos;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_display;
 #[cfg(target_os = "macos")]
 use macos as native;
 #[cfg(windows)]
@@ -49,6 +51,12 @@ use windows as native;
 #[cfg(target_os = "macos")]
 pub fn read_display_layout() -> Result<display_layout::Layout> {
     native::read_display_layout()
+}
+
+/// Snapshot public display geometry outside the input capture callback.
+#[cfg(windows)]
+pub fn read_display_layout() -> Result<display_layout::Layout> {
+    windows_display::read_display_layout()
 }
 
 pub fn now_ms() -> u64 {

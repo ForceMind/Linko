@@ -3,7 +3,7 @@ use peerglide_protocol::Edge;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct DisplayId(pub u32);
+pub struct DisplayId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bounds {
@@ -81,7 +81,7 @@ pub struct Display {
     pub id: DisplayId,
     /// Already oriented in desktop coordinates, including any negative origin.
     pub bounds: Bounds,
-    /// Physical pixels per desktop unit. Bounds are not scaled a second time.
+    /// Native backing or desktop UI scale. Bounds already use oriented coordinates.
     pub scale: f64,
     pub rotation: Rotation,
 }
@@ -220,7 +220,7 @@ fn positive(value: f64) -> bool {
 mod tests {
     use super::*;
 
-    fn display(id: u32, bounds: [f64; 4], scale: f64) -> Display {
+    fn display(id: u64, bounds: [f64; 4], scale: f64) -> Display {
         let [left, top, right, bottom] = bounds;
         Display {
             id: DisplayId(id),
