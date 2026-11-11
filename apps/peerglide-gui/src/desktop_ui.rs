@@ -332,118 +332,6 @@ impl App {
         ui.label("文字、图片和文件尚未接通，当前不会读取或同步这些内容。");
         ui.weak("后续逐项开放，并分别询问你的同意，不包含在键鼠许可里。");
     }
-    pub(super) fn displays(&mut self, ui: &mut egui::Ui) {
-        ui.strong("屏幕的位置");
-        ui.weak("拖动另一台电脑的屏幕，或直接选择方向。位置用于下一次会话。");
-        let registered = self.config.fingerprint.is_some();
-        let editable = self.layout_editable();
-        let width = ui.available_width().max(1.0);
-        let height = if matches!(self.displayed_edge(), "top" | "bottom") {
-            230.0
-        } else {
-            180.0
-        };
-        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
-        let (local, peer) = screen_rects(rect, self.displayed_edge());
-        let interaction_canvas = rect.intersect(ui.clip_rect());
-        if !editable
-            || !ui.input(|i| i.focused)
-            || self
-                .screen_drag
-                .is_some_and(|(_, _, old)| old != interaction_canvas)
-        {
-            self.screen_drag = None;
-        }
-        let _ = ui.interact(
-            peer,
-            ui.scope_id().with("peer-display"),
-            if editable {
-                egui::Sense::drag()
-            } else {
-                egui::Sense::hover()
-            },
-        );
-        // Window-local ordered events preserve a down/move/up batch even when egui's
-        // frame-level drag response no longer retains the original press position.
-        let (focused, down, events) =
-            ui.input(|i| (i.focused, i.pointer.primary_down(), i.events.clone()));
-        let layer = ui.layer_id();
-        let own_press = events.iter().all(|event| match event {
-            egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                ..
-            } => ui.ctx().layer_id_at(*pos) == Some(layer),
-            _ => true,
-        });
-        let edge = update_layout_drag(
-            &mut self.screen_drag,
-            &events,
-            peer,
-            local,
-            interaction_canvas,
-            editable && focused && own_press,
-            down,
-        );
-        if let Some(edge) = edge {
-            self.try_set_edge(edge);
-            ui.ctx().request_repaint();
-        }
-        let displayed = self.screen_drag.map_or(peer, |(_, center, _)| {
-            egui::Rect::from_center_size(center, peer.size())
-        });
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 12.0, ui.visuals().faint_bg_color);
-        painter.line_segment(
-            [local.center(), displayed.center()],
-            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
-        );
-        desktop_style::monitor(
-            &painter,
-            local,
-            local_device_name(),
-            true,
-            self.child.is_some()
-                && self.active_mode == Some(SessionMode::Native)
-                && self.input_state == Some(WorkerInputState::Local),
-            self.config.dark,
-        );
-        desktop_style::monitor(
-            &painter,
-            displayed,
-            if registered {
-                &self.config.peer_name
-            } else {
-                "等待添加电脑"
-            },
-            false,
-            self.child.is_some()
-                && self.connected
-                && self.input_state == Some(WorkerInputState::ControllingRemote),
-            self.config.dark,
-        );
-        ui.add_space(8.0);
-        ui.add_enabled_ui(editable && self.screen_drag.is_none(), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("另一台电脑在我的");
-                for side in ["left", "right", "top", "bottom"] {
-                    if ui
-                        .selectable_label(self.displayed_edge() == side, edge_label(side))
-                        .clicked()
-                    {
-                        self.try_set_edge(side);
-                    }
-                }
-            });
-        });
-        if !registered {
-            ui.weak("添加电脑后即可调整位置。");
-        } else if !self.idle_writable() {
-            ui.weak("当前位置已锁定，停止协同后可以调整。");
-        }
-        ui.weak("仅表示两台主显示器的相对方向，不代表真实尺寸。另一端需设置相反方向。");
-    }
     fn mouse(&mut self, ui: &mut egui::Ui) {
         if self.recording_mode {
             self.gesture_lab.ui(ui, self.child.is_some());
@@ -1745,22 +1633,6 @@ pub(super) fn local_device_name() -> &'static str {
         "这台电脑"
     }
 }
-fn screen_rects(canvas: egui::Rect, edge: &str) -> (egui::Rect, egui::Rect) {
-    let scale = (canvas.width() / 470.0)
-        .min(canvas.height() / 260.0)
-        .clamp(0.0, 1.0);
-    let size = Vec2::new(166.0, 112.0) * scale;
-    let offset = match edge {
-        "left" => Vec2::new(-(size.x + 26.0 * scale) / 2.0, 0.0),
-        "top" => Vec2::new(0.0, -(size.y + 14.0 * scale) / 2.0),
-        "bottom" => Vec2::new(0.0, (size.y + 14.0 * scale) / 2.0),
-        _ => Vec2::new((size.x + 26.0 * scale) / 2.0, 0.0),
-    };
-    (
-        egui::Rect::from_center_size(canvas.center() - offset, size),
-        egui::Rect::from_center_size(canvas.center() + offset, size),
-    )
-}
 fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
     if !center.x.is_finite() || !center.y.is_finite() || local.expand(10.0).contains(center) {
         return None;
@@ -1898,13 +1770,19 @@ mod layout_tests {
         assert!(draft.is_none());
     }
     #[test]
-    fn relative_screens_fit_the_canvas_in_all_directions_and_small_windows() {
-        for width in [200.0, 320.0, 600.0, 1000.0] {
-            let canvas = egui::Rect::from_min_size(egui::pos2(20.0, 30.0), Vec2::new(width, 260.0));
-            for edge in ["left", "right", "top", "bottom"] {
-                let (local, peer) = screen_rects(canvas, edge);
-                assert!(canvas.contains_rect(local));
-                assert!(canvas.contains_rect(peer));
+    fn adjacent_screens_drop_on_their_own_edge_at_every_size() {
+        // The canvas geometry itself is covered by the workspace canvas tests; this keeps
+        // the drop rule for a peer screen placed beside the local one in each direction.
+        for side in [24.0, 60.0, 166.0, 300.0] {
+            let local = egui::Rect::from_center_size(egui::pos2(400.0, 300.0), Vec2::splat(side));
+            let gap = side + 2.0;
+            for (edge, offset) in [
+                ("left", Vec2::new(-gap, 0.0)),
+                ("right", Vec2::new(gap, 0.0)),
+                ("top", Vec2::new(0.0, -gap)),
+                ("bottom", Vec2::new(0.0, gap)),
+            ] {
+                let peer = local.translate(offset);
                 assert_eq!(dropped_edge(peer.center(), local), Some(edge));
                 assert_eq!(dropped_edge(local.center(), local), None);
                 assert!(!local.intersects(peer));

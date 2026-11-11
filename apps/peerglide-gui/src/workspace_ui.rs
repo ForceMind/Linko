@@ -33,12 +33,6 @@ const LOCKED_NOTE: &str = "当前位置已锁定，暂不能调整方向。";
 /// Hover text of the sketch chip; the canvas is never measured display geometry.
 const SKETCH_HINT: &str = "仅表示两台主屏的相对方向，不代表真实尺寸。";
 
-/// The former layout subpage (L9) is this canvas now. Its old body, `App::displays` in
-/// `desktop_ui.rs`, lies outside this slice's files and goes with that file's next slice;
-/// until then this reference keeps it compiled although the shell no longer calls it.
-#[allow(dead_code)]
-const FORMER_LAYOUT_PAGE: fn(&mut App, &mut egui::Ui) = App::displays;
-
 impl App {
     /// Home view: the screen canvas with the device context column. The device list lives
     /// in the sidebar, so the former device and layout pages share this one view; the
