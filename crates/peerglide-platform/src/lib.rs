@@ -45,6 +45,12 @@ use macos as native;
 #[cfg(windows)]
 use windows as native;
 
+/// Snapshot public display geometry outside the input capture callback.
+#[cfg(target_os = "macos")]
+pub fn read_display_layout() -> Result<display_layout::Layout> {
+    native::read_display_layout()
+}
+
 pub fn now_ms() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
