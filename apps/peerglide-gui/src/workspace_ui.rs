@@ -287,7 +287,9 @@ impl App {
         let (badge, status) = self.local_badge();
         let local_emphasis = badge.has_emphasis()
             || (self.child.is_some() && self.input_state == Some(WorkerInputState::Local));
-        state.local_badge.observe_appearance(local_emphasis, now, pop);
+        state
+            .local_badge
+            .observe_appearance(local_emphasis, now, pop);
         let local_screen = ScreenView {
             id: ui.scope_id().with("local-screen"),
             target: local,
@@ -306,7 +308,9 @@ impl App {
         }
         if registered {
             let (badge, status) = self.peer_badge();
-            state.peer_badge.observe_appearance(badge.has_emphasis(), now, pop);
+            state
+                .peer_badge
+                .observe_appearance(badge.has_emphasis(), now, pop);
             let hint = if !editable {
                 None
             } else if self.child.is_some() {
