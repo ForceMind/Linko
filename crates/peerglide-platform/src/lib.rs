@@ -44,6 +44,8 @@ use capture_thread::CaptureThread;
 mod macos;
 #[cfg(target_os = "macos")]
 pub mod macos_audio;
+#[cfg(target_os = "macos")]
+pub mod macos_native_drop;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
