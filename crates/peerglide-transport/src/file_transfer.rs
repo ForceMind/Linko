@@ -33,6 +33,26 @@ const FRAME_TIMEOUT: Duration = Duration::from_secs(5);
 const DECISION_TIMEOUT: Duration = Duration::from_secs(60);
 const ACCEPT_TIMEOUT: Duration = Duration::from_secs(180);
 const GRANT: Duration = Duration::from_secs(20 * 60);
+// 256 KiB every 31.25 ms bounds one file direction to 8 MiB/s. No
+// unused credit accumulates while waiting on disk, consent or the network.
+const CHUNK_SPACING: Duration = Duration::from_micros(31_250);
+
+struct Pacer {
+    next: tokio::time::Instant,
+}
+
+impl Pacer {
+    fn new() -> Self {
+        Self {
+            next: tokio::time::Instant::now(),
+        }
+    }
+
+    async fn wait(&mut self) {
+        tokio::time::sleep_until(self.next).await;
+        self.next = tokio::time::Instant::now() + CHUNK_SPACING;
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct Cancellation(Arc<AtomicBool>);
@@ -199,6 +219,7 @@ pub async fn send(
     });
     let upload = async {
         let mut source = source;
+        let mut pacing = Pacer::new();
         for index in next..total_chunks {
             let (opened, bytes) = tokio::task::spawn_blocking({
                 let guard = guard.clone();
@@ -211,6 +232,7 @@ pub async fn send(
             .await??;
             source = opened;
             let len = bytes.len() as u64;
+            pacing.wait().await;
             send.write(&Frame::Chunk {
                 id,
                 index: u32::try_from(index)?,
@@ -351,7 +373,9 @@ where
     })
     .await?;
 
+    let mut pacing = Pacer::new();
     for expected in next..total_chunks {
+        pacing.wait().await;
         let admitted = receive
             .read_file(&[Kind::Chunk, Kind::Cancel], FRAME_TIMEOUT)
             .await?;
@@ -440,6 +464,19 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[tokio::test]
+    async fn file_pacing_spaces_chunks_without_accumulating_credit() {
+        let mut pacing = Pacer::new();
+        pacing.wait().await;
+        tokio::time::sleep(CHUNK_SPACING * 2).await;
+        let after_pause = tokio::time::Instant::now();
+        pacing.wait().await;
+        let due = pacing.next;
+        assert!(due >= after_pause + CHUNK_SPACING);
+        pacing.wait().await;
+        assert!(tokio::time::Instant::now() >= due);
     }
 
     #[tokio::test]
