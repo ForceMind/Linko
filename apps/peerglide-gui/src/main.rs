@@ -432,7 +432,7 @@ struct App {
     /// Explicit sidebar choice; None follows the window width.
     sidebar_pref: Option<bool>,
     page_motion: motion::Retrigger<u8>,
-    capsule_motion: motion::Retrigger<&'static str>,
+    capsule_motion: motion::Retrigger<(&'static str, desktop_style::Tone)>,
     notice_details: bool,
     connection_details_open: bool,
     settings_section: SettingsSection,

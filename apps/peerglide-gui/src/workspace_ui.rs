@@ -285,7 +285,11 @@ impl App {
         };
         let pop = tokens::BADGE_POP_SECS;
         let (badge, status) = self.local_badge();
-        state.local_badge.observe(badge, now, pop);
+        let local_emphasis = badge.has_emphasis()
+            || (self.child.is_some() && self.input_state == Some(WorkerInputState::Local));
+        state
+            .local_badge
+            .observe_appearance(local_emphasis, now, pop);
         let local_screen = ScreenView {
             id: ui.scope_id().with("local-screen"),
             target: local,
@@ -304,7 +308,9 @@ impl App {
         }
         if registered {
             let (badge, status) = self.peer_badge();
-            state.peer_badge.observe(badge, now, pop);
+            state
+                .peer_badge
+                .observe_appearance(badge.has_emphasis(), now, pop);
             let hint = if !editable {
                 None
             } else if self.child.is_some() {
@@ -329,6 +335,7 @@ impl App {
                 self.workspace_peer_selected = true;
             }
         } else {
+            state.peer_badge.observe_appearance(false, now, pop);
             let add = egui::Rect::from_center_size(peer.center(), Vec2::new(peer.width(), 66.0));
             ui.add_enabled_ui(self.idle_writable(), |ui| {
                 let response = ui.put(add, egui::Button::new("＋\n添加另一台电脑"));
@@ -822,6 +829,13 @@ enum Badge {
 }
 
 impl Badge {
+    fn has_emphasis(self) -> bool {
+        matches!(
+            self,
+            Badge::Connected | Badge::Controlling | Badge::Receiving | Badge::RecoveryUnconfirmed
+        )
+    }
+
     fn tone(self) -> Tone {
         match self {
             Badge::Local | Badge::Connecting => Tone::Accent,
@@ -847,8 +861,8 @@ struct CanvasMotion {
     from_local: Vec2,
     from_peer: Vec2,
     rebound: motion::OneShot,
-    local_badge: motion::Retrigger<Badge>,
-    peer_badge: motion::Retrigger<Badge>,
+    local_badge: motion::Retrigger<bool>,
+    peer_badge: motion::Retrigger<bool>,
 }
 
 impl CanvasMotion {
