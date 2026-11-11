@@ -1,5 +1,7 @@
 # 屏跃：本机 Codex 接手开发
 
+> 2026-11-11 更新：Claude 会话的最新接手说明（分支/PR 全景、单向输入故障进展、UI 重做设计与线稿、待办）见 `docs/HANDOFF_CLAUDE_TO_GPT.zh-CN.md`，先读它再读本文。
+
 这是既有 Rust 工程的延续，不是重建项目。仓库 ForceMind/Linko（原名PeerGlide），main，MIT。
 先重新读取 GitHub 当前 main/PR/Issues/CI，不把本文件中的历史 SHA 当作最新状态。
 PR #27 的云端基础候选 6ebeda55b22a3edba159c8f88f34f09784134fa8 已通过三平台
