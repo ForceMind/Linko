@@ -14,7 +14,10 @@ pub struct Binding {
 
 impl Binding {
     pub fn from_v5(connection: &Connection, pinned_peer: &[u8]) -> Result<Self> {
-        ensure!(connection.close_reason().is_none(), "input connection already ended");
+        ensure!(
+            connection.close_reason().is_none(),
+            "input connection already ended"
+        );
         let data = connection
             .handshake_data()
             .context("input handshake unavailable")?
@@ -96,7 +99,9 @@ mod tests {
         assert!(!sent.matches(&second_left, &right.certificate, &peer.proof())?);
         assert!(Binding::from_v5(&first_left, &stranger.certificate).is_err());
         first_left.close(0u8.into(), b"fixture ended");
-        assert!(sent.matches(&first_left, &right.certificate, &peer.proof()).is_err());
+        assert!(sent
+            .matches(&first_left, &right.certificate, &peer.proof())
+            .is_err());
         Ok(())
     }
 }
