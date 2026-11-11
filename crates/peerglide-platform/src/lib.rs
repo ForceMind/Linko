@@ -7,6 +7,8 @@ use std::sync::{
 };
 use std::time::Instant;
 pub mod application_menu;
+#[cfg(any(windows, target_os = "macos"))]
+mod audio_output;
 mod capture_events;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
@@ -38,6 +40,8 @@ use capture_thread::CaptureThread;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub mod macos_audio;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]

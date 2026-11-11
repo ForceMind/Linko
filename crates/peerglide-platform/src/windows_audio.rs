@@ -1,4 +1,5 @@
 //! Local WinMM output owner. Opens only on explicit local playback selection.
+use crate::audio_output::scale_sample;
 use anyhow::{ensure, Result};
 use peerglide_protocol::audio::{CHANNELS, SAMPLE_RATE, SAMPLES};
 use std::{cell::UnsafeCell, mem::size_of, ptr::null_mut};
@@ -187,10 +188,6 @@ fn pcm_format() -> WAVEFORMATEX {
         wBitsPerSample: 16,
         cbSize: 0,
     }
-}
-
-fn scale_sample(sample: i16, volume_percent: u8) -> i16 {
-    (i32::from(sample) * i32::from(volume_percent) / 100) as i16
 }
 
 fn check(result: u32, operation: &'static str) -> Result<()> {
