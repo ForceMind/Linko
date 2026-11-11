@@ -1,3 +1,5 @@
+#[cfg(any(windows, target_os = "macos", test))]
+mod audio_playback;
 mod input_diagnostics;
 mod layout_control;
 mod pairing_worker;
@@ -120,6 +122,23 @@ enum Command {
     },
     /// Accept a connection from exactly the enrolled certificate. No input permission by default.
     Listen(Options),
+    /// Play audio from one explicitly verified computer on this computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayAudio {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24874")]
+        bind: SocketAddr,
+        /// Local output device ID on Windows or device UID on macOS.
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -209,6 +228,25 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Listen(o) => run(o, None, false).await,
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayAudio {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => {
+            audio_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
         Command::Connect {
             address,
             options,
