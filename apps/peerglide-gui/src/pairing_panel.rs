@@ -188,13 +188,11 @@ impl Panel {
     }
     fn discovery_offer(&self) -> Option<super::pairing_discovery::Offer> {
         let (address, attempts_remaining) = self.supervisor.offer_hint_state()?;
-        if address.is_ipv6() {
-            return None;
-        }
         Some(super::pairing_discovery::Offer {
             generation: self.supervisor.generation(),
             attempts_remaining,
             port: address.port(),
+            ipv6: address.is_ipv6(),
         })
     }
     pub(super) fn cancel(&mut self) {
@@ -440,7 +438,7 @@ impl Panel {
                     ui.label("点击显示后，在另一台屏跃中选择“我来输入配对码”。");
                     ui.horizontal_wrapped(|ui| {
                         ui.selectable_value(&mut self.offer_ipv6, false, "IPv4");
-                        ui.selectable_value(&mut self.offer_ipv6, true, "IPv6 手动地址");
+                        ui.selectable_value(&mut self.offer_ipv6, true, "IPv6");
                     });
                     if ui.add(desktop_style::primary("显示我的配对码")).clicked(){
                         let bind=if self.offer_ipv6 {SocketAddr::from((Ipv6Addr::UNSPECIFIED,24871))} else {SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))};

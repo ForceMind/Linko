@@ -97,6 +97,7 @@ pub(super) struct Offer {
     pub generation: u64,
     pub attempts_remaining: u8,
     pub port: u16,
+    pub ipv6: bool,
 }
 
 #[derive(Default)]
@@ -195,7 +196,12 @@ impl Panel {
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("本机身份不可用"))?;
                     self.start(own.clone())?;
-                    self.handle.as_mut().unwrap().advertise(fp, offer.port)?;
+                    let handle = self.handle.as_mut().unwrap();
+                    if offer.ipv6 {
+                        handle.advertise_pairing_ipv6(fp, offer.port)?;
+                    } else {
+                        handle.advertise(fp, offer.port)?;
+                    }
                     self.published = Some(offer);
                     Ok(())
                 })();
@@ -226,7 +232,7 @@ impl Panel {
                     let secs = tokens::LIST_PRESENCE_SECS;
                     sync_rows(&mut self.rows, &current, now, secs);
                     if current.is_empty() {
-                        ui.label("还没找到？可直接填写另一台显示的 IPv4 地址");
+                        ui.label("还没找到？可直接填写另一台显示的 IP 地址");
                     }
                     let rows = &self.rows;
                     egui::ScrollArea::vertical()
