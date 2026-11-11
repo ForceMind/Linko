@@ -1961,7 +1961,10 @@ mod tests {
         let fixed = 2.0 * tokens::ICON_SMALL + CONTEXT_LABEL_W + 24.0;
         let button = 82.0;
         let word = 3.0 * 14.0;
-        assert!(204.0 - fixed - button < word, "the compact case needs its own line");
+        assert!(
+            204.0 - fixed - button < word,
+            "the compact case needs its own line"
+        );
         assert!(!stop_fits_inline(204.0));
         assert!(stop_fits_inline(300.0));
         assert!(STOP_INLINE_MIN_W - fixed - button >= word);
