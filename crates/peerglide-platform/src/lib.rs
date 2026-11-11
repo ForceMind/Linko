@@ -7,11 +7,11 @@ use std::sync::{
 };
 use std::time::Instant;
 pub mod application_menu;
-#[cfg(any(windows, target_os = "macos"))]
-pub mod clipboard;
 mod capture_events;
 #[cfg(any(windows, target_os = "macos", test))]
 mod capture_thread;
+#[cfg(any(windows, target_os = "macos"))]
+pub mod clipboard;
 pub mod context;
 #[cfg(any(windows, target_os = "macos", test))]
 mod held_inputs;
