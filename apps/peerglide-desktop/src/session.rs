@@ -321,6 +321,31 @@ struct Outgoing {
     lease: u64,
     epoch: CaptureEpoch,
 }
+const MOTION_SEND_INTERVAL: Duration = Duration::from_millis(4);
+
+struct MotionOutbox {
+    latest: Option<Motion>,
+    next_send: tokio::time::Instant,
+}
+
+impl MotionOutbox {
+    fn new(now: tokio::time::Instant) -> Self {
+        Self {
+            latest: None,
+            next_send: now,
+        }
+    }
+
+    fn take_due(&mut self, now: tokio::time::Instant) -> Option<Motion> {
+        if now < self.next_send {
+            return None;
+        }
+        let motion = self.latest.take()?;
+        self.next_send = now + MOTION_SEND_INTERVAL;
+        Some(motion)
+    }
+}
+
 const ACQUIRE_TIMEOUT_MS: u64 = 1000;
 const COMMIT_RETRY_MS: u64 = 10;
 const MAX_COMMIT_ATTEMPTS: u16 = 100;
@@ -684,6 +709,7 @@ pub(super) async fn run_with_diagnostics(
     let mut outgoing: Option<Outgoing> = None;
     let mut next_lease = 0u64;
     let mut sequence = 0u64;
+    let mut motion_outbox = MotionOutbox::new(tokio::time::Instant::now());
     let mut position = (0.5, 0.5);
     let mut local_return = (0.5, 0.5);
     let mut size = (1920.0, 1080.0);
@@ -730,6 +756,7 @@ pub(super) async fn run_with_diagnostics(
             PendingStep::Waiting=>{},
             PendingStep::Committed{lease,epoch}=>{
                 count(Count::Committed);
+                motion_outbox.latest=None;
                 input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now_ms();
                 if let Some(cap)=&capture{cap.gate.refresh();}
                 continue;
@@ -749,6 +776,26 @@ pub(super) async fn run_with_diagnostics(
         let acquire_wake=pending.map(PendingAcquire::wake_at);
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
+            _=tokio::time::sleep_until(motion_outbox.next_send),if motion_outbox.latest.is_some()=>{
+                if *stop.borrow() || stop.has_changed().is_err(){return Ok(());}
+                if let Some(m)=motion_outbox.take_due(tokio::time::Instant::now()){
+                    // Recheck the lease and capture epoch after waiting. A queued
+                    // position cannot outlive its capture ownership.
+                    let live=outgoing.filter(|current|current.lease==m.lease).is_some_and(|current| {
+                        capture.as_ref().is_some_and(|cap|cap.gate.is_current(CaptureRoute::Remote(current.epoch)))
+                    });
+                    if live {
+                        use quinn::SendDatagramError::*;
+                        count(match c.send_datagram(encode(&m)?.into()) {
+                            Ok(())=>Count::SendOk,
+                            Err(UnsupportedByPeer)=>Count::SendUnsupported,
+                            Err(Disabled)=>Count::SendDisabled,
+                            Err(TooLarge)=>Count::SendOversize,
+                            Err(ConnectionLost(_))=>Count::SendClosed,
+                        });
+                    }
+                }
+            },
             request=layout_requests.recv(),if layout_scope.is_some()=>{
                 if let Some(request)=request {
                     let applied=now_ms()<request.deadline
@@ -955,23 +1002,18 @@ pub(super) async fn run_with_diagnostics(
                             // Same reliable stream as earlier discrete input: motion cannot
                             // overtake those events and revoke their lease at the receiver.
                             outgoing=None;
+                            motion_outbox.latest=None;
                             send(&mut tx,&Message::Release { lease, cursor: Some(m) }).await?;
-                        } else {
-                            // Datagram queue pressure may discard motion; the next absolute position repairs it.
-                            use quinn::SendDatagramError::*;
-                            count(match c.send_datagram(encode(&m)?.into()) {
-                                Ok(())=>Count::SendOk,
-                                Err(UnsupportedByPeer)=>Count::SendUnsupported,
-                                Err(Disabled)=>Count::SendDisabled,
-                                Err(TooLarge)=>Count::SendOversize,
-                                Err(ConnectionLost(_))=>Count::SendClosed,
-                            });
+                        } else if motion_outbox.latest.replace(m).is_some() {
+                            count(Count::MotionCoalesced);
                         }
                     }else{count(Count::NoLease);}},
                     Captured::Input{event,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)){
                         if is_zero_scroll(event){count(Count::ScrollZero);continue;}
                         if !peer.supports(event) { count(Count::CapabilityStop);input_status.restore(capture.as_ref())?; outgoing=None; send(&mut tx,&Message::Release{lease,cursor:None}).await?; continue; }
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let cursor=Motion{lease,sequence,x:position.0,y:position.1};
+                        // The reliable cursor supersedes the pending datagram.
+                        motion_outbox.latest=None;
                         let result=send(&mut tx,&Message::Input{lease,event,cursor}).await;
                         count(if result.is_ok(){Count::ReliableSent}else{Count::ReliableFailed});
                         if let (Ok(()),Input::Scroll{..})=(&result,event){count(Count::ScrollSent);}
@@ -1559,6 +1601,35 @@ mod tests {
                 WorkerInputState::RecoveryUnconfirmed,
             ]
         );
+    }
+
+    #[test]
+    fn paced_motion_keeps_the_latest_pending_position_until_due() {
+        let start = tokio::time::Instant::now();
+        let mut outbox = MotionOutbox::new(start);
+        let first = Motion {
+            lease: 1,
+            sequence: 1,
+            x: 0.25,
+            y: 0.5,
+        };
+        outbox.latest = Some(first);
+        assert_eq!(outbox.take_due(start).map(|motion| motion.sequence), Some(1));
+        outbox.latest = Some(Motion {
+            sequence: 2,
+            x: 0.5,
+            ..first
+        });
+        assert!(outbox.take_due(start + Duration::from_millis(1)).is_none());
+        outbox.latest = Some(Motion {
+            sequence: 3,
+            x: 0.75,
+            ..first
+        });
+        let due = start + MOTION_SEND_INTERVAL;
+        let latest = outbox.take_due(due).unwrap();
+        assert_eq!((latest.sequence, latest.x), (3, 0.75));
+        assert!(outbox.take_due(due + MOTION_SEND_INTERVAL).is_none());
     }
 
     #[test]
