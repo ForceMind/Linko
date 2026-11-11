@@ -1341,25 +1341,11 @@ mod tests {
                     .shapes
                     .iter()
                     .find_map(|s| text_rect(&s.shape, "100%"));
-                let mut card_alignment = Vec::new();
-                for (name, metadata) in [
-                    (desktop_ui::local_device_name(), "系统"),
-                    (app.config.peer_name.as_str(), "登记"),
-                ]
-                .into_iter()
-                .take(if paired { 2 } else { 1 })
-                {
-                    // The lowest name occurrence belongs to its formal card.
-                    let name_rect = output
-                        .shapes
-                        .iter()
-                        .filter_map(|s| text_rect(&s.shape, name))
-                        .max_by(|a, b| a.min.y.total_cmp(&b.min.y));
-                    let metadata_rect = output
-                        .shapes
-                        .iter()
-                        .find_map(|s| text_rect(&s.shape, metadata));
-                    card_alignment.push((name.to_owned(), name_rect, metadata_rect));
+                for label in ["系统", "登记", "设备", "会话"] {
+                    assert!(
+                        !painted(&output, label),
+                        "{label} should stay in the closed details drawer at {size:?}"
+                    );
                 }
                 output.drop_without_applying_deltas();
                 let capsule = capsule.context("title bar status capsule absent")?;
@@ -1369,15 +1355,6 @@ mod tests {
                     capsule.min.x >= 0.0 && capsule.max.x < stop.min.x,
                     "status capsule collides with the safety controls at {size:?}"
                 );
-                for (name, name_rect, metadata_rect) in card_alignment {
-                    let name_rect = name_rect.with_context(|| format!("{name} card absent"))?;
-                    let metadata_rect = metadata_rect.context("card metadata absent")?;
-                    // A 22px glyph plus 8px gap precedes the ordinary name label.
-                    assert!(
-                        (name_rect.min.x - metadata_rect.min.x - 30.0).abs() <= 3.0,
-                        "{name} card name is not left-aligned after its icon at {size:?}"
-                    );
-                }
                 assert!(
                     capsule.max.y <= 52.0,
                     "status capsule left the bounded title bar row at {size:?}"
@@ -1725,8 +1702,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn topology_device_cards_change_selection_without_writing_trust_layout_or_grants() -> Result<()>
-    {
+    fn canvas_devices_change_selection_without_writing_trust_layout_or_grants() -> Result<()> {
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         app.config.fingerprint = Some("device-card-presentation-only".into());
@@ -1739,15 +1715,14 @@ mod tests {
             (desktop_ui::local_device_name().to_owned(), false),
         ] {
             let output = frame(&mut app, &ctx, vec![]);
-            // The same real name appears below its illustration; the lower
-            // occurrence is the formal card. All side-effect assertions remain.
+            // The lowest device name belongs to the canvas, below its illustration.
             let at = output
                 .shapes
                 .iter()
                 .filter_map(|s| text_center(&s.shape, &label))
                 .max_by(|a, b| a.y.total_cmp(&b.y));
             output.drop_without_applying_deltas();
-            let at = at.context("actual topology device card absent")?;
+            let at = at.context("canvas device absent")?;
             click(&mut app, &ctx, at);
             assert_eq!(app.workspace_peer_selected, selected);
             assert!(app.config == original && app.child.is_none());
