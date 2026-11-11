@@ -75,14 +75,41 @@ def switch_states(log):
 with tempfile.TemporaryDirectory(prefix="peerglide-reconnect-") as work:
     root = pathlib.Path(work)
     a, b, c = [root / name for name in ("a", "b", "c")]
+    fingerprints = {}
     for identity in (a, b, c):
-        subprocess.run([str(binary), "init", "--identity", str(identity)], check=True, capture_output=True)
+        created = subprocess.run(
+            [str(binary), "init", "--identity", str(identity)],
+            check=True, capture_output=True, text=True,
+        )
+        match = re.search(r"(?m)^BLAKE3: ([0-9a-f]{64})$", created.stdout)
+        assert match, created.stdout
+        fingerprints[identity] = match[1]
     pin = root / "enrolled.der"
     original_pin = (b / "node.crt.der").read_bytes()
     pin.write_bytes(original_pin)
     server_log, client_log = root / "server.log", root / "client.log"
-    client_args = ["connect", "", "--identity", str(a), "--peer-cert", str(pin), "--bind", "127.0.0.1:0", "--managed", "--reconnect"]
+    client_args = [
+        "connect", "127.0.0.1:9", "--identity", str(a), "--peer-cert", str(pin),
+        "--bind", "127.0.0.1:0", "--managed", "--reconnect",
+        "--expected-local-fingerprint", fingerprints[a],
+        "--expected-peer-fingerprint", fingerprints[b],
+    ]
     try:
+        pin.write_bytes((c / "node.crt.der").read_bytes())
+        changed_peer = launch(client_args, client_log, managed=True)
+        assert changed_peer.wait(timeout=5) != 0, client_log.read_text()
+        assert "enrolled peer identity differs from the GUI snapshot" in client_log.read_text()
+        assert states(client_log) == ["Failed"], client_log.read_text()
+
+        pin.write_bytes(original_pin)
+        changed_local_args = client_args.copy()
+        changed_local_args[changed_local_args.index("--identity") + 1] = str(c)
+        changed_local = launch(changed_local_args, client_log, managed=True)
+        assert changed_local.wait(timeout=5) != 0, client_log.read_text()
+        assert "local identity differs from the GUI snapshot" in client_log.read_text()
+        assert states(client_log) == ["Failed"], client_log.read_text()
+        print("PASS: a changed launch identity is rejected before the first connection attempt")
+
         def server(identity, bind):
             child = launch(["listen", "--identity", str(identity), "--peer-cert", str(a / "node.crt.der"), "--bind", bind], server_log)
             wait_for(lambda: re.search(r"Listening on (127\.0\.0\.1:\d+)", server_log.read_text()), child, server_log)

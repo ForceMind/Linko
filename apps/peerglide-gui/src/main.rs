@@ -943,7 +943,7 @@ impl App {
         );
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         anyhow::ensure!(self.child.is_none(), "已有会话正在运行");
-        Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
+        let local = Identity::load(&self.identity_dir()).context("请先在“设备”页创建本机身份")?;
         let cert = self.verified_peer_certificate()?;
         if !self.config.listen || probe {
             self.config
@@ -963,7 +963,18 @@ impl App {
             executable.is_file(),
             "缺少同目录的 peerglide 通信程序，请使用完整开发包"
         );
-        let mut cmd = self.worker_command(executable, cert, mode, diagnostics);
+        let peer_fingerprint = self
+            .config
+            .fingerprint
+            .as_deref()
+            .context("缺少已登记证书指纹")?;
+        let mut cmd = self.worker_command(
+            executable,
+            cert,
+            mode,
+            diagnostics,
+            (&local.fingerprint(), peer_fingerprint),
+        );
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1026,6 +1037,7 @@ impl App {
         cert: PathBuf,
         mode: SessionMode,
         diagnostics: bool,
+        fingerprints: (&str, &str),
     ) -> Command {
         let probe = mode == SessionMode::Probe;
         let diagnostics = diagnostics && mode == SessionMode::Native;
@@ -1048,7 +1060,9 @@ impl App {
             .arg(cert)
             .arg("--edge")
             .arg(&self.config.edge)
-            .arg("--managed");
+            .arg("--managed")
+            .args(["--expected-local-fingerprint", fingerprints.0])
+            .args(["--expected-peer-fingerprint", fingerprints.1]);
         if self.config.reconnect && !probe && !diagnostics {
             cmd.arg("--reconnect");
         } else if !self.config.listen && !probe {
@@ -1820,6 +1834,7 @@ mod tests {
                 PathBuf::from("public-test.crt"),
                 mode,
                 true,
+                ("test-local", "test-peer"),
             );
             let args: Vec<_> = command
                 .get_args()
@@ -1832,12 +1847,19 @@ mod tests {
                 args.iter().any(|s| s == "--probe"),
                 mode == SessionMode::Probe
             );
+            assert!(args.windows(2).any(|pair| {
+                pair[0] == "--expected-local-fingerprint" && pair[1] == "test-local"
+            }));
+            assert!(args.windows(2).any(|pair| {
+                pair[0] == "--expected-peer-fingerprint" && pair[1] == "test-peer"
+            }));
         }
         let native = app.worker_command(
             PathBuf::from("not-executed-worker"),
             PathBuf::from("public-test.crt"),
             SessionMode::Native,
             false,
+            ("test-local", "test-peer"),
         );
         let args: Vec<_> = native
             .get_args()
@@ -3440,6 +3462,7 @@ mod lifecycle_tests {
                 PathBuf::from("public-test.der"),
                 mode,
                 false,
+                ("test-local", "test-peer"),
             );
             let args: Vec<_> = command.get_args().collect();
             let position = args.iter().position(|arg| *arg == "--wait-for-peer-secs");

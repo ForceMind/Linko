@@ -86,3 +86,10 @@ versioned settings snapshot, preserves independent grants, and starts no
 worker. The next connection uses the same pin checks and a new session.
 Listener setup and new identity enrollment remain explicit operations.
 Discovery hints only enter a verification draft.
+
+For a matched GUI launch, the private managed arguments carry both verified
+fingerprints. The worker compares its initial certificate reads to this
+snapshot before opening an endpoint. The same per-attempt file checks still
+apply. This closes the GUI-to-worker read gap without changing input v5 or
+granting a different peer. Standalone CLI invocations can still explicitly
+select their certificate files.

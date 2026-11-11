@@ -158,6 +158,10 @@ struct Options {
     /// Explicitly enrolled remote public certificate; verify its BLAKE3 fingerprint out of band.
     #[arg(long)]
     peer_cert: PathBuf,
+    #[arg(long, hide = true, requires = "managed")]
+    expected_local_fingerprint: Option<String>,
+    #[arg(long, hide = true, requires = "managed")]
+    expected_peer_fingerprint: Option<String>,
     #[arg(long, default_value = "0.0.0.0:24870")]
     bind: SocketAddr,
     /// Explicit consent to receive remote input (independent of connecting/listening).
@@ -509,6 +513,12 @@ async fn supervise(
 ) -> Result<()> {
     let id = transport::Identity::load(&o.identity)?;
     let peer = transport::read_certificate(&o.peer_cert)?;
+    reconnect::verify_launch_fingerprints(
+        &id.certificate,
+        &peer,
+        o.expected_local_fingerprint.as_deref(),
+        o.expected_peer_fingerprint.as_deref(),
+    )?;
     anyhow::ensure!(
         peer != id.certificate,
         "a peer must have a distinct identity"

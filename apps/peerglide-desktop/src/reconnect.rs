@@ -97,6 +97,30 @@ fn unchanged(path: &Path, expected: &[u8]) -> Result<bool> {
         .read_to_end(&mut bytes)?;
     Ok(bytes == expected)
 }
+/// Bind the worker's initial disk reads to the matched GUI's verified snapshot.
+pub fn verify_launch_fingerprints(
+    local: &[u8],
+    peer: &[u8],
+    expected_local: Option<&str>,
+    expected_peer: Option<&str>,
+) -> Result<()> {
+    match (expected_local, expected_peer) {
+        (None, None) => Ok(()),
+        (Some(local_pin), Some(peer_pin)) => {
+            anyhow::ensure!(
+                peerglide_transport::fingerprint(local) == local_pin,
+                "local identity differs from the GUI snapshot"
+            );
+            anyhow::ensure!(
+                peerglide_transport::fingerprint(peer) == peer_pin,
+                "enrolled peer identity differs from the GUI snapshot"
+            );
+            Ok(())
+        }
+        _ => anyhow::bail!("expected local and peer fingerprints must be supplied together"),
+    }
+}
+
 pub fn verify_pins(identity: &Path, peer_path: &Path, local: &[u8], peer: &[u8]) -> Result<()> {
     (|| -> Result<()> {
         anyhow::ensure!(
