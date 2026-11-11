@@ -288,15 +288,11 @@ impl App {
         }
         let own = self.local_fingerprint();
         let publishing = self.child.is_some() && self.stopping.is_none() && self.config.listen;
-        let idle = self.child.is_none();
+        let idle = self.idle_writable() && !self.recovery_blocked && !self.pairing_pending();
         let writable = self.writable();
         if let Some(address) = self.discovery.ui(ui, own, publishing, idle, writable) {
-            let result = self.use_discovery_address(address);
-            self.feedback(result, "仅选择了地址，尚未登记或授权。");
-            if self.notice.starts_with("仅选择") {
-                self.open_setup();
-                self.wizard = Some(SetupStep::Verify);
-            }
+            let result = self.stage_discovery_address(address);
+            self.feedback(result, "已将地址带入核验草稿。");
         }
         if let Some(fp) = &self.config.fingerprint {
             ui.label("已登记的完整身份指纹");
