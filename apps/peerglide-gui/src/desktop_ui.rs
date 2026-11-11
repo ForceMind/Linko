@@ -333,9 +333,9 @@ impl App {
         ui.add_space(16.0);
         ui.separator();
         ui.strong("更多协作方式");
-        ui.label("文本共享需要两端各自确认。");
-        if ui.button("打开剪贴板").clicked() {
-            self.navigate_to(Page::Clipboard);
+        ui.label("文件和文本共享需要两端各自确认。");
+        if ui.button("打开文件与剪贴板").clicked() {
+            self.navigate_to(Page::Transfers);
         }
     }
     fn mouse(&mut self, ui: &mut egui::Ui) {
@@ -463,11 +463,11 @@ impl App {
                 #[cfg(not(any(windows, target_os = "macos")))]
                 Self::unavailable(ui, "当前平台暂不支持系统剪贴板共享", &[]);
             }
-            CollaborationTab::Files => Self::unavailable(
-                ui,
-                "文件发送与接收尚未接通",
-                &["目前也未提供原生跨屏拖拽。"],
-            ),
+            CollaborationTab::Files => {
+                let mut files = std::mem::take(&mut self.file_panel);
+                files.ui(self, ui);
+                self.file_panel = files;
+            }
         });
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
