@@ -97,11 +97,19 @@ impl UntrustedHint {
         let mut addresses: Vec<_> = addresses
             .into_iter()
             .take(64)
-            .filter(|address| address.port() != 0 && match address {
-                SocketAddr::V4(address) => address.ip().is_private() || address.ip().is_link_local(),
-                SocketAddr::V6(address) => purpose == Purpose::Pairing
-                    && (address.ip().is_unique_local()
-                        || (address.ip().is_unicast_link_local() && address.scope_id() != 0)),
+            .filter(|address| {
+                address.port() != 0
+                    && match address {
+                        SocketAddr::V4(address) => {
+                            address.ip().is_private() || address.ip().is_link_local()
+                        }
+                        SocketAddr::V6(address) => {
+                            purpose == Purpose::Pairing
+                                && (address.ip().is_unique_local()
+                                    || (address.ip().is_unicast_link_local()
+                                        && address.scope_id() != 0))
+                        }
+                    }
             })
             .take(16)
             .collect();
@@ -121,17 +129,22 @@ impl UntrustedHint {
 }
 fn resolved_addresses(info: &ResolvedService, ipv6: bool) -> impl Iterator<Item = SocketAddr> + '_ {
     let port = info.get_port();
-    info.get_addresses().iter().take(64).filter_map(move |address| {
-        match address {
+    info.get_addresses()
+        .iter()
+        .take(64)
+        .filter_map(move |address| match address {
             ScopedIp::V4(address) if !ipv6 => Some(SocketAddr::from((*address.addr(), port))),
             ScopedIp::V6(address) if ipv6 => {
                 let ip = *address.addr();
-                let scope = if ip.is_unicast_link_local() { address.scope_id().index } else { 0 };
+                let scope = if ip.is_unicast_link_local() {
+                    address.scope_id().index
+                } else {
+                    0
+                };
                 Some(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, scope)))
             }
             _ => None,
-        }
-    })
+        })
 }
 
 #[derive(Default)]
@@ -270,7 +283,10 @@ impl Discovery {
     }
 
     pub fn advertise_pairing_ipv6(&mut self, fp: &str, port: u16) -> Result<()> {
-        anyhow::ensure!(self.purpose == Purpose::Pairing, "IPv6 offer is for short-code pairing");
+        anyhow::ensure!(
+            self.purpose == Purpose::Pairing,
+            "IPv6 offer is for short-code pairing"
+        );
         self.advertise_family(fp, port, true)
     }
 
@@ -352,16 +368,30 @@ mod tests {
     fn ipv6_pairing_hints_keep_only_lan_addresses_and_local_link_scope() {
         let name = format!("node.{PAIRING_SERVICE}");
         let addresses: Vec<SocketAddr> = [
-            "[fd00::2]:24871", "[fe80::1%4]:24871", "[fe80::1]:24871",
-            "[2001:db8::3]:24871", "[::1]:24871", "[fd00::3]:0",
+            "[fd00::2]:24871",
+            "[fe80::1%4]:24871",
+            "[fe80::1]:24871",
+            "[2001:db8::3]:24871",
+            "[::1]:24871",
+            "[fd00::3]:0",
         ]
-        .into_iter().map(|address| address.parse().unwrap()).collect();
+        .into_iter()
+        .map(|address| address.parse().unwrap())
+        .collect();
         let hint = UntrustedHint::for_purpose(
-            Purpose::Pairing, &name, &"a".repeat(64), "5", addresses, Instant::now(),
-        ).unwrap();
+            Purpose::Pairing,
+            &name,
+            &"a".repeat(64),
+            "5",
+            addresses,
+            Instant::now(),
+        )
+        .unwrap();
         assert_eq!(hint.addresses.len(), 2);
         assert!(hint.addresses.contains(&"[fd00::2]:24871".parse().unwrap()));
-        assert!(hint.addresses.contains(&"[fe80::1%4]:24871".parse().unwrap()));
+        assert!(hint
+            .addresses
+            .contains(&"[fe80::1%4]:24871".parse().unwrap()));
     }
 
     #[test]
