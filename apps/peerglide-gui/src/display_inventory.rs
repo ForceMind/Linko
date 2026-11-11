@@ -45,7 +45,10 @@ impl Panel {
 
     pub(super) fn ui(&self, ui: &mut egui::Ui, enabled: bool, wake: &Arc<dyn Fn() + Send + Sync>) {
         ui.collapsing("本机显示器", |ui| {
-            let state = self.state.lock().map_or(State::Failed, |state| state.clone());
+            let state = self
+                .state
+                .lock()
+                .map_or(State::Failed, |state| state.clone());
             if ui
                 .add_enabled(
                     enabled && !matches!(state, State::Pending),

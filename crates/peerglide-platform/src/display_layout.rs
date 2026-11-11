@@ -285,7 +285,16 @@ mod tests {
         );
         assert!(layout.anchor_is_current(anchor));
         assert!(layout
-            .replace(primary.id, vec![Display { scale: 2.0, ..primary }, second])
+            .replace(
+                primary.id,
+                vec![
+                    Display {
+                        scale: 2.0,
+                        ..primary
+                    },
+                    second
+                ]
+            )
             .unwrap());
         assert!(!layout.anchor_is_current(anchor));
     }
