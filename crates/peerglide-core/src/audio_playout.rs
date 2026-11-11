@@ -1,19 +1,11 @@
 //! Bounded PCM playout for one locally authorized audio source.
 //! No OS device, input grant, network or media-content diagnostics.
-pub const SAMPLE_RATE: u32 = 48_000;
-pub const CHANNELS: usize = 2;
-/// Five milliseconds of interleaved stereo PCM at 48 kHz.
-pub const SAMPLES: usize = 240 * CHANNELS;
+pub use peerglide_protocol::audio::{Frame, CHANNELS, SAMPLE_RATE, SAMPLES};
 
 const WINDOW: usize = 16;
 const PREFILL: usize = 3;
 const START_WAIT: u8 = 4;
 const REBUFFER_GAP: u8 = 4;
-
-pub struct Frame {
-    pub sequence: u64,
-    pub samples: [i16; SAMPLES],
-}
 
 /// Local output generation issued by the one audio owner.
 #[derive(Clone, Copy, PartialEq, Eq)]

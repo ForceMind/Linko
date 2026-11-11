@@ -1,6 +1,7 @@
 //! PeerGlide's independent, versioned wire protocol. Input payloads must never be logged.
 use serde::{Deserialize, Serialize};
 
+pub mod audio;
 pub mod pairing_worker;
 
 pub const VERSION: u16 = 5;
