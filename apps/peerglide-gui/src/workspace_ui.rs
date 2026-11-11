@@ -38,12 +38,6 @@ const CONTEXT_LABEL_W: f32 = 60.0;
 /// Short word of the connection row's stop button; its name keeps the full action.
 const STOP_WORD: &str = "断开";
 
-/// The former layout subpage (L9) is this canvas now. Its old body, `App::displays` in
-/// `desktop_ui.rs`, lies outside this slice's files and goes with that file's next slice;
-/// until then this reference keeps it compiled although the shell no longer calls it.
-#[allow(dead_code)]
-const FORMER_LAYOUT_PAGE: fn(&mut App, &mut egui::Ui) = App::displays;
-
 impl App {
     /// Home view: the screen canvas with the device context column. The device list lives
     /// in the sidebar, so the former device and layout pages share this one view; the
