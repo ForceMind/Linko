@@ -2747,13 +2747,11 @@ mod hook_tests {
             events.try_recv(),
             Err(mpsc::error::TryRecvError::Empty)
         ));
-        assert!(
-            diagnostics
-                .snapshot(input_diagnostics::Phase::Sample)
-                .to_string()
-                .split_ascii_whitespace()
-                .any(|field| field == "scr_zero=1")
-        );
+        assert!(diagnostics
+            .snapshot(input_diagnostics::Phase::Sample)
+            .to_string()
+            .split_ascii_whitespace()
+            .any(|field| field == "scr_zero=1"));
     }
 
     #[test]
