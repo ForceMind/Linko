@@ -2620,3 +2620,23 @@ Actions 实际检出的合成提交为 `3dcb1d8bcc0198aad428c72d5b6dfaf90857aec2
 和 [macOS 包](https://github.com/ForceMind/Linko/actions/runs/43102482924/artifacts/13892734026)
 已由 CI 产出。真实 Windows/macOS 系统剪贴板、局域网文件、混合 DPI、
 大文件并行键鼠延迟及 #3/C06 仍待最终同源候选的统一验收。
+
+### F15 设备插图资源对照
+
+审阅提交 `b0fa5ba` 将解码像素移交给纹理管理器，应用只保留每个
+GUI 上下文的纹理句柄、裁剪坐标和比例。GitHub Actions 的三平台
+回归通过，确认纹理复用和画布几何。
+
+| 空闲 180 秒 | 调整前平均 CPU / 峰值 RSS | 调整后平均 CPU / 峰值 RSS |
+| --- | ---: | ---: |
+| macOS 空身份 | 0.961% / 108.969 MiB | 1.116% / 115.734 MiB |
+| macOS 已有身份 | 0.572% / 108.734 MiB | 0.505% / 109.781 MiB |
+| Ubuntu 空身份 | 0.000% / 148.531 MiB | 0.000% / 141.926 MiB |
+| Ubuntu 已有身份 | 0.000% / 149.168 MiB | 0.000% / 142.223 MiB |
+
+两平台预热后增长不超过 0.266 MiB，原 512 MiB／64 MiB 门槛保留。
+Ubuntu 本次峰值低约 6.6–6.9 MiB，macOS 空身份本次峰值较高。
+这些是独立 runner 的短时观察，纹理驱动和启动峰值仍计入 RSS。
+[调整前报告](https://github.com/ForceMind/Linko/actions/runs/43102956952) ·
+[调整后报告](https://github.com/ForceMind/Linko/actions/runs/43110989149) ·
+[工作区 CI](https://github.com/ForceMind/Linko/actions/runs/43110989136)
