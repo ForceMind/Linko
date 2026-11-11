@@ -5,7 +5,7 @@ use crate::{
     Identity,
 };
 use anyhow::{ensure, Context, Result};
-pub use peerglide_transfer::codec::FileOutcome;
+pub use peerglide_transfer::{codec::FileOutcome, MAX_FILE_BYTES};
 pub use crate::file_transfer::{Decision, Offer, ReceiveResult};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},

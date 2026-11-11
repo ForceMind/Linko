@@ -1,43 +1,15 @@
 //! One-shot text controls. Rendering and polling never access the system clipboard.
-use super::{egui, transport, App, Identity};
+use super::{
+    data_access::{self, Pin},
+    egui, transport, App,
+};
 use anyhow::{Context, Result};
 use peerglide_platform::clipboard::NativeClipboard;
-use std::net::{IpAddr, SocketAddr};
 use transport::clipboard_worker::{
     self, Classification, Event, Job, LocalText, PendingText, TextOutcome,
 };
 
 const PORT: u16 = 24872;
-
-#[derive(PartialEq, Eq)]
-struct Pin {
-    local: String,
-    peer: String,
-}
-
-impl Pin {
-    fn load(app: &App) -> Result<(Self, Identity, Vec<u8>)> {
-        anyhow::ensure!(Panel::can_start(app), "请先完成设备配对并打开可写窗口");
-        app.ensure_pairing_ready()
-            .context("请先完成设备配对核验")?;
-        let identity = Identity::load(&app.identity_dir()).context("无法读取本机身份")?;
-        let peer = transport::read_certificate(&app.dir.join("trusted-peer.crt.der"))
-            .context("无法读取已登记的证书")?;
-        let fingerprint = transport::fingerprint(&peer);
-        anyhow::ensure!(
-            app.config.fingerprint.as_deref() == Some(fingerprint.as_str()),
-            "已登记证书发生变化，请重新核验"
-        );
-        Ok((
-            Self {
-                local: identity.fingerprint(),
-                peer: fingerprint,
-            },
-            identity,
-            peer,
-        ))
-    }
-}
 
 struct Active {
     pin: Pin,
@@ -69,15 +41,6 @@ impl Default for Panel {
 }
 
 impl Panel {
-    fn can_start(app: &App) -> bool {
-        app.writable()
-            && !app.enrollment_blocked
-            && !app.pairing_pending()
-            && !app.close_requested
-            && !app.exit_confirmed
-            && app.config.fingerprint.is_some()
-    }
-
     pub(super) fn is_active(&self) -> bool {
         self.active.is_some()
     }
@@ -93,9 +56,7 @@ impl Panel {
 
     pub(super) fn tick(&mut self, app: &App) {
         if self.active.as_ref().is_some_and(|active| {
-            !active.stopping
-                && (!Self::can_start(app)
-                    || app.config.fingerprint.as_deref() != Some(active.pin.peer.as_str()))
+            !active.stopping && !active.pin.matches(app)
         }) {
             self.stop();
         }
@@ -148,7 +109,7 @@ impl Panel {
         let (pin, identity, peer) = Pin::load(app)?;
         let wake = app.wake_ui.clone();
         let job = if send {
-            let target = send_address(&self.target, &app.config.address)?;
+            let target = data_access::send_address(&self.target, &app.config.address, PORT)?;
             let snapshot = self
                 .clipboard()?
                 .snapshot()
@@ -166,7 +127,7 @@ impl Panel {
                 wake,
             )
         } else {
-            let bind = parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?;
+            let bind = data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?;
             let revision = self
                 .clipboard()?
                 .revision()
@@ -212,8 +173,8 @@ impl Panel {
         ui.label("先在接收端选择“等待接收”，再从另一台发送当前纯文本。");
         ui.weak("发送前请确认当前复制的内容。每次接收都需要本机确认导入。");
         ui.add_space(8.0);
-        ui.add_enabled_ui(Self::can_start(app) && self.active.is_none(), |ui| {
-            let hint = saved_target(&app.config.address)
+        ui.add_enabled_ui(data_access::ready(app) && self.active.is_none(), |ui| {
+            let hint = data_access::saved_target(&app.config.address, PORT)
                 .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
             ui.label("接收端地址");
             ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
@@ -233,7 +194,7 @@ impl Panel {
                 }
             }
         });
-        if !Self::can_start(app) {
+        if !data_access::ready(app) {
             ui.weak("请先完成设备配对并打开可写窗口。");
         }
         if let Some(active) = &self.active {
@@ -243,11 +204,12 @@ impl Panel {
                 if pending {
                     let import = ui.button("导入到本机剪贴板").clicked();
                     let decline = ui.button("拒绝").clicked();
-                    if (import || decline)
-                        && let Err(error) = self.decide(app, import)
-                    {
-                        self.stop();
-                        self.notice = error.to_string();
+                    if import || decline {
+                        let result = self.decide(app, import);
+                        if let Err(error) = result {
+                            self.stop();
+                            self.notice = error.to_string();
+                        }
                     }
                 }
                 if ui
@@ -258,50 +220,15 @@ impl Panel {
                 }
             });
         }
-        if let Some(outcome) = self.local_outcome
-            && self.notice != outcome_label(outcome)
-        {
-            ui.label(outcome_label(outcome));
+        if let Some(label) = self.local_outcome.map(outcome_label).filter(|label| {
+            self.notice != *label
+        }) {
+            ui.label(label);
         }
         if !self.notice.is_empty() {
             ui.label(&self.notice);
         }
     }
-}
-
-fn parse_address(text: &str) -> Result<SocketAddr> {
-    let address: SocketAddr = text.trim().parse()?;
-    anyhow::ensure!(
-        address.port() != 0 && !address.ip().is_multicast() && !is_broadcast(address.ip()),
-        "需要有效的单播地址和非零端口"
-    );
-    Ok(address)
-}
-
-fn is_broadcast(address: IpAddr) -> bool {
-    matches!(address, IpAddr::V4(ip) if ip.is_broadcast())
-}
-
-fn saved_target(saved: &str) -> Option<SocketAddr> {
-    let mut address = parse_address(saved).ok()?;
-    if address.ip().is_unspecified() {
-        return None;
-    }
-    address.set_port(PORT);
-    Some(address)
-}
-
-fn send_address(text: &str, saved: &str) -> Result<SocketAddr> {
-    let address = if text.trim().is_empty() {
-        saved_target(saved).context("请输入接收端 IP 地址和 UDP 端口")?
-    } else {
-        parse_address(text).context("请输入接收端 IP 地址和 UDP 端口")?
-    };
-    anyhow::ensure!(
-        !address.ip().is_unspecified(),
-        "请输入接收端的实际 IP 地址"
-    );
-    Ok(address)
 }
 
 fn outcome_label(outcome: TextOutcome) -> &'static str {
@@ -311,48 +238,5 @@ fn outcome_label(outcome: TextOutcome) -> &'static str {
         TextOutcome::Declined => "接收端已拒绝导入。",
         TextOutcome::Failed => "接收端无法导入文本。",
         TextOutcome::Unknown => "系统未能确认导入结果，请在接收端检查剪贴板。",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn data_pin_checks_real_certificates_without_granting_input() -> Result<()> {
-        let fixture = super::super::tests::Fixture::new()?;
-        let mut app = App::load(fixture.path.clone());
-        let local = Identity::create(&app.identity_dir())?;
-        let peer = Identity::generate()?;
-        let peer_path = app.dir.join("trusted-peer.crt.der");
-        std::fs::write(&peer_path, &peer.certificate)?;
-        assert!(Pin::load(&app).is_err());
-
-        app.config.fingerprint = Some(peer.fingerprint());
-        let (pin, _, _) = Pin::load(&app)?;
-        assert_eq!(pin.local, local.fingerprint());
-        assert_eq!(pin.peer, peer.fingerprint());
-        assert!(!app.config.allow && !app.config.native);
-
-        std::fs::write(peer_path, Identity::generate()?.certificate)?;
-        assert!(Pin::load(&app).is_err());
-        drop(app);
-        fixture.close()
-    }
-
-    #[test]
-    fn explicit_target_and_saved_address_use_distinct_data_port_rules() -> Result<()> {
-        assert_eq!(
-            send_address("", "[2001:db8::2]:24871")?,
-            "[2001:db8::2]:24872".parse()?
-        );
-        assert_eq!(
-            send_address("192.0.2.1:9000", "invalid")?,
-            "192.0.2.1:9000".parse()?
-        );
-        assert!(send_address("", "0.0.0.0:24871").is_err());
-        assert!(send_address("[::]:24872", "").is_err());
-        assert!(send_address("224.0.0.1:24872", "").is_err());
-        Ok(())
     }
 }

@@ -1,0 +1,349 @@
+//! Desktop selection and consent for one file job at a time.
+use super::{
+    data_access::{self, Pin},
+    egui, transport, App,
+};
+use anyhow::{Context, Result};
+use std::path::PathBuf;
+use transport::file_worker::{self, Decision, Event, FileOutcome, Job, Offer, Progress, Request};
+
+const PORT: u16 = 24873;
+
+enum Approval {
+    Receive,
+    Resume,
+    Decline,
+}
+
+struct Active {
+    pin: Pin,
+    job: Job,
+    offer: Option<Offer>,
+    stopping: bool,
+}
+
+pub(super) struct Panel {
+    active: Option<Active>,
+    source: String,
+    destination: String,
+    target: String,
+    bind: String,
+    resume: String,
+    prepared_id: Option<[u8; 16]>,
+    progress: Option<Progress>,
+    notice: String,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Self {
+            active: None,
+            source: String::new(),
+            destination: String::new(),
+            target: String::new(),
+            bind: format!("0.0.0.0:{PORT}"),
+            resume: String::new(),
+            prepared_id: None,
+            progress: None,
+            notice: String::new(),
+        }
+    }
+}
+
+impl Panel {
+    pub(super) fn is_active(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub(super) fn stop(&mut self) {
+        if let Some(active) = self.active.as_mut().filter(|active| !active.stopping) {
+            active.job.stop();
+            active.offer = None;
+            active.stopping = true;
+            self.notice = "正在停止文件传输。".into();
+        }
+    }
+
+    pub(super) fn tick(&mut self, app: &App) {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| !active.stopping && !active.pin.matches(app))
+        {
+            self.stop();
+        }
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        let finished = active.job.is_finished();
+        self.progress = active.job.progress();
+        while let Some(event) = active.job.poll() {
+            self.notice = match event {
+                Event::Sent(outcome) => outcome_label(outcome, false).into(),
+                Event::Received(result) => {
+                    let local = outcome_label(result.outcome, true);
+                    if result.report_queued {
+                        local.into()
+                    } else {
+                        format!("{local} 未能把回执送入发送队列。")
+                    }
+                }
+                Event::Stopped => "文件任务已停止。已暂存的数据保留。".into(),
+                _ if active.stopping => continue,
+                Event::Prepared(id) => {
+                    self.prepared_id = Some(id);
+                    "文件准备完毕，正在连接接收端。".into()
+                }
+                Event::Listening(address) => format!(
+                    "正在等待已配对电脑。发送端需填写本机 IP 和 UDP 端口 {}。",
+                    address.port()
+                ),
+                Event::Offer(offer) => {
+                    active.offer = Some(offer);
+                    "收到文件请求，请选择接收、恢复或拒绝。".into()
+                }
+                Event::Failed => {
+                    active.offer = None;
+                    "传输结束，未收到成功确认。再次发送前请检查接收目录。".into()
+                }
+            };
+        }
+        if finished {
+            if active.stopping && self.notice == "正在停止文件传输。" {
+                self.notice = "文件任务已停止。请在接收端确认目录状态。".into();
+            }
+            self.active = None;
+        }
+    }
+
+    fn start(&mut self, app: &App, sending: bool) -> Result<()> {
+        anyhow::ensure!(self.active.is_none(), "请先结束当前文件任务");
+        let (pin, identity, peer) = Pin::load(app)?;
+        let request = if sending {
+            Request::Send {
+                target: data_access::send_address(&self.target, &app.config.address, PORT)?,
+                source: absolute_path(&self.source).context("请填写源文件的绝对路径")?,
+                resume_id: parse_id(&self.resume)?,
+            }
+        } else {
+            Request::Receive {
+                bind: data_access::parse_address(&self.bind)
+                    .context("请填写本机监听地址和 UDP 端口")?,
+                budget: file_worker::MAX_FILE_BYTES,
+            }
+        };
+        let job = file_worker::start(request, identity, peer, app.wake_ui.clone())
+            .context("无法启动文件后台任务")?;
+        self.active = Some(Active {
+            pin,
+            job,
+            offer: None,
+            stopping: false,
+        });
+        self.progress = None;
+        if sending {
+            self.prepared_id = None;
+            self.notice = "正在读取文件并计算分块校验。".into();
+        } else {
+            self.notice = "正在准备接收文件请求。".into();
+        }
+        Ok(())
+    }
+
+    fn decide(&mut self, app: &App, choice: Approval) -> Result<()> {
+        let active = self.active.as_mut().context("没有待处理的文件")?;
+        let (pin, _, _) = Pin::load(app)?;
+        anyhow::ensure!(active.pin == pin && !active.stopping, "设备配对状态已变化");
+        let decision = match choice {
+            Approval::Receive | Approval::Resume => Decision::Accept {
+                directory: absolute_path(&self.destination).context("请填写接收目录的绝对路径")?,
+                resume: matches!(choice, Approval::Resume),
+            },
+            Approval::Decline => Decision::Decline,
+        };
+        active
+            .job
+            .decide(decision)
+            .context("本次文件请求已结束")?;
+        active.offer = None;
+        self.notice = "正在处理本次文件请求。".into();
+        Ok(())
+    }
+
+    pub(super) fn ui(&mut self, app: &App, ui: &mut egui::Ui) {
+        let ready = data_access::ready(app);
+        if !ready {
+            ui.weak("请先完成设备配对并打开可写窗口。");
+        }
+        if ready && self.active.is_none() {
+            let dropped = ui.input(|input| {
+                let files = &input.raw.dropped_files;
+                if files.len() != 1 {
+                    return None;
+                }
+                files[0].path.as_ref()?.to_str().map(str::to_owned)
+            });
+            if let Some(path) = dropped {
+                self.source = path;
+            }
+        }
+        ui.add_enabled_ui(ready && self.active.is_none(), |ui| {
+            ui.strong("发送文件");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.source)
+                    .hint_text("源文件绝对路径，可拖入单个本机文件"),
+            );
+            let hint = data_access::saved_target(&app.config.address, PORT)
+                .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
+            ui.label("接收端地址");
+            ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.resume)
+                    .hint_text("续传编号，首次发送留空"),
+            );
+            if ui.button("发送选定文件").clicked() {
+                let result = self.start(app, true);
+                if let Err(error) = result {
+                    self.notice = error.to_string();
+                }
+            }
+            ui.add_space(8.0);
+            ui.strong("接收文件");
+            ui.label("本机监听地址");
+            ui.text_edit_singleline(&mut self.bind);
+            if ui.button("等待文件请求").clicked() {
+                let result = self.start(app, false);
+                if let Err(error) = result {
+                    self.notice = error.to_string();
+                }
+            }
+        });
+        if let Some(id) = self.prepared_id {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("续传编号 {}", encode_id(id)));
+                if ui.button("复制编号").clicked() {
+                    ui.ctx().copy_text(encode_id(id));
+                }
+            });
+        }
+        if self.active.is_some() {
+            self.active_ui(app, ui);
+        }
+        if let Some(progress) = self.progress {
+            let ratio = if progress.total == 0 {
+                1.0
+            } else {
+                progress.bytes as f32 / progress.total as f32
+            };
+            let label = if progress.verified_locally {
+                "本机已校验"
+            } else {
+                "已排队发送或匹配续传"
+            };
+            ui.add(egui::ProgressBar::new(ratio).text(format!(
+                "{label} {} / {} 字节",
+                progress.bytes, progress.total
+            )));
+        }
+        if !self.notice.is_empty() {
+            ui.label(&self.notice);
+        }
+    }
+
+    fn active_ui(&mut self, app: &App, ui: &mut egui::Ui) {
+        let Some(active) = self.active.as_ref() else {
+            return;
+        };
+        let stopping = active.stopping;
+        if let Some(offer) = &active.offer {
+            ui.separator();
+            ui.label(format!("{} · {} 字节", offer.name, offer.size));
+            ui.label(format!("续传编号 {}", encode_id(offer.id)));
+            ui.weak("每个接收目录累计配额 8 GiB。已存在的文件会保留。");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.destination)
+                    .hint_text("已有接收目录的绝对路径"),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for (label, approval) in [
+                    ("接收文件", Approval::Receive),
+                    ("恢复已暂存文件", Approval::Resume),
+                    ("拒绝", Approval::Decline),
+                ] {
+                    if ui.button(label).clicked() {
+                        let result = self.decide(app, approval);
+                        if let Err(error) = result {
+                            self.notice = error.to_string();
+                        }
+                    }
+                }
+            });
+        }
+        if ui
+            .add_enabled(!stopping, egui::Button::new("停止文件任务"))
+            .clicked()
+        {
+            self.stop();
+        }
+    }
+}
+
+fn absolute_path(text: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(text);
+    anyhow::ensure!(path.is_absolute(), "请输入绝对路径");
+    Ok(path)
+}
+
+fn encode_id(id: [u8; 16]) -> String {
+    use std::fmt::Write as _;
+    let mut text = String::with_capacity(32);
+    for byte in id {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
+}
+
+fn parse_id(text: &str) -> Result<Option<[u8; 16]>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        text.len() == 32 && text.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "续传编号须为 32 位十六进制字符"
+    );
+    let mut id = [0; 16];
+    for (index, byte) in id.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&text[index * 2..index * 2 + 2], 16)?;
+    }
+    anyhow::ensure!(id != [0; 16], "续传编号无效");
+    Ok(Some(id))
+}
+
+fn outcome_label(outcome: FileOutcome, receiving: bool) -> &'static str {
+    match outcome {
+        FileOutcome::Committed if receiving => "本机已校验并保存文件。",
+        FileOutcome::Committed => "接收端已确认保存文件。",
+        FileOutcome::Declined => "接收端已拒绝本次文件。",
+        FileOutcome::Failed => "接收端未能接收或校验本次文件。",
+        FileOutcome::Unknown => "文件保存结果未确认，请检查接收目录。",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_id_round_trips_and_rejects_unbounded_or_malformed_input() -> Result<()> {
+        let id = [127; 16];
+        assert_eq!(parse_id(&encode_id(id))?, Some(id));
+        assert_eq!(parse_id(&encode_id(id).to_uppercase())?, Some(id));
+        assert_eq!(parse_id(" ")?, None);
+        assert!(parse_id(&encode_id([0; 16])).is_err());
+        assert!(parse_id("屏跃").is_err());
+        assert!(parse_id(&"a".repeat(1024)).is_err());
+        assert!(absolute_path("relative.bin").is_err());
+        Ok(())
+    }
+}

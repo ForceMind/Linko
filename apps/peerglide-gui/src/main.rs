@@ -4,12 +4,14 @@ mod app_icon;
 mod clipboard_panel;
 mod config_store;
 mod connection_info;
+mod data_access;
 mod desktop_state;
 mod desktop_style;
 mod desktop_ui;
 mod device_hardware;
 mod discovery_panel;
 mod enrollment_store;
+mod file_panel;
 mod gesture_lab;
 mod gesture_rules;
 mod icons;
@@ -446,6 +448,7 @@ struct App {
     collaboration_tab: CollaborationTab,
     #[cfg(any(windows, target_os = "macos"))]
     clipboard_panel: clipboard_panel::Panel,
+    file_panel: file_panel::Panel,
     wizard: Option<SetupStep>,
     wizard_name: String,
     wizard_address: String,
@@ -582,6 +585,7 @@ impl App {
             collaboration_tab: CollaborationTab::Clipboard,
             #[cfg(any(windows, target_os = "macos"))]
             clipboard_panel: clipboard_panel::Panel::default(),
+            file_panel: file_panel::Panel::default(),
             wizard: None,
             wizard_name: config.peer_name.clone(),
             wizard_address: config.address.clone(),
@@ -819,7 +823,7 @@ impl App {
         next.allow = false;
         next.native = false;
         next.pairing_receipt = None;
-        self.stop_clipboard_job();
+        self.stop_data_jobs();
         let result =
             enrollment_store::commit(self.config_store.as_mut().unwrap(), &next, Some(&bytes));
         if let Err(error) = result {
@@ -1112,7 +1116,7 @@ impl App {
         anyhow::ensure!(!self.resource_check_mode, "隔离资源检查不撤销或修改信任");
         anyhow::ensure!(self.instance_lock.is_some(), "另一窗口正在使用此数据目录");
         self.stop();
-        self.stop_clipboard_job();
+        self.stop_data_jobs();
         self.confirmed_fingerprint = None;
         self.connected = false;
         self.config.fingerprint = None;
@@ -1139,7 +1143,7 @@ impl App {
         );
         self.validate_pairing_receipt()?;
         let next = Config::default();
-        self.stop_clipboard_job();
+        self.stop_data_jobs();
         enrollment_store::commit(self.config_store.as_mut().context("设置只读")?, &next, None)?;
         self.config = next;
         self.confirmed_fingerprint = None;
@@ -1395,7 +1399,7 @@ impl App {
             || self.gesture_lab.needs_tick()
             || self.layout_report.is_some()
             || self.pairing_panel.needs_poll()
-            || self.clipboard_job_active()
+            || self.data_job_active()
     }
     #[cfg(any(windows, target_os = "macos"))]
     fn clipboard_job_active(&self) -> bool {
@@ -1405,7 +1409,11 @@ impl App {
     fn clipboard_job_active(&self) -> bool {
         false
     }
-    fn stop_clipboard_job(&mut self) {
+    fn data_job_active(&self) -> bool {
+        self.file_panel.is_active() || self.clipboard_job_active()
+    }
+    fn stop_data_jobs(&mut self) {
+        self.file_panel.stop();
         #[cfg(any(windows, target_os = "macos"))]
         self.clipboard_panel.stop();
     }
@@ -1468,7 +1476,7 @@ impl App {
             }
             self.close_requested = true;
             self.stop();
-            self.stop_clipboard_job();
+            self.stop_data_jobs();
             if self.child.is_some() || self.recovery_blocked {
                 self.show_window(ctx);
                 self.dialog = Some(Dialog::Recovery);
@@ -1509,12 +1517,12 @@ impl App {
             self.close_requested = true;
             self.stop();
             self.dialog = Some(Dialog::Recovery);
-            self.stop_clipboard_job();
+            self.stop_data_jobs();
             self.show_window(ctx);
-        } else if self.clipboard_job_active() {
+        } else if self.data_job_active() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.close_requested = true;
-            self.stop_clipboard_job();
+            self.stop_data_jobs();
         } else {
             self.exit_confirmed = true;
         }
@@ -1556,6 +1564,9 @@ impl App {
             clipboard.tick(self);
             self.clipboard_panel = clipboard;
         }
+        let mut files = std::mem::take(&mut self.file_panel);
+        files.tick(self);
+        self.file_panel = files;
         if self.window_hidden && self.recovery_blocked {
             self.show_window(ctx);
             self.dialog = Some(Dialog::Recovery);
@@ -1589,7 +1600,7 @@ impl App {
             && self.child.is_none()
             && !self.recovery_blocked
             && !self.pairing_panel.needs_poll()
-            && !self.clipboard_job_active()
+            && !self.data_job_active()
         {
             if self
                 .quit_check
@@ -1636,7 +1647,7 @@ impl eframe::App for App {
 }
 impl Drop for App {
     fn drop(&mut self) {
-        self.stop_clipboard_job();
+        self.stop_data_jobs();
         self.stop();
         if let Some(child) = &mut self.child {
             for _ in 0..40 {
