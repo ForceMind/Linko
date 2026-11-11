@@ -2117,6 +2117,7 @@ mod tests {
             (Page::Displays, "返回"),
             (Page::Transfers, "文件与剪贴板"),
             (Page::Clipboard, "剪贴板"),
+            (Page::Audio, "音频"),
             (Page::Transfers, "文件传输"),
             (Page::Displays, "返回"),
             (Page::Settings, "设置"),

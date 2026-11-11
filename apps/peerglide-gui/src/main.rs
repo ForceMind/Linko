@@ -1,5 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 mod app_icon;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+mod audio_panel;
 #[cfg(any(windows, target_os = "macos"))]
 mod clipboard_panel;
 mod config_store;
@@ -198,6 +200,7 @@ enum MouseTab {
 enum CollaborationTab {
     Clipboard,
     Files,
+    Audio,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Dialog {
@@ -228,6 +231,7 @@ enum Page {
     Displays,
     Transfers,
     Clipboard,
+    Audio,
     Shortcuts,
     Settings,
     GestureLab,
@@ -457,6 +461,8 @@ struct App {
     device_tab: DeviceTab,
     mouse_tab: MouseTab,
     collaboration_tab: CollaborationTab,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    audio_panel: audio_panel::Panel,
     #[cfg(any(windows, target_os = "macos"))]
     clipboard_panel: clipboard_panel::Panel,
     file_panel: file_panel::Panel,
@@ -597,6 +603,8 @@ impl App {
             device_tab: DeviceTab::Device,
             mouse_tab: MouseTab::Rules,
             collaboration_tab: CollaborationTab::Clipboard,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            audio_panel: audio_panel::Panel::default(),
             #[cfg(any(windows, target_os = "macos"))]
             clipboard_panel: clipboard_panel::Panel::default(),
             file_panel: file_panel::Panel::default(),
@@ -1507,10 +1515,16 @@ impl App {
         false
     }
     fn data_job_active(&self) -> bool {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.audio_panel.is_active() {
+            return true;
+        }
         self.file_panel.is_active() || self.clipboard_job_active()
     }
     fn stop_data_jobs(&mut self) {
         self.file_panel.stop();
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        self.audio_panel.stop();
         #[cfg(any(windows, target_os = "macos"))]
         self.clipboard_panel.stop();
     }
@@ -1666,6 +1680,12 @@ impl App {
             let mut clipboard = std::mem::take(&mut self.clipboard_panel);
             clipboard.tick(self);
             self.clipboard_panel = clipboard;
+        }
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        {
+            let mut audio = std::mem::take(&mut self.audio_panel);
+            audio.tick(self);
+            self.audio_panel = audio;
         }
         let mut files = std::mem::take(&mut self.file_panel);
         files.tick(self);

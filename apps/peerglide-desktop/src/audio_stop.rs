@@ -2,6 +2,29 @@
 use std::io::{self, BufRead};
 
 #[cfg(any(windows, target_os = "macos"))]
+#[derive(clap::Args)]
+pub(super) struct Options {
+    #[arg(long, hide = true, requires_all = ["expected_local_fingerprint", "expected_peer_fingerprint"])]
+    pub managed: bool,
+    #[arg(long, hide = true, requires = "managed")]
+    expected_local_fingerprint: Option<String>,
+    #[arg(long, hide = true, requires = "managed")]
+    expected_peer_fingerprint: Option<String>,
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+impl Options {
+    pub(super) fn verify(&self, local: &[u8], peer: &[u8]) -> anyhow::Result<()> {
+        super::reconnect::verify_launch_fingerprints(
+            local,
+            peer,
+            self.expected_local_fingerprint.as_deref(),
+            self.expected_peer_fingerprint.as_deref(),
+        )
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 pub(super) async fn requested(managed: bool) -> io::Result<()> {
     if !managed {
         return tokio::signal::ctrl_c().await;

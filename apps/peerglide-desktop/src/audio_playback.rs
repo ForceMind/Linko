@@ -51,16 +51,17 @@ pub(super) async fn run(
     device: Option<&str>,
     volume: u8,
     duration: Duration,
-    managed: bool,
+    supervisor: &super::audio_stop::Options,
 ) -> Result<()> {
     let identity = transport::Identity::load(identity)?;
     let pin = transport::read_certificate(peer_certificate)?;
+    supervisor.verify(&identity.certificate, &pin)?;
     let endpoint = audio::endpoint(bind, &identity, &pin)?;
     println!(
         "Waiting for the authenticated audio source on {}.",
         endpoint.local_addr()?
     );
-    let stop = super::audio_stop::requested(managed);
+    let stop = super::audio_stop::requested(supervisor.managed);
     tokio::pin!(stop);
     let connection = tokio::select! {
         biased;
