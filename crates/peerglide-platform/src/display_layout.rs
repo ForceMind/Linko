@@ -114,11 +114,8 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(primary: DisplayId, displays: Vec<Display>) -> Result<Self, LayoutError> {
-        static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
         let displays = validated(primary, displays)?;
-        let instance = NEXT_INSTANCE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .map_err(|_| LayoutError::GenerationExhausted)?;
+        let instance = next_instance()?;
         Ok(Self {
             primary,
             displays,
@@ -188,6 +185,22 @@ impl Layout {
 
     pub fn anchor_is_current(&self, anchor: EdgeAnchor) -> bool {
         anchor.instance == self.instance && anchor.generation == self.generation
+    }
+}
+
+fn next_instance() -> Result<u64, LayoutError> {
+    static NEXT_INSTANCE: AtomicU64 = AtomicU64::new(1);
+    let mut current = NEXT_INSTANCE.load(Ordering::Relaxed);
+    loop {
+        let next = current
+            .checked_add(1)
+            .ok_or(LayoutError::GenerationExhausted)?;
+        let exchanged =
+            NEXT_INSTANCE.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed);
+        match exchanged {
+            Ok(id) => return Ok(id),
+            Err(actual) => current = actual,
+        }
     }
 }
 
