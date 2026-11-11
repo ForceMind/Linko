@@ -2569,3 +2569,41 @@ F10 的捕获队列复用现有预分配 SPSC 环形队列，容量仍为 128。
 控制或恢复未确认等重点状态从缺席变为出现时弹出。切换已有状态、
 首次绘制和回到静态状态不重播，旋转提示仍随原有活动节拍。真实
 平台的布局与动画观感留到集中验收。
+
+## 2026-11-12 数据协作草稿验证
+
+PR156 审阅提交为 `2e5b28c84ea18d97bb22579c086994dca1421b4c`。
+Actions 实际检出的合成提交为 `3dcb1d8bcc0198aad428c72d5b6dfaf90857aec2`，
+两者的源码树均为 `9bddd35c9a1946e3b008b0375123cbdac19acc47`。
+该次 Windows、macOS、Ubuntu 格式检查、严格 Clippy、locked 工作区
+测试、构建和平台冒烟已通过。最低 Rust、依赖审计、固定上游资格及 macOS/Ubuntu 资源检查通过。
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43102482924) ·
+[固定上游资格](https://github.com/ForceMind/Linko/actions/runs/43102483061) ·
+[资源报告](https://github.com/ForceMind/Linko/actions/runs/43102482967)
+
+已读 Ubuntu 用例日志。两端回环覆盖文本独立许可、本机确认后导入、
+停止使待导入票据失效、文件分块准入、逐条同意、拒绝不写盘、完整文件
+提交、重新连接恢复、停止保留暂存、节流和只读历史。PNG 用例覆盖
+尺寸／大小边界、坏帧、动画拒绝、像素保留与移除文本元数据。图片目前
+仅有校验库，尚无图片网络或系统剪贴板入口。
+
+| 采样场景 | 平均 CPU | 峰值 RSS | 预热后最大增长 |
+| --- | ---: | ---: | ---: |
+| macOS 空身份空闲 180 秒 | 1.150% | 109.188 MiB | 0.281 MiB |
+| macOS 已有身份空闲 180 秒 | 0.539% | 109.188 MiB | 0 MiB |
+| Ubuntu 空身份空闲 180 秒 | 0.000% | 146.027 MiB | 0 MiB |
+| Ubuntu 已有身份空闲 180 秒 | 0.000% | 146.098 MiB | 0 MiB |
+| macOS 普通窗口仅通信约 30 秒 | 2.223% | 111.250 MiB | — |
+| Ubuntu 普通窗口仅通信约 30 秒 | 3.334% | 149.242 MiB | — |
+| macOS 隐藏窗口仅通信约 30 秒 | 0.433% | 118.156 MiB | — |
+
+空闲报告保留 RSS 512 MiB 与预热后增长 64 MiB。0.000% 表示采样
+精度内未跨过进程 CPU 时间计数刻度。与上述同口径 macOS 普通窗口
+仅通信基线相比，CPU 高约 1.459 个百分点，峰值 RSS 低 7.828 MiB。
+三次仅通信进程检查均确认回收 worker。这里记录短时、单次 runner
+观测，未测原生输入或文件传输期间的延迟和资源。
+
+该次 [Windows 包](https://github.com/ForceMind/Linko/actions/runs/43102482924/artifacts/13892823980)
+和 [macOS 包](https://github.com/ForceMind/Linko/actions/runs/43102482924/artifacts/13892734026)
+已由 CI 产出。真实 Windows/macOS 系统剪贴板、局域网文件、混合 DPI、
+大文件并行键鼠延迟及 #3/C06 仍待最终同源候选的统一验收。
