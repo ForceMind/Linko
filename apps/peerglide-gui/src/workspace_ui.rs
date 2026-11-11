@@ -92,9 +92,6 @@ impl App {
             ui.small(self.workspace_direction_note());
             self.layout_hint_row(ui);
         });
-        ui.add_space(8.0);
-        ui.label(desktop_style::semibold("设备详情", 17.0));
-        self.workspace_device_cards(ui);
     }
 
     /// Icon-only zoom buttons around the zoom level; each keeps its name for assistive use.
@@ -144,112 +141,6 @@ impl App {
         } else {
             "两台主屏的相对方向；另一端需设置相反方向。"
         }
-    }
-
-    fn workspace_device_cards(&mut self, ui: &mut egui::Ui) {
-        let registered = self.config.fingerprint.is_some();
-        let compact = ui.available_width() < 500.0;
-        ui.columns(if registered { 2 } else { 1 }, |columns| {
-            for (index, column) in columns.iter_mut().enumerate() {
-                let peer = index == 1;
-                let selected = if peer {
-                    self.workspace_peer_selected
-                } else {
-                    !self.workspace_peer_selected || !registered
-                };
-                let name = if peer {
-                    self.config.peer_name.clone()
-                } else {
-                    desktop_ui::local_device_name().into()
-                };
-                let frame = card(column)
-                    .inner_margin(if compact { 10.0 } else { 14.0 })
-                    .fill(if selected && !column.visuals().dark_mode {
-                        egui::Color32::from_rgb(251, 252, 255)
-                    } else {
-                        column.visuals().window_fill
-                    })
-                    .stroke(egui::Stroke::new(
-                        1.0,
-                        if selected {
-                            column.visuals().selection.bg_fill
-                        } else {
-                            column.visuals().widgets.noninteractive.bg_stroke.color
-                        },
-                    ));
-                let response = frame.show(column, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.spacing_mut().item_spacing.y = if compact { 3.0 } else { 5.0 };
-                    ui.set_min_height(if compact { 70.0 } else { 96.0 });
-                    read_only_row(ui, |ui| {
-                        device_glyph(
-                            ui,
-                            if peer {
-                                visual_assets::DeviceKind::Unknown
-                            } else {
-                                visual_assets::local_device_kind()
-                            },
-                        );
-                        let name_width = (ui.available_width() - 64.0).max(1.0);
-                        desktop_ui::left_text_slot(
-                            ui,
-                            name_width,
-                            24.0,
-                            desktop_style::semibold(&name, if compact { 14.0 } else { 16.0 }),
-                        )
-                        .on_hover_text(&name);
-                        let (label, tone) = if !peer {
-                            ("本机", Tone::Accent)
-                        } else if self.pairing_pending() {
-                            ("待确认", Tone::Warning)
-                        } else if self.stopping.is_some() {
-                            ("断开中", Tone::Neutral)
-                        } else if self.connected && self.child.is_some() {
-                            ("已连接", Tone::Good)
-                        } else if self.child.is_some() {
-                            ("连接中", Tone::Neutral)
-                        } else {
-                            ("已登记", Tone::Neutral)
-                        };
-                        desktop_style::status_chip(ui, label, tone);
-                    });
-                    ui.add_space(2.0);
-                    if peer {
-                        card_metadata(
-                            ui,
-                            "登记",
-                            if self.pairing_pending() {
-                                "等待另一台回执"
-                            } else {
-                                "已登记设备"
-                            },
-                        );
-                    } else {
-                        card_metadata(ui, "系统", local_system_name());
-                    }
-                    let kind = if peer {
-                        visual_assets::DeviceKind::Unknown
-                    } else {
-                        visual_assets::local_device_kind()
-                    };
-                    card_metadata(ui, "设备", device_kind_label(kind));
-                    card_metadata(ui, "会话", self.input_label());
-                });
-                let id = column.scope_id().with(if peer {
-                    "peer-device-card"
-                } else {
-                    "local-device-card"
-                });
-                if column
-                    .interact(response.response.rect, id, egui::Sense::click())
-                    .clicked()
-                {
-                    self.workspace_peer_selected = peer;
-                    self.screen_drag = None;
-                }
-            }
-        });
     }
 
     fn peer_connection_label(&self) -> &'static str {
@@ -704,9 +595,28 @@ impl App {
             ui.multiply_opacity(amount);
             card(ui).inner_margin(margin).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                self.selected_device_metadata(ui);
+                ui.separator();
                 self.connection_details(ui);
             });
         });
+    }
+
+    fn selected_device_metadata(&self, ui: &mut egui::Ui) {
+        let kind = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+            let registration = if self.pairing_pending() {
+                "等待另一台回执"
+            } else {
+                "已登记设备"
+            };
+            card_metadata(ui, "登记", registration);
+            visual_assets::DeviceKind::Unknown
+        } else {
+            card_metadata(ui, "系统", local_system_name());
+            visual_assets::local_device_kind()
+        };
+        card_metadata(ui, "设备", device_kind_label(kind));
+        card_metadata(ui, "会话", self.input_label());
     }
 
     /// Short word and tone of the connection row, in the order of `peer_connection_label`.
@@ -767,55 +677,6 @@ fn device_kind_label(kind: visual_assets::DeviceKind) -> &'static str {
     }
 }
 
-fn device_glyph(ui: &mut egui::Ui, kind: visual_assets::DeviceKind) {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::hover());
-    response.on_hover_text(device_kind_label(kind));
-    let painter = ui.painter();
-    if kind == visual_assets::DeviceKind::Unknown {
-        generic_device_symbol(
-            painter,
-            rect,
-            ui.visuals().text_color(),
-            ui.visuals().window_fill,
-        );
-        return;
-    }
-    let screen = egui::Rect::from_min_max(
-        rect.min + egui::vec2(2.0, 3.0),
-        rect.min + egui::vec2(20.0, 16.0),
-    );
-    let stroke = egui::Stroke::new(1.3, ui.visuals().text_color());
-    painter.rect_stroke(screen, 2.0, stroke, egui::StrokeKind::Inside);
-    match kind {
-        visual_assets::DeviceKind::Laptop => {
-            painter.line_segment(
-                [
-                    rect.min + egui::vec2(1.0, 19.0),
-                    rect.min + egui::vec2(21.0, 19.0),
-                ],
-                stroke,
-            );
-        }
-        visual_assets::DeviceKind::Desktop => {
-            painter.line_segment(
-                [
-                    rect.min + egui::vec2(11.0, 16.0),
-                    rect.min + egui::vec2(11.0, 20.0),
-                ],
-                stroke,
-            );
-            painter.line_segment(
-                [
-                    rect.min + egui::vec2(6.0, 20.0),
-                    rect.min + egui::vec2(16.0, 20.0),
-                ],
-                stroke,
-            );
-        }
-        visual_assets::DeviceKind::Unknown => {}
-    }
-}
-
 fn generic_device_symbol(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -843,14 +704,6 @@ fn generic_device_symbol(
             rect.min + egui::vec2(size.x * 0.65, size.y * 0.34),
         ],
         stroke,
-    );
-}
-
-fn read_only_row(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
-    ui.allocate_ui_with_layout(
-        Vec2::new(ui.available_width(), 24.0),
-        egui::Layout::left_to_right(egui::Align::Center),
-        add_contents,
     );
 }
 
@@ -2056,8 +1909,10 @@ mod tests {
             time += FRAME_SECS;
             let rested = timed_frame(&mut app, &ctx, time, vec![]);
             let shown = painted(&rested, HEADING);
+            let metadata = painted(&rested, "系统");
             rested.drop_without_applying_deltas();
             assert_eq!(shown, open, "drawer end state");
+            assert_eq!(metadata, open, "device metadata belongs inside the drawer");
             for _ in 0..120 {
                 time += FRAME_SECS;
                 step(&mut app, &ctx, time, vec![]);

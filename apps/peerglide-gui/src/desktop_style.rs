@@ -257,17 +257,6 @@ pub(super) fn canvas_wash(painter: &egui::Painter, rect: egui::Rect, dark: bool)
     painter.add(egui::Shape::mesh(mesh));
 }
 
-pub(super) fn status_chip(ui: &mut egui::Ui, label: &str, tone: Tone) {
-    let (fill, text) = tone_colors(ui.visuals().dark_mode, tone);
-    egui::Frame::NONE
-        .fill(fill)
-        .corner_radius(egui::CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(7, 2))
-        .show(ui, |ui| {
-            ui.add(egui::Label::new(RichText::new(label).size(11.0).color(text)).truncate());
-        });
-}
-
 pub(super) fn status_colors(dark: bool, tone: Tone) -> (Color32, Color32) {
     tone_colors(dark, tone)
 }

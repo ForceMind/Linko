@@ -368,7 +368,6 @@ impl Panel {
         if !self.open {
             return;
         }
-        let mut open = true;
         let now = ctx.input(|input| input.time);
         let phase = self.supervisor.phase();
         self.feedback.observe(phase, self.join_entry, now);
@@ -377,7 +376,7 @@ impl Panel {
         let height_id = egui::Id::unique("pairing_window_height");
         let requested_height = motion::dialog_height(ctx, height_id, target);
         let height = requested_height.min((ctx.viewport_rect().height() - 48.0).max(1.0));
-        egui::Window::new("添加电脑").open(&mut open).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).fixed_size(egui::vec2(510.0,height)).vscroll(true).show(ctx,|ui|{
+        egui::Window::new("添加电脑").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).fixed_size(egui::vec2(510.0,height)).vscroll(true).show(ctx,|ui|{
             ui.label(desktop_style::semibold("把另一台电脑加入工作区",21.0));
             ui.label("两台电脑连到同一 Wi-Fi 或局域网。任选一台显示配对码，另一台输入；双方确认后会记住彼此。键鼠与数据权限仍单独选择。");
             ui.add_space(12.0);
@@ -437,10 +436,12 @@ impl Panel {
                 }
             }
             let current=self.supervisor.phase();
-            // Dots add a shape for progress; the phase sentence below always stays.
-            if app.local_fingerprint().is_some(){stage_dots(ui,self.feedback.stage,stage_of(current).is_none());}
-            let glyph=self.feedback.glyph(ui.ctx(),self.supervisor.needs_poll());
-            status_row(ui,glyph,phase_text(current));
+            // Once verification starts, each phase has a text label alongside its shape.
+            if current!=Phase::Idle{
+                if app.local_fingerprint().is_some(){stage_dots(ui,self.feedback.stage,stage_of(current).is_none());}
+                let glyph=self.feedback.glyph(ui.ctx(),self.supervisor.needs_poll());
+                status_row(ui,glyph,phase_text(current));
+            }
             if current==Phase::Verified{
                 ui.label("两台电脑都要点击一次。记住设备后，本机接收、键鼠和自动重连仍关闭。");
                 if app.config.fingerprint.is_some(){ui.weak("若身份不同，这会替换原设备登记。");}
@@ -460,10 +461,6 @@ impl Panel {
                 if ui.button("关闭").clicked(){self.open=false;self.cancel();}
             });
         });
-        if !open {
-            self.open = false;
-            self.cancel();
-        }
     }
     fn select_address(&mut self, address: SocketAddr) {
         self.address = address.to_string();
@@ -1311,8 +1308,13 @@ mod tests {
                             (label, bounds)
                         })
                         .collect();
+                    let idle_placeholder = output
+                        .shapes
+                        .iter()
+                        .any(|s| text_rect(&s.shape, phase_text(Phase::Idle)).is_some());
                     output.drop_without_applying_deltas();
                     if pass == 1 {
+                        assert!(!idle_placeholder);
                         for (label, bounds) in controls {
                             let (clip, rect) = bounds.with_context(|| format!("{label} absent"))?;
                             assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");

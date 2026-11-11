@@ -344,7 +344,6 @@ impl App {
             self.use_recorded_gesture(ui);
             return;
         }
-        self.subpage_header(ui, "本机鼠标", Page::Shortcuts);
         ui.weak("离线配置：录制、测试并保存规则，不执行系统动作。");
         ui.add_space(14.0);
         egui::Frame::group(ui.style())
@@ -1313,15 +1312,20 @@ impl App {
             )
             .show(root, |ui| {
                 ui.multiply_opacity(shell_ui::view_alpha(progress));
-                egui::ScrollArea::vertical().show(ui, |ui| match self.page {
-                    Page::Home => self.home(ui),
-                    Page::Devices => self.devices(ui),
-                    Page::Displays => self.devices(ui),
-                    Page::Settings => self.settings(ui, &ctx),
-                    Page::GestureLab | Page::GestureRules => self.mouse(ui),
-                    Page::Transfers | Page::Clipboard => self.collaboration(ui),
-                    Page::Shortcuts => self.shortcuts(ui),
-                });
+                if matches!(self.page, Page::GestureLab | Page::GestureRules) {
+                    self.subpage_header(ui, "本机鼠标", Page::Shortcuts);
+                }
+                egui::ScrollArea::vertical()
+                    .id_salt(shell_ui::view_key(self.page))
+                    .show(ui, |ui| match self.page {
+                        Page::Home => self.home(ui),
+                        Page::Devices => self.devices(ui),
+                        Page::Displays => self.devices(ui),
+                        Page::Settings => self.settings(ui, &ctx),
+                        Page::GestureLab | Page::GestureRules => self.mouse(ui),
+                        Page::Transfers | Page::Clipboard => self.collaboration(ui),
+                        Page::Shortcuts => self.shortcuts(ui),
+                    });
             });
         if self.notice_details {
             egui::Window::new("操作详情")
