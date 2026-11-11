@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
+use peerglide_platform::display_layout::Layout;
 use peerglide_platform::input_diagnostics::{Count, InputDiagnostics};
 use peerglide_platform::{
     self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute,
@@ -652,6 +653,9 @@ pub(super) async fn run_with_diagnostics(
             diagnostics.increment(kind);
         }
     };
+    // Native display enumeration runs before installing capture, on the
+    // worker. A failed OS query keeps the compatible primary-screen behavior.
+    let topology = monitor_layout(native);
     let mut capture = if native {
         match platform::capture_with_diagnostics(itx, peer.clone(), diagnostics.cloned()) {
             Ok(capture) => Some(capture),
@@ -963,7 +967,7 @@ pub(super) async fn run_with_diagnostics(
                         if !matches!(route,CaptureRoute::Local(_)){continue;}
                         if !width.is_finite() || !height.is_finite() || width<1.0 || height<1.0 {continue;}
                         size=(width,height);
-                        let entry=primary_edge_entry(&mut edge_gate,edge,(x,y),size,now_ms());
+                        let entry=primary_edge_entry(&mut edge_gate,edge,(x,y),size,now_ms(),topology.as_ref());
                         let cross=entry.is_some();
                         if cross {count(Count::EdgeHit);}
                         // Same order as the original condition chain; only the first blocker is tallied.
@@ -1190,12 +1194,51 @@ fn observe_motion_datagram(
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
+fn monitor_layout(native: bool) -> Option<Layout> {
+    native.then(platform::read_display_layout).and_then(Result::ok)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn monitor_layout(_: bool) -> Option<Layout> {
+    None
+}
+
+fn exposed_primary_edge(
+    layout: Option<&Layout>,
+    edge: Edge,
+    (x, y): (f64, f64),
+    (width, height): (f64, f64),
+) -> bool {
+    let Some(layout) = layout else {
+        return true;
+    };
+    let primary = layout.primary();
+    let Some(display) = layout.displays().iter().find(|display| display.id == primary) else {
+        return false;
+    };
+    let bounds = display.bounds;
+    if (bounds.right - bounds.left - width).abs() > f64::EPSILON
+        || (bounds.bottom - bounds.top - height).abs() > f64::EPSILON
+    {
+        return false;
+    }
+    let axis = match edge {
+        Edge::Left | Edge::Right => width,
+        Edge::Top | Edge::Bottom => height,
+    };
+    layout
+        .edge_at(edge, bounds.left + x, bounds.top + y, 1.0 + axis * 0.001)
+        .is_some_and(|anchor| anchor.display == primary)
+}
+
 fn primary_edge_entry(
     gate: &mut EdgeGate,
     edge: Edge,
     (x, y): (f64, f64),
     (width, height): (f64, f64),
     now: u64,
+    layout: Option<&Layout>,
 ) -> Option<f64> {
     // A secondary display can produce coordinates beyond the primary rectangle.
     // Only an observed position inside that rectangle can rearm the entry gate.
@@ -1208,8 +1251,9 @@ fn primary_edge_entry(
         Edge::Left | Edge::Right => ny,
         Edge::Top | Edge::Bottom => nx,
     };
-    gate.update(distance(edge, nx, ny) <= 0.001, now)
-        .then_some(along)
+    let exposed = distance(edge, nx, ny) <= 0.001
+        && exposed_primary_edge(layout, edge, (x, y), (width, height));
+    gate.update(exposed, now).then_some(along)
 }
 
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
@@ -1674,27 +1718,27 @@ mod tests {
         ] {
             let mut gate = EdgeGate::default();
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, outside, size, 500),
+                primary_edge_entry(&mut gate, edge, outside, size, 500, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, boundary, size, 501),
+                primary_edge_entry(&mut gate, edge, boundary, size, 501, None),
                 Some(0.5)
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, outside, size, 900),
+                primary_edge_entry(&mut gate, edge, outside, size, 900, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, boundary, size, 901),
+                primary_edge_entry(&mut gate, edge, boundary, size, 901, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, interior, size, 902),
+                primary_edge_entry(&mut gate, edge, interior, size, 902, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, boundary, size, 903),
+                primary_edge_entry(&mut gate, edge, boundary, size, 903, None),
                 Some(0.5)
             );
         }
@@ -1706,14 +1750,43 @@ mod tests {
         let size = (1920.0, 1080.0);
         for y in [-1.0, 1080.0, f64::NAN, f64::INFINITY] {
             assert_eq!(
-                primary_edge_entry(&mut gate, Edge::Right, (1919.0, y), size, 500),
+                primary_edge_entry(&mut gate, Edge::Right, (1919.0, y), size, 500, None),
                 None
             );
         }
         assert_eq!(
-            primary_edge_entry(&mut gate, Edge::Right, (1919.0, 539.5), size, 501),
+            primary_edge_entry(&mut gate, Edge::Right, (1919.0, 539.5), size, 501, None),
             Some(0.5)
         );
+    }
+
+    #[test]
+    fn attached_screen_blocks_only_its_shared_primary_edge() {
+        use platform::display_layout::{Bounds, Display, DisplayId, Rotation};
+        let primary = Display {
+            id: DisplayId(1),
+            bounds: Bounds { left: 0.0, top: 0.0, right: 1920.0, bottom: 1080.0 },
+            scale: 1.0,
+            rotation: Rotation::Upright,
+        };
+        let right = Display {
+            id: DisplayId(2),
+            bounds: Bounds { left: 1920.0, top: 0.0, right: 2920.0, bottom: 600.0 },
+            ..primary
+        };
+        let layout = Layout::new(primary.id, vec![primary, right]).unwrap();
+        let mut gate = EdgeGate::default();
+        let size = (1920.0, 1080.0);
+        assert!(primary_edge_entry(
+            &mut gate, Edge::Right, (1919.0, 200.0), size, 500, Some(&layout)
+        ).is_none());
+        assert!(primary_edge_entry(
+            &mut gate, Edge::Right, (1919.0, 700.0), size, 501, Some(&layout)
+        ).is_some());
+        let mut gate = EdgeGate::default();
+        assert!(primary_edge_entry(
+            &mut gate, Edge::Right, (1918.0, 700.0), (1919.0, 1080.0), 600, Some(&layout)
+        ).is_none());
     }
 
     #[test]
