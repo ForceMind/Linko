@@ -34,7 +34,10 @@ impl PhysicalContext {
         // SAFETY: the predefined context changes only this calling thread.
         let previous =
             unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
-        ensure!(!previous.is_null(), "Windows display DPI context unavailable");
+        ensure!(
+            !previous.is_null(),
+            "Windows display DPI context unavailable"
+        );
         Ok(Self(previous))
     }
 }
@@ -83,7 +86,10 @@ fn monitor_handles() -> Result<Vec<HMONITOR>> {
             (&mut list as *mut MonitorList) as LPARAM,
         )
     };
-    ensure!(result != 0 && list.len != 0, "Windows monitor enumeration unavailable");
+    ensure!(
+        result != 0 && list.len != 0,
+        "Windows monitor enumeration unavailable"
+    );
     let mut handles = list.handles[..list.len].to_vec();
     handles.sort_unstable_by_key(|handle| *handle as usize);
     Ok(handles)
@@ -138,9 +144,8 @@ fn read_monitor(handle: HMONITOR) -> Result<(Display, bool)> {
         ..DEVMODEW::default()
     };
     // SAFETY: szDevice is NUL-terminated and the mode has the documented size.
-    let read = unsafe {
-        EnumDisplaySettingsW(info.szDevice.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode)
-    };
+    let read =
+        unsafe { EnumDisplaySettingsW(info.szDevice.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode) };
     ensure!(read != 0, "Windows monitor mode unavailable");
     let orientation = if mode.dmFields & DM_DISPLAYORIENTATION != 0 {
         // SAFETY: this mode came from the display API with the field flag set.
@@ -160,7 +165,10 @@ fn read_monitor(handle: HMONITOR) -> Result<(Display, bool)> {
         scale_percent,
         orientation,
     )?;
-    Ok((display, info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0))
+    Ok((
+        display,
+        info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+    ))
 }
 
 pub(super) fn read_display_layout() -> Result<Layout> {
@@ -171,13 +179,22 @@ pub(super) fn read_display_layout() -> Result<Layout> {
     for handle in &handles {
         let (display, is_primary) = read_monitor(*handle)?;
         if is_primary {
-            ensure!(primary.replace(display.id).is_none(), "multiple Windows primary displays");
+            ensure!(
+                primary.replace(display.id).is_none(),
+                "multiple Windows primary displays"
+            );
         }
         displays.push(display);
     }
-    ensure!(handles == monitor_handles()?, "Windows display set changed during enumeration");
-    Layout::new(primary.context("Windows primary display unavailable")?, displays)
-        .map_err(|error| anyhow::anyhow!("invalid Windows layout: {error:?}"))
+    ensure!(
+        handles == monitor_handles()?,
+        "Windows display set changed during enumeration"
+    );
+    Layout::new(
+        primary.context("Windows primary display unavailable")?,
+        displays,
+    )
+    .map_err(|error| anyhow::anyhow!("invalid Windows layout: {error:?}"))
 }
 
 #[cfg(test)]

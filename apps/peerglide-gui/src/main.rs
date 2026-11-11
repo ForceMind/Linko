@@ -7,6 +7,8 @@ mod desktop_style;
 mod desktop_ui;
 mod device_hardware;
 mod discovery_panel;
+#[cfg(any(windows, target_os = "macos"))]
+mod display_inventory;
 mod enrollment_store;
 mod gesture_lab;
 mod gesture_rules;
@@ -435,6 +437,8 @@ fn read_worker_diagnostics(
 struct App {
     workspace_peer_selected: bool,
     workspace_zoom: f32,
+    #[cfg(any(windows, target_os = "macos"))]
+    display_inventory: display_inventory::Panel,
     /// Explicit sidebar choice; None follows the window width.
     sidebar_pref: Option<bool>,
     page_motion: motion::Retrigger<u8>,
@@ -574,6 +578,8 @@ impl App {
             layout_geometry: std::collections::BTreeMap::new(),
             workspace_peer_selected: false,
             workspace_zoom: 1.0,
+            #[cfg(any(windows, target_os = "macos"))]
+            display_inventory: display_inventory::Panel::default(),
             sidebar_pref: None,
             page_motion: motion::Retrigger::default(),
             capsule_motion: motion::Retrigger::default(),

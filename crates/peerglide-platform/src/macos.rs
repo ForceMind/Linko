@@ -135,7 +135,10 @@ fn active_display(id: u32) -> Result<Display> {
     // retained mode or null. Release the retained mode after querying it.
     let (rect, angle, width, pixel_width) = unsafe {
         let mode = CGDisplayCopyDisplayMode(id);
-        ensure!(!mode.is_null(), "macOS display mode changed during enumeration");
+        ensure!(
+            !mode.is_null(),
+            "macOS display mode changed during enumeration"
+        );
         let metrics = (
             CGDisplayBounds(id),
             CGDisplayRotation(id),
@@ -150,15 +153,17 @@ fn active_display(id: u32) -> Result<Display> {
 
 pub(super) fn read_display_layout() -> Result<Layout> {
     let ids = active_display_ids()?;
-    let primary = DisplayId(u64::from(
-        *ids.first().context("no active macOS display")?,
-    ));
+    let primary = DisplayId(u64::from(*ids.first().context("no active macOS display")?));
     let displays = ids
         .iter()
         .map(|id| active_display(*id))
         .collect::<Result<Vec<_>>>()?;
-    ensure!(ids == active_display_ids()?, "macOS display set changed during enumeration");
-    Layout::new(primary, displays).map_err(|error| anyhow::anyhow!("invalid macOS layout: {error:?}"))
+    ensure!(
+        ids == active_display_ids()?,
+        "macOS display set changed during enumeration"
+    );
+    Layout::new(primary, displays)
+        .map_err(|error| anyhow::anyhow!("invalid macOS layout: {error:?}"))
 }
 
 // ABI from Apple's CFRunLoop.h, version-0 source. The perform callback has
