@@ -2,6 +2,8 @@
 mod audio_playback;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
 mod audio_source;
+#[cfg(any(windows, target_os = "macos", test))]
+mod audio_stop;
 mod input_diagnostics;
 mod layout_control;
 mod pairing_worker;
@@ -143,6 +145,8 @@ enum Command {
         volume: u8,
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
+        #[arg(long, hide = true)]
+        managed: bool,
     },
     /// Share the local system audio with one verified computer.
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -154,6 +158,8 @@ enum Command {
         peer_cert: PathBuf,
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
+        #[arg(long, hide = true)]
+        managed: bool,
     },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
@@ -254,6 +260,7 @@ async fn main() -> Result<()> {
             device,
             volume,
             duration_secs,
+            managed,
         } => {
             audio_playback::run(
                 &identity,
@@ -262,6 +269,7 @@ async fn main() -> Result<()> {
                 device.as_deref(),
                 volume,
                 Duration::from_secs(duration_secs),
+                managed,
             )
             .await
         }
@@ -271,12 +279,14 @@ async fn main() -> Result<()> {
             identity,
             peer_cert,
             duration_secs,
+            managed,
         } => {
             audio_source::share_system(
                 &identity,
                 &peer_cert,
                 address,
                 Duration::from_secs(duration_secs),
+                managed,
             )
             .await
         }
