@@ -419,9 +419,9 @@ fn main() -> Result<()> {
             peer_cert,
             bind,
             allow_pointer_control,
-        } => run_cli_future(|| {
-            x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control)
-        }),
+        } => {
+            run_cli_future(|| x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control))
+        }
         #[cfg(any(windows, target_os = "macos"))]
         Command::PlayMicrophone {
             identity,
