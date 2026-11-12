@@ -66,7 +66,11 @@ pub(super) fn scaled_secs(base: f32, scale: f32) -> f32 {
 
 pub(super) fn set_reduced(ctx: &egui::Context, reduced: bool) {
     ctx.data_mut(|data| data.insert_temp(egui::Id::unique("linko-reduced-motion"), reduced));
-    let seconds = if reduced { 0.0 } else { egui::Style::default().animation_time };
+    let seconds = if reduced {
+        0.0
+    } else {
+        egui::Style::default().animation_time
+    };
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         ctx.style_mut_of(theme, |style| style.animation_time = seconds);
     }
@@ -82,7 +86,11 @@ pub(super) fn duration(ctx: &egui::Context, seconds: f32) -> f32 {
 }
 
 pub(super) fn spinner_head(ctx: &egui::Context, now: f64) -> usize {
-    if reduced(ctx) { 0 } else { spinner_head_at(now) }
+    if reduced(ctx) {
+        0
+    } else {
+        spinner_head_at(now)
+    }
 }
 
 fn flag_value(on: bool) -> f32 {

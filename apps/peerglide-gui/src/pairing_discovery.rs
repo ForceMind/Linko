@@ -33,7 +33,11 @@ impl HintRow {
     fn tick(&self, ctx: &egui::Context) -> f32 {
         let shot = self.leave.unwrap_or(self.enter);
         let opacity = motion::cubic_out(shot.tick(ctx));
-        if self.leave.is_some() { 1.0 - opacity } else { opacity }
+        if self.leave.is_some() {
+            1.0 - opacity
+        } else {
+            opacity
+        }
     }
 }
 

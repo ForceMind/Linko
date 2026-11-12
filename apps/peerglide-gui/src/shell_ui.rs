@@ -117,7 +117,14 @@ impl App {
             Vec2::splat(tokens::ICON_SMALL),
         );
         let spinning = view.is_waiting() && self.activity_tick_active();
-        paint_capsule_glyph(&painter, glyph, ink, view.tone, spinning, motion::spinner_head(ui.ctx(), now));
+        paint_capsule_glyph(
+            &painter,
+            glyph,
+            ink,
+            view.tone,
+            spinning,
+            motion::spinner_head(ui.ctx(), now),
+        );
         let text = egui::pos2(
             glyph.right() + tokens::SPACE_SM,
             rect.center().y - galley.size().y / 2.0,
