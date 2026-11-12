@@ -1,11 +1,11 @@
-//! Local supervisor approval and one lease-bound target reservation.
+//! Local supervisor approval for a lease-bound file reservation.
 use anyhow::{ensure, Context, Result};
-use peerglide_platform::now_ms;
+use peerglide_platform::{now_ms, CaptureGate, HeldPrimary};
 use peerglide_protocol::file_drop_ipc::{Command, Event, State};
 use peerglide_transport::{file_drop_link, layout_reservation, Identity};
 use quinn::{Connection, Endpoint};
 use std::{
-    net::SocketAddr,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -30,9 +30,15 @@ struct Active {
 
 pub(super) struct Arm {
     request: u32,
-    bind: SocketAddr,
+    direction: Direction,
     proof: Mutex<Option<String>>,
     deadline: u64,
+}
+
+#[derive(Clone, Copy)]
+enum Direction {
+    Receive(SocketAddr),
+    Send(SocketAddr),
 }
 
 #[derive(Clone, Copy)]
@@ -80,45 +86,78 @@ impl Controller {
     pub(super) fn submit(&self, command: Command) -> Option<Event> {
         let mut state = self.0.lock().ok()?;
         let active = state.active.as_mut()?;
-        match command {
-            Command::Inspect => Some(Event::new(active.session, 0, State::Session, None)),
+        let (session, request, lifetime_ms, direction, proof) = match command {
+            Command::Inspect => {
+                return Some(Event::new(active.session, 0, State::Session, None));
+            }
             Command::Arm {
                 session,
                 request,
                 bind,
                 lifetime_ms,
                 proof,
-            } if session == active.session && request > active.watermark => {
-                active.watermark = request;
-                let deadline = now_ms().saturating_add(u64::from(lifetime_ms));
-                active.sender.send_replace(Some(Arc::new(Arm {
-                    request,
-                    bind,
-                    proof: Mutex::new(Some(proof)),
-                    deadline,
-                })));
-                None
-            }
-            Command::Cancel { session, request } if session == active.session => {
-                let matches = active
-                    .sender
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|arm| arm.request == request);
-                if !matches {
+            } => (session, request, lifetime_ms, Direction::Receive(bind), proof),
+            Command::Send {
+                session,
+                request,
+                target,
+                lifetime_ms,
+                proof,
+            } => (session, request, lifetime_ms, Direction::Send(target), proof),
+            Command::Cancel { session, request } => {
+                if session != active.session
+                    || !active
+                        .sender
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|arm| arm.request == request)
+                {
                     return None;
                 }
                 active.sender.send_replace(None);
-                Some(Event::new(session, request, State::Cancelled, None))
+                return Some(Event::new(session, request, State::Cancelled, None));
             }
-            _ => None,
+        };
+        if session == active.session && request > active.watermark {
+            active.watermark = request;
+            let deadline = now_ms().saturating_add(u64::from(lifetime_ms));
+            active.sender.send_replace(Some(Arc::new(Arm {
+                request,
+                direction,
+                proof: Mutex::new(Some(proof)),
+                deadline,
+            })));
         }
+        None
     }
 }
 
 impl Scope<'_> {
     pub(super) fn event(&self, request: u32, state: State) -> Event {
         Event::new(self.session, request, state, None)
+    }
+
+    pub(super) fn current(&self, request: u32) -> bool {
+        self.controller.0.lock().ok().is_some_and(|state| {
+            state.active.as_ref().is_some_and(|active| {
+                active.session == self.session && matches_arm(&active.sender.borrow(), request)
+            })
+        })
+    }
+
+    pub(super) fn retire(&self, request: u32) {
+        if let Ok(state) = self.controller.0.lock() {
+            if let Some(active) = state.active.as_ref().filter(|a| a.session == self.session) {
+                active.sender.send_if_modified(|arm| {
+                    if arm.as_ref().is_some_and(|arm| arm.request == request) {
+                        *arm = None;
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+        }
     }
 
     /// Called only after the normal v5 receive grant. The supervisor can
@@ -131,6 +170,9 @@ impl Scope<'_> {
         lease: u64,
         granted: bool,
     ) -> Option<Event> {
+        let Route::Target(route) = route else {
+            return None;
+        };
         let mut state = self.controller.0.lock().ok()?;
         let active = state.active.as_mut()?;
         let current =
@@ -174,10 +216,40 @@ fn matches_arm(arm: &Option<Arc<Arm>>, request: u32) -> bool {
         .is_some_and(|arm| arm.request == request && now_ms() < arm.deadline)
 }
 
-pub(super) struct Route {
+pub(super) enum Route {
+    Target(Target),
+    Source(Source),
+}
+
+pub(super) struct Target {
     request: u32,
     slot: Arc<file_drop_link::WorkerSlot>,
     task: JoinHandle<()>,
+}
+
+pub(super) struct Source {
+    pub request: u32,
+    pub hold: HeldPrimary,
+    target: SocketAddr,
+    receipt: file_drop_link::SentReceipt,
+}
+
+impl Source {
+    pub(super) async fn reserve(
+        self,
+        config: Config<'_>,
+        input: &Connection,
+        lease: u64,
+    ) -> Result<bool> {
+        let bind = if self.target.is_ipv4() {
+            SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
+        } else {
+            SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
+        };
+        let endpoint = layout_reservation::endpoint(bind, config.identity, config.pin)?;
+        let sidecar = endpoint.connect(self.target, "peerglide.local")?.await?;
+        file_drop_link::reserve(&sidecar, input, config.pin, self.receipt, lease).await
+    }
 }
 
 impl Route {
@@ -186,44 +258,86 @@ impl Route {
         mailbox: &mut Mailbox,
         config: Config<'_>,
         input: &Connection,
+        gate: Option<&CaptureGate>,
+        allow_receive: bool,
     ) -> (Option<Self>, Option<Event>) {
         let Some(arm) = mailbox.borrow_and_update().clone() else {
             return (None, None);
         };
-        let result = Self::bind(&arm, mailbox.clone(), config, input);
+        let result = Self::arm(scope, &arm, mailbox.clone(), config, input, gate, allow_receive);
         if !matches_arm(&mailbox.borrow(), arm.request) {
             return (None, None);
         }
         match result {
-            Ok((route, port)) => (
-                Some(route),
-                Some(Event::armed(scope.session, arm.request, port)),
-            ),
-            Err(_) => (None, Some(scope.event(arm.request, State::Rejected))),
+            Ok((route, event)) => (Some(route), Some(event)),
+            Err(_) => {
+                scope.retire(arm.request);
+                (None, Some(scope.event(arm.request, State::Rejected)))
+            }
         }
     }
 
-    fn bind(
+    fn arm(
+        scope: &Scope<'_>,
         arm: &Arm,
         mailbox: Mailbox,
         config: Config<'_>,
         input: &Connection,
-    ) -> Result<(Self, u16)> {
+        gate: Option<&CaptureGate>,
+        allow_receive: bool,
+    ) -> Result<(Self, Event)> {
         let proof = arm
             .proof
             .lock()
             .ok()
             .and_then(|mut proof| proof.take())
             .context("file reservation proof unavailable")?;
+        match arm.direction {
+            Direction::Receive(bind) => {
+                ensure!(allow_receive, "file receive control is disabled");
+                let (route, port) = Target::bind(arm, bind, &proof, mailbox, config, input)?;
+                Ok((
+                    Self::Target(route),
+                    Event::armed(scope.session, arm.request, port),
+                ))
+            }
+            Direction::Send(target) => {
+                ensure!(
+                    target.port() != 0
+                        && target.ip().to_canonical() == input.remote_address().ip().to_canonical(),
+                    "file reservation target is outside the current peer"
+                );
+                let hold = gate
+                    .and_then(CaptureGate::held_primary)
+                    .context("no eligible local primary hold")?;
+                let receipt = file_drop_link::SentReceipt::from_local_worker(&proof, config.pin)?;
+                Ok((
+                    Self::Source(Source { request: arm.request, hold, target, receipt }),
+                    scope.event(arm.request, State::SourceArmed),
+                ))
+            }
+        }
+    }
+}
+
+impl Target {
+    fn bind(
+        arm: &Arm,
+        bind: SocketAddr,
+        proof: &str,
+        mailbox: Mailbox,
+        config: Config<'_>,
+        input: &Connection,
+    ) -> Result<(Self, u16)> {
         ensure!(
-            !arm.bind.ip().is_multicast(),
+            !bind.ip().is_multicast(),
             "invalid file reservation bind address"
         );
         let remaining = u32::try_from(arm.deadline.saturating_sub(now_ms()))?;
         let slot = Arc::new(file_drop_link::WorkerSlot::from_local_arm(
-            &proof, remaining, config.pin,
+            proof, remaining, config.pin,
         )?);
-        let listener = layout_reservation::endpoint(arm.bind, config.identity, config.pin)?;
+        let listener = layout_reservation::endpoint(bind, config.identity, config.pin)?;
         let port = listener.local_addr()?.port();
         let task = tokio::spawn(serve(
             listener,
@@ -245,7 +359,7 @@ impl Route {
     }
 }
 
-impl Drop for Route {
+impl Drop for Target {
     fn drop(&mut self) {
         self.task.abort();
         let _ = self.slot.clear();

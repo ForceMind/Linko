@@ -113,6 +113,23 @@ impl Receipt {
 /// gives up this handle on one reservation attempt, including on failure.
 pub struct SentReceipt(pub(crate) Receipt);
 
+impl SentReceipt {
+    /// Move the short-lived receipt through the supervisor's inherited stdin.
+    pub fn into_local_worker(self) -> String {
+        self.0.worker_token()
+    }
+
+    /// Read a receipt from the trusted local supervisor for this exact peer.
+    pub fn from_local_worker(proof: &str, pin: &[u8]) -> Result<Self> {
+        let receipt = Receipt::from_worker_token(proof)?;
+        ensure!(
+            receipt.peer == blake3::hash(pin),
+            "local file reservation peer differs"
+        );
+        Ok(Self(receipt))
+    }
+}
+
 pub(crate) struct ReceivedReceipt {
     pub(crate) binding: Receipt,
     pub(crate) connection: [u8; 32],

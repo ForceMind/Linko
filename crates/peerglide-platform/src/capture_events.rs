@@ -1,5 +1,5 @@
 //! Bounded native capture handoff. Only the native loop wakes the async consumer.
-use super::{gesture_queue, CaptureEpoch, CaptureRoute, Captured};
+use super::{gesture_queue, CaptureEpoch, CaptureRoute, Captured, HeldPrimary};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -28,17 +28,26 @@ pub struct CaptureEvents {
 #[derive(Default)]
 struct LatestPosition {
     revision: AtomicU64,
-    words: [AtomicU64; 6],
+    words: [AtomicU64; 7],
 }
 
 impl LatestPosition {
     #[cfg(any(windows, target_os = "macos", test))]
-    fn store(&self, epoch: CaptureEpoch, x: f64, y: f64, width: f64, height: f64) {
+    fn store(
+        &self,
+        epoch: CaptureEpoch,
+        primary: Option<HeldPrimary>,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    ) {
         let odd = self.revision.load(Ordering::SeqCst).wrapping_add(1);
         self.revision.store(odd, Ordering::SeqCst);
         let words = [
             epoch.instance,
             epoch.generation,
+            primary.map_or(0, |hold| hold.stamp),
             x.to_bits(),
             y.to_bits(),
             width.to_bits(),
@@ -55,7 +64,7 @@ impl LatestPosition {
         if revision == 0 || revision == *seen || revision & 1 != 0 {
             return None;
         }
-        let [instance, generation, x, y, width, height] = self
+        let [instance, generation, stamp, x, y, width, height] = self
             .words
             .each_ref()
             .map(|word| word.load(Ordering::SeqCst));
@@ -63,15 +72,14 @@ impl LatestPosition {
             return None;
         }
         *seen = revision;
+        let epoch = CaptureEpoch { instance, generation };
         Some(Captured::Position {
             x: f64::from_bits(x),
             y: f64::from_bits(y),
             width: f64::from_bits(width),
             height: f64::from_bits(height),
-            route: CaptureRoute::Local(CaptureEpoch {
-                instance,
-                generation,
-            }),
+            route: CaptureRoute::Local(epoch),
+            primary: (stamp != 0).then_some(HeldPrimary { epoch, stamp }),
         })
     }
 }
@@ -113,12 +121,13 @@ impl CaptureEventSender {
             width,
             height,
             route: CaptureRoute::Local(epoch),
+            primary,
         } = event
         {
             if !queue.is_consumer_alive() {
                 return Err(event);
             }
-            self.position.store(epoch, x, y, width, height);
+            self.position.store(epoch, primary, x, y, width, height);
         } else {
             queue.try_push(event)?;
         }
@@ -215,6 +224,7 @@ mod tests {
                 instance: 1,
                 generation: 2,
             }),
+            primary: None,
         }
     }
 

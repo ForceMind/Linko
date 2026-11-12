@@ -1095,7 +1095,7 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
             let requested = managed_stop_reader(
                 stop.clone(),
                 Some(o.layout.clone()),
-                (o.native && o.allow_control && !probe).then(|| o.file_drop.clone()),
+                (o.native && !probe).then(|| o.file_drop.clone()),
             );
             tokio::select! {
                 result = &mut work => result,
@@ -1362,7 +1362,7 @@ async fn run_inner(
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
-            file_drop: (o.managed && o.native && o.allow_control).then_some(
+            file_drop: (o.managed && o.native).then_some(
                 file_drop_control::Config {
                     controller: &o.file_drop,
                     identity: id,

@@ -569,6 +569,7 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                         width: b.size.width,
                         height: b.size.height,
                         route,
+                        primary: s.gate.primary_for_position(route),
                     }
                 };
                 return s.movement(captured, route);
