@@ -150,10 +150,11 @@ mod tests {
             focused,
             ..egui::RawInput::default()
         };
-        let _ = ctx.run_ui(frame(false), |ui| {
+        let mut unfocused = ctx.run_ui(frame(false), |ui| {
             assert_eq!(offer.poll(&app, ui.ctx()), Some(CANCELLED));
         });
-        let _ = ctx.run_ui(frame(true), |ui| {
+        unfocused.textures_delta.clear();
+        let mut focused = ctx.run_ui(frame(true), |ui| {
             let ctx = ui.ctx();
             assert_eq!(offer.poll(&app, ctx), None);
             app.window_hidden = true;
@@ -167,6 +168,7 @@ mod tests {
             app.config.fingerprint = None;
             assert_eq!(offer.poll(&app, ctx), Some(CANCELLED));
         });
+        focused.textures_delta.clear();
         drop(app);
         fixture.close()
     }
