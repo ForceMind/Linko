@@ -874,10 +874,16 @@ fn submit_pointer(
         .map(|_| windows::diagnostic_cursor_position());
     let started = std::time::Instant::now();
     let result = if let Some(destination) = gate.0.receive_display.get() {
-        destination.layout.place(destination.target, point)
+        destination
+            .layout
+            .place(destination.target, point)
             .ok_or(peerglide_actions::execution::NativeFailure::BeforeSubmission)
             .and_then(|placement| {
-                native::receive_on_display(destination.target.display(), destination.target.desktop(), placement)
+                native::receive_on_display(
+                    destination.target.display(),
+                    destination.target.desktop(),
+                    placement,
+                )
             })
     } else {
         native::receive_pointer(point.x, point.y)

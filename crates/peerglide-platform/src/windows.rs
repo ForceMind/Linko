@@ -751,7 +751,10 @@ pub(super) fn receive_on_display(
     if actual != expected.bounds || current_desktop != desktop {
         return Err(NativeFailure::TargetLost);
     }
-    let mut input = mouse_packet(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, 0);
+    let mut input = mouse_packet(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        0,
+    );
     input.Anonymous.mi.dx = placement.virtual_absolute[0];
     input.Anonymous.mi.dy = placement.virtual_absolute[1];
     submit_inputs(&[input])

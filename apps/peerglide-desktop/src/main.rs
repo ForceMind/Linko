@@ -241,7 +241,10 @@ struct Options {
 }
 fn parse_display_origin(text: &str) -> std::result::Result<(f64, f64), &'static str> {
     let parse = |value: &str| {
-        value.parse::<f64>().ok().filter(|number| number.is_finite())
+        value
+            .parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite())
             .ok_or("display origin must be two finite numbers: X,Y")
     };
     let (x, y) = text.split_once(',').ok_or("display origin must be X,Y")?;
@@ -881,7 +884,14 @@ mod context_cli_tests {
 
     #[test]
     fn alternate_receive_display_requires_native_and_local_consent() {
-        let without_consent = ["peerglide", "listen", "--peer-cert", "peer.der", "--native", "--receive-display=-1920,0"];
+        let without_consent = [
+            "peerglide",
+            "listen",
+            "--peer-cert",
+            "peer.der",
+            "--native",
+            "--receive-display=-1920,0",
+        ];
         assert!(Cli::try_parse_from(without_consent).is_err());
         let enabled = without_consent.into_iter().chain(["--allow-control"]);
         let Command::Listen(options) = Cli::try_parse_from(enabled).unwrap().command else {

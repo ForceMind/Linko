@@ -718,10 +718,15 @@ pub(super) fn receive_on_display(
     if actual != expected.bounds || rotation.rem_euclid(360.0) != angle {
         return Err(NativeFailure::TargetLost);
     }
-    receive_global_pointer(Point { x: placement.desktop_x, y: placement.desktop_y })
+    receive_global_pointer(Point {
+        x: placement.desktop_x,
+        y: placement.desktop_y,
+    })
 }
 
-fn receive_global_pointer(point: Point) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+fn receive_global_pointer(
+    point: Point,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
     use peerglide_actions::execution::NativeFailure;
     unsafe {
         let buttons = BUTTONS.load(Ordering::Acquire);
@@ -734,12 +739,7 @@ fn receive_global_pointer(point: Point) -> std::result::Result<(), peerglide_act
         } else {
             (5, 0)
         };
-        let event = OwnedEvent::created(CGEventCreateMouseEvent(
-            null_mut(),
-            kind,
-            point,
-            button,
-        ))?;
+        let event = OwnedEvent::created(CGEventCreateMouseEvent(null_mut(), kind, point, button))?;
         let modifiers = MODIFIERS
             .lock()
             .map_err(|_| NativeFailure::BeforeSubmission)?;

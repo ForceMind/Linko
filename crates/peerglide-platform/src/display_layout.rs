@@ -188,9 +188,10 @@ impl Layout {
     /// or persisting a native monitor handle. Mirrored origins are ambiguous.
     #[cfg(any(windows, target_os = "macos", test))]
     pub(crate) fn placement_at_origin(&self, x: f64, y: f64) -> Option<PlacementTarget> {
-        let mut displays = self.displays.iter().filter(|display| {
-            display.bounds.left == x && display.bounds.top == y
-        });
+        let mut displays = self
+            .displays
+            .iter()
+            .filter(|display| display.bounds.left == x && display.bounds.top == y);
         let first = displays.next()?;
         if displays.next().is_some() {
             return None;
@@ -360,7 +361,9 @@ mod tests {
         let mut layout = Layout::new(primary.id, vec![primary, left]).unwrap();
         assert!(layout.placement_at_origin(-1080.0, 0.0).is_some());
         assert!(layout.placement_at_origin(10.0, 10.0).is_none());
-        layout.replace(primary.id, vec![primary, left, mirror]).unwrap();
+        layout
+            .replace(primary.id, vec![primary, left, mirror])
+            .unwrap();
         assert!(layout.placement_at_origin(-1080.0, 0.0).is_none());
     }
 
