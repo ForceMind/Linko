@@ -141,9 +141,10 @@ impl Capture {
             // SAFETY: each returned event gives this caller one reference.
             let Some(event) = NonNull::new(unsafe { (self.api.ei_get_event)(ptr) }) else {
                 batch.ready = self.seat_seen;
-                batch.pointer_started = self.devices.iter().any(|device| {
-                    device.pointer && device.matches(expected)
-                });
+                batch.pointer_started = self
+                    .devices
+                    .iter()
+                    .any(|device| device.pointer && device.matches(expected));
                 batch.discrete |= self.devices.iter().any(|device| {
                     device.matches(expected) && device.pending.iter().any(Sample::discrete)
                 });
@@ -155,6 +156,12 @@ impl Capture {
             result?;
         }
         anyhow::bail!("the compositor exceeded the capture event bound");
+    }
+
+    pub fn discard_prelease_motion(&mut self) {
+        for device in &mut self.devices {
+            device.pending.retain(Sample::discrete);
+        }
     }
 
     fn handle(
@@ -206,26 +213,42 @@ impl Capture {
             }
             ffi::START_EMULATING => {
                 let ptr = self.event_device(event)?;
-                let device = self.devices.iter_mut().find(|known| known.ptr == ptr)
+                let device = self
+                    .devices
+                    .iter_mut()
+                    .find(|known| known.ptr == ptr)
                     .context("emulation started on an unknown capture device")?;
-                ensure!(device.sequence.is_none(), "capture activation changed unexpectedly");
+                ensure!(
+                    device.sequence.is_none(),
+                    "capture activation changed unexpectedly"
+                );
                 // SAFETY: sequence is defined on StartEmulating events.
-                device.sequence = Some(unsafe { (self.api.ei_event_emulating_get_sequence)(event) });
+                device.sequence =
+                    Some(unsafe { (self.api.ei_event_emulating_get_sequence)(event) });
                 Ok(())
             }
             ffi::FRAME => {
                 let ptr = self.event_device(event)?;
-                let device = self.devices.iter_mut().find(|known| known.ptr == ptr)
+                let device = self
+                    .devices
+                    .iter_mut()
+                    .find(|known| known.ptr == ptr)
                     .context("frame arrived from an unknown capture device")?;
                 device.frame(expected, batch)
             }
             ffi::POINTER_MOTION | ffi::BUTTON_BUTTON | ffi::SCROLL_DISCRETE | ffi::KEYBOARD_KEY => {
                 let ptr = self.event_device(event)?;
                 let sample = self.sample(event, kind)?;
-                let device = self.devices.iter_mut().find(|known| known.ptr == ptr)
+                let device = self
+                    .devices
+                    .iter_mut()
+                    .find(|known| known.ptr == ptr)
                     .context("input arrived from an unknown capture device")?;
                 if device.matches(expected) {
-                    ensure!(device.pending.len() < MAX_FRAME, "capture frame is too large");
+                    ensure!(
+                        device.pending.len() < MAX_FRAME,
+                        "capture frame is too large"
+                    );
                     device.pending.push(sample);
                 }
                 Ok(())
@@ -235,7 +258,10 @@ impl Capture {
     }
 
     fn bind(&mut self, event: *mut Event) -> Result<()> {
-        ensure!(!self.seat_seen, "the compositor supplied more than one capture seat");
+        ensure!(
+            !self.seat_seen,
+            "the compositor supplied more than one capture seat"
+        );
         // SAFETY: seat is borrowed from its add event.
         let seat = NonNull::new(unsafe { (self.api.ei_event_get_seat)(event) })
             .context("the compositor did not provide a capture seat")?;
@@ -257,7 +283,12 @@ impl Capture {
         // SAFETY: pass only selected ABI enum values with a terminating zero.
         unsafe {
             (self.api.ei_seat_bind_capabilities)(
-                seat.as_ptr(), caps[0], caps[1], caps[2], caps[3], null::<c_void>(),
+                seat.as_ptr(),
+                caps[0],
+                caps[1],
+                caps[2],
+                caps[3],
+                null::<c_void>(),
             );
         }
         self.seat_seen = true;
@@ -277,7 +308,10 @@ impl Capture {
                 ffi::POINTER_MOTION => {
                     let dx = (self.api.ei_event_pointer_get_dx)(event);
                     let dy = (self.api.ei_event_pointer_get_dy)(event);
-                    ensure!(dx.is_finite() && dy.is_finite(), "invalid captured pointer motion");
+                    ensure!(
+                        dx.is_finite() && dy.is_finite(),
+                        "invalid captured pointer motion"
+                    );
                     Ok(Sample::Motion(dx, dy))
                 }
                 ffi::BUTTON_BUTTON => {
@@ -285,7 +319,12 @@ impl Capture {
                     let down = (self.api.ei_event_button_get_is_press)(event);
                     Ok(BUTTONS.iter().position(|&code| code == button).map_or(
                         Sample::Unsupported,
-                        |index| Sample::Input(Input::Button { button: index as u8 + 1, down }),
+                        |index| {
+                            Sample::Input(Input::Button {
+                                button: index as u8 + 1,
+                                down,
+                            })
+                        },
                     ))
                 }
                 ffi::SCROLL_DISCRETE => Ok(Sample::Wheel(
@@ -295,10 +334,11 @@ impl Capture {
                 ffi::KEYBOARD_KEY => {
                     let code = (self.api.ei_event_keyboard_get_key)(event);
                     let down = (self.api.ei_event_keyboard_get_key_is_press)(event);
-                    Ok(keyboard::usage_from_evdev(code).map_or(
-                        Sample::Unsupported,
-                        |usage| Sample::Input(Input::Key { usage, down }),
-                    ))
+                    Ok(
+                        keyboard::usage_from_evdev(code).map_or(Sample::Unsupported, |usage| {
+                            Sample::Input(Input::Key { usage, down })
+                        }),
+                    )
                 }
                 _ => Ok(Sample::Unsupported),
             }
@@ -323,13 +363,22 @@ mod tests {
             ptr: NonNull::dangling(),
             pointer: true,
             sequence: Some(14),
-            pending: vec![Sample::Motion(1.0, 2.0), Sample::Input(Input::Key { usage: 4, down: true })],
+            pending: vec![
+                Sample::Motion(1.0, 2.0),
+                Sample::Input(Input::Key {
+                    usage: 4,
+                    down: true,
+                }),
+            ],
         };
         let mut batch = Batch::default();
         device.frame(Some(15), &mut batch)?;
         assert!(batch.samples.is_empty() && !batch.discrete);
         device.sequence = Some(15);
-        device.pending.push(Sample::Input(Input::Key { usage: 4, down: true }));
+        device.pending.push(Sample::Input(Input::Key {
+            usage: 4,
+            down: true,
+        }));
         device.frame(Some(15), &mut batch)?;
         assert!(batch.discrete);
         assert_eq!(batch.samples.len(), 1);

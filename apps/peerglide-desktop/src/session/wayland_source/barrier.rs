@@ -12,12 +12,17 @@ pub(super) struct Zone {
 
 impl Zone {
     pub(super) fn new(x: i32, y: i32, width: u32, height: u32) -> Result<Self> {
-        ensure!(width != 0 && height != 0, "invalid Wayland capture zone size");
+        ensure!(
+            width != 0 && height != 0,
+            "invalid Wayland capture zone size"
+        );
         Ok(Self {
             origin: (x, y),
             end: (
-                x.checked_add(i32::try_from(width)?).context("invalid Wayland zone x extent")?,
-                y.checked_add(i32::try_from(height)?).context("invalid Wayland zone y extent")?,
+                x.checked_add(i32::try_from(width)?)
+                    .context("invalid Wayland zone x extent")?,
+                y.checked_add(i32::try_from(height)?)
+                    .context("invalid Wayland zone y extent")?,
             ),
         })
     }
@@ -66,12 +71,16 @@ impl Segment {
     }
 
     pub(super) fn fraction(self, cursor: (f64, f64)) -> Result<f64> {
-        ensure!(cursor.0.is_finite() && cursor.1.is_finite(), "invalid Wayland activation cursor");
+        ensure!(
+            cursor.0.is_finite() && cursor.1.is_finite(),
+            "invalid Wayland activation cursor"
+        );
         let (_, (start, end)) = self.zone.boundary(self.edge);
         let along = match self.edge {
             Edge::Left | Edge::Right => cursor.1,
             Edge::Top | Edge::Bottom => cursor.0,
-        }.clamp(f64::from(self.span.0), f64::from(self.span.1 - 1));
+        }
+        .clamp(f64::from(self.span.0), f64::from(self.span.1 - 1));
         Ok((along - f64::from(start)) / (f64::from(end - 1) - f64::from(start)).max(1.0))
     }
 
@@ -97,7 +106,10 @@ pub(super) fn exposed(
     edge: Edge,
     origin: Option<(i32, i32)>,
 ) -> Result<Vec<Segment>> {
-    ensure!(!zones.is_empty() && zones.len() <= MAX_ZONES, "invalid number of Wayland capture zones");
+    ensure!(
+        !zones.is_empty() && zones.len() <= MAX_ZONES,
+        "invalid number of Wayland capture zones"
+    );
     let mut segments = Vec::new();
     for (index, zone) in zones.iter().copied().enumerate() {
         ensure!(
@@ -122,7 +134,10 @@ pub(super) fn exposed(
         let mut cursor = start;
         for (low, high) in blockers.into_iter().chain(std::iter::once((end, end))) {
             if cursor < low {
-                ensure!(segments.len() < MAX_BARRIERS, "too many exposed Wayland barriers");
+                ensure!(
+                    segments.len() < MAX_BARRIERS,
+                    "too many exposed Wayland barriers"
+                );
                 segments.push(Segment {
                     id: (segments.len() + 1) as u32,
                     zone,
@@ -134,7 +149,10 @@ pub(super) fn exposed(
             cursor = cursor.max(high);
         }
     }
-    ensure!(!segments.is_empty(), "the requested Wayland edge has no exposed barrier");
+    ensure!(
+        !segments.is_empty(),
+        "the requested Wayland edge has no exposed barrier"
+    );
     Ok(segments)
 }
 

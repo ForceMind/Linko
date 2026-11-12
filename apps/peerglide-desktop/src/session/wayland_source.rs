@@ -21,13 +21,7 @@ use peerglide_platform::{
     wayland_input::capture::{Batch, Capture, CaptureOptions, Sample},
 };
 use peerglide_protocol::{encode, Edge, Input, InputCapabilities, Message, Motion};
-use std::{
-    collections::BTreeSet,
-    net::SocketAddr,
-    path::Path,
-    pin::Pin,
-    time::Duration,
-};
+use std::{collections::BTreeSet, net::SocketAddr, path::Path, pin::Pin, time::Duration};
 
 const POLL: Duration = Duration::from_millis(5);
 const PORTAL_WAIT: Duration = Duration::from_secs(60);
@@ -59,10 +53,13 @@ impl Activation {
         segments: &[Segment],
     ) -> Result<Self> {
         let id = id.context("the portal did not identify the capture activation")?;
-        let segment = segments.iter().copied()
+        let segment = segments
+            .iter()
+            .copied()
             .find(|segment| Some(segment.id) == barrier)
             .context("the portal activated an unknown or ambiguous barrier")?;
-        let along = segment.fraction(position.context("the portal omitted the activation cursor")?)?;
+        let along =
+            segment.fraction(position.context("the portal omitted the activation cursor")?)?;
         Ok(Self { id, segment, along })
     }
 }
@@ -82,40 +79,65 @@ enum Signal {
 
 type Signals<'a> = stream::SelectAll<Pin<Box<dyn Stream<Item = Signal> + 'a>>>;
 
-fn terminate<'a>(stream: impl Stream<Item = Signal> + 'a) -> Pin<Box<dyn Stream<Item = Signal> + 'a>> {
-    stream.chain(stream::once(future::ready(Signal::StreamEnded))).boxed_local()
+fn terminate<'a>(
+    stream: impl Stream<Item = Signal> + 'a,
+) -> Pin<Box<dyn Stream<Item = Signal> + 'a>> {
+    stream
+        .chain(stream::once(future::ready(Signal::StreamEnded)))
+        .boxed_local()
 }
 
-async fn subscribe<'a>(portal: &'a InputCapture, session: &'a Session<InputCapture>) -> Result<Signals<'a>> {
+async fn subscribe<'a>(
+    portal: &'a InputCapture,
+    session: &'a Session<InputCapture>,
+) -> Result<Signals<'a>> {
     let handle = serde_json::to_value(session)?;
-    let handle = handle.as_str().context("the portal did not identify its session")?.to_owned();
+    let handle = handle
+        .as_str()
+        .context("the portal did not identify its session")?
+        .to_owned();
     let matches = move |session: &str| session == handle;
     let activated = portal.receive_activated().await?.filter_map({
         let matches = matches.clone();
         move |event| {
-            future::ready(matches(event.session_handle().as_str()).then(|| Signal::Activated {
-                id: event.activation_id(),
-                barrier: event.barrier_id().and_then(|barrier| match barrier {
-                    ActivatedBarrier::Barrier(id) => Some(id.get()),
-                    ActivatedBarrier::UnknownBarrier => None,
-                }),
-                position: event.cursor_position().map(|(x, y)| (f64::from(x), f64::from(y))),
+            future::ready(matches(event.session_handle().as_str()).then(|| {
+                Signal::Activated {
+                    id: event.activation_id(),
+                    barrier: event.barrier_id().and_then(|barrier| match barrier {
+                        ActivatedBarrier::Barrier(id) => Some(id.get()),
+                        ActivatedBarrier::UnknownBarrier => None,
+                    }),
+                    position: event
+                        .cursor_position()
+                        .map(|(x, y)| (f64::from(x), f64::from(y))),
+                }
             }))
         }
     });
     let deactivated = portal.receive_deactivated().await?.filter_map({
         let matches = matches.clone();
-        move |event| future::ready(matches(event.session_handle().as_str()).then(|| {
-            Signal::Deactivated(event.activation_id())
-        }))
+        move |event| {
+            future::ready(
+                matches(event.session_handle().as_str())
+                    .then(|| Signal::Deactivated(event.activation_id())),
+            )
+        }
     });
     let disabled = portal.receive_disabled().await?.filter_map({
         let matches = matches.clone();
-        move |event| future::ready(matches(event.session_handle().as_str()).then_some(Signal::Disabled))
+        move |event| {
+            future::ready(matches(event.session_handle().as_str()).then_some(Signal::Disabled))
+        }
     });
-    let changed = portal.receive_zones_changed().await?.filter_map(move |event| {
-        future::ready(matches(event.session_handle().as_str()).then(|| Signal::ZonesChanged(event.zone_set())))
-    });
+    let changed = portal
+        .receive_zones_changed()
+        .await?
+        .filter_map(move |event| {
+            future::ready(
+                matches(event.session_handle().as_str())
+                    .then(|| Signal::ZonesChanged(event.zone_set())),
+            )
+        });
     let closed = session.receive_closed().await?.map(|_| Signal::Closed);
     Ok(stream::select_all([
         terminate(activated),
@@ -155,13 +177,23 @@ pub(crate) async fn run(
     allowed: bool,
     options: CaptureOptions,
 ) -> Result<()> {
-    ensure!(allowed, "Wayland pointer capture requires explicit local consent");
+    ensure!(
+        allowed,
+        "Wayland pointer capture requires explicit local consent"
+    );
     let identity = transport::Identity::load(identity)?;
     let certificate = transport::read_certificate(certificate)?;
-    ensure!(certificate != identity.certificate, "the Wayland source cannot control itself");
+    ensure!(
+        certificate != identity.certificate,
+        "the Wayland source cannot control itself"
+    );
     let source = Source {
         identity,
-        peer: Peer { address, certificate, secondary_layout: None },
+        peer: Peer {
+            address,
+            certificate,
+            secondary_layout: None,
+        },
         edge,
         zone,
         options,
@@ -177,7 +209,11 @@ pub(crate) async fn run(
         portal = tokio::time::timeout(PORTAL_WAIT, InputCapture::new()) => portal??,
     };
     let requested = Capabilities::POINTER
-        | if options.keyboard { Capabilities::KEYBOARD } else { Capabilities::empty() };
+        | if options.keyboard {
+            Capabilities::KEYBOARD
+        } else {
+            Capabilities::empty()
+        };
     let (session, started) = tokio::select! {
         biased;
         result = &mut stop => return result.map_err(Into::into),
@@ -212,7 +248,11 @@ pub(crate) async fn run(
     result
 }
 
-async fn restore(portal: &InputCapture, session: &Session<InputCapture>, route: &Route) -> Result<()> {
+async fn restore(
+    portal: &InputCapture,
+    session: &Session<InputCapture>,
+    route: &Route,
+) -> Result<()> {
     if route.closed {
         return Ok(());
     }
@@ -220,23 +260,24 @@ async fn restore(portal: &InputCapture, session: &Session<InputCapture>, route: 
         if let Some(id) = route.activation_id {
             let mut options = ReleaseOptions::default().set_activation_id(id);
             if let Some(activation) = route.activation {
-                let along = route.cursor.map_or(activation.along, |cursor| {
-                    match activation.segment.edge {
-                        Edge::Left | Edge::Right => cursor.y,
-                        Edge::Top | Edge::Bottom => cursor.x,
-                    }
-                });
+                let along =
+                    route
+                        .cursor
+                        .map_or(activation.along, |cursor| match activation.segment.edge {
+                            Edge::Left | Edge::Right => cursor.y,
+                            Edge::Top | Edge::Bottom => cursor.x,
+                        });
                 options = options.set_cursor_position(activation.segment.restore(along));
             }
             let _ = tokio::time::timeout(RELEASE_WAIT, portal.release(session, options)).await;
         }
-        let _ = tokio::time::timeout(
-            RELEASE_WAIT,
-            portal.disable(session, Default::default()),
-        )
-        .await;
+        let _ =
+            tokio::time::timeout(RELEASE_WAIT, portal.disable(session, Default::default())).await;
     }
-    session.close().await.context("Wayland capture session did not close")
+    session
+        .close()
+        .await
+        .context("Wayland capture session did not close")
 }
 
 async fn run_session(
@@ -248,55 +289,106 @@ async fn run_session(
     route: &mut Route,
 ) -> Result<()> {
     let requested = Capabilities::POINTER
-        | if source.options.keyboard { Capabilities::KEYBOARD } else { Capabilities::empty() };
+        | if source.options.keyboard {
+            Capabilities::KEYBOARD
+        } else {
+            Capabilities::empty()
+        };
     let granted = if let Some(granted) = started {
         granted
     } else {
-        tokio::time::timeout(PORTAL_WAIT, portal.start(
-            session, None, StartOptions::default().set_capabilities(requested),
-        )).await.context("Wayland capture approval timed out")??
-            .response()?.capabilities()
+        tokio::time::timeout(
+            PORTAL_WAIT,
+            portal.start(
+                session,
+                None,
+                StartOptions::default().set_capabilities(requested),
+            ),
+        )
+        .await
+        .context("Wayland capture approval timed out")??
+        .response()?
+        .capabilities()
     };
-    ensure!(granted.contains(requested), "the compositor did not grant the requested capture devices");
+    ensure!(
+        granted.contains(requested),
+        "the compositor did not grant the requested capture devices"
+    );
 
     let mut signals = tokio::time::timeout(CAPTURE_WAIT, subscribe(portal, session)).await??;
     let (zone_set, segments, fd) = tokio::time::timeout(CAPTURE_WAIT, async {
-        let zones = portal.zones(session, Default::default()).await?.response()?;
-        let bounds = zones.regions().iter().map(|region| {
-            Zone::new(region.x_offset(), region.y_offset(), region.width(), region.height())
-        }).collect::<Result<Vec<_>>>()?;
+        let zones = portal
+            .zones(session, Default::default())
+            .await?
+            .response()?;
+        let bounds = zones
+            .regions()
+            .iter()
+            .map(|region| {
+                Zone::new(
+                    region.x_offset(),
+                    region.y_offset(),
+                    region.width(),
+                    region.height(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         let segments = barrier::exposed(&bounds, source.edge, source.zone)?;
-        let barriers = segments.iter().map(|segment| {
-            let (x1, y1, x2, y2) = segment.position();
-            let id = BarrierID::new(segment.id).context("invalid Wayland barrier ID")?;
-            Ok(Barrier::new(id, BarrierPosition::new(x1, y1, x2, y2)))
-        }).collect::<Result<Vec<_>>>()?;
-        let selected = portal.set_pointer_barriers(session, &barriers, zones.zone_set(), Default::default())
-            .await?.response()?;
-        ensure!(selected.failed_barriers().is_empty(), "the compositor rejected a Wayland barrier");
+        let barriers = segments
+            .iter()
+            .map(|segment| {
+                let (x1, y1, x2, y2) = segment.position();
+                let id = BarrierID::new(segment.id).context("invalid Wayland barrier ID")?;
+                Ok(Barrier::new(id, BarrierPosition::new(x1, y1, x2, y2)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let selected = portal
+            .set_pointer_barriers(session, &barriers, zones.zone_set(), Default::default())
+            .await?
+            .response()?;
+        ensure!(
+            selected.failed_barriers().is_empty(),
+            "the compositor rejected a Wayland barrier"
+        );
         let fd = portal.connect_to_eis(session, Default::default()).await?;
         Ok::<_, anyhow::Error>((zones.zone_set(), segments, fd))
-    }).await.context("Wayland capture barriers or EIS setup timed out")??;
+    })
+    .await
+    .context("Wayland capture barriers or EIS setup timed out")??;
     capture.connect(fd)?;
     tokio::time::timeout(CAPTURE_WAIT, async {
         loop {
             let batch = capture.poll(None)?;
-            ensure!(!batch.pointer_started && !batch.discrete, "capture began before the portal was armed");
+            ensure!(
+                !batch.pointer_started && !batch.discrete,
+                "capture began before the portal was armed"
+            );
             if batch.ready {
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(POLL).await;
         }
-    }).await.context("Wayland capture devices did not initialize")??;
+    })
+    .await
+    .context("Wayland capture devices did not initialize")??;
 
-    let link = tokio::time::timeout(CONNECT_WAIT, Link::connect(&source.identity, &source.peer, source.offered.clone()))
-        .await.context("Wayland peer connection timed out")??;
-    ensure!(link.capabilities.motion(), "selected peer does not receive pointer motion");
+    let link = tokio::time::timeout(
+        CONNECT_WAIT,
+        Link::connect(&source.identity, &source.peer, source.offered.clone()),
+    )
+    .await
+    .context("Wayland peer connection timed out")??;
+    ensure!(
+        link.capabilities.motion(),
+        "selected peer does not receive pointer motion"
+    );
     route.link = Some(link);
     route.armed = true;
     tokio::time::timeout(CAPTURE_WAIT, portal.enable(session, Default::default())).await??;
     println!("Move the Wayland pointer across the selected exposed edge. Ctrl+C cancels.");
-    let Some(activation) = wait_activation(capture, &mut signals, route, &segments, zone_set).await? else {
+    let Some(activation) =
+        wait_activation(capture, &mut signals, route, &segments, zone_set).await?
+    else {
         return Ok(());
     };
     route.activation = Some(activation);
@@ -312,7 +404,10 @@ async fn wait_activation(
 ) -> Result<Option<Activation>> {
     let mut tick = tokio::time::interval(POLL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let link = route.link.as_mut().context("the Wayland peer is unavailable")?;
+    let link = route
+        .link
+        .as_mut()
+        .context("the Wayland peer is unavailable")?;
     loop {
         tokio::select! {
             biased;
@@ -357,7 +452,9 @@ fn cancelled(signal: Signal, route: &mut Route, zone_set: u32, expected: u32) ->
         }
         Signal::Disabled => Ok(true),
         Signal::Deactivated(id) => Ok(id.is_none_or(|id| id == expected)),
-        Signal::ZonesChanged(id) if zone_invalidated(zone_set, id) => anyhow::bail!("Wayland screen layout changed"),
+        Signal::ZonesChanged(id) if zone_invalidated(zone_set, id) => {
+            anyhow::bail!("Wayland screen layout changed")
+        }
         Signal::ZonesChanged(_) => Ok(false),
         Signal::Activated { .. } => anyhow::bail!("Wayland capture activation changed"),
         Signal::StreamEnded => anyhow::bail!("Wayland capture signal stream ended"),
@@ -366,7 +463,10 @@ fn cancelled(signal: Signal, route: &mut Route, zone_set: u32, expected: u32) ->
 
 async fn interruption(signals: &mut Signals<'_>, zone_set: u32, expected: u32) -> Result<Signal> {
     loop {
-        let signal = signals.next().await.context("Wayland capture signal stream ended")?;
+        let signal = signals
+            .next()
+            .await
+            .context("Wayland capture signal stream ended")?;
         match signal {
             Signal::Deactivated(Some(id)) if id != expected => continue,
             Signal::ZonesChanged(id) if !zone_invalidated(zone_set, id) => continue,
@@ -377,7 +477,11 @@ async fn interruption(signals: &mut Signals<'_>, zone_set: u32, expected: u32) -
 
 fn pending_batch(capture: &mut Capture, activation: Activation) -> Result<bool> {
     let batch = capture.poll(Some(activation.id))?;
-    ensure!(!batch.discrete, "release local keys and buttons before entering the remote screen");
+    ensure!(
+        !batch.discrete,
+        "release local keys and buttons before entering the remote screen"
+    );
+    capture.discard_prelease_motion();
     Ok(batch.pointer_started)
 }
 
@@ -411,7 +515,10 @@ async fn acquire_and_forward(
     }
 
     route.attempted = true;
-    let link = route.link.as_mut().context("the Wayland peer is unavailable")?;
+    let link = route
+        .link
+        .as_mut()
+        .context("the Wayland peer is unavailable")?;
     let request = Message::Acquire {
         lease: LEASE,
         edge: edges.wire_edge(),
@@ -429,7 +536,10 @@ async fn acquire_and_forward(
         return Ok(());
     }
     loop {
-        let link = route.link.as_mut().context("the Wayland peer is unavailable")?;
+        let link = route
+            .link
+            .as_mut()
+            .context("the Wayland peer is unavailable")?;
         tokio::select! {
             biased;
             signal = signals.next() => {
@@ -455,7 +565,10 @@ async fn acquire_and_forward(
             }
         }
     }
-    ensure!(pending_batch(capture, activation)?, "the matching Wayland activation ended");
+    ensure!(
+        pending_batch(capture, activation)?,
+        "the matching Wayland activation ended"
+    );
     println!("Wayland input lease active. Move back across the entry edge to return.");
     forward(capture, signals, route, source, zone_set, edges).await
 }
@@ -484,23 +597,37 @@ impl Forward {
             Input::Key { usage, down: true } => self.keys.insert(usage),
             Input::Key { usage, down: false } => self.keys.remove(&usage),
             Input::Button { button, down: true } => self.buttons.insert(button),
-            Input::Button { button, down: false } => self.buttons.remove(&button),
+            Input::Button {
+                button,
+                down: false,
+            } => self.buttons.remove(&button),
             Input::Scroll { x, y } => x != 0 || y != 0,
         }
     }
 
     fn emergency(&self, event: Input) -> bool {
-        matches!(event, Input::Key { usage: 0x29, down: true })
-            && [0xe0, 0xe4].iter().any(|usage| self.keys.contains(usage))
+        matches!(
+            event,
+            Input::Key {
+                usage: 0x29,
+                down: true
+            }
+        ) && [0xe0, 0xe4].iter().any(|usage| self.keys.contains(usage))
             && [0xe2, 0xe6].iter().any(|usage| self.keys.contains(usage))
     }
 
     fn scroll(&mut self, x: i32, y: i32) -> Input {
         self.wheel.0 = self.wheel.0.saturating_add(x);
         self.wheel.1 = self.wheel.1.saturating_sub(y);
-        let steps = ((self.wheel.0 / 120).clamp(-12, 12), (self.wheel.1 / 120).clamp(-12, 12));
+        let steps = (
+            (self.wheel.0 / 120).clamp(-12, 12),
+            (self.wheel.1 / 120).clamp(-12, 12),
+        );
         self.wheel = (self.wheel.0 % 120, self.wheel.1 % 120);
-        Input::Scroll { x: steps.0 as i16, y: steps.1 as i16 }
+        Input::Scroll {
+            x: steps.0 as i16,
+            y: steps.1 as i16,
+        }
     }
 
     fn returned(&self, edges: OutgoingEdges) -> bool {
@@ -524,7 +651,10 @@ async fn forward(
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        let link = route.link.as_mut().context("the Wayland peer is unavailable")?;
+        let link = route
+            .link
+            .as_mut()
+            .context("the Wayland peer is unavailable")?;
         tokio::select! {
             biased;
             signal = signals.next() => {
@@ -597,7 +727,10 @@ async fn submit_batch(
                 state.position.0 = (state.position.0 + dx).clamp(0.0, 1.0);
                 state.position.1 = (state.position.1 + dy).clamp(0.0, 1.0);
                 if state.returned(edges) {
-                    return Ok(ForwardStep::Returned(next_motion(&mut state.sequence, state.position)?));
+                    return Ok(ForwardStep::Returned(next_motion(
+                        &mut state.sequence,
+                        state.position,
+                    )?));
                 }
                 motion = true;
                 continue;
@@ -606,17 +739,28 @@ async fn submit_batch(
             Sample::Wheel(x, y) => state.scroll(x, y),
             Sample::Unsupported => return Ok(ForwardStep::Stop),
         };
-        if state.emergency(input) || !offered.supports(input) || !link.capabilities.supports(input) {
+        if state.emergency(input) || !offered.supports(input) || !link.capabilities.supports(input)
+        {
             return Ok(ForwardStep::Stop);
         }
         if state.transition(input) {
             let cursor = next_motion(&mut state.sequence, state.position)?;
-            if !link.send(&Message::Input { lease: LEASE, event: input, cursor }).await? {
+            if !link
+                .send(&Message::Input {
+                    lease: LEASE,
+                    event: input,
+                    cursor,
+                })
+                .await?
+            {
                 return Ok(ForwardStep::Stop);
             }
             motion = false;
             if state.returned(edges) {
-                return Ok(ForwardStep::Returned(next_motion(&mut state.sequence, state.position)?));
+                return Ok(ForwardStep::Returned(next_motion(
+                    &mut state.sequence,
+                    state.position,
+                )?));
             }
         }
     }
@@ -634,9 +778,17 @@ mod tests {
 
     #[test]
     fn capture_requires_a_known_barrier_and_explicit_local_permission() -> Result<()> {
-        let args = ["peerglide", "send-wayland", "127.0.0.1:24870", "--peer-cert", "peer.der"];
+        let args = [
+            "peerglide",
+            "send-wayland",
+            "127.0.0.1:24870",
+            "--peer-cert",
+            "peer.der",
+        ];
         assert!(crate::Cli::try_parse_from(args).is_err());
-        assert!(crate::Cli::try_parse_from(args.into_iter().chain(["--allow-pointer-capture"])).is_ok());
+        assert!(
+            crate::Cli::try_parse_from(args.into_iter().chain(["--allow-pointer-capture"])).is_ok()
+        );
         assert_eq!(parse_zone("-1920,20")?, (-1920, 20));
         let zones = [Zone::new(-100, 0, 100, 100)?];
         let segments = barrier::exposed(&zones, Edge::Left, None)?;
@@ -648,7 +800,12 @@ mod tests {
         assert!(!zone_invalidated(5, Some(4)));
         assert!(!zone_invalidated(0, Some(u32::MAX)));
         let mut route = Route::default();
-        assert!(!cancelled(Signal::Deactivated(Some(19)), &mut route, 5, 20)?);
+        assert!(!cancelled(
+            Signal::Deactivated(Some(19)),
+            &mut route,
+            5,
+            20
+        )?);
         assert!(cancelled(Signal::Deactivated(Some(20)), &mut route, 5, 20)?);
         Ok(())
     }
@@ -658,13 +815,31 @@ mod tests {
         let mut state = Forward::new((0.0, 0.5));
         let edges = OutgoingEdges::new(Edge::Right, None);
         assert!(state.returned(edges));
-        assert!(state.transition(Input::Key { usage: 0xe0, down: true }));
-        assert!(!state.transition(Input::Key { usage: 0xe0, down: true }));
-        assert!(state.transition(Input::Key { usage: 0xe2, down: true }));
+        assert!(state.transition(Input::Key {
+            usage: 0xe0,
+            down: true
+        }));
+        assert!(!state.transition(Input::Key {
+            usage: 0xe0,
+            down: true
+        }));
+        assert!(state.transition(Input::Key {
+            usage: 0xe2,
+            down: true
+        }));
         assert!(!state.returned(edges));
-        assert!(state.emergency(Input::Key { usage: 0x29, down: true }));
-        assert!(state.transition(Input::Key { usage: 0xe0, down: false }));
-        assert!(state.transition(Input::Key { usage: 0xe2, down: false }));
+        assert!(state.emergency(Input::Key {
+            usage: 0x29,
+            down: true
+        }));
+        assert!(state.transition(Input::Key {
+            usage: 0xe0,
+            down: false
+        }));
+        assert!(state.transition(Input::Key {
+            usage: 0xe2,
+            down: false
+        }));
         assert!(state.returned(edges));
         assert!(state.scroll(70, -60) == Input::Scroll { x: 0, y: 0 });
         assert!(state.scroll(70, -60) == Input::Scroll { x: 1, y: 1 });
@@ -680,7 +855,8 @@ mod tests {
             certificate: receiver.certificate,
             secondary_layout: None,
         };
-        let capabilities = InputCapabilities::new(&[0xe0], true, 0, false).map_err(anyhow::Error::msg)?;
+        let capabilities =
+            InputCapabilities::new(&[0xe0], true, 0, false).map_err(anyhow::Error::msg)?;
         let server = async {
             let connection = endpoint.accept().await.context("listener closed")?.await?;
             transport::verify_peer(&connection, &sender.certificate)?;
@@ -693,7 +869,11 @@ mod tests {
             transport::send(&mut tx, &Message::Granted { lease: LEASE }).await?;
             let mut sequence = 0;
             for down in [true, false] {
-                let Message::Input { lease, event, cursor } = transport::receive(&mut rx).await?
+                let Message::Input {
+                    lease,
+                    event,
+                    cursor,
+                } = transport::receive(&mut rx).await?
                 else {
                     anyhow::bail!("expected a reliable Wayland key event");
                 };
@@ -718,22 +898,44 @@ mod tests {
         };
         let client = async {
             let mut link = Link::connect(&sender, &peer, capabilities.clone()).await?;
-            assert!(link.send(&Message::Acquire {
-                lease: LEASE, edge: Edge::Right, along: 0.5,
-            }).await?);
-            assert!(matches!(link.next().await?, Some(Message::Granted { lease: LEASE })));
+            assert!(
+                link.send(&Message::Acquire {
+                    lease: LEASE,
+                    edge: Edge::Right,
+                    along: 0.5,
+                })
+                .await?
+            );
+            assert!(matches!(
+                link.next().await?,
+                Some(Message::Granted { lease: LEASE })
+            ));
             let edges = OutgoingEdges::new(Edge::Right, None);
             let mut state = Forward::new(edges.positions(0.5).0);
             let batch = Batch {
                 samples: vec![
                     Sample::Motion(200.0, 0.0),
-                    Sample::Input(Input::Key { usage: 0xe0, down: true }),
+                    Sample::Input(Input::Key {
+                        usage: 0xe0,
+                        down: true,
+                    }),
                     Sample::Motion(-300.0, 0.0),
-                    Sample::Input(Input::Key { usage: 0xe0, down: false }),
+                    Sample::Input(Input::Key {
+                        usage: 0xe0,
+                        down: false,
+                    }),
                 ],
                 ..Batch::default()
             };
-            let step = submit_batch(&mut link, &capabilities, &mut state, batch, edges, Zone::new(0, 0, 1000, 800)?).await?;
+            let step = submit_batch(
+                &mut link,
+                &capabilities,
+                &mut state,
+                batch,
+                edges,
+                Zone::new(0, 0, 1000, 800)?,
+            )
+            .await?;
             let ForwardStep::Returned(cursor) = step else {
                 anyhow::bail!("the matched release did not return to the source");
             };
@@ -741,7 +943,8 @@ mod tests {
         };
         tokio::time::timeout(Duration::from_secs(5), async {
             tokio::try_join!(server, client)
-        }).await??;
+        })
+        .await??;
         Ok(())
     }
 }
