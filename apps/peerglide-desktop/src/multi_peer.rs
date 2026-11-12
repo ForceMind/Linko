@@ -8,7 +8,10 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tokio::{sync::watch, task::JoinSet};
+use tokio::{
+    sync::watch,
+    task::{JoinSet, LocalSet},
+};
 use transport::trusted_listener::{Listener, MAX_TRUSTED_PEERS};
 
 #[derive(clap::Args)]
@@ -76,7 +79,9 @@ pub(super) async fn run(
         "Listening for authenticated peers on {}.",
         listener.local_addr()?
     );
-    listen(&listener, tokio::signal::ctrl_c(), selection).await
+    LocalSet::new()
+        .run_until(listen(&listener, tokio::signal::ctrl_c(), selection))
+        .await
 }
 
 async fn listen<F>(listener: &Listener, stop: F, mut selection: Option<Selection>) -> Result<()>
@@ -102,19 +107,22 @@ where
             incoming = listener.accept() => {
                 if let Ok(peer) = incoming {
                     let (connection, _) = peer.into_parts();
-                    let selected = take_selected(&mut selection, &connection);
-                    let stopped = stopped.clone();
-                    sessions.spawn(async move {
-                        let selected_native = selected.is_some();
-                        let result = serve(&connection, selected, stopped).await;
-                        if selected_native {
-                            match result {
+                    if let Some(selected) = take_selected(&mut selection, &connection) {
+                        let stopped = stopped.clone();
+                        // The existing capture owner must remain on its original thread.
+                        sessions.spawn_local(async move {
+                            match serve_selected(&connection, selected, stopped).await {
                                 Ok(()) => println!("Selected session ended. Restart the listener to select another native session."),
                                 Err(error) => eprintln!("Selected native session ended: {error}"),
                             }
-                        }
-                        connection.close(0u8.into(), b"trusted connection ended");
-                    });
+                            connection.close(0u8.into(), b"selected input connection ended");
+                        });
+                    } else {
+                        sessions.spawn(async move {
+                            let _ = serve_diagnostic(&connection).await;
+                            connection.close(0u8.into(), b"diagnostic connection ended");
+                        });
+                    }
                 }
             }
         }
@@ -127,42 +135,55 @@ where
     Ok(())
 }
 
-async fn serve(
+async fn open_stream(
     connection: &quinn::Connection,
-    selected: Option<Selection>,
-    stopped: watch::Receiver<bool>,
-) -> Result<()> {
+    local: InputCapabilities,
+) -> Result<(quinn::SendStream, quinn::RecvStream, InputCapabilities)> {
     let (mut send, mut receive) =
         tokio::time::timeout(Duration::from_secs(5), connection.accept_bi())
             .await
             .context("trusted input stream timed out")??;
-    let local = if selected.is_some() {
-        peerglide_platform::input_capabilities()
-    } else {
-        InputCapabilities::default()
-    };
-    let peer = exchange_hello(&mut send, &mut receive, local.clone()).await?;
-    if let Some(selected) = selected.filter(|_| local.motion() && peer.motion()) {
-        let mut reporter = InputReporter::new(false);
-        let result = session::run_with_diagnostics(
-            connection.clone(),
-            send,
-            receive,
-            session::Policy {
-                allow: selected.allow,
-                native: true,
-                edge: selected.edge,
-                local,
-                peer,
-            },
-            stopped,
-            &mut reporter,
-            session::SessionControls::default(),
-        )
-        .await;
-        reporter.finish();
-        return result;
+    let peer = exchange_hello(&mut send, &mut receive, local).await?;
+    Ok((send, receive, peer))
+}
+
+async fn serve_selected(
+    connection: &quinn::Connection,
+    selected: Selection,
+    stopped: watch::Receiver<bool>,
+) -> Result<()> {
+    let local = peerglide_platform::input_capabilities();
+    let (send, receive, peer) = open_stream(connection, local.clone()).await?;
+    if !local.motion() || !peer.motion() {
+        return diagnostic_stream(send, receive).await;
     }
+    let mut reporter = InputReporter::new(false);
+    let result = session::run_with_diagnostics(
+        connection.clone(),
+        send,
+        receive,
+        session::Policy {
+            allow: selected.allow,
+            native: true,
+            edge: selected.edge,
+            local,
+            peer,
+        },
+        stopped,
+        &mut reporter,
+        session::SessionControls::default(),
+    )
+    .await;
+    reporter.finish();
+    result
+}
+
+async fn serve_diagnostic(connection: &quinn::Connection) -> Result<()> {
+    let (send, receive, _) = open_stream(connection, InputCapabilities::default()).await?;
+    diagnostic_stream(send, receive).await
+}
+
+async fn diagnostic_stream(mut send: quinn::SendStream, mut receive: quinn::RecvStream) -> Result<()> {
     loop {
         let reply = match transport::receive(&mut receive).await? {
             Message::Ping { lease } => Message::Pong { lease },
