@@ -9,7 +9,6 @@ mod audio_stop;
 mod input_diagnostics;
 mod layout_control;
 mod layout_probe;
-#[cfg(any(windows, target_os = "macos", test))]
 mod layout_routes;
 mod multi_peer;
 mod pairing_worker;
@@ -285,6 +284,16 @@ enum Command {
         #[arg(long, value_enum)]
         edge: Side,
     },
+    /// Send native input to the pinned computer selected by each display edge segment.
+    ConnectRoutes {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        layout: PathBuf,
+        /// Enable real Windows or macOS keyboard and mouse capture.
+        #[arg(long, required = true)]
+        native: bool,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -546,6 +555,17 @@ fn main() -> Result<()> {
             point,
             edge,
         } => run_cli_future(|| layout_routes::run(&identity, &layout, point, edge.into())),
+        Command::ConnectRoutes {
+            identity,
+            layout,
+            native,
+        } => {
+            anyhow::ensure!(
+                native,
+                "configured routing requires explicit native consent"
+            );
+            run_cli_future(|| session::routed_source::run(&identity, &layout))
+        }
         Command::Connect {
             address,
             options,
@@ -1163,6 +1183,14 @@ async fn probe_roundtrip(tx: &mut quinn::SendStream, rx: &mut quinn::RecvStream)
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+
+    #[test]
+    fn configured_routes_require_explicit_native_consent() {
+        let args = ["peerglide", "connect-routes", "--layout", "routes.json"];
+        assert!(Cli::try_parse_from(args).is_err());
+        let cli = Cli::try_parse_from(args.into_iter().chain(["--native"])).unwrap();
+        assert!(matches!(cli.command, Command::ConnectRoutes { native: true, .. }));
+    }
 
     #[test]
     fn remote_entry_edge_requires_native_mode_and_preserves_local_direction() {
