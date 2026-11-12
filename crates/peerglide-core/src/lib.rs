@@ -2,6 +2,7 @@
 use peerglide_protocol::{Input, Motion, LEASE_MS};
 use std::collections::BTreeSet;
 
+pub mod audio_mix;
 pub mod audio_playout;
 
 /// Terminal reliable cursor and balanced releases; never log input payloads.
