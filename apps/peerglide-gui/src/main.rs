@@ -21,6 +21,8 @@ mod enrollment_store;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 mod file_edge_drop;
 mod file_panel;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+mod file_drop_reservation;
 mod gesture_lab;
 mod gesture_rules;
 mod icons;
@@ -315,6 +317,8 @@ struct WorkerSnapshot(
     AtomicU16,
     std::sync::Mutex<Option<peerglide_protocol::layout_ipc::LayoutUpdate>>,
     std::sync::Mutex<Option<peerglide_protocol::layout_ipc::LayoutHint>>,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+    std::sync::Mutex<file_drop_reservation::Inbox>,
 );
 impl WorkerSnapshot {
     fn publish_switch(&self, state: WorkerSwitchState) {
@@ -450,8 +454,16 @@ fn read_worker_output(
             }
         };
         if let Some(event) = WorkerEvent::parse(&line) {
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+            if let Ok(mut inbox) = snapshot.7.lock() {
+                inbox.connection(event.state);
+            }
             snapshot.publish(event.state);
         } else if let Some(event) = WorkerInputEvent::parse(&line) {
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+            if let Ok(mut inbox) = snapshot.7.lock() {
+                inbox.input(event.state);
+            }
             snapshot.publish_input(event.state, event.terminal);
         } else if let Some(event) = WorkerSwitchEvent::parse(&line) {
             snapshot.publish_switch(event.state);
@@ -465,7 +477,12 @@ fn read_worker_output(
             if let Ok(mut slot) = snapshot.6.lock() {
                 *slot = Some(hint);
             }
-        } else if peerglide_protocol::file_drop_ipc::Event::parse(&line).is_none() {
+        } else if let Some(_event) = peerglide_protocol::file_drop_ipc::Event::parse(&line) {
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+            if let Ok(mut inbox) = snapshot.7.lock() {
+                inbox.publish(_event);
+            }
+        } else {
             let _ = diagnostics.try_send(bounded_diagnostic(&line));
         }
         wake();
@@ -1186,6 +1203,7 @@ impl App {
     }
     fn resend_stop(&mut self) -> Result<()> {
         self.pending_start = None;
+        self.cancel_file_handoff();
         let child = self.child.as_mut().context("没有活动工作进程")?;
         let stdin = child.stdin.as_mut().context("工作进程的停止通道不可用")?;
         stdin.write_all(b"stop\n").context("再次发送停止请求失败")?;
@@ -1197,6 +1215,7 @@ impl App {
         Ok(())
     }
     fn stop(&mut self) {
+        self.cancel_file_handoff();
         self.layout_request = None;
         self.pairing_panel.cancel();
         self.switch_state = None;
@@ -1629,11 +1648,21 @@ impl App {
         self.file_panel.is_active() || self.clipboard_job_active()
     }
     fn stop_data_jobs(&mut self) {
-        self.file_panel.stop();
+        let mut files = std::mem::take(&mut self.file_panel);
+        files.stop(self);
+        self.file_panel = files;
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.audio_panel.stop();
         #[cfg(any(windows, target_os = "macos"))]
         self.clipboard_panel.stop();
+    }
+    fn cancel_file_handoff(&mut self) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        {
+            let mut files = std::mem::take(&mut self.file_panel);
+            files.cancel_handoff(self);
+            self.file_panel = files;
+        }
     }
     fn show_window(&mut self, ctx: &egui::Context) {
         self.window_hidden = false;
