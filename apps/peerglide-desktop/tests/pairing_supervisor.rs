@@ -43,10 +43,24 @@ fn wait(
         std::thread::sleep(Duration::from_millis(5));
     }
     anyhow::bail!(
-        "pairing parent process deadline exceeded (offer {:?}, join {:?})",
-        a.phase(),
-        b.phase()
+        "pairing parent process deadline exceeded (offer {}, join {})",
+        phase_label(a.phase()),
+        phase_label(b.phase())
     )
+}
+fn phase_label(phase: Phase) -> &'static str {
+    match phase {
+        Phase::Idle => "idle",
+        Phase::Starting => "starting",
+        Phase::Listening => "listening",
+        Phase::Verifying => "verifying",
+        Phase::Verified => "verified",
+        Phase::Stopping => "stopping",
+        Phase::Stopped(_) => "stopped",
+        Phase::Failed(Failure::Internal) => "failed/internal",
+        Phase::Failed(_) => "failed",
+        _ => "other",
+    }
 }
 fn start_offer(
     a: &mut Supervisor,
