@@ -217,7 +217,7 @@ enum Command {
         #[arg(long, requires = "allow_pointer_control")]
         allow_scroll: bool,
     },
-    /// Send relative pointer motion from a local Xorg edge to one verified computer.
+    /// Send pointer input from a local Xorg edge to one verified computer.
     #[cfg(target_os = "linux")]
     SendX11 {
         address: SocketAddr,
@@ -230,6 +230,12 @@ enum Command {
         /// Explicitly allow this session to take the local pointer at that edge.
         #[arg(long, required = true)]
         allow_pointer_capture: bool,
+        /// Also send the three standard mouse buttons when the receiver allows them.
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_button_capture: bool,
+        /// Also send standard horizontal and vertical Xorg wheel steps.
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_scroll_capture: bool,
     },
     /// Play the microphone of one explicitly verified computer.
     #[cfg(any(windows, target_os = "macos"))]
@@ -519,6 +525,8 @@ fn main() -> Result<()> {
             peer_cert,
             edge,
             allow_pointer_capture,
+            allow_button_capture,
+            allow_scroll_capture,
         } => run_cli_future(|| {
             session::x11_source::run(
                 &identity,
@@ -526,6 +534,8 @@ fn main() -> Result<()> {
                 address,
                 edge.into(),
                 allow_pointer_capture,
+                allow_button_capture,
+                allow_scroll_capture,
             )
         }),
         #[cfg(any(windows, target_os = "macos"))]

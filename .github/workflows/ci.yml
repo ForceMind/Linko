@@ -87,6 +87,10 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: xvfb-run -a -s "-screen 0 1024x768x24" env LINKO_TEST_ISOLATED_X11=1 cargo test -p peerglide-desktop --locked session::x11_source::tests::xorg_source_watchdog_releases_the_native_pointer_owner -- --ignored --exact
+      - name: X11 source button pair recovery on isolated Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" env LINKO_TEST_ISOLATED_X11=1 cargo test -p peerglide-platform --locked x11_activity::source::tests::xorg_drains_a_consumed_pair_without_replaying_its_release -- --ignored --exact
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
         timeout-minutes: 5
