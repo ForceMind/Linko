@@ -2,13 +2,14 @@
 use anyhow::{Context, Result};
 use peerglide_core::{
     audio_mix::{Mix, Source, MAX_SOURCES},
-    audio_playout::SAMPLES,
+    audio_playout::{Frame, SAMPLES},
 };
 use peerglide_transport::audio::PlaybackListener;
 use std::{future::Future, time::Duration};
 use tokio::{sync::mpsc, task::JoinSet, time::Instant};
 
 const PERIOD: Duration = Duration::from_millis(5);
+const SOURCE_QUEUE: usize = 4;
 
 #[cfg(any(windows, target_os = "macos"))]
 pub(super) async fn run(
@@ -56,6 +57,22 @@ pub(super) async fn run(
     result
 }
 
+struct BufferedSource {
+    source: Source,
+    frames: mpsc::Receiver<Frame>,
+}
+
+impl BufferedSource {
+    fn drain(&mut self, mix: &mut Mix) {
+        for _ in 0..SOURCE_QUEUE {
+            let Ok(frame) = self.frames.try_recv() else {
+                break;
+            };
+            mix.push(self.source, frame);
+        }
+    }
+}
+
 async fn drive<F>(
     listener: &PlaybackListener,
     duration: Duration,
@@ -66,8 +83,8 @@ where
     F: Future<Output = std::io::Result<()>>,
 {
     let mut mix = Mix::default();
-    let mut workers: JoinSet<Source> = JoinSet::new();
-    let (frames, mut received) = mpsc::channel(MAX_SOURCES * 4);
+    let mut workers: JoinSet<(usize, Source)> = JoinSet::new();
+    let mut sources: [Option<BufferedSource>; MAX_SOURCES] = Default::default();
     let mut tick = tokio::time::interval(PERIOD);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let deadline = Instant::now() + duration;
@@ -81,7 +98,8 @@ where
             result = &mut stop => return result.map_err(Into::into),
             _ = tokio::time::sleep_until(deadline) => return Ok(()),
             closed = workers.join_next(), if !workers.is_empty() => {
-                let source = closed.context("audio source disappeared")??;
+                let (slot, source) = closed.context("audio source disappeared")??;
+                sources[slot] = None;
                 mix.stop(source);
                 if playing && workers.is_empty() {
                     playing = false;
@@ -89,26 +107,26 @@ where
                 }
             }
             _ = tick.tick(), if !workers.is_empty() => {
+                for source in sources.iter_mut().flatten() {
+                    source.drain(&mut mix);
+                }
                 playing |= mix.render(&mut output);
                 if playing {
                     submit(Some(&output))?;
                 }
             }
-            item = received.recv() => {
-                let (source, frame) = item.context("audio source queue closed")?;
-                mix.push(source, frame);
-            }
             accepted = &mut incoming => {
                 if let Ok((slot, session)) = accepted {
                     if let Some(source) = mix.start(slot) {
-                        let frames = frames.clone();
+                        let (send, frames) = mpsc::channel(SOURCE_QUEUE);
+                        sources[slot] = Some(BufferedSource { source, frames });
                         workers.spawn(async move {
                             while let Ok(frame) = session.receive().await {
-                                if let Err(mpsc::error::TrySendError::Closed(_)) = frames.try_send((source, frame)) {
+                                if let Err(mpsc::error::TrySendError::Closed(_)) = send.try_send(frame) {
                                     break;
                                 }
                             }
-                            source
+                            (slot, source)
                         });
                     }
                 }
@@ -121,9 +139,29 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use peerglide_core::audio_playout::Frame;
     use peerglide_transport::{audio, Identity};
     use tokio::sync::oneshot;
+
+    #[test]
+    fn full_source_queue_preserves_space_for_the_other_source() {
+        let mut mix = Mix::default();
+        let (left_send, left_frames) = mpsc::channel(SOURCE_QUEUE);
+        let (right_send, right_frames) = mpsc::channel(SOURCE_QUEUE);
+        let mut left = BufferedSource { source: mix.start(0).unwrap(), frames: left_frames };
+        let mut right = BufferedSource { source: mix.start(1).unwrap(), frames: right_frames };
+        for sequence in 1..=SOURCE_QUEUE as u64 {
+            assert!(left_send.try_send(Frame { sequence, samples: [7; SAMPLES] }).is_ok());
+        }
+        assert!(left_send.try_send(Frame { sequence: 5, samples: [9; SAMPLES] }).is_err());
+        for sequence in 1..=3 {
+            assert!(right_send.try_send(Frame { sequence, samples: [5; SAMPLES] }).is_ok());
+        }
+        left.drain(&mut mix);
+        right.drain(&mut mix);
+        let mut output = [0; SAMPLES];
+        assert!(mix.render(&mut output));
+        assert_eq!(output, [12; SAMPLES]);
+    }
 
     #[tokio::test]
     async fn mix_driver_delivers_authenticated_audio_and_retires_the_last_output() -> Result<()> {
