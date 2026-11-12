@@ -248,7 +248,10 @@ impl RoutedTarget {
         for (index, slot) in self.keys.iter().enumerate() {
             let base = (index * 64) as u16;
             let word = (0..64u16).fold(0u64, |word, bit| {
-                word | (u64::from(caps.supports(Input::Key { usage: base + bit, down: true })) << bit)
+                word | (u64::from(caps.supports(Input::Key {
+                    usage: base + bit,
+                    down: true,
+                })) << bit)
             });
             slot.store(word, Ordering::Relaxed);
         }
@@ -256,7 +259,8 @@ impl RoutedTarget {
             bits | (u64::from(caps.supports(Input::Button { button, down: true })) << (button - 1))
         });
         let scroll = u64::from(caps.supports(Input::Scroll { x: 0, y: 1 }));
-        self.discrete.store(buttons | (scroll << 3), Ordering::Relaxed);
+        self.discrete
+            .store(buttons | (scroll << 3), Ordering::Relaxed);
     }
 
     #[cfg(any(windows, target_os = "macos", test))]
@@ -266,7 +270,8 @@ impl RoutedTarget {
         }
         match event {
             Input::Key { usage, .. } => {
-                self.keys[usize::from(usage / 64)].load(Ordering::Relaxed) & (1 << (usage % 64)) != 0
+                self.keys[usize::from(usage / 64)].load(Ordering::Relaxed) & (1 << (usage % 64))
+                    != 0
             }
             Input::Button { button, .. } => {
                 self.discrete.load(Ordering::Relaxed) & (1 << (button - 1)) != 0
@@ -711,9 +716,16 @@ pub struct RouteReturn {
     placement: display_layout::Placement,
 }
 impl RouteReturn {
-    pub fn new(layout: &display_layout::Layout, display: display_layout::DisplayId, (x, y): (f64, f64)) -> Option<Self> {
+    pub fn new(
+        layout: &display_layout::Layout,
+        display: display_layout::DisplayId,
+        (x, y): (f64, f64),
+    ) -> Option<Self> {
         let target = layout.placement_target(display)?;
-        Some(Self { target, placement: layout.place(target, ReceivePoint { x, y })? })
+        Some(Self {
+            target,
+            placement: layout.place(target, ReceivePoint { x, y })?,
+        })
     }
 
     fn restore(self) -> Result<()> {
@@ -847,7 +859,13 @@ impl CaptureSession {
         return_x: f64,
         return_y: f64,
     ) -> Result<CaptureCommit> {
-        self.begin_from(token, deadline, SourceReturn::Primary(return_x, return_y), None, || true)
+        self.begin_from(
+            token,
+            deadline,
+            SourceReturn::Primary(return_x, return_y),
+            None,
+            || true,
+        )
     }
 
     /// The async sender supplies the capability set from this route's pinned
@@ -863,7 +881,13 @@ impl CaptureSession {
         if !target.motion() {
             return Ok(CaptureCommit::Cancelled);
         }
-        self.begin_from(token, deadline, SourceReturn::Display(position), Some(target), position_current)
+        self.begin_from(
+            token,
+            deadline,
+            SourceReturn::Display(position),
+            Some(target),
+            position_current,
+        )
     }
 
     fn begin_from(
@@ -889,7 +913,8 @@ impl CaptureSession {
         }
         let result = if let Some((slot, caps)) = routed.zip(target) {
             let word = self.gate.0.control.load(Ordering::Acquire);
-            self.gate.commit_from_word(token, deadline, now_ms(), word, || slot.publish(caps))
+            self.gate
+                .commit_from_word(token, deadline, now_ms(), word, || slot.publish(caps))
         } else {
             self.gate.commit_from(token, deadline, now_ms())
         };
@@ -914,8 +939,7 @@ impl CaptureSession {
             *self
                 .return_position
                 .lock()
-                .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))? =
-                Some(position);
+                .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))? = Some(position);
             // Do not post an absolute move when taking over macOS's relative
             // motion stream. Its displacement can affect the next event.
             // macOS instead disconnects the cursor; event deltas stay valid.
@@ -1358,13 +1382,22 @@ pub fn capture_with_receive_display(
     diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
     receive_display: Option<Arc<ReceiveDisplay>>,
 ) -> Result<CaptureSession> {
-    capture_with_gate(tx, target, diagnostics, receive_display, CaptureGate::default())
+    capture_with_gate(
+        tx,
+        target,
+        diagnostics,
+        receive_display,
+        CaptureGate::default(),
+    )
 }
 
 /// Use the original native owner, choosing outgoing capabilities per committed route.
 pub fn capture_routed_source(tx: CaptureEventSender) -> Result<CaptureSession> {
     let gate = CaptureGate::default();
-    anyhow::ensure!(gate.0.routed_target.set(RoutedTarget::default()).is_ok(), "routed capture already initialized");
+    anyhow::ensure!(
+        gate.0.routed_target.set(RoutedTarget::default()).is_ok(),
+        "routed capture already initialized"
+    );
     capture_with_gate(tx, InputCapabilities::default(), None, None, gate)
 }
 
@@ -1870,20 +1903,35 @@ mod tests {
         assert!(session.gate.try_activate());
         assert!(session.restore_checked().is_err());
         assert!(!session.gate.active());
-        assert!(matches!(*session.return_position.lock().unwrap(), Some(SourceReturn::Primary(0.2, 0.3))));
+        assert!(matches!(
+            *session.return_position.lock().unwrap(),
+            Some(SourceReturn::Primary(0.2, 0.3))
+        ));
     }
     #[test]
     fn routed_capabilities_replace_every_previous_key_button_and_scroll_permission() {
         let target = RoutedTarget::default();
-        let key = Input::Key { usage: 0xe7, down: true };
-        let left = Input::Button { button: 1, down: true };
+        let key = Input::Key {
+            usage: 0xe7,
+            down: true,
+        };
+        let left = Input::Button {
+            button: 1,
+            down: true,
+        };
         let scroll = Input::Scroll { x: 0, y: 1 };
         target.publish(&InputCapabilities::new(&[0xe7], true, 1, true).unwrap());
         assert!(target.supports(key) && target.supports(left) && target.supports(scroll));
         target.publish(&InputCapabilities::new(&[4], true, 2, false).unwrap());
         assert!(!target.supports(key) && !target.supports(left) && !target.supports(scroll));
-        assert!(target.supports(Input::Key { usage: 4, down: true }));
-        assert!(target.supports(Input::Button { button: 2, down: false }));
+        assert!(target.supports(Input::Key {
+            usage: 4,
+            down: true
+        }));
+        assert!(target.supports(Input::Button {
+            button: 2,
+            down: false
+        }));
     }
     #[test]
     fn source_cursor_freeze_follows_only_the_exact_live_remote_phase() {
