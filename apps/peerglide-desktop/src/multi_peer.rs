@@ -169,8 +169,8 @@ where
                         let stopped = stopped.clone();
                         // The existing native owner stays on the same thread.
                         native = Some(tokio::task::spawn_local(async move {
-                            let clean = serve_selected(&connection, selected, stopped).await;
-                            connection.close(0u8.into(), b"selected input connection ended");
+                            let (clean, reason) = serve_selected(&connection, selected, stopped).await;
+                            connection.close(0u8.into(), reason);
                             clean
                         }));
                     } else {
@@ -220,18 +220,19 @@ async fn serve_selected(
     connection: &quinn::Connection,
     selected: Selection,
     stopped: watch::Receiver<bool>,
-) -> bool {
+) -> (bool, &'static [u8]) {
+    const ENDED: &[u8] = b"selected input connection ended";
     let local = peerglide_platform::input_capabilities();
     let (send, receive, peer) = match open_stream(connection, local.clone()).await {
         Ok(streams) => streams,
         Err(error) => {
             eprintln!("Selected session negotiation ended: {error}");
-            return true;
+            return (true, ENDED);
         }
     };
     if !local.motion() || !peer.motion() {
         let _ = diagnostic_stream(send, receive).await;
-        return true;
+        return (true, ENDED);
     }
     let mut reporter = InputReporter::new(false);
     let result = session::run_with_diagnostics(
@@ -250,12 +251,14 @@ async fn serve_selected(
         session::SessionControls::default(),
     )
     .await;
+    let state = reporter.finish();
+    let reason = session::close_reason_after_recovery(&result, Some(state), ENDED);
     if let Err(error) = result {
         eprintln!("Selected native session ended: {error}");
     }
-    matches!(
-        reporter.finish(),
-        WorkerInputState::Local | WorkerInputState::Disabled
+    (
+        matches!(state, WorkerInputState::Local | WorkerInputState::Disabled),
+        reason,
     )
 }
 
