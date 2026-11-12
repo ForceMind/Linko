@@ -47,7 +47,8 @@ enum State {
     #[cfg(target_os = "macos")]
     Dragging {
         drag: peerglide_platform::macos_native_drop::Drag,
-        prepared: Prepared,
+        expires: Instant,
+        _path: Option<PreparedDropPath>,
     },
 }
 
@@ -86,6 +87,12 @@ impl Export {
 
     pub(super) fn stop(&mut self) {
         if self.active() {
+            #[cfg(target_os = "macos")]
+            if matches!(self.state, State::Dragging { .. }) {
+                self.state = State::Idle;
+                self.notice = Some("拖放已停止。如已放下文件，请检查目标应用。");
+                return;
+            }
             self.state = State::Idle;
             self.notice = Some("本次复制准备已取消，接收文件仍在原目录。");
         }
@@ -126,7 +133,7 @@ impl Export {
                 }
             },
             #[cfg(target_os = "macos")]
-            State::Dragging { drag, prepared } => {
+            State::Dragging { drag, expires, .. } => {
                 if let Some(outcome) = drag.outcome() {
                     use peerglide_platform::macos_native_drop::Outcome;
                     self.notice = Some(match outcome {
@@ -135,7 +142,7 @@ impl Export {
                         Outcome::Unknown => "拖放结果未确认，请检查目标应用。",
                     });
                     self.state = State::Idle;
-                } else if Instant::now() >= prepared.expires {
+                } else if Instant::now() >= *expires {
                     drag.request_cancel();
                     self.state = State::Idle;
                     self.notice = Some("拖放已过期，请检查目标应用。");
@@ -177,17 +184,15 @@ impl Export {
         Ok(())
     }
 
-    fn start_drag(&mut self, app: &App) -> Result<()> {
+    fn start_drag(&mut self, app: &App, #[cfg(target_os = "macos")] promise: bool) -> Result<()> {
         let State::Ready(prepared) = std::mem::take(&mut self.state) else {
             return Ok(());
         };
+        let source = self.source.as_ref().context("没有已接收文件")?;
         anyhow::ensure!(
             Instant::now() < prepared.expires
                 && eligible(app)
-                && self
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| source.pin.matches(app)),
+                && source.pin.matches(app),
             "请重新准备复制拖放"
         );
         #[cfg(all(windows, target_env = "msvc"))]
@@ -201,10 +206,30 @@ impl Export {
         }
         #[cfg(target_os = "macos")]
         {
-            let drag = peerglide_platform::macos_native_drop::Drag::start_prepared_file(
-                prepared.path.path(),
-            )?;
-            self.state = State::Dragging { drag, prepared };
+            use peerglide_platform::macos_native_drop::Drag;
+            let Prepared { path, expires } = prepared;
+            let (drag, retained) = if promise {
+                let remaining = expires.saturating_duration_since(Instant::now());
+                let write = move |destination: &std::path::Path, allowed: &dyn Fn() -> bool| {
+                    path.copy_to_drop_destination(destination, || {
+                        if allowed() {
+                            Ok(())
+                        } else {
+                            Err(io::ErrorKind::Interrupted.into())
+                        }
+                    })
+                };
+                let drag = Drag::start_file_promise(source.file.name(), remaining, write)?;
+                (drag, None)
+            } else {
+                let drag = Drag::start_prepared_file(path.path())?;
+                (drag, Some(path))
+            };
+            self.state = State::Dragging {
+                drag,
+                expires,
+                _path: retained,
+            };
         }
         Ok(())
     }
@@ -232,11 +257,15 @@ impl Export {
                 }
             }
             State::Ready(_) => {
-                let target = ui.add(egui::Button::new("按住并拖出复制").sense(egui::Sense::drag()));
-                let pressed = ui.input(|input| {
-                    input.focused && input.pointer.button_pressed(egui::PointerButton::Primary)
-                });
-                if target.hovered() && pressed && self.start_drag(app).is_err() {
+                #[cfg(target_os = "macos")]
+                let started = {
+                    let promise = drag_pressed(ui, "按住并拖出文件副本");
+                    let reference = drag_pressed(ui, "按住并拖出文件引用");
+                    (promise || reference).then(|| self.start_drag(app, promise))
+                };
+                #[cfg(all(windows, target_env = "msvc"))]
+                let started = drag_pressed(ui, "按住并拖出复制").then(|| self.start_drag(app));
+                if started.is_some_and(|result| result.is_err()) {
                     self.notice = Some("系统未开启拖放，请重新准备并从拖动按钮按下。");
                 }
             }
@@ -249,6 +278,14 @@ impl Export {
             ui.label(notice);
         }
     }
+}
+
+fn drag_pressed(ui: &mut egui::Ui, label: &str) -> bool {
+    let target = ui.add(egui::Button::new(label).sense(egui::Sense::drag()));
+    target.hovered()
+        && ui.input(|input| {
+            input.focused && input.pointer.button_pressed(egui::PointerButton::Primary)
+        })
 }
 
 #[cfg(test)]

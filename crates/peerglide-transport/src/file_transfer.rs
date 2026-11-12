@@ -21,6 +21,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(any(target_os = "macos", test))]
+mod promised_copy;
+
 const FILES: data::Capabilities = data::Capabilities {
     text: false,
     files: true,
@@ -137,6 +140,8 @@ pub struct ReceivedFile {
 pub struct PreparedDropPath {
     path: PathBuf,
     _source: File,
+    #[cfg(any(target_os = "macos", test))]
+    manifest: Manifest,
 }
 
 impl ReceivedFile {
@@ -154,6 +159,8 @@ impl ReceivedFile {
         Ok(PreparedDropPath {
             path: self.path.clone(),
             _source: source,
+            #[cfg(any(target_os = "macos", test))]
+            manifest: actual,
         })
     }
 }
@@ -516,6 +523,69 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn promised_copy_checks_each_chunk_and_publishes_without_overwrite() -> Result<()> {
+        let directory = TestDirectory::new()?;
+        let original = directory.0.join("received.bin");
+        let target = directory.0.join("target.bin");
+        let content = vec![17; CHUNK_BYTES + 1];
+        fs::write(&original, &content)?;
+        let file = ReceivedFile {
+            manifest: Manifest::from_file(&original)?,
+            path: original.clone(),
+        };
+
+        let mut checks = 0;
+        let collision = file.prepare_drop(|| Ok(()))?.copy_to_drop_destination(&target, || {
+            checks += 1;
+            if checks == 4 {
+                fs::write(&target, b"new local file")?;
+            }
+            Ok(())
+        });
+        assert!(collision.is_err());
+        assert_eq!(fs::read(&target)?, b"new local file");
+        assert_eq!(fs::read_dir(&directory.0)?.count(), 2);
+
+        fs::remove_file(&target)?;
+        file.prepare_drop(|| Ok(()))?
+            .copy_to_drop_destination(&target, || Ok(()))?;
+        assert_eq!(fs::read(&target)?, content);
+        assert_eq!(fs::read(&original)?, content);
+        assert_eq!(fs::read_dir(&directory.0)?.count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn promised_copy_discards_cancelled_or_modified_staging() -> Result<()> {
+        let directory = TestDirectory::new()?;
+        let original = directory.0.join("received.bin");
+        let target = directory.0.join("target.bin");
+        let content = vec![17; CHUNK_BYTES + 1];
+        fs::write(&original, &content)?;
+        let file = ReceivedFile {
+            manifest: Manifest::from_file(&original)?,
+            path: original.clone(),
+        };
+        let mut checks = 0;
+        let cancelled = file.prepare_drop(|| Ok(()))?.copy_to_drop_destination(&target, || {
+            checks += 1;
+            if checks == 3 {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            Ok(())
+        });
+        assert!(cancelled.is_err());
+        assert_eq!(fs::read_dir(&directory.0)?.count(), 1);
+        assert_eq!(fs::read(&original)?, content);
+
+        let prepared = file.prepare_drop(|| Ok(()))?;
+        fs::write(&original, vec![21; CHUNK_BYTES + 1])?;
+        assert!(prepared.copy_to_drop_destination(&target, || Ok(())).is_err());
+        assert_eq!(fs::read_dir(&directory.0)?.count(), 1);
+        Ok(())
     }
 
     #[tokio::test]
