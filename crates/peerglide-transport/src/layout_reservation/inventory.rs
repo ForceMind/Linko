@@ -33,10 +33,18 @@ pub struct Inventory {
 
 impl Inventory {
     fn validate(&self) -> Result<()> {
-        ensure!(self.generation != 0 && (1..=MAX_DISPLAYS).contains(&self.displays.len()),
-            "display inventory generation or size invalid");
-        ensure!(self.displays.iter().filter(|display| display.primary).count() == 1,
-            "display inventory must have one primary");
+        ensure!(
+            self.generation != 0 && (1..=MAX_DISPLAYS).contains(&self.displays.len()),
+            "display inventory generation or size invalid"
+        );
+        ensure!(
+            self.displays
+                .iter()
+                .filter(|display| display.primary)
+                .count()
+                == 1,
+            "display inventory must have one primary"
+        );
         let mut ids = BTreeSet::new();
         for display in &self.displays {
             ensure!(
@@ -57,14 +65,21 @@ impl Inventory {
     fn encode(&self) -> Result<Vec<u8>> {
         self.validate()?;
         let bytes = serde_json::to_vec(self)?;
-        ensure!(bytes.len() <= MAX_BYTES, "display inventory exceeds byte limit");
+        ensure!(
+            bytes.len() <= MAX_BYTES,
+            "display inventory exceeds byte limit"
+        );
         Ok(bytes)
     }
 }
 
 /// A separate short layout connection is consumed by this query. It uses the
 /// same explicit pin and the exporter from the live v5 input connection.
-pub async fn query(sidecar: &Connection, input: &Connection, pin: &[u8]) -> Result<Option<Inventory>> {
+pub async fn query(
+    sidecar: &Connection,
+    input: &Connection,
+    pin: &[u8],
+) -> Result<Option<Inventory>> {
     verify_sidecar(sidecar, pin)?;
     let binding = Binding::from_v5(input, pin)?;
     tokio::time::timeout(IO_TIMEOUT, async {
@@ -89,7 +104,10 @@ pub async fn query(sidecar: &Connection, input: &Connection, pin: &[u8]) -> Resu
         require_end(&mut receive).await?;
         let inventory: Inventory = serde_json::from_slice(&bytes)?;
         inventory.validate()?;
-        ensure!(binding.matches(input, pin, &binding.proof())?, "display inventory input connection changed");
+        ensure!(
+            binding.matches(input, pin, &binding.proof())?,
+            "display inventory input connection changed"
+        );
         Ok(Some(inventory))
     })
     .await
@@ -136,8 +154,8 @@ pub async fn answer(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::endpoint;
+    use super::*;
     use crate::Identity;
     use quinn::Endpoint;
     use std::time::Duration;
@@ -161,7 +179,10 @@ mod tests {
     #[test]
     fn geometry_requires_unique_ordinals_and_bounded_rectangles() -> Result<()> {
         let valid = geometry();
-        assert_eq!(serde_json::from_slice::<Inventory>(&valid.encode()?)?, valid);
+        assert_eq!(
+            serde_json::from_slice::<Inventory>(&valid.encode()?)?,
+            valid
+        );
         let mut duplicate = valid.clone();
         let mut screen = duplicate.displays[0].clone();
         screen.primary = false;
@@ -170,7 +191,9 @@ mod tests {
         duplicate.displays[1].id = 2;
         duplicate.displays[1].left = i32::MAX;
         assert!(duplicate.encode().is_err());
-        duplicate.displays.resize(MAX_DISPLAYS + 1, valid.displays[0].clone());
+        duplicate
+            .displays
+            .resize(MAX_DISPLAYS + 1, valid.displays[0].clone());
         assert!(duplicate.encode().is_err());
         Ok(())
     }
@@ -184,11 +207,13 @@ mod tests {
             };
             let (client, server) = tokio::join!(connecting, accepting);
             Ok((client?, server?))
-        }).await?
+        })
+        .await?
     }
 
     #[tokio::test]
-    async fn only_the_bound_input_connection_can_query_a_locally_approved_inventory() -> Result<()> {
+    async fn only_the_bound_input_connection_can_query_a_locally_approved_inventory() -> Result<()>
+    {
         let a = Identity::generate()?;
         let b = Identity::generate()?;
         let bind = "127.0.0.1:0".parse()?;
@@ -201,7 +226,9 @@ mod tests {
         let (offer, answerer) = pair(&sidecar_a, &sidecar_b).await?;
         let (received, sent) = tokio::try_join!(
             query(&offer, &client, &b.certificate),
-            answer(&answerer, &wrong, &a.certificate, || panic!("wrong input proof")),
+            answer(&answerer, &wrong, &a.certificate, || panic!(
+                "wrong input proof"
+            )),
         )?;
         assert!(!sent && received.is_none());
         let (offer, answerer) = pair(&sidecar_a, &sidecar_b).await?;
