@@ -184,7 +184,7 @@ impl Export {
         Ok(())
     }
 
-    fn start_drag(&mut self, app: &App, #[cfg(target_os = "macos")] promise: bool) -> Result<()> {
+    fn start_drag(&mut self, app: &App, copy: bool) -> Result<()> {
         let State::Ready(prepared) = std::mem::take(&mut self.state) else {
             return Ok(());
         };
@@ -195,8 +195,22 @@ impl Export {
         );
         #[cfg(all(windows, target_env = "msvc"))]
         {
-            use peerglide_platform::windows_native_drop::{drag_prepared_file, Outcome};
-            self.notice = Some(match drag_prepared_file(prepared.path.path())? {
+            use peerglide_platform::windows_native_drop::{
+                drag_prepared_file, drag_verified_file, Outcome,
+            };
+            let result = if copy {
+                let remaining = prepared.expires.saturating_duration_since(Instant::now());
+                let mut reader = prepared.path.into_verified_reader();
+                drag_verified_file(
+                    source.file.name(),
+                    reader.size(),
+                    remaining,
+                    move |offset, output| reader.read_at(offset, output),
+                )?
+            } else {
+                drag_prepared_file(prepared.path.path())?
+            };
+            self.notice = Some(match result {
                 Outcome::Copied => "系统报告复制拖放已完成。",
                 Outcome::Cancelled => "系统报告拖放已取消。",
                 Outcome::Unknown => "拖放结果未确认，请检查目标应用。",
@@ -206,7 +220,7 @@ impl Export {
         {
             use peerglide_platform::macos_native_drop::Drag;
             let Prepared { path, expires } = prepared;
-            let (drag, retained) = if promise {
+            let (drag, retained) = if copy {
                 let remaining = expires.saturating_duration_since(Instant::now());
                 let write = move |destination: &std::path::Path, allowed: &dyn Fn() -> bool| {
                     path.copy_to_drop_destination(destination, || {
@@ -255,15 +269,9 @@ impl Export {
                 }
             }
             State::Ready(_) => {
-                #[cfg(target_os = "macos")]
-                let started = {
-                    let promise = drag_pressed(ui, "按住并拖出文件副本");
-                    let reference = drag_pressed(ui, "按住并拖出文件引用");
-                    (promise || reference).then(|| self.start_drag(app, promise))
-                };
-                #[cfg(all(windows, target_env = "msvc"))]
-                let started = drag_pressed(ui, "按住并拖出复制").then(|| self.start_drag(app));
-                if started.is_some_and(|result| result.is_err()) {
+                let copy = drag_pressed(ui, "按住并拖出文件副本");
+                let reference = drag_pressed(ui, "按住并拖出文件引用");
+                if (copy || reference) && self.start_drag(app, copy).is_err() {
                     self.notice = Some("系统未开启拖放，请重新准备并从拖动按钮按下。");
                 }
             }

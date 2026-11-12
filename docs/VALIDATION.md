@@ -2955,6 +2955,27 @@ macOS 和 Ubuntu 工作区回归覆盖目标发布、同名竞争、取消清理
 其他目标应用、慢写入、目标文件系统支持及放置结果留到集中验收。
 [文件承诺 CI](https://github.com/ForceMind/Linko/actions/runs/43262386201)
 
+### Windows 接收文件的 OLE 内容流
+
+Windows 文件页可把已校验接收文件拖出为只读文件流，也可拖出本机文件引用。OLE
+允许放置后才开放内容。文件读取交给工作器，从保留的接收句柄按分块摘要核对。
+取消、超时、读取失败和拖放返回会撤销旧流，复制状态需要 OLE 回执与完整读取。
+
+Windows runner 的 COM 回归覆盖文件描述、放下前拒绝、复制到流末尾和撤销后的
+保留流。工作区回归核对跨分块读取、越界及源文件变化。Explorer 和其他真实目标应用
+的同步读取、异步兼容性及原文件安全留到集中验收。
+[Windows 专项 CI](https://github.com/ForceMind/Linko/actions/runs/43271043775/job/131367320326)
+
+### 实际便携包升级与回滚
+
+独立草稿 `ecfaf1e` 在 Windows 和 Ubuntu runner 使用 `2026.11.13-0054` 成品作为
+旧版，验证 `2026.11.13-0140` 成品的暂存、激活、入口回读和 worker 启动。修改旧版
+暂存文件后拒绝回滚并保留当前选择，恢复原文件后可回到旧版并启动同包 worker。
+macOS 及最新候选的结果以各自同源 CI 作业为准，实际安装、系统授权和用户环境更新
+继续由集中验收记录。
+[Windows 更新演练](https://github.com/ForceMind/Linko/actions/runs/43271896015/job/131380707452) ·
+[Ubuntu 更新演练](https://github.com/ForceMind/Linko/actions/runs/43271896015/job/131380707631)
+
 ## 集中验收清单
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
