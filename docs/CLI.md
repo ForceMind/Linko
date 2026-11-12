@@ -61,15 +61,18 @@ outside its control. Windows input cannot cross privilege boundaries or control
 UAC/secure desktop. Keep OS security protections enabled.
 
 
-## 多台可信电脑的通信诊断
+## 多台可信电脑的监听
 
 ```text
 peerglide listen-peers --identity PATH --bind 0.0.0.0:24870 --peer-cert A.der --peer-cert B.der
 ```
 
 每个证书必须分别线下核对。对方使用已有的 `connect --probe` 检查
-同一个端口。监听可保持多条 v5 诊断连接，实际键鼠许可始终关闭。
-Ctrl+C 停止监听及这些连接。
+同一个端口。默认所有连接只运行 v5 通信诊断。Windows 和 macOS 可以
+额外指定 `--native-peer-cert A.der --edge right`，让该证书的首次连接
+进入现有原生会话。只有再加 `--allow-control` 才允许它接管本机。
+其余已登记连接继续提供通信诊断。切换原生目标需先 Ctrl+C 停止，再
+重新指定证书启动。真实多机输入留到集中验收。
 
 ## 从一台可信电脑播放音频
 
@@ -94,6 +97,35 @@ peerglide share-system-audio RECEIVER_IP:24874 --identity PATH --peer-cert RECEI
 macOS 13 或更新版本的同一发送命令使用 ScreenCaptureKit 的音频输出。
 系统可能要求录制权限。这个入口不打开麦克风或注册屏幕画面输出。
 真实权限提示、不同设备格式和结束后静音留到集中验收。
+
+同一个本机输出可混合最多四台已经分别核验的系统音频来源。
+接收端明确列出来源证书。各来源沿用 `share-system-audio`，并核对接收端证书。
+播放端可选择 `audio-output-devices` 显示的本机设备及播放音量。
+
+```text
+peerglide play-audio-mix --identity PATH --peer-cert A.der --peer-cert B.der --device DEVICE --volume 65
+```
+
+## Linux Xorg 指针接收候选
+
+```text
+peerglide listen-x11 --peer-cert SOURCE.der --allow-pointer-control
+```
+
+仅在本机 Xorg 会话使用。接收端先核对来源证书，发送端用已有 v5 `connect --native`。
+显式启动后最多接收一次指针租约。本机活动、断线、租约过期或 Ctrl+C 会结束它。
+键盘、按钮、滚轮和 Linux 主动发起控制仍待接入。实际 Xorg 设备及接管行为待验收。
+
+## 麦克风音频候选
+
+播放端在 Windows 或 macOS 明确指定麦克风来源，默认使用 UDP 24875。
+发送端明确指定已核验的播放端。Windows 使用默认通信麦克风，macOS 使用默认录音设备并由系统确认权限。
+设备会在本次会话认证成功后打开，Ctrl+C、断线和许可到期结束会话。
+
+```text
+peerglide play-microphone --identity PATH --peer-cert SOURCE.der
+peerglide share-microphone RECEIVER_IP:24875 --identity PATH --peer-cert RECEIVER.der
+```
 
 ## 指定本机键鼠接收屏幕
 
