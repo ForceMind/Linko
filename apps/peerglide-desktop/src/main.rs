@@ -16,6 +16,8 @@ mod reconnect;
 mod secondary_layout;
 mod session;
 #[cfg(target_os = "linux")]
+mod wayland_receive;
+#[cfg(target_os = "linux")]
 mod x11_receive;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -216,6 +218,25 @@ enum Command {
         /// Also receive wheel steps on a standard X11 pointer mapping.
         #[arg(long, requires = "allow_pointer_control")]
         allow_scroll: bool,
+    },
+    /// Receive one verified computer's pointer through a Wayland RemoteDesktop session.
+    #[cfg(target_os = "linux")]
+    ListenWayland {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+        #[arg(long, required = true)]
+        allow_pointer_control: bool,
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_buttons: bool,
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_scroll: bool,
+        /// Select an EIS region by its compositor-provided X,Y origin.
+        #[arg(long, value_parser = wayland_receive::parse_region)]
+        region: Option<(u32, u32)>,
     },
     /// Send pointer input from a local Xorg edge to one verified computer.
     #[cfg(target_os = "linux")]
@@ -519,6 +540,28 @@ fn main() -> Result<()> {
                 allow_pointer_control,
                 allow_discrete_input,
                 allow_scroll,
+            )
+        }),
+        #[cfg(target_os = "linux")]
+        Command::ListenWayland {
+            identity,
+            peer_cert,
+            bind,
+            allow_pointer_control,
+            allow_buttons,
+            allow_scroll,
+            region,
+        } => run_cli_future(|| {
+            wayland_receive::run(
+                &identity,
+                &peer_cert,
+                bind,
+                allow_pointer_control,
+                peerglide_platform::wayland_input::Options {
+                    buttons: allow_buttons,
+                    scroll: allow_scroll,
+                    region,
+                },
             )
         }),
         #[cfg(target_os = "linux")]
