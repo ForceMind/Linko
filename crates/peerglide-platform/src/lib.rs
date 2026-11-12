@@ -29,6 +29,8 @@ mod receive_driver;
 pub mod system_audio_capture;
 pub mod tray;
 #[cfg(target_os = "linux")]
+pub mod x11_activity;
+#[cfg(target_os = "linux")]
 pub mod x11_inject;
 pub use capture_events::{CaptureEventSender, CaptureEvents};
 pub use receive_driver::{

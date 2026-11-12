@@ -97,3 +97,13 @@ peerglide share-system-audio RECEIVER_IP:24874 --identity PATH --peer-cert RECEI
 macOS 13 或更新版本的同一发送命令使用 ScreenCaptureKit 的音频输出。
 系统可能要求录制权限。这个入口不打开麦克风或注册屏幕画面输出。
 真实权限提示、不同设备格式和结束后静音留到集中验收。
+
+## Linux Xorg 指针接收候选
+
+```text
+peerglide listen-x11 --peer-cert SOURCE.der --allow-pointer-control
+```
+
+仅在本机 Xorg 会话使用。接收端先核对来源证书，发送端用已有 v5 `connect --native`。
+显式启动后最多接收一次指针租约。本机活动、断线、租约过期或 Ctrl+C 会结束它。
+键盘、按钮、滚轮和 Linux 主动发起控制仍待接入。实际 Xorg 设备及接管行为待验收。

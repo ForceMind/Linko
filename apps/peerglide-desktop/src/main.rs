@@ -10,6 +10,8 @@ mod multi_peer;
 mod pairing_worker;
 mod reconnect;
 mod session;
+#[cfg(target_os = "linux")]
+mod x11_receive;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
@@ -174,6 +176,19 @@ enum Command {
         #[command(flatten)]
         supervisor: audio_stop::Options,
     },
+    /// Receive pointer motion from one verified peer on the local Xorg desktop.
+    #[cfg(target_os = "linux")]
+    ListenX11 {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+        /// Explicitly allow the selected computer to move the local pointer.
+        #[arg(long, required = true)]
+        allow_pointer_control: bool,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -309,6 +324,13 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        #[cfg(target_os = "linux")]
+        Command::ListenX11 {
+            identity,
+            peer_cert,
+            bind,
+            allow_pointer_control,
+        } => x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control).await,
         Command::Connect {
             address,
             options,
