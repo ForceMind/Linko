@@ -209,7 +209,7 @@ impl Export {
         Ok(())
     }
 
-    pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub(super) fn ui(&mut self, app: &App, ui: &mut egui::Ui) {
         let Some(source) = &self.source else {
             return;
         };
@@ -221,9 +221,8 @@ impl Export {
         }
         match &self.state {
             State::Idle => {
-                if ui.button("准备复制拖放").clicked() {
-                    let result = self.prepare(app);
-                    app.feedback(result, "正在重新校验本机文件。");
+                if ui.button("准备复制拖放").clicked() && self.prepare(app).is_err() {
+                    self.notice = Some("无法准备复制拖放，请检查配对和接收文件。");
                 }
             }
             State::Preparing(_) => {
