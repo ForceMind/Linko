@@ -410,11 +410,15 @@ pub(super) async fn run_with_diagnostics(
     // Native display enumeration runs before installing capture, on the
     // worker. A failed OS query keeps the compatible primary-screen behavior.
     let topology = monitor_layout(native);
-    if let Some(selection) = &receive_display
-        && topology.as_ref().is_none_or(|current| !selection.matches_snapshot(current))
-    {
+    if receive_display.as_ref().is_some_and(|selection| {
+        topology
+            .as_ref()
+            .is_none_or(|current| !selection.matches_snapshot(current))
+    }) {
         input_status.reporter.set(WorkerInputState::Disabled);
-        bail!("The selected receive display is no longer current. Select it again before restarting.");
+        bail!(
+            "The selected receive display is no longer current. Select it again before restarting."
+        );
     }
     let mut display_change = Box::pin(watch_display_layout(topology.as_ref()));
     let mut capture = if native {
@@ -1019,7 +1023,9 @@ async fn watch_display_layout(original: Option<&Layout>) -> Result<()> {
         .and_then(Result::ok)
         .ok_or_else(|| anyhow::anyhow!("Display layout could not be checked. Restart the session."))?;
         if !layout_unchanged(original, current.as_ref()) {
-            bail!("Display layout changed or became unavailable. Check the display selection before restarting.");
+            bail!(
+                "Display layout changed or became unavailable. Check the display selection before restarting."
+            );
         }
     }
 }
@@ -1133,10 +1139,20 @@ mod tests {
         let same = Layout::new(primary.id, vec![secondary, primary]).unwrap();
         let removed = Layout::new(primary.id, vec![primary]).unwrap();
         let other_primary = Layout::new(secondary.id, vec![primary, secondary]).unwrap();
-        let scaled = Display { scale: 2.0, ..secondary };
-        let rotated = Display { rotation: Rotation::Clockwise90, ..secondary };
+        let scaled = Display {
+            scale: 2.0,
+            ..secondary
+        };
+        let rotated = Display {
+            rotation: Rotation::Clockwise90,
+            ..secondary
+        };
         let moved = Display {
-            bounds: Bounds { top: 50.0, bottom: 150.0, ..secondary.bounds },
+            bounds: Bounds {
+                top: 50.0,
+                bottom: 150.0,
+                ..secondary.bounds
+            },
             ..secondary
         };
         assert!(layout_unchanged(Some(&original), Some(&same)));
