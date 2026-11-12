@@ -221,7 +221,10 @@ peerglide connect-routes --identity PATH --layout routes.json --native
 指定 `--receive-display=X,Y --secondary-layout-bind=0.0.0.0:24877`，并把自己的 `--edge`
 设为发送端配置的 `remote_edge`。可用 `--reconnect` 接受后续分段连接。预留失败时，
 光标留在本机。省略该字段时，继续使用目标接收会话的默认行为。副屏由接收端选择。
-可编辑的图形入口及物理多机切换仍待开发与验收。
+桌面可在布局工作区选择本机，展开详情中的“多电脑分段布局”。读取当前显示器后，
+可选择出边、目标、入边和两端分段范围。导出文件保存在数据目录的 `route-exports`，
+带有已核对的证书指纹。用 `connect-routes --layout` 指向导出文件。现有导出不会被
+同名操作覆盖。物理多机切换仍待验收。
 
 ## 查询已核验电脑的屏幕表
 

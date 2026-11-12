@@ -7,50 +7,19 @@ use peerglide_platform::{
     display_layout::{EdgeAnchor, Layout},
     display_routes::{Link, Route, Span, Table, Target},
 };
-use peerglide_protocol::Edge;
 #[cfg(any(windows, target_os = "macos", test))]
 use peerglide_protocol::InputCapabilities;
-use serde::Deserialize;
+use peerglide_protocol::{
+    route_plan::{Plan, VERSION as PLAN_VERSION},
+    Edge,
+};
 #[cfg(any(windows, target_os = "macos", test))]
 use std::time::Duration;
-use std::{
-    collections::BTreeMap,
-    fs::File,
-    io::Read,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, fs::File, io::Read, net::SocketAddr, path::Path};
 
 const MAX_PLAN_BYTES: u64 = 128 * 1024;
 #[cfg(any(windows, target_os = "macos", test))]
 const TIMEOUT: Duration = Duration::from_secs(8);
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Plan {
-    version: u8,
-    peers: Vec<PeerSpec>,
-    routes: Vec<RouteSpec>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PeerSpec {
-    address: SocketAddr,
-    certificate: PathBuf,
-    secondary_layout: Option<SocketAddr>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RouteSpec {
-    local_origin: [f64; 2],
-    local_edge: Edge,
-    local_span: [f64; 2],
-    peer: usize,
-    remote_edge: Edge,
-    remote_span: [f64; 2],
-}
 
 pub(super) struct Peer {
     pub address: SocketAddr,
@@ -93,7 +62,10 @@ impl Routes {
     }
 
     fn bind(plan: Plan, directory: &Path, local: &[u8], layout: &Layout) -> Result<Self> {
-        ensure!(plan.version == 1, "unsupported display route plan version");
+        ensure!(
+            plan.version == PLAN_VERSION,
+            "unsupported display route plan version"
+        );
         ensure!(
             (1..=transport::trusted_listener::MAX_TRUSTED_PEERS).contains(&plan.peers.len()),
             "display route peer count outside listener limits"
@@ -115,6 +87,13 @@ impl Routes {
                 "secondary layout needs a destination address and port"
             );
             let certificate = transport::read_certificate(&directory.join(spec.certificate))?;
+            ensure!(
+                spec.fingerprint
+                    .as_ref()
+                    .is_none_or(|expected| expected
+                        .eq_ignore_ascii_case(&transport::fingerprint(&certificate))),
+                "display route peer certificate differs from its configured fingerprint"
+            );
             ensure!(
                 certificate != local,
                 "display route peer matches the local identity"
@@ -241,7 +220,10 @@ mod tests {
     use super::*;
     use peerglide_platform::display_layout::{Bounds, Display, DisplayId, Rotation};
     use peerglide_protocol::Message;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     struct Fixture(PathBuf);
 
@@ -352,6 +334,10 @@ mod tests {
         assert_eq!(first_route.target.edge, Edge::Left);
         assert_eq!(second_route.target.edge, Edge::Top);
         assert_eq!(second_route.fraction, 0.25);
+        plan["peers"][1]["fingerprint"] = serde_json::json!(first.fingerprint());
+        std::fs::write(&path, serde_json::to_vec(&plan)?)?;
+        assert!(Routes::load(&path, &local.certificate, &layout).is_err());
+        plan["peers"][1]["fingerprint"] = serde_json::json!(second.fingerprint());
         let serve_first = tokio::spawn(answer(first_endpoint.clone(), local.certificate.clone()));
         let serve_second = tokio::spawn(answer(second_endpoint.clone(), local.certificate.clone()));
         probe(&local, first_peer).await?;

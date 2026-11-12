@@ -2211,7 +2211,6 @@ dependencies = [
  "peerglide-protocol",
  "peerglide-transport",
  "quinn",
- "serde",
  "serde_json",
  "tokio",
 ]
