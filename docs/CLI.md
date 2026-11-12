@@ -159,7 +159,12 @@ peerglide listen --peer-cert SOURCE.der --native --allow-control --edge left --r
 peerglide connect HOST:24870 --peer-cert HOST.der --native --edge right --request-secondary-layout=HOST:24878
 ```
 
-这条路径一次确认接收端明确配置的屏幕。多目标自动路由与热插拔重建仍待开发及真机验证。
+这条路径一次确认接收端明确配置的屏幕。多目标自动路由仍待开发。
+
+主屏模式显式启用 `--reconnect` 时，检测到新的有效布局后可在本机释放完成后重连原电脑。
+开始新的键鼠捕获前重新核对证书与本机布局，光标先回到屏内才能再次从边缘切换。布局
+读不到、恢复未确认或指定了任意一端的接收屏幕时，需要先检查本机状态。真实热插拔和
+两端恢复仍待验收。
 
 ## 查询已核验电脑的屏幕表
 
