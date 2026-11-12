@@ -1223,7 +1223,7 @@ fn distance(edge: Edge, x: f64, y: f64) -> f64 {
         Edge::Bottom => 1.0 - y,
     }
 }
-fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
+pub(super) fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
     match edge {
         Edge::Left => (0.002, along),
         Edge::Right => (0.998, along),

@@ -3,6 +3,8 @@ mod layout_control;
 mod pairing_worker;
 mod reconnect;
 mod session;
+#[cfg(target_os = "linux")]
+mod x11_receive;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
@@ -120,6 +122,19 @@ enum Command {
     },
     /// Accept a connection from exactly the enrolled certificate. No input permission by default.
     Listen(Options),
+    /// Receive pointer motion from one verified peer on the local Xorg desktop.
+    #[cfg(target_os = "linux")]
+    ListenX11 {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+        /// Explicitly allow the selected computer to move the local pointer.
+        #[arg(long, required = true)]
+        allow_pointer_control: bool,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -209,6 +224,13 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Listen(o) => run(o, None, false).await,
+        #[cfg(target_os = "linux")]
+        Command::ListenX11 {
+            identity,
+            peer_cert,
+            bind,
+            allow_pointer_control,
+        } => x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control).await,
         Command::Connect {
             address,
             options,
@@ -650,22 +672,7 @@ async fn run_inner(
     } else {
         InputCapabilities::default()
     };
-    transport::send(
-        &mut tx,
-        &Message::Hello {
-            version: VERSION,
-            capabilities: local.clone(),
-        },
-    )
-    .await?;
-    let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??;
-    let peer_capabilities = match hello {
-        Message::Hello {
-            version: VERSION,
-            capabilities,
-        } if capabilities.valid() => capabilities,
-        _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
-    };
+    let peer_capabilities = exchange_hello(&mut tx, &mut rx, local.clone()).await?;
     Ok::<_, anyhow::Error>((c, tx, rx, local, peer_capabilities))
         } => Some(result),
     };
@@ -747,6 +754,29 @@ async fn run_inner(
         }
     }
     Ok(())
+}
+
+async fn exchange_hello(
+    tx: &mut quinn::SendStream,
+    rx: &mut quinn::RecvStream,
+    local: InputCapabilities,
+) -> Result<InputCapabilities> {
+    transport::send(
+        tx,
+        &Message::Hello {
+            version: VERSION,
+            capabilities: local,
+        },
+    )
+    .await?;
+    let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(rx)).await??;
+    match hello {
+        Message::Hello {
+            version: VERSION,
+            capabilities,
+        } if capabilities.valid() => Ok(capabilities),
+        _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
+    }
 }
 
 #[cfg(test)]
