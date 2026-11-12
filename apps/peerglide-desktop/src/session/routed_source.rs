@@ -11,7 +11,7 @@ use platform::{
 };
 use std::path::Path;
 
-const LEASE: u64 = 1;
+pub(super) const LEASE: u64 = 1;
 type Ending<'a> = Pin<&'a mut dyn Future<Output = Result<()>>>;
 
 pub(crate) async fn run(
@@ -193,7 +193,7 @@ impl<'a> Source<'a> {
             self.reporter.switch(crate::WorkerSwitchState::Pending);
             let dial = tokio::time::timeout(
                 Duration::from_millis(request.deadline.saturating_sub(now_ms())),
-                Link::connect(identity, chosen.peer),
+                Link::connect(identity, chosen.peer, platform::input_capabilities()),
             );
             let dialed = tokio::select! {
                 biased;
@@ -452,7 +452,7 @@ fn is_interior(layout: &Layout, (x, y): (f64, f64)) -> bool {
         })
 }
 
-fn next_motion(sequence: &mut u64, (x, y): (f64, f64)) -> Result<Motion> {
+pub(super) fn next_motion(sequence: &mut u64, (x, y): (f64, f64)) -> Result<Motion> {
     *sequence = sequence
         .checked_add(1)
         .context("input sequence exhausted")?;
@@ -466,24 +466,28 @@ fn next_motion(sequence: &mut u64, (x, y): (f64, f64)) -> Result<Motion> {
     Ok(cursor)
 }
 
-struct Link {
-    connection: quinn::Connection,
+pub(super) struct Link {
+    pub(super) connection: quinn::Connection,
     tx: quinn::SendStream,
     messages: mpsc::Receiver<Result<Message>>,
-    capabilities: InputCapabilities,
+    pub(super) capabilities: InputCapabilities,
     secondary: Option<crate::secondary_layout::Routes>,
     _reader: Abort,
     _endpoint: quinn::Endpoint,
 }
 
 impl Link {
-    async fn connect(identity: &transport::Identity, peer: &Peer) -> Result<Self> {
+    pub(super) async fn connect(
+        identity: &transport::Identity,
+        peer: &Peer,
+        local: InputCapabilities,
+    ) -> Result<Self> {
         let endpoint =
             transport::endpoint(unspecified_for(peer.address), identity, &peer.certificate)?;
         let connection = endpoint.connect(peer.address, "peerglide.local")?.await?;
         transport::verify_peer(&connection, &peer.certificate)?;
         let (mut tx, mut rx) = connection.open_bi().await?;
-        let capabilities = exchange_hello(&mut tx, &mut rx, platform::input_capabilities()).await?;
+        let capabilities = exchange_hello(&mut tx, &mut rx, local).await?;
         let secondary = crate::secondary_layout::Routes::start(
             identity,
             &peer.certificate,
@@ -529,7 +533,7 @@ impl Link {
         })
     }
 
-    async fn reply(&mut self, message: Message) -> Result<()> {
+    pub(super) async fn reply(&mut self, message: Message) -> Result<()> {
         match message {
             Message::Acquire { lease, .. } => send(&mut self.tx, &Message::Denied { lease }).await,
             Message::Ping { lease: 0 } => send(&mut self.tx, &Message::Pong { lease: 0 }).await,
@@ -540,7 +544,7 @@ impl Link {
         }
     }
 
-    async fn next(&mut self) -> Result<Option<Message>> {
+    pub(super) async fn next(&mut self) -> Result<Option<Message>> {
         match self.messages.recv().await {
             Some(Ok(message)) => Ok(Some(message)),
             Some(Err(error)) if error.is::<transport::InvalidMessageFrame>() => Err(error),
@@ -555,7 +559,7 @@ impl Link {
         }
     }
 
-    async fn send(&mut self, message: &Message) -> Result<bool> {
+    pub(super) async fn send(&mut self, message: &Message) -> Result<bool> {
         match send(&mut self.tx, message).await {
             Ok(()) => Ok(true),
             Err(_) if self.connection.close_reason().is_some() => Ok(false),
@@ -563,7 +567,7 @@ impl Link {
         }
     }
 
-    async fn retire(&mut self, cursor: Option<Motion>) -> Result<()> {
+    pub(super) async fn retire(&mut self, cursor: Option<Motion>) -> Result<()> {
         if self.connection.close_reason().is_none() {
             // Even a write racing with close can succeed through the peer's
             // independently confirmed cleanup. The exact close is the fence.
@@ -669,7 +673,7 @@ mod tests {
                 Ok::<_, anyhow::Error>(())
             };
             let sender = async {
-                let mut link = Link::connect(&source, &peer).await?;
+                let mut link = Link::connect(&source, &peer, platform::input_capabilities()).await?;
                 let acquire = link.acquire_proposal(Edge::Right, 0.25).await;
                 assert_eq!(acquire.is_some(), allowed);
                 if let Some(acquire) = acquire {
@@ -767,7 +771,7 @@ mod tests {
                 Ok::<_, anyhow::Error>(())
             };
             let handoff = async {
-                let mut link = Link::connect(&source, &peer).await?;
+                let mut link = Link::connect(&source, &peer, platform::input_capabilities()).await?;
                 send(
                     &mut link.tx,
                     &Message::Acquire {

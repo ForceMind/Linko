@@ -1,14 +1,18 @@
-//! Read-only XInput2 activity for local takeover. Never logs input payloads.
-use super::x11_inject::local_connection;
+//! The single local XInput2 observation owner. Never logs input payloads.
+use super::{capture_thread::Reservation, x11_inject::local_connection};
 use anyhow::{ensure, Context, Result};
 use x11rb::{
     connection::Connection as _,
     protocol::{
-        xinput::{ConnectionExt as _, DeviceType, EventMask, XIEventMask},
+        xinput::{ConnectionExt as _, DeviceType, EventMask, XIDeviceInfo, XIEventMask},
+        xproto::Window,
         Event,
     },
     rust_connection::RustConnection,
 };
+
+mod source;
+pub use source::{PointerSample, PointerSource};
 
 const ALL_DEVICES: u16 = 0;
 const ALL_MASTERS: u16 = 1;
@@ -18,13 +22,19 @@ const XTEST_KEYBOARD: &[u8] = b"Virtual core XTEST keyboard";
 
 pub struct Activity {
     connection: RustConnection,
+    root: Window,
     xtest: [u16; 2],
+    _reservation: Reservation,
 }
 
 impl Activity {
-    /// This is the Linux receiver's only native input observation subscription.
-    /// It never grabs input and opens only inside the local X11 session.
+    /// The receiver observes activity without grabbing input.
     pub fn open_for_local_takeover() -> Result<Self> {
+        Self::open().map(|(activity, _)| activity)
+    }
+
+    fn open() -> Result<(Self, Vec<XIDeviceInfo>)> {
+        let reservation = Reservation::acquire()?;
         let (connection, screen) = local_connection()?;
         let version = connection.xinput_xi_query_version(2, 2)?.reply()?;
         ensure!(
@@ -72,7 +82,15 @@ impl Activity {
             },
         ];
         connection.xinput_xi_select_events(root, &masks)?.check()?;
-        Ok(Self { connection, xtest })
+        Ok((
+            Self {
+                connection,
+                root,
+                xtest,
+                _reservation: reservation,
+            },
+            reply.infos,
+        ))
     }
 
     /// True means reclaim the local computer before the next remote effect.
