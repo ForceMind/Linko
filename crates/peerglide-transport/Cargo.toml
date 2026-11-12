@@ -12,6 +12,7 @@ rcgen.workspace = true
 blake3.workspace = true
 peerglide-protocol.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 opaque-ke = { git = "https://github.com/facebook/opaque-ke", rev = "027abbc91115baa38b70ad3af7f5a22f072f978b", default-features = false, features = ["ristretto255", "argon2"] }
 rand = "0.8"
 sha2 = "0.11"
