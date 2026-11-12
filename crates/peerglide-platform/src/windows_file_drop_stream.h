@@ -217,7 +217,7 @@ public:
                 return status;
             }
             if (actual == 0) {
-                return S_FALSE;
+                return S_OK;
             }
             if (read) {
                 read->QuadPart += actual;
@@ -229,6 +229,9 @@ public:
             }
             if (FAILED(result) || saved != actual) {
                 return FAILED(result) ? result : STG_E_WRITEFAULT;
+            }
+            if (status == S_FALSE) {
+                return S_OK;
             }
             count.QuadPart -= actual;
         }

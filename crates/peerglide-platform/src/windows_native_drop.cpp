@@ -394,10 +394,22 @@ extern "C" int32_t linko_windows_file_stream_regression() {
         return 10;
     }
     LARGE_INTEGER offset{};
-    if (!file->close() || fixture.closes != 1 || FAILED(stream->Seek(offset, STREAM_SEEK_SET, nullptr)) ||
-        stream->Read(output, 1, &copied) != STG_E_ACCESSDENIED || copied != 0 || fixture.reads != 1 ||
-        SUCCEEDED(data->GetData(&content, &medium)) || SUCCEEDED(data->GetData(&metadata, &medium))) {
+    ComPtr<IStream> duplicate;
+    ComPtr<IStream> target;
+    ULARGE_INTEGER remainder{};
+    remainder.QuadPart = std::numeric_limits<uint64_t>::max();
+    ULARGE_INTEGER read_count{}, write_count{};
+    if (FAILED(stream->Seek(offset, STREAM_SEEK_SET, nullptr)) ||
+        FAILED(stream->Clone(duplicate.GetAddressOf())) ||
+        FAILED(CreateStreamOnHGlobal(nullptr, TRUE, target.GetAddressOf())) ||
+        duplicate->CopyTo(target.Get(), remainder, &read_count, &write_count) != S_OK ||
+        read_count.QuadPart != 3 || write_count.QuadPart != 3 || fixture.reads != 2) {
         return 11;
+    }
+    if (!file->close() || fixture.closes != 1 || FAILED(stream->Seek(offset, STREAM_SEEK_SET, nullptr)) ||
+        stream->Read(output, 1, &copied) != STG_E_ACCESSDENIED || copied != 0 || fixture.reads != 2 ||
+        SUCCEEDED(data->GetData(&content, &medium)) || SUCCEEDED(data->GetData(&metadata, &medium))) {
+        return 12;
     }
     return 0;
 }
