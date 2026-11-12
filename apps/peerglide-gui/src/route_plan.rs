@@ -46,6 +46,26 @@ impl Draft {
         self.plan = plan;
         Ok(())
     }
+
+    fn launch(&self, app: &App, layout: &Layout) -> Result<super::RoutedLaunch> {
+        ensure!(!self.plan.routes.is_empty(), "请先保存至少一个分段");
+        validate_layout(&self.plan, layout)?;
+        let local = Identity::load(&app.identity_dir())?;
+        for peer in &self.plan.peers {
+            verify_peer(peer, &local.certificate)?;
+        }
+        let path = app.dir.join("route-draft.json");
+        let bytes = config_store::read(&path)?.context("分段布局草稿尚未保存")?;
+        ensure!(
+            config_store::decode::<Plan>(&bytes)? == self.plan,
+            "分段布局草稿已变化，请重新打开窗口核对"
+        );
+        Ok(super::RoutedLaunch {
+            path,
+            layout_fingerprint: blake3::hash(&bytes).to_hex().to_string(),
+            local_fingerprint: local.fingerprint(),
+        })
+    }
 }
 
 impl Panel {
@@ -71,6 +91,24 @@ impl Panel {
             self.draw_peers(app, ui, draft);
             if let Some(layout) = app.display_inventory.snapshot() {
                 self.draw_routes(app, ui, draft, &layout);
+                if ui
+                    .add_enabled(
+                        app.dialog.is_none()
+                            && app.routed_start_available()
+                            && !draft.plan.routes.is_empty(),
+                        egui::Button::new("开启分段键鼠…"),
+                    )
+                    .clicked()
+                {
+                    match draft.launch(app, &layout) {
+                        Ok(launch) => {
+                            app.native_confirmation = false;
+                            app.pending_routed = Some(launch);
+                            app.dialog = Some(super::Dialog::NativeStart);
+                        }
+                        Err(error) => app.notice = format!("无法准备分段发送：{error:#}"),
+                    }
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.export_name)
@@ -543,7 +581,8 @@ mod tests {
     #[test]
     fn validates_export_geometry_and_pins_and_keeps_an_existing_export() -> Result<()> {
         let fixture = crate::tests::Fixture::new()?;
-        let local = Identity::generate()?;
+        let app = App::load(fixture.path.clone());
+        let local = Identity::create(&app.identity_dir())?;
         let remote = Identity::generate()?;
         let certificate = fixture.path.join("peer.der");
         std::fs::write(&certificate, &remote.certificate)?;
@@ -587,6 +626,19 @@ mod tests {
         plan.routes.push(route);
         assert!(validate_layout(&plan, &layout).is_err());
         plan.routes.pop();
+        let mut draft = Draft::open(fixture.path.join("route-draft.json"))?;
+        draft.save(plan.clone())?;
+        let launch = draft.launch(&app, &layout)?;
+        launch.recheck(&app)?;
+        let command = launch.command(PathBuf::from("peerglide"), app.identity_dir());
+        assert!(command.get_args().any(|arg| arg == "--managed"));
+        assert!(command
+            .get_args()
+            .any(|arg| arg == launch.layout_fingerprint.as_str()));
+        let mut changed = plan.clone();
+        changed.routes[0].remote_edge = Edge::Left;
+        draft.save(changed)?;
+        assert!(launch.recheck(&app).is_err());
         let output = fixture.path.join("routes.json");
         write_new(&output, &plan)?;
         let before = std::fs::read(&output)?;
@@ -596,6 +648,7 @@ mod tests {
         assert_eq!(std::fs::read(&output)?, before);
         std::fs::write(certificate, Identity::generate()?.certificate)?;
         assert!(verify_peer(&peer, &local.certificate).is_err());
+        drop(app);
         fixture.close()?;
         Ok(())
     }
