@@ -553,8 +553,11 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
             || (o.managed && address.is_some() && !probe && !o.reconnect),
         "initial wait requires a managed non-probe connector without reconnect"
     );
-    o.receive_selection = o.receive_display.map(peerglide_platform::ReceiveDisplay::select)
-        .transpose()?.map(Arc::new);
+    o.receive_selection = o
+        .receive_display
+        .map(peerglide_platform::ReceiveDisplay::select)
+        .transpose()?
+        .map(Arc::new);
     let managed = o.managed;
     let mut input_status = InputReporter::new(managed);
     // No native capture/input effect exists during identity/network setup.

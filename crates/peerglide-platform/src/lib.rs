@@ -178,8 +178,11 @@ impl ReceiveDisplay {
         #[cfg(any(windows, target_os = "macos"))]
         {
             let layout = read_display_layout()?;
-            let target = layout.placement_at_origin(origin.0, origin.1)
-                .ok_or_else(|| anyhow::anyhow!("requested local display origin is missing or ambiguous"))?;
+            let target = layout
+                .placement_at_origin(origin.0, origin.1)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("requested local display origin is missing or ambiguous")
+                })?;
             Ok(Self { layout, target })
         }
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -1210,7 +1213,9 @@ pub fn capture_with_receive_display(
     #[cfg(any(windows, target_os = "macos"))]
     {
         if let Some(display) = receive_display {
-            gate.0.receive_display.set(display)
+            gate.0
+                .receive_display
+                .set(display)
                 .map_err(|_| anyhow::anyhow!("local receive display was already selected"))?;
         }
         let wake = Arc::new(native::ReceiveWake::default());
