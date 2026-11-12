@@ -1144,7 +1144,10 @@ struct OutgoingEdges {
 
 impl OutgoingEdges {
     fn new(local: Edge, remote: Option<Edge>) -> Self {
-        Self { local, remote: remote.unwrap_or_else(|| local.opposite()) }
+        Self {
+            local,
+            remote: remote.unwrap_or_else(|| local.opposite()),
+        }
     }
 
     /// v5 receivers place the cursor on the opposite edge of the Acquire.
@@ -1153,7 +1156,10 @@ impl OutgoingEdges {
     }
 
     fn positions(&self, along: f64) -> ((f64, f64), (f64, f64)) {
-        (entry_position(self.remote, along), entry_position(self.local, along))
+        (
+            entry_position(self.remote, along),
+            entry_position(self.local, along),
+        )
     }
 
     fn crossed_back(&self, (x, y): (f64, f64)) -> bool {
