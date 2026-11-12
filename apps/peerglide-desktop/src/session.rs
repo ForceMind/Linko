@@ -1534,8 +1534,15 @@ mod tests {
                 let c = target.accept().await.unwrap().await?;
                 transport::verify_peer(&c, &sender.certificate)?;
                 let (_, mut rx) = c.accept_bi().await?;
-                assert!(matches!(transport::receive(&mut rx).await?, Message::Ping { lease: 0 }));
-                let result = if clean { Ok(()) } else { Err(anyhow::anyhow!("session failed")) };
+                assert!(matches!(
+                    transport::receive(&mut rx).await?,
+                    Message::Ping { lease: 0 }
+                ));
+                let result = if clean {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("session failed"))
+                };
                 let reason = close_reason_after_recovery(&result, Some(state), generic);
                 c.close(0u8.into(), reason);
                 Ok::<_, anyhow::Error>(())
@@ -1559,7 +1566,8 @@ mod tests {
             };
             tokio::time::timeout(Duration::from_secs(5), async {
                 tokio::try_join!(receive, send_probe)
-            }).await??;
+            })
+            .await??;
         }
         Ok(())
     }
