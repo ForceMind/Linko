@@ -189,6 +189,7 @@ mod tests {
     }
 }
 
+pub mod file_drop_ipc;
 pub mod layout_ipc;
 pub mod worker;
 

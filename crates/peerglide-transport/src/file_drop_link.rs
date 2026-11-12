@@ -13,7 +13,8 @@ use peerglide_protocol::LEASE_MS;
 use peerglide_transfer::drop_admission::{Admission, Context as DropContext, Ticket};
 use quinn::{crypto::rustls::HandshakeData, Connection};
 use std::{
-    sync::{Arc, Mutex},
+    fmt::Write,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -25,8 +26,9 @@ const REQUEST: u8 = 1;
 const READY: u8 = 2;
 const DECLINED: u8 = 3;
 
-/// Shared secret of a single authenticated file transfer. Never serialized.
-#[cfg_attr(test, derive(Clone))]
+/// Purpose-scoped proof of one authenticated file transfer. Export is limited
+/// to the local worker pipe and never logged, persisted, or sent to a peer.
+#[derive(Clone)]
 pub(crate) struct Receipt {
     transfer: [u8; 16],
     peer: blake3::Hash,
@@ -72,6 +74,39 @@ impl Receipt {
         mac.update(&input.proof());
         mac.finalize()
     }
+
+    fn worker_token(&self) -> String {
+        let mut token = String::with_capacity(peerglide_protocol::file_drop_ipc::PROOF_HEX);
+        for byte in self.transfer {
+            write!(&mut token, "{byte:02x}").expect("format into String");
+        }
+        token.push_str(self.peer.to_hex().as_str());
+        token.push_str(blake3::Hash::from_bytes(self.key).to_hex().as_str());
+        token
+    }
+
+    fn from_worker_token(token: &str) -> Result<Self> {
+        ensure!(
+            token.len() == peerglide_protocol::file_drop_ipc::PROOF_HEX && token.is_ascii(),
+            "invalid local file reservation proof"
+        );
+        let mut transfer = [0; 16];
+        for (index, byte) in transfer.iter_mut().enumerate() {
+            let offset = index * 2;
+            *byte = u8::from_str_radix(&token[offset..offset + 2], 16)?;
+        }
+        let peer = blake3::Hash::from_hex(&token[32..96])?;
+        let key = *blake3::Hash::from_hex(&token[96..160])?.as_bytes();
+        ensure!(
+            transfer != [0; 16] && key != [0; 32],
+            "invalid local file reservation proof"
+        );
+        Ok(Self {
+            transfer,
+            peer,
+            key,
+        })
+    }
 }
 
 /// The authenticated receiving peer reported this file committed. The sender
@@ -84,14 +119,23 @@ pub(crate) struct ReceivedReceipt {
 }
 
 /// One locally armed file and at most one claim for it.
-pub struct Slot(Mutex<Option<Prepared>>);
+pub struct Slot(Reservations<LocalFile>);
 
-struct Prepared {
+struct LocalFile {
     context: DropContext,
     ticket: Ticket,
-    expires: Instant,
     file: PreparedDropPath,
-    receipt: Arc<ReceivedReceipt>,
+}
+
+/// The input worker owns only the short-lived proof, never the local file.
+pub struct WorkerSlot(Reservations<()>);
+
+struct Reservations<P>(Mutex<Option<Prepared<P>>>);
+
+struct Prepared<P> {
+    local: P,
+    expires: Instant,
+    receipt: Receipt,
     reservation: Option<Reservation>,
 }
 
@@ -101,8 +145,8 @@ struct Reservation {
     expires: Instant,
 }
 
-/// Owns the prepared file after the exact live lease claims it. The local
-/// adapter still checks this ticket when it submits or retires the drag.
+/// Owns the prepared file. The local adapter still checks its ticket when it
+/// submits or retires the drag.
 pub struct Claim {
     pub file: PreparedDropPath,
     pub ticket: Ticket,
@@ -130,25 +174,45 @@ impl Slot {
         let remaining = admission
             .file_ready(ticket, context, receipt.binding.transfer, now, authorized)
             .map_err(|error| anyhow::anyhow!("file preparation unavailable ({error:?})"))?;
-        Ok(Self(Mutex::new(Some(Prepared {
-            context,
-            ticket,
-            expires: Instant::now() + Duration::from_millis(remaining),
-            file,
-            receipt,
-            reservation: None,
-        }))))
+        Ok(Self(Reservations::new(
+            LocalFile {
+                context,
+                ticket,
+                file,
+            },
+            receipt.binding.clone(),
+            Duration::from_millis(remaining),
+        )))
     }
 
     pub fn clear(&self) -> Result<()> {
-        *self.lock()? = None;
-        Ok(())
+        self.0.clear()
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Option<Prepared>>> {
-        self.0
-            .lock()
-            .map_err(|_| anyhow::anyhow!("file reservation slot unavailable"))
+    /// Separate the GUI-owned file from the proof for one managed input worker.
+    /// The token is only for inherited stdin and must never enter diagnostics.
+    pub fn into_worker(self) -> Result<(Claim, String, u32)> {
+        let prepared = self
+            .0
+             .0
+            .into_inner()
+            .ok()
+            .flatten()
+            .context("file preparation ended")?;
+        let remaining = prepared.expires.saturating_duration_since(Instant::now());
+        let lifetime_ms = u32::try_from(remaining.as_millis())?;
+        ensure!(
+            prepared.reservation.is_none() && lifetime_ms != 0,
+            "file preparation unavailable"
+        );
+        Ok((
+            Claim {
+                file: prepared.local.file,
+                ticket: prepared.local.ticket,
+            },
+            prepared.receipt.worker_token(),
+            lifetime_ms,
+        ))
     }
 
     /// Only call from the local input owner after the normal v5 Acquire was
@@ -162,6 +226,104 @@ impl Slot {
         admission: &mut Admission,
         now: u64,
     ) -> Result<Option<Claim>> {
+        Ok(self
+            .0
+            .claim(input, pin, granted_lease, |prepared| {
+                Some(prepared.local.context) == current
+                    && admission
+                        .file_ready(
+                            prepared.local.ticket,
+                            prepared.local.context,
+                            prepared.receipt.transfer,
+                            now,
+                            true,
+                        )
+                        .is_ok()
+            })?
+            .map(|local| Claim {
+                file: local.file,
+                ticket: local.ticket,
+            }))
+    }
+}
+
+impl WorkerSlot {
+    /// Accept only a bounded proof supplied by this worker's local supervisor.
+    pub fn from_local_arm(proof: &str, lifetime_ms: u32, pin: &[u8]) -> Result<Self> {
+        ensure!(
+            (1..=peerglide_protocol::file_drop_ipc::MAX_LIFETIME_MS).contains(&lifetime_ms),
+            "file reservation lifetime invalid"
+        );
+        let receipt = Receipt::from_worker_token(proof)?;
+        ensure!(
+            receipt.peer == blake3::hash(pin),
+            "file reservation peer differs"
+        );
+        Ok(Self(Reservations::new(
+            (),
+            receipt,
+            Duration::from_millis(u64::from(lifetime_ms)),
+        )))
+    }
+
+    pub fn clear(&self) -> Result<()> {
+        self.0.clear()
+    }
+
+    /// Report only an already-granted input lease, once.
+    pub fn claim(
+        &self,
+        input: &Connection,
+        pin: &[u8],
+        granted_lease: u64,
+        current: bool,
+    ) -> Result<bool> {
+        Ok(self
+            .0
+            .claim(input, pin, granted_lease, |_| current)?
+            .is_some())
+    }
+
+    /// Denial of the exact lease retires its file proof without granting it.
+    pub fn retire_denied(
+        &self,
+        input: &Connection,
+        pin: &[u8],
+        lease: u64,
+        current: bool,
+    ) -> Result<bool> {
+        Ok(self.0.claim(input, pin, lease, |_| current)?.is_some())
+    }
+}
+
+impl<P> Reservations<P> {
+    fn new(local: P, receipt: Receipt, lifetime: Duration) -> Self {
+        Self(Mutex::new(Some(Prepared {
+            local,
+            expires: Instant::now() + lifetime,
+            receipt,
+            reservation: None,
+        })))
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Option<Prepared<P>>>> {
+        self.0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("file reservation slot unavailable"))
+    }
+
+    fn clear(&self) -> Result<()> {
+        *self.lock()? = None;
+        Ok(())
+    }
+
+    fn claim(
+        &self,
+        input: &Connection,
+        pin: &[u8],
+        granted_lease: u64,
+        current: impl FnOnce(&Prepared<P>) -> bool,
+    ) -> Result<Option<P>> {
         let mut state = self.lock()?;
         let Some(prepared) = live(&mut state, current) else {
             return Ok(None);
@@ -169,32 +331,15 @@ impl Slot {
         let Some(reservation) = &prepared.reservation else {
             return Ok(None);
         };
-        let receipt = &prepared.receipt.binding;
         if reservation.lease != granted_lease
-            || receipt.peer != blake3::hash(pin)
+            || prepared.receipt.peer != blake3::hash(pin)
             || !reservation
                 .input
                 .matches(input, pin, &reservation.input.proof())?
         {
             return Ok(None);
         }
-        if admission
-            .file_ready(
-                prepared.ticket,
-                prepared.context,
-                receipt.transfer,
-                now,
-                true,
-            )
-            .is_err()
-        {
-            *state = None;
-            return Ok(None);
-        }
-        Ok(state.take().map(|prepared| Claim {
-            file: prepared.file,
-            ticket: prepared.ticket,
-        }))
+        Ok(state.take().map(|prepared| prepared.local))
     }
 
     fn publish(
@@ -202,13 +347,13 @@ impl Slot {
         request: &Record,
         input: Binding,
         pin: &[u8],
-        current: Option<DropContext>,
-    ) -> Result<Option<Published<'_>>> {
+        current: impl FnOnce(&Prepared<P>) -> bool,
+    ) -> Result<Option<Published<'_, P>>> {
         let mut state = self.lock()?;
         let Some(prepared) = live(&mut state, current) else {
             return Ok(None);
         };
-        let receipt = &prepared.receipt.binding;
+        let receipt = &prepared.receipt;
         if prepared.reservation.is_some()
             || receipt.peer != blake3::hash(pin)
             || receipt.transfer != request.transfer
@@ -230,28 +375,31 @@ impl Slot {
     }
 }
 
-fn live(state: &mut Option<Prepared>, current: Option<DropContext>) -> Option<&mut Prepared> {
+fn live<P>(
+    state: &mut Option<Prepared<P>>,
+    current: impl FnOnce(&Prepared<P>) -> bool,
+) -> Option<&mut Prepared<P>> {
     let now = Instant::now();
     if state.as_ref().is_some_and(|prepared| {
-        Some(prepared.context) != current
-            || now >= prepared.expires
+        now >= prepared.expires
             || prepared
                 .reservation
                 .as_ref()
                 .is_some_and(|grant| now >= grant.expires)
+            || !current(prepared)
     }) {
         *state = None;
     }
     state.as_mut()
 }
 
-struct Published<'a> {
-    slot: &'a Slot,
+struct Published<'a, P> {
+    slot: &'a Reservations<P>,
     tag: blake3::Hash,
     confirmed: bool,
 }
 
-impl Drop for Published<'_> {
+impl<P> Drop for Published<'_, P> {
     fn drop(&mut self) {
         if !self.confirmed {
             let _ = self.slot.clear();
@@ -323,6 +471,29 @@ pub async fn accept(
     slot: &Slot,
     current: impl FnOnce() -> Option<DropContext>,
 ) -> Result<bool> {
+    accept_inner(sidecar, input, pin, &slot.0, |prepared| {
+        current() == Some(prepared.local.context)
+    })
+    .await
+}
+
+pub async fn accept_worker(
+    sidecar: &Connection,
+    input: &Connection,
+    pin: &[u8],
+    slot: &WorkerSlot,
+    current: impl FnOnce() -> bool,
+) -> Result<bool> {
+    accept_inner(sidecar, input, pin, &slot.0, |_| current()).await
+}
+
+async fn accept_inner<P>(
+    sidecar: &Connection,
+    input: &Connection,
+    pin: &[u8],
+    slot: &Reservations<P>,
+    current: impl FnOnce(&Prepared<P>) -> bool,
+) -> Result<bool> {
     verify_sidecar(sidecar, pin)?;
     tokio::time::timeout(IO_TIMEOUT, async {
         let (mut send, mut receive) = sidecar.accept_bi().await?;
@@ -333,7 +504,7 @@ pub async fn accept(
         let request = Record::decode(bytes)?;
         ensure!(request.kind == REQUEST, "invalid file reservation request");
         let binding = Binding::from_v5(input, pin)?;
-        let published = slot.publish(&request, binding, pin, current())?;
+        let published = slot.publish(&request, binding, pin, current)?;
         let (kind, tag) = published
             .as_ref()
             .map_or((DECLINED, blake3::Hash::from_bytes([0; 32])), |grant| {

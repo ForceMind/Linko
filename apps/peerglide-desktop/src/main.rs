@@ -6,6 +6,7 @@ mod audio_playback;
 mod audio_source;
 #[cfg(any(windows, target_os = "macos", test))]
 mod audio_stop;
+mod file_drop_control;
 mod input_diagnostics;
 mod layout_control;
 mod layout_probe;
@@ -399,6 +400,8 @@ impl From<Side> for Edge {
 struct Options {
     #[arg(skip)]
     layout: std::sync::Arc<layout_control::Controller>,
+    #[arg(skip)]
+    file_drop: Arc<file_drop_control::Controller>,
     /// Accept a stop command on stdin from the local GUI supervisor.
     #[arg(long, hide = true)]
     managed: bool,
@@ -847,6 +850,8 @@ pub(crate) struct InputReporter {
     emitted: Vec<WorkerInputEvent>,
     #[cfg(test)]
     observed_switches: Vec<WorkerSwitchState>,
+    #[cfg(test)]
+    file_drop_events: Option<tokio::sync::mpsc::Sender<peerglide_protocol::file_drop_ipc::Event>>,
 }
 impl InputReporter {
     fn new(managed: bool) -> Self {
@@ -863,6 +868,8 @@ impl InputReporter {
             emitted: Vec::new(),
             #[cfg(test)]
             observed_switches: Vec::new(),
+            #[cfg(test)]
+            file_drop_events: None,
         }
     }
     fn switch(&mut self, state: WorkerSwitchState) {
@@ -887,6 +894,15 @@ impl InputReporter {
     fn peer_motion(&mut self, available: bool) {
         self.peer_unavailable = !available;
         self.switch(WorkerSwitchState::Idle);
+    }
+    fn file_drop(&mut self, event: peerglide_protocol::file_drop_ipc::Event) {
+        #[cfg(test)]
+        if let Some(sender) = &self.file_drop_events {
+            let _ = sender.try_send(event);
+        }
+        if self.managed {
+            println!("{}", event.line());
+        }
     }
     fn clear_switch(&mut self) {
         self.peer_unavailable = false;
@@ -957,6 +973,7 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
 fn managed_stop_reader(
     stop: tokio::sync::watch::Sender<bool>,
     layout: Option<Arc<layout_control::Controller>>,
+    file_drop: Option<Arc<file_drop_control::Controller>>,
 ) -> tokio::sync::oneshot::Receiver<()> {
     let (request, requested) = tokio::sync::oneshot::channel();
     std::thread::spawn(move || {
@@ -966,6 +983,16 @@ fn managed_stop_reader(
             match layout_control::read_command(&mut reader) {
                 Ok(Some(line)) if line.trim() == "stop" => break,
                 Ok(Some(line)) => {
+                    if let Some(file_drop) = &file_drop {
+                        if let Some(command) =
+                            peerglide_protocol::file_drop_ipc::Command::parse(&line)
+                        {
+                            if let Some(event) = file_drop.submit(command) {
+                                println!("{}", event.line());
+                            }
+                            continue;
+                        }
+                    }
                     if let Some(layout) = &layout {
                         if let Some(update) =
                             peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line)
@@ -996,7 +1023,7 @@ async fn run_routed_worker(
         "managed route startup requires both confirmed fingerprints"
     );
     let (stop, stopped) = tokio::sync::watch::channel(false);
-    let _requested = managed.then(|| managed_stop_reader(stop.clone(), None));
+    let _requested = managed.then(|| managed_stop_reader(stop.clone(), None, None));
     let mut reporter = InputReporter::new(managed);
     reporter.set(WorkerInputState::Disabled);
     let result = {
@@ -1065,7 +1092,11 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
     let result = {
         let mut work = Box::pin(supervise(&o, address, probe, stopped, &mut input_status));
         if managed {
-            let requested = managed_stop_reader(stop.clone(), Some(o.layout.clone()));
+            let requested = managed_stop_reader(
+                stop.clone(),
+                Some(o.layout.clone()),
+                (o.native && o.allow_control && !probe).then(|| o.file_drop.clone()),
+            );
             tokio::select! {
                 result = &mut work => result,
                 _ = requested => { let _ = stop.send(true); request_native_stop(); work.await },
@@ -1331,6 +1362,13 @@ async fn run_inner(
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
+            file_drop: (o.managed && o.native && o.allow_control).then_some(
+                file_drop_control::Config {
+                    controller: &o.file_drop,
+                    identity: id,
+                    pin: peer,
+                },
+            ),
             receive_display: o.receive_selection.clone(),
             secondary: secondary.as_ref(),
             rebuilding_display_layout,
