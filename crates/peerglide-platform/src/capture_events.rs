@@ -72,7 +72,10 @@ impl LatestPosition {
             return None;
         }
         *seen = revision;
-        let epoch = CaptureEpoch { instance, generation };
+        let epoch = CaptureEpoch {
+            instance,
+            generation,
+        };
         Some(Captured::Position {
             x: f64::from_bits(x),
             y: f64::from_bits(y),

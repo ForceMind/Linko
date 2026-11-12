@@ -1362,13 +1362,11 @@ async fn run_inner(
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
-            file_drop: (o.managed && o.native).then_some(
-                file_drop_control::Config {
-                    controller: &o.file_drop,
-                    identity: id,
-                    pin: peer,
-                },
-            ),
+            file_drop: (o.managed && o.native).then_some(file_drop_control::Config {
+                controller: &o.file_drop,
+                identity: id,
+                pin: peer,
+            }),
             receive_display: o.receive_selection.clone(),
             secondary: secondary.as_ref(),
             rebuilding_display_layout,

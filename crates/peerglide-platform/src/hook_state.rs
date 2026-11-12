@@ -208,7 +208,8 @@ impl HookState {
         }
         self.gate.disable();
         self.emit(Captured::Emergency);
-        self.gate.route_from(self.gate.0.control.load(Ordering::Acquire))
+        self.gate
+            .route_from(self.gate.0.control.load(Ordering::Acquire))
     }
     fn rejected_pair(&mut self, key: bool, index: usize, down: bool, route: CaptureRoute) -> bool {
         let old = if key {

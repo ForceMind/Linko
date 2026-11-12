@@ -17,6 +17,7 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+use tokio::sync::oneshot;
 
 const LABEL: &[u8] = b"EXPORTER-Linko-Verified-File-Drop-v1";
 const IO_TIMEOUT: Duration = Duration::from_secs(4);
@@ -25,6 +26,8 @@ const BYTES: usize = 64;
 const REQUEST: u8 = 1;
 const READY: u8 = 2;
 const DECLINED: u8 = 3;
+const REQUEST_CONFIRM: u8 = 4;
+const CLAIMED: u8 = 5;
 
 /// Purpose-scoped proof of one authenticated file transfer. Export is limited
 /// to the local worker pipe and never logged, persisted, or sent to a peer.
@@ -160,6 +163,7 @@ struct Reservation {
     lease: u64,
     input: Binding,
     expires: Instant,
+    confirmation: Option<(oneshot::Sender<Record>, Record)>,
 }
 
 /// Owns the prepared file. The local adapter still checks its ticket when it
@@ -245,7 +249,7 @@ impl Slot {
     ) -> Result<Option<Claim>> {
         Ok(self
             .0
-            .claim(input, pin, granted_lease, |prepared| {
+            .claim(input, pin, granted_lease, true, |prepared| {
                 Some(prepared.local.context) == current
                     && admission
                         .file_ready(
@@ -297,7 +301,7 @@ impl WorkerSlot {
     ) -> Result<bool> {
         Ok(self
             .0
-            .claim(input, pin, granted_lease, |_| current)?
+            .claim(input, pin, granted_lease, true, |_| current)?
             .is_some())
     }
 
@@ -309,7 +313,10 @@ impl WorkerSlot {
         lease: u64,
         current: bool,
     ) -> Result<bool> {
-        Ok(self.0.claim(input, pin, lease, |_| current)?.is_some())
+        Ok(self
+            .0
+            .claim(input, pin, lease, false, |_| current)?
+            .is_some())
     }
 }
 
@@ -339,6 +346,7 @@ impl<P> Reservations<P> {
         input: &Connection,
         pin: &[u8],
         granted_lease: u64,
+        granted: bool,
         current: impl FnOnce(&Prepared<P>) -> bool,
     ) -> Result<Option<P>> {
         let mut state = self.lock()?;
@@ -356,7 +364,19 @@ impl<P> Reservations<P> {
         {
             return Ok(None);
         }
-        Ok(state.take().map(|prepared| prepared.local))
+        let Some(mut prepared) = state.take() else {
+            return Ok(None);
+        };
+        if granted {
+            if let Some((sender, record)) = prepared
+                .reservation
+                .as_mut()
+                .and_then(|reservation| reservation.confirmation.take())
+            {
+                let _ = sender.send(record);
+            }
+        }
+        Ok(Some(prepared.local))
     }
 
     fn publish(
@@ -374,19 +394,33 @@ impl<P> Reservations<P> {
         if prepared.reservation.is_some()
             || receipt.peer != blake3::hash(pin)
             || receipt.transfer != request.transfer
-            || receipt.tag(REQUEST, request.lease, &input) != request.tag
+            || receipt.tag(request.kind, request.lease, &input) != request.tag
         {
             return Ok(None);
         }
         let tag = receipt.tag(READY, request.lease, &input);
+        let (confirmation, completion) = if request.kind == REQUEST_CONFIRM {
+            let (send, receive) = oneshot::channel();
+            let claimed = Record {
+                kind: CLAIMED,
+                lease: request.lease,
+                transfer: request.transfer,
+                tag: receipt.tag(CLAIMED, request.lease, &input),
+            };
+            (Some((send, claimed)), Some(receive))
+        } else {
+            (None, None)
+        };
         prepared.reservation = Some(Reservation {
             lease: request.lease,
             input,
             expires: Instant::now() + Duration::from_millis(LEASE_MS),
+            confirmation,
         });
         Ok(Some(Published {
             slot: self,
             tag,
+            completion,
             confirmed: false,
         }))
     }
@@ -413,6 +447,7 @@ fn live<P>(
 struct Published<'a, P> {
     slot: &'a Reservations<P>,
     tag: blake3::Hash,
+    completion: Option<oneshot::Receiver<Record>>,
     confirmed: bool,
 }
 
@@ -433,6 +468,52 @@ pub async fn reserve(
     receipt: SentReceipt,
     lease: u64,
 ) -> Result<bool> {
+    Ok(reserve_inner(sidecar, input, pin, receipt, lease, REQUEST)
+        .await?
+        .is_some())
+}
+
+/// Wait for the target worker to claim this exact reservation after v5 grant.
+pub struct SourceReservation {
+    receive: quinn::RecvStream,
+    claimed: Record,
+}
+
+impl SourceReservation {
+    pub async fn confirm(mut self) -> Result<()> {
+        let mut bytes = [0; BYTES];
+        self.receive.read_exact(&mut bytes).await?;
+        require_end(&mut self.receive).await?;
+        let record = Record::decode(bytes)?;
+        ensure!(
+            record.kind == CLAIMED
+                && record.lease == self.claimed.lease
+                && record.transfer == self.claimed.transfer
+                && record.tag == self.claimed.tag,
+            "file claim does not match the reservation"
+        );
+        Ok(())
+    }
+}
+
+pub async fn reserve_for_worker(
+    sidecar: &Connection,
+    input: &Connection,
+    pin: &[u8],
+    receipt: SentReceipt,
+    lease: u64,
+) -> Result<Option<SourceReservation>> {
+    reserve_inner(sidecar, input, pin, receipt, lease, REQUEST_CONFIRM).await
+}
+
+async fn reserve_inner(
+    sidecar: &Connection,
+    input: &Connection,
+    pin: &[u8],
+    receipt: SentReceipt,
+    lease: u64,
+    kind: u8,
+) -> Result<Option<SourceReservation>> {
     let receipt = receipt.0;
     verify_sidecar(sidecar, pin)?;
     ensure!(
@@ -441,10 +522,10 @@ pub async fn reserve(
     );
     let binding = Binding::from_v5(input, pin)?;
     let request = Record {
-        kind: REQUEST,
+        kind,
         lease,
         transfer: receipt.transfer,
-        tag: receipt.tag(REQUEST, lease, &binding),
+        tag: receipt.tag(kind, lease, &binding),
     };
     tokio::time::timeout(IO_TIMEOUT, async {
         let (mut send, mut receive) = sidecar.open_bi().await?;
@@ -453,8 +534,10 @@ pub async fn reserve(
         send.finish()?;
         let mut bytes = [0; BYTES];
         receive.read_exact(&mut bytes).await?;
-        require_end(&mut receive).await?;
         let reply = Record::decode(bytes)?;
+        if kind == REQUEST || reply.kind == DECLINED {
+            require_end(&mut receive).await?;
+        }
         ensure!(
             reply.lease == lease && reply.transfer == receipt.transfer,
             "file reservation reply differs"
@@ -469,9 +552,17 @@ pub async fn reserve(
                     binding.matches(input, pin, &binding.proof())?,
                     "input binding retired"
                 );
-                Ok(true)
+                Ok(Some(SourceReservation {
+                    receive,
+                    claimed: Record {
+                        kind: CLAIMED,
+                        lease,
+                        transfer: receipt.transfer,
+                        tag: receipt.tag(CLAIMED, lease, &binding),
+                    },
+                }))
             }
-            DECLINED if reply.tag == blake3::Hash::from_bytes([0; 32]) => Ok(false),
+            DECLINED if reply.tag == blake3::Hash::from_bytes([0; 32]) => Ok(None),
             _ => anyhow::bail!("invalid file reservation reply"),
         }
     })
@@ -488,7 +579,7 @@ pub async fn accept(
     slot: &Slot,
     current: impl FnOnce() -> Option<DropContext>,
 ) -> Result<bool> {
-    accept_inner(sidecar, input, pin, &slot.0, |prepared| {
+    accept_inner(sidecar, input, pin, &slot.0, false, |prepared| {
         current() == Some(prepared.local.context)
     })
     .await
@@ -501,7 +592,7 @@ pub async fn accept_worker(
     slot: &WorkerSlot,
     current: impl FnOnce() -> bool,
 ) -> Result<bool> {
-    accept_inner(sidecar, input, pin, &slot.0, |_| current()).await
+    accept_inner(sidecar, input, pin, &slot.0, true, |_| current()).await
 }
 
 async fn accept_inner<P>(
@@ -509,6 +600,7 @@ async fn accept_inner<P>(
     input: &Connection,
     pin: &[u8],
     slot: &Reservations<P>,
+    can_confirm: bool,
     current: impl FnOnce(&Prepared<P>) -> bool,
 ) -> Result<bool> {
     verify_sidecar(sidecar, pin)?;
@@ -519,7 +611,10 @@ async fn accept_inner<P>(
         receive.read_exact(&mut bytes).await?;
         require_end(&mut receive).await?;
         let request = Record::decode(bytes)?;
-        ensure!(request.kind == REQUEST, "invalid file reservation request");
+        ensure!(
+            request.kind == REQUEST || (can_confirm && request.kind == REQUEST_CONFIRM),
+            "invalid file reservation request"
+        );
         let binding = Binding::from_v5(input, pin)?;
         let published = slot.publish(&request, binding, pin, current)?;
         let (kind, tag) = published
@@ -533,9 +628,20 @@ async fn accept_inner<P>(
             ..request
         };
         send.write_all(&reply.encode()).await?;
+        let mut published = published;
+        if let Some(completion) = published
+            .as_mut()
+            .and_then(|grant| grant.completion.take())
+        {
+            let claim = tokio::time::timeout(Duration::from_millis(LEASE_MS), completion)
+                .await
+                .context("file claim expired")?
+                .context("file reservation was withdrawn")?;
+            send.write_all(&claim.encode()).await?;
+        }
         send.finish()?;
-        if let Some(mut published) = published {
-            published.confirmed = true;
+        if let Some(grant) = published.as_mut() {
+            grant.confirmed = true;
         }
         Ok(kind == READY)
     })

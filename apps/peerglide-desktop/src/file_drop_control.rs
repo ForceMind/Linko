@@ -6,7 +6,10 @@ use peerglide_transport::{file_drop_link, layout_reservation, Identity};
 use quinn::{Connection, Endpoint};
 use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tokio::{sync::watch, task::JoinHandle};
@@ -96,14 +99,26 @@ impl Controller {
                 bind,
                 lifetime_ms,
                 proof,
-            } => (session, request, lifetime_ms, Direction::Receive(bind), proof),
+            } => (
+                session,
+                request,
+                lifetime_ms,
+                Direction::Receive(bind),
+                proof,
+            ),
             Command::Send {
                 session,
                 request,
                 target,
                 lifetime_ms,
                 proof,
-            } => (session, request, lifetime_ms, Direction::Send(target), proof),
+            } => (
+                session,
+                request,
+                lifetime_ms,
+                Direction::Send(target),
+                proof,
+            ),
             Command::Cancel { session, request } => {
                 if session != active.session
                     || !active
@@ -185,6 +200,9 @@ impl Scope<'_> {
         if !matched.ok()? {
             return None;
         }
+        if granted {
+            route.claimed.store(true, Ordering::Release);
+        }
         active.sender.send_replace(None);
         Some(if granted {
             Event::new(self.session, route.request, State::Claimed, Some(lease))
@@ -225,6 +243,7 @@ pub(super) struct Target {
     request: u32,
     slot: Arc<file_drop_link::WorkerSlot>,
     task: JoinHandle<()>,
+    claimed: AtomicBool,
 }
 
 pub(super) struct Source {
@@ -234,13 +253,24 @@ pub(super) struct Source {
     receipt: file_drop_link::SentReceipt,
 }
 
+pub(super) struct SourceReservation {
+    _endpoint: Endpoint,
+    confirmation: file_drop_link::SourceReservation,
+}
+
+impl SourceReservation {
+    pub(super) async fn confirm(self) -> Result<()> {
+        self.confirmation.confirm().await
+    }
+}
+
 impl Source {
     pub(super) async fn reserve(
         self,
         config: Config<'_>,
         input: &Connection,
         lease: u64,
-    ) -> Result<bool> {
+    ) -> Result<Option<SourceReservation>> {
         let bind = if self.target.is_ipv4() {
             SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
         } else {
@@ -248,7 +278,13 @@ impl Source {
         };
         let endpoint = layout_reservation::endpoint(bind, config.identity, config.pin)?;
         let sidecar = endpoint.connect(self.target, "peerglide.local")?.await?;
-        file_drop_link::reserve(&sidecar, input, config.pin, self.receipt, lease).await
+        let confirmation =
+            file_drop_link::reserve_for_worker(&sidecar, input, config.pin, self.receipt, lease)
+                .await?;
+        Ok(confirmation.map(|confirmation| SourceReservation {
+            _endpoint: endpoint,
+            confirmation,
+        }))
     }
 }
 
@@ -264,7 +300,15 @@ impl Route {
         let Some(arm) = mailbox.borrow_and_update().clone() else {
             return (None, None);
         };
-        let result = Self::arm(scope, &arm, mailbox.clone(), config, input, gate, allow_receive);
+        let result = Self::arm(
+            scope,
+            &arm,
+            mailbox.clone(),
+            config,
+            input,
+            gate,
+            allow_receive,
+        );
         if !matches_arm(&mailbox.borrow(), arm.request) {
             return (None, None);
         }
@@ -312,7 +356,12 @@ impl Route {
                     .context("no eligible local primary hold")?;
                 let receipt = file_drop_link::SentReceipt::from_local_worker(&proof, config.pin)?;
                 Ok((
-                    Self::Source(Source { request: arm.request, hold, target, receipt }),
+                    Self::Source(Source {
+                        request: arm.request,
+                        hold,
+                        target,
+                        receipt,
+                    }),
                     scope.event(arm.request, State::SourceArmed),
                 ))
             }
@@ -353,6 +402,7 @@ impl Target {
                 request: arm.request,
                 slot,
                 task,
+                claimed: AtomicBool::new(false),
             },
             port,
         ))
@@ -361,8 +411,12 @@ impl Target {
 
 impl Drop for Target {
     fn drop(&mut self) {
-        self.task.abort();
-        let _ = self.slot.clear();
+        // A matched v5 grant retired the slot and woke the bounded reply.
+        // Let that one reply finish after the session removes this route.
+        if !self.claimed.load(Ordering::Acquire) {
+            self.task.abort();
+            let _ = self.slot.clear();
+        }
     }
 }
 

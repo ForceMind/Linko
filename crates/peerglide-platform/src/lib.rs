@@ -397,8 +397,7 @@ impl CaptureGate {
         let stamp = self.0.primary_stamp.load(Ordering::Acquire);
         let word = self.0.control.load(Ordering::Acquire);
         (stamp != 0
-            && word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED | COUNT)
-                == PRIMARY
+            && word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED | COUNT) == PRIMARY
             && self.0.primary_stamp.load(Ordering::Acquire) == stamp)
             .then(|| HeldPrimary {
                 epoch: self.epoch_from(word),
@@ -748,9 +747,7 @@ impl CaptureGate {
     fn update_held(&self, count: u64, fresh_primary: bool) {
         // Only the serialized capture callback publishes physical holds.
         let fresh_primary = fresh_primary && count == 1;
-        if fresh_primary
-            && self.0.primary_stamp.fetch_add(1, Ordering::AcqRel) == u64::MAX
-        {
+        if fresh_primary && self.0.primary_stamp.fetch_add(1, Ordering::AcqRel) == u64::MAX {
             self.source_lost();
             return;
         }
@@ -779,8 +776,7 @@ impl CaptureGate {
     #[cfg(any(windows, target_os = "macos"))]
     fn primary_bridge(&self, route: CaptureRoute) -> bool {
         let word = self.0.control.load(Ordering::Acquire);
-        word & (ACTIVE | STOPPED | COUNT) == ACTIVE | PRIMARY
-            && self.route_from(word) == route
+        word & (ACTIVE | STOPPED | COUNT) == ACTIVE | PRIMARY && self.route_from(word) == route
     }
     #[cfg(any(windows, all(test, target_os = "macos")))]
     fn snapshot(&self) -> CaptureRoute {
