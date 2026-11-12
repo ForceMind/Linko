@@ -5,6 +5,7 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
+#[derive(PartialEq, Eq)]
 pub(super) struct KeyMap {
     codes: [Option<u8>; 256],
 }

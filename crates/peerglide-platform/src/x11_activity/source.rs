@@ -145,6 +145,10 @@ impl PointerSource {
     /// Drain one bounded batch. Unsupported input stops an active lease.
     /// Relative motion is coalesced before crossing the worker boundary.
     pub fn poll(&mut self) -> Result<PointerSample> {
+        self.poll_input(false)
+    }
+
+    fn poll_input(&mut self, draining: bool) -> Result<PointerSample> {
         ensure!(
             self.frozen_button.is_none() && !self.keyboard.as_ref().is_some_and(Keyboard::pending),
             "Xorg input needs a decision"
@@ -198,21 +202,21 @@ impl PointerSource {
                 Event::KeyRelease(event) if self.keyboard_grabbed() => {
                     return Ok(self.freeze_key(&event, false, motion, local_input));
                 }
-                Event::MappingNotify(event) if event.request == Mapping::POINTER => {
+                Event::MappingNotify(event) if !draining && event.request == Mapping::POINTER => {
                     anyhow::bail!("Xorg pointer mapping changed");
                 }
                 Event::MappingNotify(event)
-                    if self.keyboard.is_some()
+                    if !draining
                         && matches!(event.request, Mapping::KEYBOARD | Mapping::MODIFIER) =>
                 {
-                    anyhow::bail!("Xorg keyboard mapping changed");
+                    self.check_keyboard_mapping()?;
                 }
                 Event::XkbNewKeyboardNotify(_)
                 | Event::XkbNamesNotify(_)
                 | Event::XkbMapNotify(_)
-                    if self.keyboard.is_some() =>
+                    if !draining =>
                 {
-                    anyhow::bail!("Xorg keyboard mapping changed");
+                    self.check_keyboard_mapping()?;
                 }
                 Event::XinputHierarchy(_) | Event::ConfigureNotify(_) | Event::Error(_) => {
                     anyhow::bail!("Xorg input mapping or root geometry changed");
@@ -225,6 +229,12 @@ impl PointerSource {
 
     fn keyboard_grabbed(&self) -> bool {
         self.keyboard.as_ref().is_some_and(Keyboard::grabbed)
+    }
+
+    fn check_keyboard_mapping(&self) -> Result<()> {
+        self.keyboard.as_ref().map_or(Ok(()), |keyboard| {
+            keyboard.check_mapping(&self.activity)
+        })
     }
 
     fn remember_key(
@@ -492,7 +502,7 @@ impl PointerSource {
                 if self.frozen_button.is_none()
                     && !self.keyboard.as_ref().is_some_and(Keyboard::pending)
                 {
-                    self.poll()?;
+                    self.poll_input(true)?;
                 }
                 if self.frozen_button.is_some() {
                     self.consume_button()?;

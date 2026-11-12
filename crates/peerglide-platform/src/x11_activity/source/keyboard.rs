@@ -102,6 +102,14 @@ impl Keyboard {
         self.map.usages()
     }
 
+    pub(super) fn check_mapping(&self, activity: &Activity) -> Result<()> {
+        ensure!(
+            self.map == KeyMap::load_names(&activity.connection)?,
+            "Xorg physical keyboard mapping changed"
+        );
+        Ok(())
+    }
+
     pub(super) fn grabbed(&self) -> bool {
         self.grabbed
     }
