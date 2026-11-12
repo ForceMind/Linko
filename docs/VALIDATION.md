@@ -2657,6 +2657,21 @@ PR180 审阅提交 `7916b5e4eada6fe8580eb164fd4943ba0cb83b12` 的
 通过。便携回滚在 runner 隔离目录验证。实际系统音频、原生拖放、
 多设备路由、安装和 #3/C06 按最终候选记录。
 
+### 集成版本 2026.11.12-0900
+
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43131489508) 的审阅
+提交为 `81a5f6253ba70731a3ce6449c92aea342f9907d1`。已读取两份便携包，
+`BUILD_SOURCE.json` 的实际检出为 `52d6b7174fdc941c351c0b040abee3c4c3fccbe7`，
+源码树为 `5a222668e12c899db706f201e6f0015fc2cb3b3e`，与审阅提交树一致。
+内层 ZIP 的实算 SHA-256 分别等于各自摘要。
+
+| 包 | SHA-256 |
+| --- | --- |
+| [Windows x64](https://github.com/ForceMind/Linko/actions/runs/43131489508/artifacts/13905499578) | `11c609e7e61e247690a69c7901191c392ed90307950152e62ea9556c9492c9f7` |
+| [macOS arm64](https://github.com/ForceMind/Linko/actions/runs/43131489508/artifacts/13906522740) | `e3326478b8f18bf461fc8d0b8fc36455522f83ebf11053add3e32162707ead83` |
+
+此记录用于阶段证据，统一验收以最后冻结的匹配包为准。
+
 ### F16 中文字重资源对照
 
 基线 `d4c872b` 使用同一静态字体字节及 400、550、650 三个实例，试验
