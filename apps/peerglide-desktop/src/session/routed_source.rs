@@ -28,18 +28,29 @@ pub(crate) async fn run(
         .context("configured native routing needs a Windows or macOS display snapshot")?;
     let identity = transport::Identity::load(identity)?;
     if let Some((_, local)) = expected {
-        ensure!(identity.fingerprint() == local, "local identity changed after route confirmation");
+        ensure!(
+            identity.fingerprint() == local,
+            "local identity changed after route confirmation"
+        );
     }
-    let routes = Routes::load_for_launch(plan, &identity.certificate, &layout, expected.map(|(layout, _)| layout))?;
+    let routes = Routes::load_for_launch(
+        plan,
+        &identity.certificate,
+        &layout,
+        expected.map(|(layout, _)| layout),
+    )?;
     if *stop.borrow() || stop.has_changed().is_err() {
         return Ok(());
     }
     let (tx, mut input) = platform::capture_event_channel();
     let mut capture = platform::capture_routed_source(tx)?;
     let driver = capture.take_receive_driver()?;
-    let _registration = driver.as_ref().map(|driver| crate::NativeRecoveryRegistration::new(
-        driver.control(), *stop.borrow() || stop.has_changed().is_err(),
-    ));
+    let _registration = driver.as_ref().map(|driver| {
+        crate::NativeRecoveryRegistration::new(
+            driver.control(),
+            *stop.borrow() || stop.has_changed().is_err(),
+        )
+    });
     reporter.set(WorkerInputState::Local);
     crate::worker_event(reporter.managed, crate::WorkerState::Listening);
     let ending = async {
@@ -193,7 +204,8 @@ impl<'a> Source<'a> {
                 Ok(Ok(link)) if link.capabilities.motion() => link,
                 _ => {
                     eprintln!("Selected route is unavailable or has no native input capability.");
-                    self.reporter.switch(crate::WorkerSwitchState::PeerUnavailable);
+                    self.reporter
+                        .switch(crate::WorkerSwitchState::PeerUnavailable);
                     continue;
                 }
             };
@@ -586,7 +598,14 @@ mod tests {
         let (_stop, stopped) = tokio::sync::watch::channel(true);
         let mut reporter = crate::InputReporter::new(false);
         reporter.set(WorkerInputState::Disabled);
-        run(Path::new("missing-identity"), Path::new("missing-plan"), None, stopped, &mut reporter).await?;
+        run(
+            Path::new("missing-identity"),
+            Path::new("missing-plan"),
+            None,
+            stopped,
+            &mut reporter,
+        )
+        .await?;
         assert_eq!(reporter.finish(), WorkerInputState::Disabled);
         Ok(())
     }
