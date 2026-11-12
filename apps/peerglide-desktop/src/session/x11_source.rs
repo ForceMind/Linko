@@ -104,7 +104,8 @@ impl Native {
         let owner = thread::Builder::new()
             .name("linko-xorg-pointer-source".into())
             .spawn(move || {
-                let result = native_source(edge, keyboard, &owned, arrived, permit, admitted, publish);
+                let result =
+                    native_source(edge, keyboard, &owned, arrived, permit, admitted, publish);
                 owned.stop.store(true, Ordering::Release);
                 let _ = closed.send(result);
             })?;
@@ -180,7 +181,10 @@ fn native_source(
         }
         thread::park_timeout(NATIVE_POLL);
     };
-    if arrived.send((along, source.key_usages().collect())).is_err() {
+    if arrived
+        .send((along, source.key_usages().collect()))
+        .is_err()
+    {
         return Ok(());
     }
     let limit = Instant::now() + PENDING;
@@ -198,10 +202,9 @@ fn native_source(
                     return Ok(());
                 }
                 permissions.check_mapping(&source)?;
-                let keys = source.key_usages().any(|usage| permissions.supports(Input::Key {
-                    usage,
-                    down: true,
-                }));
+                let keys = source
+                    .key_usages()
+                    .any(|usage| permissions.supports(Input::Key { usage, down: true }));
                 if !flags.lease_live() || !source.claim(edge, along, keys)? {
                     return Ok(());
                 }
@@ -261,7 +264,13 @@ fn forward_native(
                     input,
                 })
             }
-            PointerSample::Key { dx, dy, usage, down, repeated } => {
+            PointerSample::Key {
+                dx,
+                dy,
+                usage,
+                down,
+                repeated,
+            } => {
                 let input = Input::Key { usage, down };
                 if !flags.lease_live() || !permissions.supports(input) {
                     break;
@@ -374,8 +383,12 @@ async fn connect_at_edge(
         .await
         .context("Xorg edge owner stopped")?;
     let offered = InputCapabilities::new(
-        &keys, true, if options.buttons { 7 } else { 0 }, options.scroll,
-    ).map_err(anyhow::Error::msg)?;
+        &keys,
+        true,
+        if options.buttons { 7 } else { 0 },
+        options.scroll,
+    )
+    .map_err(anyhow::Error::msg)?;
     let link = tokio::time::timeout(PENDING, Link::connect(identity, peer, offered.clone()))
         .await
         .context("Xorg peer connection timed out")??;
@@ -640,13 +653,19 @@ mod tests {
                     button: 2,
                     down: true,
                 },
-                Input::Key { usage: 0xe0, down: true },
+                Input::Key {
+                    usage: 0xe0,
+                    down: true,
+                },
                 Input::Scroll { x: -1, y: 0 },
                 Input::Button {
                     button: 2,
                     down: false,
                 },
-                Input::Key { usage: 0xe0, down: false },
+                Input::Key {
+                    usage: 0xe0,
+                    down: false,
+                },
             ]
             .into_iter();
             let mut sequence = cursor.sequence;
@@ -699,11 +718,23 @@ mod tests {
             motion_received.await?;
             for (dx, input) in [
                 (0.0, pointer_input(3, true)),
-                (0.0, Some(Input::Key { usage: 0xe0, down: true })),
+                (
+                    0.0,
+                    Some(Input::Key {
+                        usage: 0xe0,
+                        down: true,
+                    }),
+                ),
                 (-0.3, None),
                 (0.0, pointer_input(6, true)),
                 (0.0, pointer_input(3, false)),
-                (0.0, Some(Input::Key { usage: 0xe0, down: false })),
+                (
+                    0.0,
+                    Some(Input::Key {
+                        usage: 0xe0,
+                        down: false,
+                    }),
+                ),
             ] {
                 publish.send(PointerEvent { dx, dy: 0.0, input }).await?;
             }

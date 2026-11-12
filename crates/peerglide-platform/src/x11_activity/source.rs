@@ -90,7 +90,9 @@ impl PointerSource {
                 .map(|device| device.deviceid),
         )
         .context("Xorg master pointer is ambiguous")?;
-        let keyboard = keyboard.then(|| Keyboard::load(&activity, &devices, master)).transpose()?;
+        let keyboard = keyboard
+            .then(|| Keyboard::load(&activity, &devices, master))
+            .transpose()?;
         let rel_x = connection.intern_atom(true, b"Rel X")?.reply()?.atom;
         let rel_y = connection.intern_atom(true, b"Rel Y")?.reply()?.atom;
         let axes = devices
@@ -205,7 +207,9 @@ impl PointerSource {
                 {
                     anyhow::bail!("Xorg keyboard mapping changed");
                 }
-                Event::XkbNewKeyboardNotify(_) | Event::XkbNamesNotify(_) | Event::XkbMapNotify(_)
+                Event::XkbNewKeyboardNotify(_)
+                | Event::XkbNamesNotify(_)
+                | Event::XkbMapNotify(_)
                     if self.keyboard.is_some() =>
                 {
                     anyhow::bail!("Xorg keyboard mapping changed");
@@ -223,7 +227,11 @@ impl PointerSource {
         self.keyboard.as_ref().is_some_and(Keyboard::grabbed)
     }
 
-    fn remember_key(&mut self, event: &x11rb::protocol::xinput::RawKeyPressEvent, down: bool) -> bool {
+    fn remember_key(
+        &mut self,
+        event: &x11rb::protocol::xinput::RawKeyPressEvent,
+        down: bool,
+    ) -> bool {
         if let Some(keyboard) = self.keyboard.as_mut().filter(|keyboard| keyboard.grabbed()) {
             keyboard.remember(event, down);
             false
@@ -239,7 +247,9 @@ impl PointerSource {
         motion: (f64, f64),
         local_input: bool,
     ) -> PointerSample {
-        let key = self.keyboard.as_mut()
+        let key = self
+            .keyboard
+            .as_mut()
             .and_then(|keyboard| keyboard.freeze(&self.activity, event, down, local_input));
         key.map_or(PointerSample::LocalInput, |key| PointerSample::Key {
             dx: motion.0 / f64::from(self.bounds.0),
@@ -255,7 +265,9 @@ impl PointerSource {
     }
 
     pub fn accept_key(&mut self, usage: u16, down: bool) -> Result<()> {
-        self.keyboard.as_mut().context("Xorg keyboard not prepared")?
+        self.keyboard
+            .as_mut()
+            .context("Xorg keyboard not prepared")?
             .accept(&self.activity, usage, down)
     }
 
@@ -356,7 +368,10 @@ impl PointerSource {
         }
         let admitted = (|| -> Result<bool> {
             if capture_keys {
-                let keyboard = self.keyboard.as_mut().context("Xorg keyboard not prepared")?;
+                let keyboard = self
+                    .keyboard
+                    .as_mut()
+                    .context("Xorg keyboard not prepared")?;
                 if !keyboard.claim(&self.activity)? {
                     return Ok(false);
                 }
@@ -470,14 +485,20 @@ impl PointerSource {
         // The network lease is already retired. Keep only the native owner
         // until presses consumed by this grab have their matching release.
         let drained = (|| -> Result<()> {
-            while self.has_suppressed_buttons() || self.keyboard.as_ref().is_some_and(Keyboard::has_held) {
+            while self.has_suppressed_buttons()
+                || self.keyboard.as_ref().is_some_and(Keyboard::has_held)
+            {
                 progress();
-                if self.frozen_button.is_none() && !self.keyboard.as_ref().is_some_and(Keyboard::pending) {
+                if self.frozen_button.is_none()
+                    && !self.keyboard.as_ref().is_some_and(Keyboard::pending)
+                {
                     self.poll()?;
                 }
                 if self.frozen_button.is_some() {
                     self.consume_button()?;
-                } else if let Some(keyboard) = self.keyboard.as_mut().filter(|keyboard| keyboard.pending()) {
+                } else if let Some(keyboard) =
+                    self.keyboard.as_mut().filter(|keyboard| keyboard.pending())
+                {
                     keyboard.consume(&self.activity)?;
                 } else {
                     std::thread::sleep(Duration::from_millis(5));
