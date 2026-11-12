@@ -94,3 +94,11 @@ peerglide share-system-audio RECEIVER_IP:24874 --identity PATH --peer-cert RECEI
 macOS 13 或更新版本的同一发送命令使用 ScreenCaptureKit 的音频输出。
 系统可能要求录制权限。这个入口不打开麦克风或注册屏幕画面输出。
 真实权限提示、不同设备格式和结束后静音留到集中验收。
+
+同一个本机输出可混合最多四台已经分别核验的系统音频来源。
+接收端明确列出来源证书。各来源沿用 `share-system-audio`，并核对接收端证书。
+播放端可选择 `audio-output-devices` 显示的本机设备及播放音量。
+
+```text
+peerglide play-audio-mix --identity PATH --peer-cert A.der --peer-cert B.der --device DEVICE --volume 65
+```

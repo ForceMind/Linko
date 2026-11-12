@@ -1,4 +1,6 @@
 #[cfg(any(windows, target_os = "macos", test))]
+mod audio_mix_playback;
+#[cfg(any(windows, target_os = "macos", test))]
 mod audio_playback;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
 mod audio_source;
@@ -155,6 +157,22 @@ enum Command {
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
     },
+    /// Mix audio from up to four explicitly verified computers to one local output.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayAudioMix {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long, required = true)]
+        peer_cert: Vec<PathBuf>,
+        #[arg(long, default_value = "0.0.0.0:24874")]
+        bind: SocketAddr,
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
     /// Share the local system audio with one verified computer.
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     ShareSystemAudio {
@@ -272,6 +290,25 @@ async fn main() -> Result<()> {
             duration_secs,
         } => {
             audio_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayAudioMix {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => {
+            audio_mix_playback::run(
                 &identity,
                 &peer_cert,
                 bind,
