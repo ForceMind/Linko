@@ -2786,6 +2786,15 @@ macOS 约 30 秒的可见窗口 NoNative 测量为平均 CPU 1.398%、峰值 RSS
 释放报文、两种可靠流结束顺序、损坏帧和同连接回执。该回环使用模拟的恢复终态。
 物理三机切换、混合 DPI、真实按键归属、屏幕热插拔及缺失回执时的设备行为由 #3/C06 验收。
 
+分段发送可按目标请求接收端已选副屏。预留绑定到当前输入连接、固定证书、租约、方向和
+位置。拒绝时保持本机控制。隔离回环检查确认后发送接管请求以及拒绝时无请求。
+[分段副屏 CI](https://github.com/ForceMind/Linko/actions/runs/43167517220)
+
+桌面编辑器可维护多个核验过的目标、选本机屏幕、分别设置两端边沿范围，并导出 CLI
+布局文件。新增回归覆盖重叠拒绝、导出保留已有文件、证书替换拒绝及固定指纹保留。
+[分段编辑 CI](https://github.com/ForceMind/Linko/actions/runs/43170772848)
+从 GUI 直接启动分段发送仍待接入，Windows/macOS 实际编辑、物理切换和副屏定位待验收。
+
 ## 集中验收清单
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
@@ -2797,7 +2806,7 @@ macOS 约 30 秒的可见窗口 NoNative 测量为平均 CPU 1.398%、峰值 RSS
 | 配对、发现、权限和后台 | [IPv6 短码配对发现](https://github.com/ForceMind/Linko/actions/runs/43121334625)；[隔离 X11 窗口与流程](https://github.com/ForceMind/Linko/actions/runs/43123212190/artifacts/13901353937) | Windows/macOS 实际配对提示、IPv6 多网卡与作用域、关闭到托盘、从托盘停止、输入权限变化和键盘可访问性待验。 |
 | 本机手势 | [Windows 受控库工作器](https://github.com/ForceMind/Linko/actions/runs/43091867388)；隔离窗口录制、预览与规则回归 | G1 全局捕获和动作保持关闭。G2 保留设计，远程动作和脚本执行不在本次候选能力内。 |
 | 剪贴板与文件 | [双工作器文本及文件回归](https://github.com/ForceMind/Linko/actions/runs/43102482924)；[显式 PNG 导入和系统后端](https://github.com/ForceMind/Linko/actions/runs/43107244245) | 双向测试文本、PNG、同意／拒绝、撤权和外部剪贴板变化；文件测试续传、取消、历史、同名文件及文件负载下的键鼠。 |
-| 多台电脑、多屏与 Linux | [多证书串行原生监听](https://github.com/ForceMind/Linko/actions/runs/43136235340)、[副屏预留](https://github.com/ForceMind/Linko/actions/runs/43125086927)、[Xorg 指针、键钮和双轴滚轮接收](https://github.com/ForceMind/Linko/actions/runs/43138051348)通过三平台 CI。[Xvfb 指针、键钮释放及滚轮按钮对](https://github.com/ForceMind/Linko/actions/runs/43138051348/job/130918045948)已验隔离合成。 | [主屏方向档案](https://github.com/ForceMind/Linko/actions/runs/43131249465)及[本机副屏选择](https://github.com/ForceMind/Linko/actions/runs/43137143430)通过 CI。[屏幕表](https://github.com/ForceMind/Linko/pull/243)、[单个指定屏幕的双端确认](https://github.com/ForceMind/Linko/pull/245)和[外沿分段发送](https://github.com/ForceMind/Linko/pull/254)有 CLI 入口。分段切换和热插拔待真机。分段编辑、自动路由的副屏预留、光标定位与拖尾、Linux 主动捕获、Wayland 和完整触摸板手势仍待开发。 |
+| 多台电脑、多屏与 Linux | [多证书串行原生监听](https://github.com/ForceMind/Linko/actions/runs/43136235340)、[副屏预留](https://github.com/ForceMind/Linko/actions/runs/43125086927)、[Xorg 指针、键钮和双轴滚轮接收](https://github.com/ForceMind/Linko/actions/runs/43138051348)通过三平台 CI。[Xvfb 指针、键钮释放及滚轮按钮对](https://github.com/ForceMind/Linko/actions/runs/43138051348/job/130918045948)已验隔离合成。 | [主屏方向档案](https://github.com/ForceMind/Linko/actions/runs/43131249465)及[本机副屏选择](https://github.com/ForceMind/Linko/actions/runs/43137143430)通过 CI。[外沿分段发送](https://github.com/ForceMind/Linko/pull/254)可用[桌面导出的布局](https://github.com/ForceMind/Linko/pull/257)和[按目标选用的副屏预留](https://github.com/ForceMind/Linko/pull/256)。物理分段切换、副屏定位和热插拔待验收。桌面直接启动、光标定位与拖尾、Linux 主动捕获、Wayland 和完整触摸板手势仍待开发。 |
 | 原生拖放 | [Windows 适配器](https://github.com/ForceMind/Linko/actions/runs/43121324256)、[macOS 适配器](https://github.com/ForceMind/Linko/actions/runs/43121330845)与[文件页本机复制拖放](https://github.com/ForceMind/Linko/actions/runs/43131249334)通过 CI | Finder、Explorer 和其他目标应用的跨机文字、PNG、文件拖放仍待接线；验证保留复制、取消、失焦和原文件安全。 |
 | 系统音频 | [Windows WASAPI 与 macOS ScreenCaptureKit](https://github.com/ForceMind/Linko/actions/runs/43119118577)完成编译和会话回归；`d4c872b` 的集成已复验 | [桌面独立授权](https://github.com/ForceMind/Linko/actions/runs/43125086706)和[本机输出选择](https://github.com/ForceMind/Linko/actions/runs/43127954327)已通过各自的三平台 CI。[四来源播放和队列隔离](https://github.com/ForceMind/Linko/actions/runs/43135410348)及[两端独立麦克风 CLI](https://github.com/ForceMind/Linko/actions/runs/43132393131)也通过三平台 CI。真实设备、录制提示、断线静音、输出切换及持续音质待验；[桌面麦克风入口](https://github.com/ForceMind/Linko/actions/runs/43137144867)通过三平台 CI，虚拟音频设备仍待开发与授权。 |
 | 便携包、安装和回滚 | [同源与校验](https://github.com/ForceMind/Linko/actions/runs/43110809035)；[隔离暂存、切换和回滚](https://github.com/ForceMind/Linko/actions/runs/43110821243) | 最终统一候选须核对两端包的版本、检出树与 SHA-256。真实安装、升级、回滚及长期资源观察待验。正式签名、公证、开机启动、系统服务、官网部署和发布按项目授权处理。 |
