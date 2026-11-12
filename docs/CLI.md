@@ -61,15 +61,18 @@ outside its control. Windows input cannot cross privilege boundaries or control
 UAC/secure desktop. Keep OS security protections enabled.
 
 
-## 多台可信电脑的通信诊断
+## 多台可信电脑的监听
 
 ```text
 peerglide listen-peers --identity PATH --bind 0.0.0.0:24870 --peer-cert A.der --peer-cert B.der
 ```
 
 每个证书必须分别线下核对。对方使用已有的 `connect --probe` 检查
-同一个端口。监听可保持多条 v5 诊断连接，实际键鼠许可始终关闭。
-Ctrl+C 停止监听及这些连接。
+同一个端口。默认所有连接只运行 v5 通信诊断。Windows 和 macOS 可以
+额外指定 `--native-peer-cert A.der --edge right`，让该证书的首次连接
+进入现有原生会话。只有再加 `--allow-control` 才允许它接管本机。
+其余已登记连接继续提供通信诊断。切换原生目标需先 Ctrl+C 停止，再
+重新指定证书启动。真实多机输入留到集中验收。
 
 ## 从一台可信电脑播放音频
 

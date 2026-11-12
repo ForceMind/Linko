@@ -127,7 +127,7 @@ enum Command {
     },
     /// Accept a connection from exactly the enrolled certificate. No input permission by default.
     Listen(Options),
-    /// Verify communication with several enrolled peers on one listener.
+    /// Listen for several enrolled peers with at most one selected native session.
     ListenPeers {
         #[arg(long, default_value = "identity")]
         identity: PathBuf,
@@ -136,6 +136,8 @@ enum Command {
         peer_cert: Vec<PathBuf>,
         #[arg(long, default_value = "0.0.0.0:24870")]
         bind: SocketAddr,
+        #[command(flatten)]
+        native_route: multi_peer::Options,
     },
     /// List the local playback devices without opening an audio stream.
     #[cfg(any(windows, target_os = "macos"))]
@@ -265,7 +267,8 @@ async fn main() -> Result<()> {
             identity,
             peer_cert,
             bind,
-        } => multi_peer::run(&identity, &peer_cert, bind).await,
+            native_route,
+        } => multi_peer::run(&identity, &peer_cert, bind, native_route).await,
         #[cfg(any(windows, target_os = "macos"))]
         Command::AudioOutputDevices => audio_playback::list_outputs(),
         #[cfg(any(windows, target_os = "macos"))]
