@@ -8,7 +8,10 @@ use std::{
     future::{pending, Future},
     net::SocketAddr,
     path::Path,
-    sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     thread::{self, Thread},
     time::Duration,
 };
@@ -46,17 +49,27 @@ impl Worker {
         let admit_before = now.saturating_add(ADMISSION.as_millis() as u64);
         let (ready, admitted) = oneshot::channel();
         let (done, finished) = oneshot::channel();
-        let owner = thread::Builder::new().name("linko-x11-pointer".into()).spawn(move || {
-            let result = serve_native(&request, ready, admit_before);
-            request.stop.store(true, Ordering::Release);
-            let _ = done.send(result);
-        })?;
-        let worker = Self { mailbox, thread: owner.thread().clone(), finished: Some(finished) };
+        let owner = thread::Builder::new()
+            .name("linko-x11-pointer".into())
+            .spawn(move || {
+                let result = serve_native(&request, ready, admit_before);
+                request.stop.store(true, Ordering::Release);
+                let _ = done.send(result);
+            })?;
+        let worker = Self {
+            mailbox,
+            thread: owner.thread().clone(),
+            finished: Some(finished),
+        };
         Ok((worker, admitted))
     }
 
     fn replace_motion(&self, point: ReceivePoint) -> Result<()> {
-        let mut latest = self.mailbox.latest.lock().map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?;
+        let mut latest = self
+            .mailbox
+            .latest
+            .lock()
+            .map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?;
         if self.mailbox.live(now_ms()) {
             *latest = Some(point);
             self.thread.unpark();
@@ -65,7 +78,9 @@ impl Worker {
     }
 
     fn renew(&self, now: u64) {
-        self.mailbox.deadline.store(now.saturating_add(LEASE_MS), Ordering::Release);
+        self.mailbox
+            .deadline
+            .store(now.saturating_add(LEASE_MS), Ordering::Release);
     }
 
     fn stop(&self) {
@@ -97,7 +112,11 @@ fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64
         if activity.local_activity()? {
             break;
         }
-        let point = mailbox.latest.lock().map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?.take();
+        let point = mailbox
+            .latest
+            .lock()
+            .map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?
+            .take();
         if let Some(point) = point {
             let placed = injector.pointer_if(point, || {
                 let local = activity.local_activity()?;
@@ -118,15 +137,26 @@ fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64
     Ok(())
 }
 
-pub(super) async fn run(identity: &Path, certificate: &Path, bind: SocketAddr, allow: bool) -> Result<()> {
+pub(super) async fn run(
+    identity: &Path,
+    certificate: &Path,
+    bind: SocketAddr,
+    allow: bool,
+) -> Result<()> {
     ensure!(allow, "X11 pointer control requires explicit local consent");
     let identity = transport::Identity::load(identity)?;
     let peer = transport::read_certificate(certificate)?;
-    ensure!(peer != identity.certificate, "X11 pointer source must be another computer");
+    ensure!(
+        peer != identity.certificate,
+        "X11 pointer source must be another computer"
+    );
     let endpoint = transport::endpoint(bind, &identity, &peer)?;
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
-    println!("Waiting for one verified computer on {}. Ctrl+C stops pointer control.", endpoint.local_addr()?);
+    println!(
+        "Waiting for one verified computer on {}. Ctrl+C stops pointer control.",
+        endpoint.local_addr()?
+    );
     let connection = tokio::select! {
         biased;
         result = &mut stop => return result.map_err(Into::into),
@@ -221,10 +251,18 @@ where
     reader.abort();
     if let Some(owner) = &mut worker {
         owner.stop();
-        let cleanup = tokio::time::timeout(ADMISSION, owner.finish()).await
+        let cleanup = tokio::time::timeout(ADMISSION, owner.finish())
+            .await
             .context("X11 pointer stop could not be confirmed")?;
         if let Some(lease) = receiver.active() {
-            let _ = reply(&mut send, &Message::Release { lease, cursor: None }).await;
+            let _ = reply(
+                &mut send,
+                &Message::Release {
+                    lease,
+                    cursor: None,
+                },
+            )
+            .await;
         }
         cleanup?;
     }
@@ -250,7 +288,13 @@ mod tests {
 
     #[test]
     fn receiver_requires_local_opt_in_and_limits_native_admission_to_the_lease() {
-        assert!(super::super::Cli::try_parse_from(["peerglide", "listen-x11", "--peer-cert", "peer.der"]).is_err());
+        assert!(super::super::Cli::try_parse_from([
+            "peerglide",
+            "listen-x11",
+            "--peer-cert",
+            "peer.der"
+        ])
+        .is_err());
         let mailbox = Mailbox {
             stop: AtomicBool::new(false),
             deadline: AtomicU64::new(20),

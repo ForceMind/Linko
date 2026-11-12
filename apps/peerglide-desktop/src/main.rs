@@ -225,9 +225,12 @@ async fn main() -> Result<()> {
         }
         Command::Listen(o) => run(o, None, false).await,
         #[cfg(target_os = "linux")]
-        Command::ListenX11 { identity, peer_cert, bind, allow_pointer_control } => {
-            x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control).await
-        }
+        Command::ListenX11 {
+            identity,
+            peer_cert,
+            bind,
+            allow_pointer_control,
+        } => x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control).await,
         Command::Connect {
             address,
             options,

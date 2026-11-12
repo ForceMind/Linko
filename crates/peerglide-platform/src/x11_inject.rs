@@ -123,7 +123,11 @@ impl Injector {
     }
 
     /// Recheck local ownership after the geometry reply, before submitting XTEST.
-    pub fn pointer_if(&self, point: ReceivePoint, admit: impl FnOnce() -> Result<bool>) -> Result<bool> {
+    pub fn pointer_if(
+        &self,
+        point: ReceivePoint,
+        admit: impl FnOnce() -> Result<bool>,
+    ) -> Result<bool> {
         let (x, y) =
             coordinates(point, self.width, self.height).context("invalid X11 pointer position")?;
         // Refuse a stale geometry instead of interpreting a position in a new root.
