@@ -99,7 +99,8 @@ impl Offer {
         #[cfg(all(windows, target_env = "msvc"))]
         let State::Ready(payload) = &self.state;
         #[cfg(target_os = "macos")]
-        let State::Ready(payload) = &self.state else {
+        let State::Ready(payload) = &self.state
+        else {
             return Ok(None);
         };
         #[cfg(all(windows, target_env = "msvc"))]
