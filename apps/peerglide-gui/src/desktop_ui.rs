@@ -449,13 +449,18 @@ impl App {
     fn collaboration(&mut self, ui: &mut egui::Ui) {
         self.collaboration_tab = if self.page == Page::Clipboard {
             CollaborationTab::Clipboard
+        } else if self.page == Page::Audio {
+            CollaborationTab::Audio
         } else {
             CollaborationTab::Files
         };
         self.subpage_header(ui, "文件与剪贴板", Page::Displays);
         ui.horizontal(|ui| {
-            for (page, label) in [(Page::Transfers, "文件传输"), (Page::Clipboard, "剪贴板")]
-            {
+            for (page, label) in [
+                (Page::Transfers, "文件传输"),
+                (Page::Clipboard, "剪贴板"),
+                (Page::Audio, "音频"),
+            ] {
                 if ui.selectable_label(self.page == page, label).clicked() {
                     self.navigate_to(page);
                 }
@@ -480,6 +485,16 @@ impl App {
                 }
                 #[cfg(not(any(windows, target_os = "macos")))]
                 ui.strong("当前平台暂不支持系统剪贴板共享");
+            }
+            CollaborationTab::Audio => {
+                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                {
+                    let mut audio = std::mem::take(&mut self.audio_panel);
+                    audio.ui(self, ui);
+                    self.audio_panel = audio;
+                }
+                #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
+                ui.strong("系统音频共享目前可在 Windows 和 macOS 使用");
             }
             CollaborationTab::Files => {
                 let mut files = std::mem::take(&mut self.file_panel);
@@ -1335,7 +1350,7 @@ impl App {
                         Page::Displays => self.devices(ui),
                         Page::Settings => self.settings(ui, &ctx),
                         Page::GestureLab | Page::GestureRules => self.mouse(ui),
-                        Page::Transfers | Page::Clipboard => self.collaboration(ui),
+                        Page::Transfers | Page::Clipboard | Page::Audio => self.collaboration(ui),
                         Page::Shortcuts => self.shortcuts(ui),
                     });
             });

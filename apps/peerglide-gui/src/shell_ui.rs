@@ -232,7 +232,7 @@ pub(super) fn view_key(page: Page) -> u8 {
     match page {
         Page::Devices | Page::Displays => 0,
         Page::Home => 1,
-        Page::Transfers | Page::Clipboard => 2,
+        Page::Transfers | Page::Clipboard | Page::Audio => 2,
         Page::Shortcuts => 3,
         Page::Settings => 4,
         Page::GestureLab | Page::GestureRules => 5,
