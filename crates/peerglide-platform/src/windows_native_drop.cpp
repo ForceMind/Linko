@@ -1,4 +1,4 @@
-// A local, copy-only OLE drag from a prepared regular file.
+// A local, copy-only OLE drag from prepared content.
 #define NOMINMAX
 #include <windows.h>
 #include <ole2.h>
@@ -13,9 +13,14 @@
 using Microsoft::WRL::ComPtr;
 
 namespace {
+bool expired(ULONGLONG deadline) {
+    return deadline != 0 && GetTickCount64() >= deadline;
+}
+
 class DataObject final : public IDataObject {
 public:
-    explicit DataObject(HGLOBAL data) : data_(data) {}
+    DataObject(HGLOBAL data, CLIPFORMAT format, ULONGLONG deadline)
+        : data_(data), format_(format), deadline_(deadline) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** result) override {
         if (!result) {
@@ -63,7 +68,7 @@ public:
         if (!request) {
             return E_POINTER;
         }
-        if (request->cfFormat != CF_HDROP) {
+        if (expired(deadline_) || request->cfFormat != format_) {
             return DV_E_FORMATETC;
         }
         if (request->dwAspect != DVASPECT_CONTENT) {
@@ -83,7 +88,7 @@ public:
         if (direction != DATADIR_GET) {
             return E_NOTIMPL;
         }
-        FORMATETC format{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+        FORMATETC format{format_, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
         return SHCreateStdEnumFmtEtc(1, &format, result);
     }
 
@@ -106,10 +111,14 @@ private:
     ~DataObject() { GlobalFree(data_); }
     volatile LONG refs_ = 1;
     HGLOBAL data_;
+    CLIPFORMAT format_;
+    ULONGLONG deadline_;
 };
 
 class DropSource final : public IDropSource {
 public:
+    explicit DropSource(ULONGLONG deadline) : deadline_(deadline) {}
+
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** result) override {
         if (!result) {
             return E_POINTER;
@@ -136,7 +145,7 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
-        if (escape) {
+        if (escape || expired(deadline_)) {
             return DRAGDROP_S_CANCEL;
         }
         return (keys & MK_LBUTTON) ? S_OK : DRAGDROP_S_DROP;
@@ -148,6 +157,7 @@ public:
 
 private:
     volatile LONG refs_ = 1;
+    ULONGLONG deadline_;
 };
 
 struct OleScope {
@@ -158,21 +168,66 @@ struct OleScope {
         }
     }
 };
+// Takes ownership of allocation, including on cancellation or initialization failure.
+int32_t start_drag(HGLOBAL allocation, CLIPFORMAT format, ULONGLONG deadline) {
+    if (expired(deadline) || !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
+        GlobalFree(allocation);
+        return 0;
+    }
+    OleScope ole;
+    if (FAILED(ole.result)) {
+        GlobalFree(allocation);
+        return ole.result;
+    }
+    ComPtr<IDataObject> data;
+    data.Attach(new (std::nothrow) DataObject(allocation, format, deadline));
+    if (!data) {
+        GlobalFree(allocation);
+        return E_OUTOFMEMORY;
+    }
+    ComPtr<IDropSource> source;
+    source.Attach(new (std::nothrow) DropSource(deadline));
+    if (!source) {
+        return E_OUTOFMEMORY;
+    }
+
+    DWORD effect = DROPEFFECT_NONE;
+    const auto result = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
+    if (result == DRAGDROP_S_CANCEL) {
+        return 0;
+    }
+    if (result == DRAGDROP_S_DROP && effect == DROPEFFECT_COPY && !expired(deadline)) {
+        return 1;
+    }
+    return FAILED(result) ? result : 2;
+}
+
+int32_t start_content_drag(
+    const void* content, size_t bytes, size_t padding, CLIPFORMAT format, uint32_t millis) {
+    if (!content || !format || bytes == 0 || millis == 0 || millis > 60'000) {
+        return E_INVALIDARG;
+    }
+    const auto deadline = GetTickCount64() + millis;
+    HGLOBAL allocation = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes + padding);
+    if (!allocation) {
+        return E_OUTOFMEMORY;
+    }
+    void* data = GlobalLock(allocation);
+    if (!data) {
+        GlobalFree(allocation);
+        return E_OUTOFMEMORY;
+    }
+    std::memcpy(data, content, bytes);
+    GlobalUnlock(allocation);
+    return start_drag(allocation, format, deadline);
+}
 } // namespace
 
 extern "C" int32_t linko_windows_copy_drag(const uint16_t* path, size_t units) {
     if (!path || units == 0 || units > 32'767) {
         return E_INVALIDARG;
     }
-    if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
-        return 0;
-    }
-    OleScope ole;
-    if (FAILED(ole.result)) {
-        return ole.result;
-    }
-    // UTF-16 path followed by two NUL units. Allocation happens before the
-    // native drag loop and is never owned by an input capture callback.
+    // UTF-16 path followed by two NUL units.
     const auto size = sizeof(DROPFILES) + (units + 2) * sizeof(uint16_t);
     HGLOBAL allocation = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, size);
     if (!allocation) {
@@ -187,25 +242,20 @@ extern "C" int32_t linko_windows_copy_drag(const uint16_t* path, size_t units) {
     header->fWide = TRUE;
     std::memcpy(header + 1, path, units * sizeof(uint16_t));
     GlobalUnlock(allocation);
-    ComPtr<IDataObject> data;
-    data.Attach(new (std::nothrow) DataObject(allocation));
-    if (!data) {
-        GlobalFree(allocation);
-        return E_OUTOFMEMORY;
-    }
-    ComPtr<IDropSource> source;
-    source.Attach(new (std::nothrow) DropSource());
-    if (!source) {
-        return E_OUTOFMEMORY;
-    }
+    return start_drag(allocation, CF_HDROP, 0);
+}
 
-    DWORD effect = DROPEFFECT_NONE;
-    const auto result = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
-    if (result == DRAGDROP_S_CANCEL) {
-        return 0;
+extern "C" int32_t linko_windows_copy_drag_text(const uint16_t* text, size_t units, uint32_t millis) {
+    if (units > 1024 * 1024) {
+        return E_INVALIDARG;
     }
-    if (result == DRAGDROP_S_DROP && effect == DROPEFFECT_COPY) {
-        return 1;
+    return start_content_drag(text, units * sizeof(uint16_t), sizeof(uint16_t), CF_UNICODETEXT, millis);
+}
+
+extern "C" int32_t linko_windows_copy_drag_png(const uint8_t* png, size_t bytes, uint32_t millis) {
+    if (bytes > 4 * 1024 * 1024) {
+        return E_INVALIDARG;
     }
-    return FAILED(result) ? result : 2;
+    const auto format = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"PNG"));
+    return start_content_drag(png, bytes, 0, format, millis);
 }

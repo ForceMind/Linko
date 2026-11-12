@@ -3,7 +3,7 @@ use crate::{data, Identity};
 use anyhow::{ensure, Context, Result};
 pub use peerglide_transfer::{clipboard::Classification, codec::TextOutcome};
 use peerglide_transfer::{
-    clipboard::{Backend, Origin, MAX_TEXT_BYTES},
+    clipboard::{Backend, Origin, WriteResult, MAX_TEXT_BYTES},
     clipboard_image::{Image, ImageBackend, MAX_PNG_BYTES},
     data_policy::Permissions,
 };
@@ -79,6 +79,37 @@ pub struct PendingClipboard {
     frame: PendingFrame,
 }
 
+/// Validated content from an explicitly submitted local clipboard import.
+pub enum DragPayload {
+    Text(String),
+    Png(Vec<u8>),
+}
+
+struct DragImport<'a, B> {
+    backend: &'a mut B,
+    payload: Option<DragPayload>,
+}
+
+impl<B: Backend> Backend for DragImport<'_, B> {
+    fn compare_and_write(&mut self, revision: u64, text: &str) -> WriteResult {
+        let result = self.backend.compare_and_write(revision, text);
+        if result == WriteResult::Submitted {
+            self.payload = Some(DragPayload::Text(text.to_owned()));
+        }
+        result
+    }
+}
+
+impl<B: ImageBackend> ImageBackend for DragImport<'_, B> {
+    fn compare_and_write_image(&mut self, revision: u64, image: &Image) -> WriteResult {
+        let result = self.backend.compare_and_write_image(revision, image);
+        if result == WriteResult::Submitted {
+            self.payload = Some(DragPayload::Png(image.as_png().to_vec()));
+        }
+        result
+    }
+}
+
 impl PendingClipboard {
     pub fn dimensions(&self) -> Option<(u32, u32)> {
         match &self.frame {
@@ -100,6 +131,19 @@ impl PendingClipboard {
             consent: self.consent,
             result,
         })
+    }
+
+    /// Capture the accepted payload without rereading the system clipboard.
+    pub fn import_for_drag(
+        self,
+        backend: &mut (impl Backend + ImageBackend),
+    ) -> Result<(Completion, Option<DragPayload>)> {
+        let mut capture = DragImport {
+            backend,
+            payload: None,
+        };
+        let completion = self.import(&mut capture)?;
+        Ok((completion, capture.payload))
     }
 
     pub fn decline(mut self) -> Result<Completion> {
@@ -408,7 +452,6 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use peerglide_transfer::clipboard::WriteResult;
 
     struct Memory {
         revision: u64,
@@ -440,25 +483,45 @@ mod tests {
 
     #[test]
     fn two_workers_keep_consent_until_local_import_and_report_the_result() -> Result<()> {
-        loopback(Mode::Text, false)
+        loopback(Mode::Text, Decision::Import)
     }
 
     #[test]
     fn stopping_the_receiver_invalidates_an_already_admitted_frame() -> Result<()> {
-        loopback(Mode::Text, true)
+        loopback(Mode::Text, Decision::Stop)
     }
 
     #[test]
     fn image_worker_waits_for_the_local_import_and_reports_the_result() -> Result<()> {
-        loopback(Mode::Image, false)
+        loopback(Mode::Image, Decision::Import)
     }
 
     #[test]
     fn stopping_the_receiver_invalidates_a_validated_image() -> Result<()> {
-        loopback(Mode::Image, true)
+        loopback(Mode::Image, Decision::Stop)
     }
 
-    fn loopback(mode: Mode, cancel: bool) -> Result<()> {
+    #[test]
+    fn successful_drag_import_keeps_only_the_accepted_text_or_png() -> Result<()> {
+        loopback(Mode::Text, Decision::PrepareDrag)?;
+        loopback(Mode::Image, Decision::PrepareDrag)
+    }
+
+    #[test]
+    fn changing_the_clipboard_prevents_import_and_drag_preparation() -> Result<()> {
+        loopback(Mode::Text, Decision::ClipboardChanged)?;
+        loopback(Mode::Image, Decision::ClipboardChanged)
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Decision {
+        Import,
+        PrepareDrag,
+        ClipboardChanged,
+        Stop,
+    }
+
+    fn loopback(mode: Mode, decision: Decision) -> Result<()> {
         let source = Identity::generate()?;
         let destination = Identity::generate()?;
         let source_cert = source.certificate.clone();
@@ -507,13 +570,13 @@ mod tests {
         );
         assert!(backend.text.is_empty());
         assert_eq!(backend.images, 0);
-        if cancel {
+        if decision == Decision::Stop {
             receiving.stop();
             assert!(matches!(
                 receiving.events.recv_timeout(Duration::from_secs(5))?,
                 Event::Stopped
             ));
-            assert!(pending.import(&mut backend).is_err());
+            assert!(pending.import_for_drag(&mut backend).is_err());
             assert!(backend.text.is_empty());
             assert_eq!(backend.images, 0);
             assert!(matches!(
@@ -522,18 +585,46 @@ mod tests {
             ));
             return Ok(());
         }
-        receiving.complete(pending.import(&mut backend)?)?;
-        match mode {
-            Mode::Text => assert_eq!(backend.text, "屏跃"),
-            Mode::Image => assert_eq!(backend.images, 1),
+        let expected = if decision == Decision::ClipboardChanged {
+            backend.revision += 1;
+            TextOutcome::Changed
+        } else {
+            TextOutcome::Submitted
+        };
+        let completion = if decision == Decision::Import {
+            pending.import(&mut backend)?
+        } else {
+            let (completion, payload) = pending.import_for_drag(&mut backend)?;
+            match (decision, mode, payload) {
+                (Decision::PrepareDrag, Mode::Text, Some(DragPayload::Text(text))) => {
+                    assert_eq!(text, "屏跃");
+                }
+                (Decision::PrepareDrag, Mode::Image, Some(DragPayload::Png(png))) => {
+                    assert_eq!(png, Image::normalize(data::TEST_PNG)?.as_png());
+                }
+                (Decision::ClipboardChanged, _, None) => (),
+                _ => anyhow::bail!("unexpected clipboard drag payload"),
+            }
+            completion
+        };
+        assert_eq!(completion.outcome(), expected);
+        receiving.complete(completion)?;
+        if expected == TextOutcome::Submitted {
+            match mode {
+                Mode::Text => assert_eq!(backend.text, "屏跃"),
+                Mode::Image => assert_eq!(backend.images, 1),
+            }
+        } else {
+            assert!(backend.text.is_empty());
+            assert_eq!(backend.images, 0);
         }
         assert!(matches!(
             sending.events.recv_timeout(Duration::from_secs(5))?,
-            Event::Finished(TextOutcome::Submitted)
+            Event::Finished(outcome) if outcome == expected
         ));
         assert!(matches!(
             receiving.events.recv_timeout(Duration::from_secs(8))?,
-            Event::Finished(TextOutcome::Submitted)
+            Event::Finished(outcome) if outcome == expected
         ));
         Ok(())
     }
