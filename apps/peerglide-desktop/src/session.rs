@@ -2378,9 +2378,9 @@ mod tests {
     }
 
     async fn exercise_file_worker(cancelled: bool) -> Result<()> {
+        use file_transfer::drop_admission::{Admission, Content, Context as DropContext};
         use peerglide_protocol::file_drop_ipc::{Command, State};
         use transport::{file_drop_link, file_transfer, layout_reservation};
-        use file_transfer::drop_admission::{Admission, Content, Context as DropContext};
 
         let a = Identity::generate()?;
         let b = Identity::generate()?;
@@ -2395,7 +2395,9 @@ mod tests {
         };
         let mut admission = Admission::default();
         let now = now_ms();
-        let ticket = admission.begin(context, origin.transfer(), Content::File, now, true).unwrap();
+        let ticket = admission
+            .begin(context, origin.transfer(), Content::File, now, true)
+            .unwrap();
         admission.verified(ticket, context, now, true).unwrap();
         let slot = file_drop_link::Slot::arm(prepared, &mut admission, ticket, context, now, true)?;
         let (local, proof, lifetime_ms) = slot.into_worker()?;
@@ -2412,9 +2414,13 @@ mod tests {
             let mut reporter = super::super::InputReporter::new(false);
             reporter.file_drop_events = Some(events);
             run_with_diagnostics(
-                c.clone(), tx, rx,
+                c.clone(),
+                tx,
+                rx,
                 Policy {
-                    allow: true, native: false, edge: Edge::Left,
+                    allow: true,
+                    native: false,
+                    edge: Edge::Left,
                     local: InputCapabilities::new(&[4], true, 1, true).unwrap(),
                     peer: InputCapabilities::default(),
                 },
@@ -2428,7 +2434,8 @@ mod tests {
                     }),
                     ..SessionControls::default()
                 },
-            ).await?;
+            )
+            .await?;
             assert!(controller.submit(Command::Inspect).is_none());
             c.close(0u8.into(), b"file reservation fixture finished");
             Ok::<_, anyhow::Error>(())
@@ -2437,38 +2444,98 @@ mod tests {
             let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
             let (mut tx, mut rx) = c.open_bi().await?;
             send(&mut tx, &Message::Ping { lease: 0 }).await?;
-            assert!(matches!(transport::receive(&mut rx).await?, Message::Pong { lease: 0 }));
-            let session = controller.submit(Command::Inspect).context("missing worker session")?.session;
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Pong { lease: 0 }
+            ));
+            let session = controller
+                .submit(Command::Inspect)
+                .context("missing worker session")?
+                .session;
             let request = 4;
-            let arm = Command::Arm { session, request, bind, lifetime_ms, proof };
+            let arm = Command::Arm {
+                session,
+                request,
+                bind,
+                lifetime_ms,
+                proof,
+            };
             controller.submit(Command::parse(&arm.line()).context("invalid arm fixture")?);
             let armed = observed.recv().await.context("missing armed event")?;
-            assert_eq!((armed.session, armed.request, armed.state), (session, request, State::Armed));
-            let address = (std::net::Ipv4Addr::LOCALHOST, armed.port.context("missing sidecar port")?).into();
+            assert_eq!(
+                (armed.session, armed.request, armed.state),
+                (session, request, State::Armed)
+            );
+            let address = (
+                std::net::Ipv4Addr::LOCALHOST,
+                armed.port.context("missing sidecar port")?,
+            )
+                .into();
             let sidecar = layout_reservation::endpoint(bind, &a, &b.certificate)?;
             let side = sidecar.connect(address, "peerglide.local")?.await?;
             let lease = 7;
             assert!(file_drop_link::reserve(&side, &c, &b.certificate, receipt, lease).await?);
             side.close(0u8.into(), b"reservation accepted");
             if cancelled {
-                let event = controller.submit(Command::Cancel { session, request }).context("cancel not accepted")?;
+                let event = controller
+                    .submit(Command::Cancel { session, request })
+                    .context("cancel not accepted")?;
                 assert_eq!(event.state, State::Cancelled);
             }
-            send(&mut tx, &Message::Acquire { lease, edge: Edge::Right, along: 0.5 }).await?;
-            assert!(matches!(transport::receive(&mut rx).await?, Message::Granted { lease: granted } if granted == lease));
+            send(
+                &mut tx,
+                &Message::Acquire {
+                    lease,
+                    edge: Edge::Right,
+                    along: 0.5,
+                },
+            )
+            .await?;
+            assert!(
+                matches!(transport::receive(&mut rx).await?, Message::Granted { lease: granted } if granted == lease)
+            );
             if !cancelled {
                 let claimed = observed.recv().await.context("missing claim")?;
-                assert_eq!((claimed.session, claimed.request, claimed.state, claimed.lease), (session, request, State::Claimed, Some(lease)));
-                admission.submit(local.ticket, context, now_ms(), true, file_transfer::drop_admission::Effect::Copy).unwrap();
+                assert_eq!(
+                    (
+                        claimed.session,
+                        claimed.request,
+                        claimed.state,
+                        claimed.lease
+                    ),
+                    (session, request, State::Claimed, Some(lease))
+                );
+                admission
+                    .submit(
+                        local.ticket,
+                        context,
+                        now_ms(),
+                        true,
+                        file_transfer::drop_admission::Effect::Copy,
+                    )
+                    .unwrap();
             }
-            send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+            send(
+                &mut tx,
+                &Message::Release {
+                    lease,
+                    cursor: None,
+                },
+            )
+            .await?;
             send(&mut tx, &Message::Ping { lease: 0 }).await?;
-            assert!(matches!(transport::receive(&mut rx).await?, Message::Pong { lease: 0 }));
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Pong { lease: 0 }
+            ));
             assert!(observed.try_recv().is_err());
             let _ = stop.send(true);
             Ok::<_, anyhow::Error>(())
         };
-        tokio::time::timeout(Duration::from_secs(10), async { tokio::try_join!(server, client) }).await??;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::try_join!(server, client)
+        })
+        .await??;
         Ok(())
     }
 
@@ -2490,7 +2557,8 @@ mod tests {
         b: &Identity,
     ) -> Result<(transport::file_drop_link::SentReceipt, FileFixture)> {
         use transport::file_transfer::{self, Cancellation, Decision, ReceiveOptions, Source};
-        let directory = std::env::temp_dir().join(format!("linko-file-reservation-{}", a.fingerprint()));
+        let directory =
+            std::env::temp_dir().join(format!("linko-file-reservation-{}", a.fingerprint()));
         std::fs::create_dir(&directory)?;
         let cleanup = TestFileDirectory(directory.clone());
         let path = directory.join("source.txt");
@@ -2502,25 +2570,56 @@ mod tests {
         let receiver = transport::data::endpoint(bind, b, &a.certificate)?;
         let (send, receive) = tokio::try_join!(
             async {
-                Ok::<_, anyhow::Error>(sender.connect(receiver.local_addr()?, "peerglide.local")?.await?)
+                Ok::<_, anyhow::Error>(
+                    sender
+                        .connect(receiver.local_addr()?, "peerglide.local")?
+                        .await?,
+                )
             },
             async {
-                Ok::<_, anyhow::Error>(receiver.accept().await.context("missing file connection")?.await?)
+                Ok::<_, anyhow::Error>(
+                    receiver
+                        .accept()
+                        .await
+                        .context("missing file connection")?
+                        .await?,
+                )
             },
         )?;
         let source = Source::open(path, None, Cancellation::default()).await?;
         let ((_, receipt), result) = tokio::try_join!(
-            file_transfer::send_for_drop(&send, &b.certificate, source, Cancellation::default(), |_| {}),
+            file_transfer::send_for_drop(
+                &send,
+                &b.certificate,
+                source,
+                Cancellation::default(),
+                |_| {}
+            ),
             file_transfer::receive(
-                &receive, &a.certificate,
-                ReceiveOptions { budget: 1024 * 1024, stop: Cancellation::default() },
-                |_| async { Ok(Decision::Accept { directory: target, resume: false }) },
+                &receive,
+                &a.certificate,
+                ReceiveOptions {
+                    budget: 1024 * 1024,
+                    stop: Cancellation::default()
+                },
+                |_| async {
+                    Ok(Decision::Accept {
+                        directory: target,
+                        resume: false,
+                    })
+                },
                 |_| {},
             ),
         )?;
         let received = result.file.context("missing verified file")?;
         let receipt = receipt.context("missing verified send receipt")?;
-        Ok((receipt, FileFixture { received, _directory: cleanup }))
+        Ok((
+            receipt,
+            FileFixture {
+                received,
+                _directory: cleanup,
+            },
+        ))
     }
 
     #[tokio::test]

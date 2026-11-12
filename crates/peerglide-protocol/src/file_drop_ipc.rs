@@ -41,11 +41,19 @@ impl Command {
                 let proof = fields.next()?;
                 if !(1..=MAX_LIFETIME_MS).contains(&lifetime_ms)
                     || proof.len() != PROOF_HEX
-                    || !proof.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    || !proof
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
                 {
                     return None;
                 }
-                Self::Arm { session, request, bind, lifetime_ms, proof: proof.to_owned() }
+                Self::Arm {
+                    session,
+                    request,
+                    bind,
+                    lifetime_ms,
+                    proof: proof.to_owned(),
+                }
             }
             "cancel" => Self::Cancel {
                 session: identifier(fields.next()?)?,
@@ -59,7 +67,13 @@ impl Command {
     pub fn line(&self) -> String {
         match self {
             Self::Inspect => "fd inspect".into(),
-            Self::Arm { session, request, bind, lifetime_ms, proof } => {
+            Self::Arm {
+                session,
+                request,
+                bind,
+                lifetime_ms,
+                proof,
+            } => {
                 format!("fd arm {session:x} {request:x} {lifetime_ms} {bind} {proof}")
             }
             Self::Cancel { session, request } => format!("fd cancel {session:x} {request:x}"),
@@ -68,7 +82,11 @@ impl Command {
 }
 
 fn identifier(field: &str) -> Option<u32> {
-    if field.len() > 8 || !field.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) {
+    if field.len() > 8
+        || !field
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
         return None;
     }
     let value = u32::from_str_radix(field, 16).ok()?;
@@ -107,11 +125,22 @@ enum Kind {
 
 impl Event {
     pub fn new(session: u32, request: u32, state: State, lease: Option<u64>) -> Self {
-        Self { version: 1, kind: Kind::FileDrop, session, request, state, lease, port: None }
+        Self {
+            version: 1,
+            kind: Kind::FileDrop,
+            session,
+            request,
+            state,
+            lease,
+            port: None,
+        }
     }
 
     pub fn armed(session: u32, request: u32, port: u16) -> Self {
-        Self { port: Some(port), ..Self::new(session, request, State::Armed, None) }
+        Self {
+            port: Some(port),
+            ..Self::new(session, request, State::Armed, None)
+        }
     }
 
     pub fn parse(line: &str) -> Option<Self> {
@@ -123,8 +152,12 @@ impl Event {
                 && event.session != 0
                 && (event.request == 0) == (event.state == State::Session)
                 && match event.state {
-                    State::Claimed => event.lease.is_some_and(|lease| lease != 0) && event.port.is_none(),
-                    State::Armed => event.lease.is_none() && event.port.is_some_and(|port| port != 0),
+                    State::Claimed => {
+                        event.lease.is_some_and(|lease| lease != 0) && event.port.is_none()
+                    }
+                    State::Armed => {
+                        event.lease.is_none() && event.port.is_some_and(|port| port != 0)
+                    }
                     _ => event.lease.is_none() && event.port.is_none(),
                 }
         })
@@ -144,7 +177,9 @@ mod tests {
         let arm = Command::Arm {
             session: u32::MAX,
             request: u32::MAX,
-            bind: "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295]:65535".parse().unwrap(),
+            bind: "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295]:65535"
+                .parse()
+                .unwrap(),
             lifetime_ms: MAX_LIFETIME_MS,
             proof: "ab".repeat(80),
         };

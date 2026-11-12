@@ -2346,7 +2346,10 @@ mod lifecycle_tests {
     fn file_reservation_control_records_stay_out_of_diagnostics() -> Result<()> {
         use peerglide_protocol::file_drop_ipc::{Event, State};
         let (send, receive) = mpsc::sync_channel(4);
-        let text = format!("{}\nregular diagnostic\n", Event::new(1, 2, State::Claimed, Some(7)).line());
+        let text = format!(
+            "{}\nregular diagnostic\n",
+            Event::new(1, 2, State::Claimed, Some(7)).line()
+        );
         read_worker_output(
             std::io::Cursor::new(text),
             Arc::new(WorkerSnapshot::default()),

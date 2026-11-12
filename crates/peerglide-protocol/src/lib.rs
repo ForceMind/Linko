@@ -189,8 +189,8 @@ mod tests {
     }
 }
 
-pub mod layout_ipc;
 pub mod file_drop_ipc;
+pub mod layout_ipc;
 pub mod worker;
 
 pub mod capabilities;

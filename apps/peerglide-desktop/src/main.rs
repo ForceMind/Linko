@@ -984,7 +984,9 @@ fn managed_stop_reader(
                 Ok(Some(line)) if line.trim() == "stop" => break,
                 Ok(Some(line)) => {
                     if let Some(file_drop) = &file_drop {
-                        if let Some(command) = peerglide_protocol::file_drop_ipc::Command::parse(&line) {
+                        if let Some(command) =
+                            peerglide_protocol::file_drop_ipc::Command::parse(&line)
+                        {
                             if let Some(event) = file_drop.submit(command) {
                                 println!("{}", event.line());
                             }
@@ -1360,11 +1362,13 @@ async fn run_inner(
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
-            file_drop: (o.managed && o.native && o.allow_control).then_some(file_drop_control::Config {
-                controller: &o.file_drop,
-                identity: id,
-                pin: peer,
-            }),
+            file_drop: (o.managed && o.native && o.allow_control).then_some(
+                file_drop_control::Config {
+                    controller: &o.file_drop,
+                    identity: id,
+                    pin: peer,
+                },
+            ),
             receive_display: o.receive_selection.clone(),
             secondary: secondary.as_ref(),
             rebuilding_display_layout,
