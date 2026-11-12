@@ -2,6 +2,7 @@
 use super::{
     data::Capabilities,
     data_frames::{FrameReceiver, FrameSender},
+    file_transfer::DropOrigin,
 };
 use anyhow::{ensure, Result};
 use peerglide_transfer::{
@@ -20,6 +21,7 @@ use std::{
 struct Policy {
     connection: Connection,
     peer_digest: [u8; 32],
+    nonce: [u8; 32],
     clipboard: Mutex<Clipboard>,
     started: Instant,
 }
@@ -134,6 +136,7 @@ pub(super) fn new(
     let policy = Arc::new(Policy {
         connection,
         peer_digest,
+        nonce,
         clipboard: Mutex::new(Clipboard::new(DataSession::new(peer_digest, nonce, 0))),
         started: Instant::now(),
     });
@@ -181,10 +184,14 @@ impl Consent {
         self.policy.close();
     }
 
-    pub(crate) fn file_receive_peer(&self) -> Result<[u8; 32]> {
+    pub(crate) fn file_receive_origin(&self, transfer: [u8; 16]) -> Result<DropOrigin> {
         self.policy
             .check(|session, now| session.authorize(Capability::FileReceive, now))?;
-        Ok(self.policy.peer_digest)
+        Ok(DropOrigin::new(
+            transfer,
+            self.policy.peer_digest,
+            self.policy.nonce,
+        ))
     }
 
     /// File dispatch still requires its own offer and transfer-ID checks.

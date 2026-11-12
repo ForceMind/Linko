@@ -103,7 +103,7 @@ impl Panel {
             self.tick_edge(app, _ctx);
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        self.export.tick(app);
+        self.export.tick(app, _ctx);
         if let Some(search) = self.history.as_mut() {
             search.poll();
         }

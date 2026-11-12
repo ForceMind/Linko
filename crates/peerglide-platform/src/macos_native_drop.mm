@@ -21,6 +21,7 @@ using DropPromise = void (*)(void*);
     Clock::time_point deadline;
     NSString* text;
     NSData* png;
+    NSString* file_url;
     NSString* promise_name;
     NSOperationQueue* promise_queue;
     void* promise_context;
@@ -71,6 +72,8 @@ static bool can_write_promise(void* owner) {
         [item setString:text forType:type];
     } else if (png && [type isEqualToString:NSPasteboardTypePNG]) {
         [item setData:png forType:type];
+    } else if (file_url && [type isEqualToString:NSPasteboardTypeFileURL]) {
+        [item setString:file_url forType:type];
     }
 }
 
@@ -166,8 +169,10 @@ static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* s
     return 0;
 }
 
-extern "C" int32_t linko_macos_copy_drag_start(const uint8_t* path, size_t bytes, void** owner) {
-    if (!path || bytes == 0 || bytes > 4096 || ![NSThread isMainThread]) {
+extern "C" int32_t linko_macos_copy_drag_start(
+    const uint8_t* path, size_t bytes, uint32_t millis, void** owner) {
+    if (!path || bytes == 0 || bytes > 4096 || millis == 0 || millis > 60'000
+        || ![NSThread isMainThread]) {
         return -1;
     }
     NSString* name = [[NSString alloc] initWithBytes:path length:bytes encoding:NSUTF8StringEncoding];
@@ -176,11 +181,12 @@ extern "C" int32_t linko_macos_copy_drag_start(const uint8_t* path, size_t bytes
     }
     NSURL* file = [NSURL fileURLWithPath:name isDirectory:NO];
     NSPasteboardItem* data = [NSPasteboardItem new];
-    if (![data setString:file.absoluteString forType:NSPasteboardTypeFileURL]) {
+    LinkoNativeCopySource* source = [LinkoNativeCopySource new];
+    source->file_url = file.absoluteString;
+    source->deadline = Clock::now() + std::chrono::milliseconds(millis);
+    if (!source->file_url || ![data setDataProvider:source forTypes:@[NSPasteboardTypeFileURL]]) {
         return -1;
     }
-    LinkoNativeCopySource* source = [LinkoNativeCopySource new];
-    source->deadline = Clock::time_point::max();
     return start_drag(data, source, owner);
 }
 

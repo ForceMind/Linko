@@ -10,9 +10,9 @@ pub enum Content {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Context {
-    /// Locally assigned after authenticating the connection.
-    pub connection: u64,
-    pub layout_generation: u64,
+    /// The local nonce of the authenticated data connection.
+    pub connection: [u8; 32],
+    pub layout_epoch: (u64, u64),
     pub gesture_generation: u64,
     pub focused: bool,
 }
@@ -87,8 +87,9 @@ impl Admission {
             return Err(Error::Unauthorized);
         }
         if !context.focused
-            || context.connection == 0
-            || context.layout_generation == 0
+            || context.connection == [0; 32]
+            || context.layout_epoch.0 == 0
+            || context.layout_epoch.1 == 0
             || context.gesture_generation == 0
             || transfer == [0; 16]
         {
@@ -238,8 +239,8 @@ mod tests {
 
     fn context() -> Context {
         Context {
-            connection: 1,
-            layout_generation: 2,
+            connection: [1; 32],
+            layout_epoch: (1, 2),
             gesture_generation: 3,
             focused: true,
         }
@@ -295,6 +296,34 @@ mod tests {
     }
 
     #[test]
+    fn a_layout_change_and_late_os_result_cannot_complete_a_new_attempt() {
+        let mut owner = Admission::default();
+        let ctx = context();
+        let transfer = [8; 16];
+        let first = owner.begin(ctx, transfer, Content::File, 0, true).unwrap();
+        owner.verified(first, ctx, 1, true).unwrap();
+        owner.submit(first, ctx, 2, true, Effect::Copy).unwrap();
+        let moved = Context {
+            layout_epoch: (1, 3),
+            gesture_generation: 4,
+            ..ctx
+        };
+        assert_eq!(
+            owner.complete(first, moved, 3, true, NativeOutcome::Copied),
+            Err(Error::InvalidContext)
+        );
+        assert_eq!(owner.state(), Some(State::Unknown));
+        owner.acknowledge_unknown(first).unwrap();
+        let second = owner.begin(moved, transfer, Content::File, 4, true).unwrap();
+        owner.verified(second, moved, 5, true).unwrap();
+        assert_eq!(
+            owner.complete(first, moved, 6, true, NativeOutcome::Copied),
+            Err(Error::StaleTicket)
+        );
+        assert_eq!(owner.state(), Some(State::Ready));
+    }
+
+    #[test]
     fn interrupted_submission_remains_uncertain_until_local_acknowledgment() {
         let mut owner = Admission::default();
         let ctx = context();
@@ -302,7 +331,7 @@ mod tests {
         owner.verified(ticket, ctx, 1, true).unwrap();
         owner.submit(ticket, ctx, 2, true, Effect::Copy).unwrap();
         let other = Context {
-            connection: 5,
+            connection: [5; 32],
             ..ctx
         };
         assert_eq!(

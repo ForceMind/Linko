@@ -414,10 +414,11 @@ extern "C" int32_t linko_windows_file_stream_regression() {
     return 0;
 }
 
-extern "C" int32_t linko_windows_copy_drag(const uint16_t* path, size_t units) {
-    if (!path || units == 0 || units > 32'767) {
+extern "C" int32_t linko_windows_copy_drag(const uint16_t* path, size_t units, uint32_t millis) {
+    if (!path || units == 0 || units > 32'767 || millis == 0 || millis > 60'000) {
         return E_INVALIDARG;
     }
+    const auto deadline = GetTickCount64() + millis;
     // UTF-16 path followed by two NUL units.
     const auto size = sizeof(DROPFILES) + (units + 2) * sizeof(uint16_t);
     HGLOBAL allocation = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, size);
@@ -433,7 +434,7 @@ extern "C" int32_t linko_windows_copy_drag(const uint16_t* path, size_t units) {
     header->fWide = TRUE;
     std::memcpy(header + 1, path, units * sizeof(uint16_t));
     GlobalUnlock(allocation);
-    return start_drag(allocation, CF_HDROP, 0);
+    return start_drag(allocation, CF_HDROP, deadline);
 }
 
 extern "C" int32_t linko_windows_copy_drag_text(const uint16_t* text, size_t units, uint32_t millis) {
