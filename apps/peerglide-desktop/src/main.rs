@@ -1031,8 +1031,14 @@ mod context_cli_tests {
 
     #[test]
     fn secondary_layout_flags_require_the_existing_native_and_display_permissions() {
-        for flag in ["--request-secondary-layout=127.0.0.1:24878", "--secondary-layout-bind=127.0.0.1:24878"] {
-            assert!(Cli::try_parse_from(["peerglide", "listen", "--peer-cert", "peer.der", flag]).is_err());
+        for flag in [
+            "--request-secondary-layout=127.0.0.1:24878",
+            "--secondary-layout-bind=127.0.0.1:24878",
+        ] {
+            assert!(
+                Cli::try_parse_from(["peerglide", "listen", "--peer-cert", "peer.der", flag])
+                    .is_err()
+            );
         }
     }
 

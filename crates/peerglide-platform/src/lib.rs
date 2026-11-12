@@ -199,14 +199,14 @@ impl ReceiveDisplay {
         #[cfg(any(windows, target_os = "macos"))]
         {
             let current = read_display_layout()?;
-            Ok(current.primary() == self.layout.primary() && current.displays() == self.layout.displays())
+            Ok(current.primary() == self.layout.primary()
+                && current.displays() == self.layout.displays())
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             Ok(false)
         }
     }
-
 }
 
 struct GateState {

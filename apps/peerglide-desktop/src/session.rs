@@ -341,11 +341,16 @@ async fn confirmed_secondary(
     let Some(routes) = routes.filter(|routes| routes.has_outbound()) else {
         return true;
     };
-    let confirmed = routes.confirm_outbound(connection, stop, request.lease, edge, fraction).await;
+    let confirmed = routes
+        .confirm_outbound(connection, stop, request.lease, edge, fraction)
+        .await;
     if !confirmed {
         eprintln!("Secondary layout reservation was not confirmed.");
     }
-    confirmed && now_ms() < request.deadline && !*stop.borrow() && gate.commit_pending(request.token)
+    confirmed
+        && now_ms() < request.deadline
+        && !*stop.borrow()
+        && gate.commit_pending(request.token)
 }
 
 pub(super) async fn run_with_diagnostics(
