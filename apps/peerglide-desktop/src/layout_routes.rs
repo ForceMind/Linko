@@ -38,6 +38,7 @@ struct Plan {
 struct PeerSpec {
     address: SocketAddr,
     certificate: PathBuf,
+    secondary_layout: Option<SocketAddr>,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +55,7 @@ struct RouteSpec {
 pub(super) struct Peer {
     pub address: SocketAddr,
     pub certificate: Vec<u8>,
+    pub secondary_layout: Option<SocketAddr>,
 }
 
 pub(super) struct Routes {
@@ -107,6 +109,10 @@ impl Routes {
                 spec.address.port() != 0 && !spec.address.ip().is_unspecified(),
                 "display route peer needs a destination address and port"
             );
+            ensure!(
+                spec.secondary_layout.is_none_or(|address| address.port() != 0 && !address.ip().is_unspecified()),
+                "secondary layout needs a destination address and port"
+            );
             let certificate = transport::read_certificate(&directory.join(spec.certificate))?;
             ensure!(
                 certificate != local,
@@ -119,7 +125,8 @@ impl Routes {
                         id,
                         Peer {
                             address: spec.address,
-                            certificate
+                            certificate,
+                            secondary_layout: spec.secondary_layout,
                         }
                     )
                     .is_none(),
@@ -310,7 +317,7 @@ mod tests {
             "version": 1,
             "peers": [
                 {"certificate": "first.der", "address": first_address},
-                {"certificate": "second.der", "address": second_address},
+                {"certificate": "second.der", "address": second_address, "secondary_layout": "127.0.0.1:24877"},
             ],
             "routes": [
                 {"local_origin": [-100, 0], "local_edge": "Right", "local_span": [0, 0.5],
@@ -336,6 +343,8 @@ mod tests {
             routes.resolve(&layout, Edge::Right, (-1.0, 50.0)).unwrap();
         assert_eq!(first_peer.certificate, first.certificate);
         assert_eq!(second_peer.certificate, second.certificate);
+        assert_eq!(first_peer.secondary_layout, None);
+        assert_eq!(second_peer.secondary_layout, Some("127.0.0.1:24877".parse()?));
         assert_eq!(first_route.target.edge, Edge::Left);
         assert_eq!(second_route.target.edge, Edge::Top);
         assert_eq!(second_route.fraction, 0.25);
@@ -354,6 +363,7 @@ mod tests {
         let wrong = Peer {
             address: second_address,
             certificate: first.certificate,
+            secondary_layout: None,
         };
         assert!(probe(&local, &wrong).await.is_err());
         tokio::time::timeout(TIMEOUT, incorrect).await???;
