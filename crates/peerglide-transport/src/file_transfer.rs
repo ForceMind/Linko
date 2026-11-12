@@ -1,6 +1,7 @@
 //! File offer and disk orchestration on the authenticated data connection.
 use crate::data;
 use anyhow::{ensure, Context, Result};
+pub use peerglide_transfer::drop_admission;
 use peerglide_transfer::{
     codec::{FileOutcome, Frame, Kind, HEADER_BYTES},
     data_policy::{DataSession, Permissions},
@@ -136,6 +137,38 @@ pub struct ReceiveResult {
 pub struct ReceivedFile {
     path: PathBuf,
     manifest: Manifest,
+    origin: DropOrigin,
+}
+
+/// Locally retained provenance of one committed transfer. Never put the
+/// connection nonce in a network message, file, diagnostic, or user report.
+#[derive(Clone, Copy)]
+pub struct DropOrigin {
+    transfer: [u8; 16],
+    peer: [u8; 32],
+    connection: [u8; 32],
+}
+
+impl DropOrigin {
+    pub(crate) fn new(transfer: [u8; 16], peer: [u8; 32], connection: [u8; 32]) -> Self {
+        Self {
+            transfer,
+            peer,
+            connection,
+        }
+    }
+
+    pub fn transfer(self) -> [u8; 16] {
+        self.transfer
+    }
+
+    pub fn connection(self) -> [u8; 32] {
+        self.connection
+    }
+
+    pub fn matches_peer(self, fingerprint: &str) -> bool {
+        blake3::Hash::from_bytes(self.peer).to_hex().as_str() == fingerprint
+    }
 }
 
 /// A file rechecked before the native adapter can offer its local path.
@@ -149,6 +182,10 @@ pub struct PreparedDropPath {
 }
 
 impl ReceivedFile {
+    pub fn drop_origin(&self) -> DropOrigin {
+        self.origin
+    }
+
     pub fn name(&self) -> &str {
         self.manifest.name()
     }
@@ -381,7 +418,8 @@ where
 
     // Use the digest bound by the authenticated connection, independently of
     // the transfer ID and local directory supplied by the controller.
-    let peer = consent.file_receive_peer()?;
+    let origin = consent.file_receive_origin(id)?;
+    let peer = origin.peer;
     let total_chunks = manifest.chunks();
     let verified_manifest = manifest.clone();
     let storage = tokio::task::spawn_blocking({
@@ -481,6 +519,7 @@ where
     result.file = published.map(|path| ReceivedFile {
         path,
         manifest: verified_manifest,
+        origin,
     });
     Ok(result)
 }
@@ -529,6 +568,14 @@ mod tests {
         }
     }
 
+    fn local_fixture_file(path: &Path) -> Result<ReceivedFile> {
+        Ok(ReceivedFile {
+            manifest: Manifest::from_file(path)?,
+            path: path.to_path_buf(),
+            origin: DropOrigin::new([1; 16], [2; 32], [3; 32]),
+        })
+    }
+
     #[test]
     fn promised_copy_checks_each_chunk_and_publishes_without_overwrite() -> Result<()> {
         let directory = TestDirectory::new()?;
@@ -536,10 +583,7 @@ mod tests {
         let target = directory.0.join("target.bin");
         let content = vec![17; CHUNK_BYTES + 1];
         fs::write(&original, &content)?;
-        let file = ReceivedFile {
-            manifest: Manifest::from_file(&original)?,
-            path: original.clone(),
-        };
+        let file = local_fixture_file(&original)?;
 
         let mut checks = 0;
         let collision = file
@@ -571,10 +615,7 @@ mod tests {
         let target = directory.0.join("target.bin");
         let content = vec![17; CHUNK_BYTES + 1];
         fs::write(&original, &content)?;
-        let file = ReceivedFile {
-            manifest: Manifest::from_file(&original)?,
-            path: original.clone(),
-        };
+        let file = local_fixture_file(&original)?;
         let mut checks = 0;
         let cancelled = file
             .prepare_drop(|| Ok(()))?
@@ -607,10 +648,7 @@ mod tests {
         let mut content = vec![17; CHUNK_BYTES];
         content.extend_from_slice(&[19, 21, 23]);
         fs::write(&path, &content)?;
-        let file = ReceivedFile {
-            manifest: Manifest::from_file(&path)?,
-            path: path.clone(),
-        };
+        let file = local_fixture_file(&path)?;
         let mut reader = file.prepare_drop(|| Ok(()))?.into_verified_reader();
         assert_eq!(reader.size(), content.len() as u64);
         let mut piece = [0; 4];
@@ -759,6 +797,11 @@ mod tests {
             assert_eq!(fs::read(&path)?, contents);
             let file = received.file.context("missing verified local copy")?;
             assert_eq!(file.name(), "example.bin");
+            let origin = file.drop_origin();
+            assert_eq!(origin.transfer(), id);
+            assert!(origin.matches_peer(&source.fingerprint()));
+            assert!(!origin.matches_peer(&peer.fingerprint()));
+            assert_ne!(origin.connection(), [0; 32]);
             let prepared = file.prepare_drop(|| Ok(()))?;
             assert_eq!(fs::canonicalize(prepared.path())?, fs::canonicalize(&path)?);
             drop(prepared);

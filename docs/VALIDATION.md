@@ -2978,6 +2978,25 @@ macOS 及最新候选的结果以各自同源 CI 作业为准，实际安装、�
 [Windows 更新演练](https://github.com/ForceMind/Linko/actions/runs/43271896015/job/131380707452) ·
 [Ubuntu 更新演练](https://github.com/ForceMind/Linko/actions/runs/43271896015/job/131380707631)
 
+集成提交 `28b1ab3` 的三平台真实成品已验证从 `2026.11.13-0200` 切换到
+`2026.11.13-0204`，拒绝篡改旧版并恢复原版。macOS 与 Ubuntu 的 180 秒空闲峰值 RSS
+分别为 99.312 和 142.383 MiB，最大预热后增长为 0.234 MiB。峰值和增长门槛仍为
+512 MiB 和 64 MiB。macOS 同口径 NoNative 普通窗口约 30.17 秒的平均单核 CPU 为
+1.094%，峰值 RSS 为 101.250 MiB，基线为 0.764% 和 119.078 MiB。
+[成品更新](https://github.com/ForceMind/Linko/actions/runs/43276115573) ·
+[资源复验](https://github.com/ForceMind/Linko/actions/runs/43276115619)
+
+### 文件拖放票据
+
+原生文件复制准备使用已认证文件连接的本机随机值、发送端证书摘要及传输编号。
+文件校验成功后签发票据，关联本次操作和准备时的显示器布局。离开文件页、准备期间
+失焦、布局变化或停止会结束准备。提交和回执时复查本机身份、配对证书及布局，无法
+确认结果时要求核对目标应用后再准备。
+
+草稿的工作区回归覆盖真实互认证文件传输、布局变化、旧回执和明确撤销。Windows 和
+macOS 均保留文件引用与文件副本入口。持续跨机传递持键仍待和 v5 输入租约联动。
+[文件票据 CI](https://github.com/ForceMind/Linko/actions/runs/43285201166)
+
 ## 集中验收清单
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。

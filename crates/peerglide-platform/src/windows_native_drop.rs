@@ -16,7 +16,7 @@ type ReadDropFile = extern "C" fn(*mut c_void, u64, *mut u8, usize) -> bool;
 type ReleaseDropFile = extern "C" fn(*mut c_void);
 
 extern "C" {
-    fn linko_windows_copy_drag(path: *const u16, units: usize) -> i32;
+    fn linko_windows_copy_drag(path: *const u16, units: usize, millis: u32) -> i32;
     fn linko_windows_verified_file_drag(
         name: *const u16,
         units: usize,
@@ -133,7 +133,7 @@ pub enum Outcome {
 
 /// Only a locally authorized UI gesture supplies a previously verified path.
 /// This call owns an OLE UI message loop until the user drops or cancels.
-pub fn drag_prepared_file(path: &Path) -> Result<Outcome> {
+pub fn drag_prepared_file(path: &Path, remaining: Duration) -> Result<Outcome> {
     ensure!(
         path.is_absolute(),
         "native drop requires a local absolute path"
@@ -146,9 +146,10 @@ pub fn drag_prepared_file(path: &Path) -> Result<Outcome> {
         "native drop requires a regular file"
     );
     let units = bounded_path(path)?;
+    let millis = drag_millis(remaining)?;
     // SAFETY: the bounded UTF-16 slice remains alive through the call. OLE
     // receives an owned copy of the path and only allows the copy effect.
-    decode_outcome(unsafe { linko_windows_copy_drag(units.as_ptr(), units.len()) })
+    decode_outcome(unsafe { linko_windows_copy_drag(units.as_ptr(), units.len(), millis) })
 }
 
 pub fn drag_text(text: &str, remaining: Duration) -> Result<Outcome> {
