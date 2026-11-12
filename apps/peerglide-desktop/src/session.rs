@@ -1259,6 +1259,7 @@ pub(super) fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use transport::Identity;
 
     #[test]

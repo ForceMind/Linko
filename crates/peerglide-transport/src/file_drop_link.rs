@@ -14,7 +14,7 @@ use peerglide_transfer::drop_admission::{Admission, Context as DropContext, Tick
 use quinn::{crypto::rustls::HandshakeData, Connection};
 use std::{
     fmt::Write,
-    sync::{Arc, Mutex},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
