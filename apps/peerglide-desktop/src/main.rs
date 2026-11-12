@@ -206,6 +206,9 @@ enum Command {
         /// Explicitly allow the selected computer to move the local pointer.
         #[arg(long, required = true)]
         allow_pointer_control: bool,
+        /// Also receive supported keys and the three mouse buttons.
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_discrete_input: bool,
     },
     /// Play the microphone of one explicitly verified computer.
     #[cfg(any(windows, target_os = "macos"))]
@@ -394,7 +397,17 @@ async fn main() -> Result<()> {
             peer_cert,
             bind,
             allow_pointer_control,
-        } => x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control).await,
+            allow_discrete_input,
+        } => {
+            x11_receive::run(
+                &identity,
+                &peer_cert,
+                bind,
+                allow_pointer_control,
+                allow_discrete_input,
+            )
+            .await
+        }
         #[cfg(any(windows, target_os = "macos"))]
         Command::PlayMicrophone {
             identity,
