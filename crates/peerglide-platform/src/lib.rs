@@ -10,7 +10,7 @@ pub mod application_menu;
 #[cfg(any(windows, target_os = "macos"))]
 mod audio_output;
 mod capture_events;
-#[cfg(any(windows, target_os = "macos", test))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
 mod capture_thread;
 #[cfg(any(windows, target_os = "macos"))]
 pub mod clipboard;

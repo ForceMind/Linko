@@ -217,6 +217,20 @@ enum Command {
         #[arg(long, requires = "allow_pointer_control")]
         allow_scroll: bool,
     },
+    /// Send relative pointer motion from a local Xorg edge to one verified computer.
+    #[cfg(target_os = "linux")]
+    SendX11 {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, value_enum, default_value = "right")]
+        edge: Side,
+        /// Explicitly allow this session to take the local pointer at that edge.
+        #[arg(long, required = true)]
+        allow_pointer_capture: bool,
+    },
     /// Play the microphone of one explicitly verified computer.
     #[cfg(any(windows, target_os = "macos"))]
     PlayMicrophone {
@@ -496,6 +510,22 @@ fn main() -> Result<()> {
                 allow_pointer_control,
                 allow_discrete_input,
                 allow_scroll,
+            )
+        }),
+        #[cfg(target_os = "linux")]
+        Command::SendX11 {
+            address,
+            identity,
+            peer_cert,
+            edge,
+            allow_pointer_capture,
+        } => run_cli_future(|| {
+            session::x11_source::run(
+                &identity,
+                &peer_cert,
+                address,
+                edge.into(),
+                allow_pointer_capture,
             )
         }),
         #[cfg(any(windows, target_os = "macos"))]
