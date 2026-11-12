@@ -413,12 +413,14 @@ fn workspace_pointer_drag_and_direction_buttons_commit_only_editable_layout() ->
 fn desktop_preferences_preserve_input_schema_and_future_desktop_file() -> Result<()> {
     let fixture = Fixture::new()?;
     let mut app = App::load(fixture.path.clone());
+    assert!(!app.desktop_preferences.cursor_trail);
     app.save_config()?;
     let original = std::fs::read(app.dir.join("settings.json"))?;
     let preferences = DesktopPreferences {
         tray_enabled: true,
         close_to_tray: true,
         reduce_motion: true,
+        cursor_trail: true,
     };
     app.desktop_store.as_mut().unwrap().save(&preferences)?;
     assert_eq!(std::fs::read(app.dir.join("settings.json"))?, original);
@@ -426,6 +428,7 @@ fn desktop_preferences_preserve_input_schema_and_future_desktop_file() -> Result
     let app = App::load(fixture.path.clone());
     assert!(app.desktop_preferences.tray_enabled && app.desktop_preferences.close_to_tray);
     assert!(app.desktop_preferences.reduce_motion);
+    assert!(app.desktop_preferences.cursor_trail);
     assert!(app.tray.is_none() && app.child.is_none());
     drop(app);
     let future = br#"{"store_version":999,"data":{"tray_enabled":true}}"#;
