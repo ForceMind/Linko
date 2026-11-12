@@ -27,8 +27,10 @@ impl Profiles {
         let mut names = BTreeSet::new();
         for entry in &self.entries {
             ensure!(
-                entry.peer.len() == 64 && entry.peer.bytes().all(|byte| byte.is_ascii_hexdigit())
-                    && valid_name(&entry.name) && matches!(entry.edge.as_str(), "left" | "right" | "top" | "bottom")
+                entry.peer.len() == 64
+                    && entry.peer.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    && valid_name(&entry.name)
+                    && matches!(entry.edge.as_str(), "left" | "right" | "top" | "bottom")
                     && names.insert((entry.peer.as_str(), entry.name.as_str())),
                 "布局档案内容无效或重名"
             );
@@ -38,7 +40,9 @@ impl Profiles {
 }
 
 fn valid_name(name: &str) -> bool {
-    !name.is_empty() && name.trim() == name && name.chars().count() <= NAME_CHARS
+    !name.is_empty()
+        && name.trim() == name
+        && name.chars().count() <= NAME_CHARS
         && !name.chars().any(char::is_control)
 }
 
@@ -77,8 +81,12 @@ impl Panel {
     }
 
     fn draw(&mut self, app: &mut App, ui: &mut egui::Ui) {
-        let Some(peer) = app.config.fingerprint.clone() else { return; };
-        let store = self.loaded.get_or_insert_with(|| Local::open(app.dir.join("layout-profiles.json")));
+        let Some(peer) = app.config.fingerprint.clone() else {
+            return;
+        };
+        let store = self
+            .loaded
+            .get_or_insert_with(|| Local::open(app.dir.join("layout-profiles.json")));
         let Ok(store) = store else {
             ui.label("布局档案只读，原文件已保留。");
             return;
@@ -86,7 +94,13 @@ impl Panel {
         let editable = app.layout_editable();
         let mut action = None;
         ui.add_enabled_ui(editable, |ui| {
-            for (index, entry) in store.profiles.entries.iter().enumerate().filter(|(_, entry)| entry.peer == peer) {
+            for (index, entry) in store
+                .profiles
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| entry.peer == peer)
+            {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(format!("{} · {}", entry.name, edge_label(&entry.edge)));
                     if ui.small_button("应用").clicked() {
@@ -98,13 +112,25 @@ impl Panel {
                 });
             }
             ui.horizontal_wrapped(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.name).char_limit(NAME_CHARS).hint_text("档案名称"));
-                if ui.add_enabled(valid_name(self.name.trim()), egui::Button::new("保存当前方向")).clicked() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.name)
+                        .char_limit(NAME_CHARS)
+                        .hint_text("档案名称"),
+                );
+                if ui
+                    .add_enabled(
+                        valid_name(self.name.trim()),
+                        egui::Button::new("保存当前方向"),
+                    )
+                    .clicked()
+                {
                     action = Some(Action::Save);
                 }
             });
         });
-        let Some(action) = action else { return; };
+        let Some(action) = action else {
+            return;
+        };
         if let Err(error) = data_access::Pin::load(app) {
             app.feedback(Err(error), "");
             return;
@@ -150,10 +176,24 @@ mod tests {
         let fixture = super::super::tests::Fixture::new()?;
         let path = fixture.path.join("layout-profiles.json");
         let mut store = Local::open(path.clone())?;
-        let a = Profile { peer: "a".repeat(64), name: "工作台".into(), edge: "left".into() };
-        let b = Profile { peer: "b".repeat(64), name: a.name.clone(), edge: "top".into() };
-        store.save(Profiles { entries: vec![a.clone(), b] })?;
-        assert!(store.save(Profiles { entries: vec![a.clone(), a] }).is_err());
+        let a = Profile {
+            peer: "a".repeat(64),
+            name: "工作台".into(),
+            edge: "left".into(),
+        };
+        let b = Profile {
+            peer: "b".repeat(64),
+            name: a.name.clone(),
+            edge: "top".into(),
+        };
+        store.save(Profiles {
+            entries: vec![a.clone(), b],
+        })?;
+        assert!(store
+            .save(Profiles {
+                entries: vec![a.clone(), a]
+            })
+            .is_err());
         let reopened = Local::open(path.clone())?;
         assert_eq!(reopened.profiles.entries[0].edge, "left");
         assert_eq!(reopened.profiles.entries[1].edge, "top");
