@@ -629,10 +629,7 @@ async fn accept_inner<P>(
         };
         send.write_all(&reply.encode()).await?;
         let mut published = published;
-        if let Some(completion) = published
-            .as_mut()
-            .and_then(|grant| grant.completion.take())
-        {
+        if let Some(completion) = published.as_mut().and_then(|grant| grant.completion.take()) {
             let claim = tokio::time::timeout(Duration::from_millis(LEASE_MS), completion)
                 .await
                 .context("file claim expired")?

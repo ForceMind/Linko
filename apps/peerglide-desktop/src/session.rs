@@ -2608,11 +2608,10 @@ mod tests {
             );
             let receipt =
                 file_drop_link::SentReceipt::from_local_worker(&source_proof, &b.certificate)?;
-            let confirmation = file_drop_link::reserve_for_worker(
-                &side, &c, &b.certificate, receipt, lease,
-            )
-            .await?
-            .context("receiver declined initial reservation")?;
+            let confirmation =
+                file_drop_link::reserve_for_worker(&side, &c, &b.certificate, receipt, lease)
+                    .await?
+                    .context("receiver declined initial reservation")?;
             if cancelled {
                 let event = controller
                     .submit(Command::Cancel { session, request })
@@ -2631,7 +2630,8 @@ mod tests {
             assert!(
                 matches!(transport::receive(&mut rx).await?, Message::Granted { lease: granted } if granted == lease)
             );
-            let proof = tokio::time::timeout(Duration::from_secs(2), confirmation.confirm()).await?;
+            let proof =
+                tokio::time::timeout(Duration::from_secs(2), confirmation.confirm()).await?;
             assert_eq!(proof.is_ok(), !cancelled);
             side.close(0u8.into(), b"reservation resolved");
             if !cancelled {
