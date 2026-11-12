@@ -1983,6 +1983,8 @@ fn main() -> eframe::Result<()> {
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            // The Mac GL context is shared by the main window and overlays.
+            .with_transparent(cfg!(target_os = "macos"))
             .with_icon(app_icon::icon())
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([920.0, 700.0]),
@@ -1992,6 +1994,8 @@ fn main() -> eframe::Result<()> {
         "Linko / 屏跃",
         native_options,
         Box::new(move |cc| {
+            #[cfg(target_os = "macos")]
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(false));
             let mut app = App::new(cc, dir);
             app.quit_check_mode = quit_check.is_some();
             app.quit_check = quit_check;
