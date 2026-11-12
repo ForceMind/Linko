@@ -189,8 +189,9 @@ impl Export {
             return Ok(());
         };
         let source = self.source.as_ref().context("没有已接收文件")?;
+        source.pin.recheck(app)?;
         anyhow::ensure!(
-            Instant::now() < prepared.expires && eligible(app) && source.pin.matches(app),
+            Instant::now() < prepared.expires && eligible(app),
             "请重新准备复制拖放"
         );
         #[cfg(all(windows, target_env = "msvc"))]

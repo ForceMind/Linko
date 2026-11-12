@@ -93,9 +93,9 @@ impl Offer {
     }
 
     fn start(&mut self, app: &App) -> Result<Option<&'static str>> {
-        let (pin, _, _) = Pin::load(app)?;
+        self.pin.recheck(app)?;
         let remaining = self.expires.saturating_duration_since(Instant::now());
-        ensure!(pin == self.pin && !remaining.is_zero(), "复制拖放已失效");
+        ensure!(!remaining.is_zero(), "复制拖放已失效");
         #[cfg(all(windows, target_env = "msvc"))]
         let State::Ready(payload) = &self.state;
         #[cfg(target_os = "macos")]
