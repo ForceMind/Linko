@@ -1089,7 +1089,8 @@ async fn run_inner(
     }
     worker_event(o.managed, WorkerState::Disconnected);
     let reason = c.close_reason();
-    c.close(0u8.into(), b"session ended");
+    let receipt = session::close_reason_after_recovery(&result, input_status.last, b"session ended");
+    c.close(0u8.into(), receipt);
     e.wait_idle().await;
     result?;
     if let Some(reason) = reason {

@@ -22,6 +22,21 @@ async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
     tokio::time::timeout(Duration::from_millis(250), transport::send(tx, m)).await??;
     Ok(())
 }
+
+pub(super) const NATIVE_INPUT_RECOVERED: &[u8] = b"linko native input recovered/1";
+
+pub(super) fn close_reason_after_recovery(
+    session: &Result<()>,
+    state: Option<WorkerInputState>,
+    fallback: &'static [u8],
+) -> &'static [u8] {
+    if session.is_ok() && state == Some(WorkerInputState::Local) {
+        NATIVE_INPUT_RECOVERED
+    } else {
+        fallback
+    }
+}
+
 fn normal_close(c: &quinn::Connection) -> bool {
     matches!(c.close_reason(),Some(quinn::ConnectionError::ApplicationClosed(closed)) if closed.error_code==0u8.into())
 }
@@ -1497,6 +1512,55 @@ mod tests {
         }
         assert!(connection_end(quinn::ConnectionError::TimedOut).is_err());
         assert!(connection_end(quinn::ConnectionError::Reset).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recovery_receipt_is_a_normal_close_on_the_authenticated_connection() -> Result<()> {
+        let sender = Identity::generate()?;
+        let receiver = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let source = transport::endpoint(bind, &sender, &receiver.certificate)?;
+        let target = transport::endpoint(bind, &receiver, &sender.certificate)?;
+        let address = target.local_addr()?;
+        let generic = b"session ended";
+        for (state, clean) in [
+            (WorkerInputState::Local, true),
+            (WorkerInputState::Local, false),
+            (WorkerInputState::RecoveryUnconfirmed, true),
+            (WorkerInputState::Disabled, true),
+        ] {
+            let receive = async {
+                let c = target.accept().await.unwrap().await?;
+                transport::verify_peer(&c, &sender.certificate)?;
+                let (_, mut rx) = c.accept_bi().await?;
+                assert!(matches!(transport::receive(&mut rx).await?, Message::Ping { lease: 0 }));
+                let result = if clean { Ok(()) } else { Err(anyhow::anyhow!("session failed")) };
+                let reason = close_reason_after_recovery(&result, Some(state), generic);
+                c.close(0u8.into(), reason);
+                Ok::<_, anyhow::Error>(())
+            };
+            let send_probe = async {
+                let c = source.connect(address, "peerglide.local")?.await?;
+                transport::verify_peer(&c, &receiver.certificate)?;
+                let (mut tx, _rx) = c.open_bi().await?;
+                send(&mut tx, &Message::Ping { lease: 0 }).await?;
+                let quinn::ConnectionError::ApplicationClosed(closed) = c.closed().await else {
+                    anyhow::bail!("expected authenticated application close");
+                };
+                assert_eq!(closed.error_code, 0u8.into());
+                let expected = if clean && state == WorkerInputState::Local {
+                    NATIVE_INPUT_RECOVERED
+                } else {
+                    generic
+                };
+                assert_eq!(closed.reason.as_ref(), expected);
+                Ok::<_, anyhow::Error>(())
+            };
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(receive, send_probe)
+            }).await??;
+        }
         Ok(())
     }
 
