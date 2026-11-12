@@ -14,6 +14,7 @@ use std::{
 };
 
 const LIFETIME: Duration = Duration::from_secs(60);
+const LAYOUT_POLL: Duration = Duration::from_millis(500);
 const SIZE: [f32; 2] = [208.0, 72.0];
 const INSET: f64 = 48.0;
 const ALIGNMENT: f32 = 4.0;
@@ -48,6 +49,7 @@ pub(super) struct Offer {
     layout: Layout,
     zoom: f32,
     expires: Instant,
+    next_layout_check: Instant,
     placement: Placement,
     id: egui::ViewportId,
     parent: egui::Context,
@@ -79,6 +81,7 @@ impl Offer {
             layout,
             zoom,
             expires: now + LIFETIME,
+            next_layout_check: now + LAYOUT_POLL,
             placement,
             id: egui::ViewportId::from_hash_of(("linko-file-edge-send", now)),
             parent: ctx.clone(),
@@ -99,8 +102,23 @@ impl Offer {
 
     pub(super) fn validate_drop(&self, app: &App, now: Instant) -> Result<()> {
         ensure!(self.current(app, now), "边沿发送许可已失效");
+        self.validate_layout()
+    }
+
+    pub(super) fn check_layout_if_due(&mut self, now: Instant) -> Result<()> {
+        if now < self.next_layout_check {
+            return Ok(());
+        }
+        self.next_layout_check = now + LAYOUT_POLL;
+        self.validate_layout()
+    }
+
+    fn validate_layout(&self) -> Result<()> {
         let layout = peerglide_platform::read_display_layout().context("无法重新读取本机显示器")?;
-        ensure!(self.layout.same_configuration(&layout), "屏幕布局已变化，请重新开启边沿发送");
+        ensure!(
+            self.layout.same_configuration(&layout),
+            "屏幕布局已变化，请重新开启边沿发送"
+        );
         Ok(())
     }
 
@@ -110,7 +128,13 @@ impl Offer {
 
     pub(super) fn show(&self, ctx: &egui::Context) {
         let Some(position) = self.placement.points(ctx) else {
-            finish(&self.live, &self.sender, ctx, self.id, Event::PositionUnavailable);
+            finish(
+                &self.live,
+                &self.sender,
+                ctx,
+                self.id,
+                Event::PositionUnavailable,
+            );
             return;
         };
         let builder = egui::ViewportBuilder::default()
@@ -168,7 +192,8 @@ impl Offer {
                 ui.centered_and_justified(|ui| ui.label("正在定位屏幕边沿"));
                 return;
             }
-            ui.painter().rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0.0, ui.visuals().panel_fill);
             ui.centered_and_justified(|ui| ui.strong("拖入单个文件发送"));
         });
     }
@@ -177,7 +202,8 @@ impl Offer {
 impl Drop for Offer {
     fn drop(&mut self) {
         self.live.store(false, Ordering::Release);
-        self.parent.send_viewport_cmd_to(self.id, egui::ViewportCommand::Close);
+        self.parent
+            .send_viewport_cmd_to(self.id, egui::ViewportCommand::Close);
     }
 }
 
@@ -200,7 +226,10 @@ fn configured_edge(name: &str) -> Option<Edge> {
 
 fn aligned(rect: egui::Rect, expected: egui::Pos2) -> bool {
     (rect.min - expected).abs().max_elem() <= ALIGNMENT
-        && (rect.size() - egui::vec2(SIZE[0], SIZE[1])).abs().max_elem() <= ALIGNMENT
+        && (rect.size() - egui::vec2(SIZE[0], SIZE[1]))
+            .abs()
+            .max_elem()
+            <= ALIGNMENT
 }
 
 fn drop_event(files: &[egui::DroppedFileHandle], aligned: bool) -> Option<Event> {
@@ -227,7 +256,10 @@ fn finish(
 }
 
 fn placement(layout: &Layout, edge: Edge, zoom: f32) -> Result<Placement> {
-    let primary = layout.displays().iter().find(|display| display.id == layout.primary())
+    let primary = layout
+        .displays()
+        .iter()
+        .find(|display| display.id == layout.primary())
         .context("无法识别本机主屏")?;
     let screen = primary.bounds;
     let scale = f64::from(zoom) * if cfg!(windows) { primary.scale } else { 1.0 };
@@ -242,11 +274,19 @@ fn placement(layout: &Layout, edge: Edge, zoom: f32) -> Result<Placement> {
     );
     let vertical = matches!(edge, Edge::Left | Edge::Right);
     let along = |bounds: Bounds| {
-        if vertical { (bounds.top, bounds.bottom) } else { (bounds.left, bounds.right) }
+        if vertical {
+            (bounds.top, bounds.bottom)
+        } else {
+            (bounds.left, bounds.right)
+        }
     };
     let (low, high) = along(screen);
     let mut limits = vec![low, high];
-    for display in layout.displays().iter().filter(|display| display.id != primary.id) {
+    for display in layout
+        .displays()
+        .iter()
+        .filter(|display| display.id != primary.id)
+    {
         let bounds = display.bounds;
         ensure!(
             bounds.right <= screen.left
@@ -270,7 +310,10 @@ fn placement(layout: &Layout, edge: Edge, zoom: f32) -> Result<Placement> {
             Edge::Top => (middle, screen.top + 0.5),
             Edge::Bottom => (middle, screen.bottom - 0.5),
         };
-        if layout.edge_at(edge, x, y, 1.0).is_some_and(|anchor| anchor.display == primary.id) {
+        if layout
+            .edge_at(edge, x, y, 1.0)
+            .is_some_and(|anchor| anchor.display == primary.id)
+        {
             if let Some(previous) = spans.last_mut().filter(|span| span.1 == start) {
                 previous.1 = end;
             } else {
@@ -280,7 +323,8 @@ fn placement(layout: &Layout, edge: Edge, zoom: f32) -> Result<Placement> {
     }
     let extent = if vertical { height } else { width };
     let middle = (low + high - extent) * 0.5;
-    let along = spans.into_iter()
+    let along = spans
+        .into_iter()
         .filter(|(start, end)| end - start >= extent + 2.0 * inset)
         .map(|(start, end)| middle.clamp(start + inset, end - extent - inset))
         .min_by(|a, b| (a - middle).abs().total_cmp(&(b - middle).abs()))
@@ -317,7 +361,12 @@ mod tests {
     fn display(id: u64, bounds: [f64; 4]) -> Display {
         Display {
             id: DisplayId(id),
-            bounds: Bounds { left: bounds[0], top: bounds[1], right: bounds[2], bottom: bounds[3] },
+            bounds: Bounds {
+                left: bounds[0],
+                top: bounds[1],
+                right: bounds[2],
+                bottom: bounds[3],
+            },
             scale: 1.0,
             rotation: Rotation::Upright,
         }
@@ -340,25 +389,41 @@ mod tests {
 
     #[test]
     fn only_one_absolute_file_is_accepted_by_a_positioned_window() {
-        let absolute = PathBuf::from(if cfg!(windows) { "C:\\Source\\one.txt" } else { "/tmp/one.txt" });
+        let absolute = PathBuf::from(if cfg!(windows) {
+            "C:\\Source\\one.txt"
+        } else {
+            "/tmp/one.txt"
+        });
         let file: egui::DroppedFileHandle = Arc::new(Dropped(absolute.clone()));
-        assert!(matches!(drop_event(&[file.clone()], true), Some(Event::File(path)) if path == absolute));
-        assert!(matches!(drop_event(&[file.clone()], false), Some(Event::PositionUnavailable)));
-        assert!(matches!(drop_event(&[file.clone(), file], true), Some(Event::InvalidFile)));
+        assert!(
+            matches!(drop_event(&[file.clone()], true), Some(Event::File(path)) if path == absolute)
+        );
+        assert!(matches!(
+            drop_event(&[file.clone()], false),
+            Some(Event::PositionUnavailable)
+        ));
+        assert!(matches!(
+            drop_event(&[file.clone(), file], true),
+            Some(Event::InvalidFile)
+        ));
         let relative: egui::DroppedFileHandle = Arc::new(Dropped(PathBuf::from("relative.txt")));
-        assert!(matches!(drop_event(&[relative], true), Some(Event::InvalidFile)));
+        assert!(matches!(
+            drop_event(&[relative], true),
+            Some(Event::InvalidFile)
+        ));
         assert!(drop_event(&[], true).is_none());
     }
 
     #[test]
-    fn a_deferred_drop_or_close_consumes_the_offer_once() {
+    fn a_deferred_drop_consumes_the_offer_once() {
         let ctx = egui::Context::default();
         let (sender, receiver) = mpsc::sync_channel(1);
         let live = AtomicBool::new(true);
         let id = egui::ViewportId::from_hash_of("edge-drop-test");
-        finish(&live, &sender, &ctx, id, Event::Cancelled);
+        let path = PathBuf::from("queued-file");
+        finish(&live, &sender, &ctx, id, Event::File(path.clone()));
         finish(&live, &sender, &ctx, id, Event::InvalidFile);
-        assert!(matches!(receiver.try_recv(), Ok(Event::Cancelled)));
+        assert!(matches!(receiver.try_recv(), Ok(Event::File(first)) if first == path));
         assert!(receiver.try_recv().is_err());
     }
 
@@ -386,6 +451,7 @@ mod tests {
             layout,
             zoom: ctx.zoom_factor(),
             expires: now + LIFETIME,
+            next_layout_check: now + LAYOUT_POLL,
             id: egui::ViewportId::from_hash_of("edge-lifetime-test"),
             parent: ctx,
             live: Arc::new(AtomicBool::new(true)),
@@ -403,6 +469,7 @@ mod tests {
         app.config.edge = "right".into();
         app.config.fingerprint = None;
         assert!(!offer.current(&app, now));
+        drop(app);
         fixture.close()?;
         Ok(())
     }

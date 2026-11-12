@@ -186,7 +186,10 @@ impl Panel {
     fn start_job(&mut self, app: &App, request: Request, expected: Option<&Pin>) -> Result<()> {
         anyhow::ensure!(self.active.is_none(), "请先结束当前文件任务");
         let (pin, identity, peer) = Pin::load(app)?;
-        anyhow::ensure!(expected.is_none_or(|expected| *expected == pin), "设备配对状态已变化");
+        anyhow::ensure!(
+            expected.is_none_or(|expected| *expected == pin),
+            "设备配对状态已变化"
+        );
         let sending = matches!(request, Request::Send { .. });
         let job = file_worker::start(request, identity, peer, app.wake_ui.clone())
             .context("无法启动文件后台任务")?;
@@ -234,7 +237,7 @@ impl Panel {
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     fn tick_edge(&mut self, app: &App, ctx: &egui::Context) {
         use super::file_edge_drop::Event;
-        let Some(offer) = &self.edge else {
+        let Some(offer) = self.edge.as_mut() else {
             return;
         };
         let now = std::time::Instant::now();
@@ -245,6 +248,11 @@ impl Panel {
         if unavailable || !offer.current(app, now) || target.ok() != Some(offer.target) {
             self.edge = None;
             self.notice = "边沿发送许可已结束。".into();
+            return;
+        }
+        if let Err(error) = offer.check_layout_if_due(now) {
+            self.edge = None;
+            self.notice = error.to_string();
             return;
         }
         let Some(event) = offer.poll() else {
@@ -309,45 +317,49 @@ impl Panel {
                 self.source = path;
             }
         }
-        ui.add_enabled_ui(ready && self.active.is_none() && !self.edge_active(), |ui| {
-            ui.strong("发送文件");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.source)
-                    .hint_text("源文件绝对路径，可拖入单个本机文件"),
-            );
-            let hint = data_access::saved_target(&app.config.address, PORT)
-                .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
-            ui.label("接收端地址");
-            ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
-            ui.add(
-                egui::TextEdit::singleline(&mut self.resume).hint_text("续传编号，首次发送留空"),
-            );
-            if ui.button("发送选定文件").clicked() {
-                let result = self.start(app, true);
-                if let Err(error) = result {
-                    self.notice = error.to_string();
+        ui.add_enabled_ui(
+            ready && self.active.is_none() && !self.edge_active(),
+            |ui| {
+                ui.strong("发送文件");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.source)
+                        .hint_text("源文件绝对路径，可拖入单个本机文件"),
+                );
+                let hint = data_access::saved_target(&app.config.address, PORT)
+                    .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
+                ui.label("接收端地址");
+                ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.resume)
+                        .hint_text("续传编号，首次发送留空"),
+                );
+                if ui.button("发送选定文件").clicked() {
+                    let result = self.start(app, true);
+                    if let Err(error) = result {
+                        self.notice = error.to_string();
+                    }
                 }
-            }
-            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-            if ui
-                .add_enabled(!self.export.active(), egui::Button::new("开启一次边沿发送"))
-                .clicked()
-            {
-                if let Err(error) = self.arm_edge(app, ui.ctx()) {
-                    self.notice = error.to_string();
+                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                if ui
+                    .add_enabled(!self.export.active(), egui::Button::new("开启一次边沿发送"))
+                    .clicked()
+                {
+                    if let Err(error) = self.arm_edge(app, ui.ctx()) {
+                        self.notice = error.to_string();
+                    }
                 }
-            }
-            ui.add_space(8.0);
-            ui.strong("接收文件");
-            ui.label("本机监听地址");
-            ui.text_edit_singleline(&mut self.bind);
-            if ui.button("等待文件请求").clicked() {
-                let result = self.start(app, false);
-                if let Err(error) = result {
-                    self.notice = error.to_string();
+                ui.add_space(8.0);
+                ui.strong("接收文件");
+                ui.label("本机监听地址");
+                ui.text_edit_singleline(&mut self.bind);
+                if ui.button("等待文件请求").clicked() {
+                    let result = self.start(app, false);
+                    if let Err(error) = result {
+                        self.notice = error.to_string();
+                    }
                 }
-            }
-        });
+            },
+        );
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if let Some(offer) = &self.edge {
             if ui.button("取消边沿发送").clicked() {
