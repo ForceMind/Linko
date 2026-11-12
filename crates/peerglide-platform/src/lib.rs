@@ -193,6 +193,20 @@ impl ReceiveDisplay {
             anyhow::bail!("local receive display requires Windows or macOS")
         }
     }
+
+    /// Recheck the exact frozen desktop outside native capture callbacks.
+    pub fn matches_current(&self) -> Result<bool> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let current = read_display_layout()?;
+            Ok(current.primary() == self.layout.primary()
+                && current.displays() == self.layout.displays())
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            Ok(false)
+        }
+    }
 }
 
 struct GateState {

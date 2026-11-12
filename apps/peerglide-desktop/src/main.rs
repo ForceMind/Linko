@@ -11,6 +11,7 @@ mod layout_control;
 mod multi_peer;
 mod pairing_worker;
 mod reconnect;
+mod secondary_layout;
 mod session;
 #[cfg(target_os = "linux")]
 mod x11_receive;
@@ -26,6 +27,7 @@ use peerglide_protocol::{
 };
 use peerglide_transport as transport;
 use std::{
+    future::Future,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -289,6 +291,12 @@ struct Options {
     receive_display: Option<(f64, f64)>,
     #[arg(skip)]
     receive_selection: Option<Arc<peerglide_platform::ReceiveDisplay>>,
+    /// Require confirmation from the selected computer's layout listener before sending input.
+    #[arg(long, requires = "native")]
+    request_secondary_layout: Option<SocketAddr>,
+    /// Require a bound layout reservation for incoming control on the selected local screen.
+    #[arg(long, requires = "receive_display")]
+    secondary_layout_bind: Option<SocketAddr>,
     /// Emit bounded input pipeline counts for the first 120 seconds.
     #[arg(long, requires_all = ["native", "managed"], conflicts_with = "reconnect")]
     input_diagnostics: bool,
@@ -313,19 +321,22 @@ fn parse_display_origin(text: &str) -> std::result::Result<(f64, f64), &'static 
     Ok((parse(x)?, parse(y)?))
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     match Cli::parse().command {
         Command::PairOffer {
             identity,
             bind,
             managed,
-        } => pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed).await,
+        } => run_cli_future(|| {
+            pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed)
+        }),
         Command::PairConnect {
             address,
             identity,
             managed,
-        } => pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed).await,
+        } => run_cli_future(|| {
+            pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed)
+        }),
         Command::DiagnoseContext {
             include_application_id,
             observe_ms,
@@ -339,13 +350,13 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Listen(o) => run(o, None, false).await,
+        Command::Listen(o) => run_cli_future(|| run(o, None, false)),
         Command::ListenPeers {
             identity,
             peer_cert,
             bind,
             native_route,
-        } => multi_peer::run(&identity, &peer_cert, bind, native_route).await,
+        } => run_cli_future(|| multi_peer::run(&identity, &peer_cert, bind, native_route)),
         #[cfg(any(windows, target_os = "macos"))]
         Command::AudioOutputDevices => audio_playback::list_outputs(),
         #[cfg(any(windows, target_os = "macos"))]
@@ -357,7 +368,7 @@ async fn main() -> Result<()> {
             volume,
             duration_secs,
             supervisor,
-        } => {
+        } => run_cli_future(|| {
             audio_playback::run(
                 &identity,
                 &peer_cert,
@@ -367,8 +378,7 @@ async fn main() -> Result<()> {
                 Duration::from_secs(duration_secs),
                 &supervisor,
             )
-            .await
-        }
+        }),
         #[cfg(any(windows, target_os = "macos"))]
         Command::PlayAudioMix {
             identity,
@@ -377,7 +387,7 @@ async fn main() -> Result<()> {
             device,
             volume,
             duration_secs,
-        } => {
+        } => run_cli_future(|| {
             audio_mix_playback::run(
                 &identity,
                 &peer_cert,
@@ -386,8 +396,7 @@ async fn main() -> Result<()> {
                 volume,
                 Duration::from_secs(duration_secs),
             )
-            .await
-        }
+        }),
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareSystemAudio {
             address,
@@ -395,7 +404,7 @@ async fn main() -> Result<()> {
             peer_cert,
             duration_secs,
             supervisor,
-        } => {
+        } => run_cli_future(|| {
             audio_source::share_system(
                 &identity,
                 &peer_cert,
@@ -403,15 +412,16 @@ async fn main() -> Result<()> {
                 Duration::from_secs(duration_secs),
                 &supervisor,
             )
-            .await
-        }
+        }),
         #[cfg(target_os = "linux")]
         Command::ListenX11 {
             identity,
             peer_cert,
             bind,
             allow_pointer_control,
-        } => x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control).await,
+        } => {
+            run_cli_future(|| x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control))
+        }
         #[cfg(any(windows, target_os = "macos"))]
         Command::PlayMicrophone {
             identity,
@@ -420,7 +430,7 @@ async fn main() -> Result<()> {
             device,
             volume,
             duration_secs,
-        } => {
+        } => run_cli_future(|| {
             audio_playback::play_microphone(
                 &identity,
                 &peer_cert,
@@ -429,29 +439,38 @@ async fn main() -> Result<()> {
                 volume,
                 Duration::from_secs(duration_secs),
             )
-            .await
-        }
+        }),
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareMicrophone {
             address,
             identity,
             peer_cert,
             duration_secs,
-        } => {
+        } => run_cli_future(|| {
             audio_source::share_microphone(
                 &identity,
                 &peer_cert,
                 address,
                 Duration::from_secs(duration_secs),
             )
-            .await
-        }
+        }),
         Command::Connect {
             address,
             options,
             probe,
-        } => run(options, Some(address), probe).await,
+        } => run_cli_future(|| run(options, Some(address), probe)),
     }
+}
+
+// Parse without constructing a large async dispatch frame. Only the selected
+// operation constructs a future, and the runtime holds a pinned heap value.
+#[inline(never)]
+fn run_cli_future<F: Future<Output = Result<()>>>(start: impl FnOnce() -> F) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    runtime.block_on(Box::pin(start()))
 }
 
 fn diagnose_context(include_application_id: bool, observe_ms: Option<u64>) -> Result<()> {
@@ -676,6 +695,11 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
             || (o.managed && address.is_some() && !probe && !o.reconnect),
         "initial wait requires a managed non-probe connector without reconnect"
     );
+    anyhow::ensure!(
+        (o.request_secondary_layout.is_none() && o.secondary_layout_bind.is_none())
+            || (!probe && cfg!(any(windows, target_os = "macos"))),
+        "secondary layout confirmation requires a native Windows or macOS session"
+    );
     o.receive_selection = o
         .receive_display
         .map(peerglide_platform::ReceiveDisplay::select)
@@ -687,8 +711,7 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
     input_status.set(WorkerInputState::Disabled);
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let result = {
-        let work = supervise(&o, address, probe, stopped, &mut input_status);
-        tokio::pin!(work);
+        let mut work = Box::pin(supervise(&o, address, probe, stopped, &mut input_status));
         if managed {
             let (request, requested) = tokio::sync::oneshot::channel();
             let direct_stop = stop.clone();
@@ -940,6 +963,14 @@ async fn run_inner(
         e.wait_idle().await;
         return result;
     }
+    let secondary = secondary_layout::Routes::start(
+        id,
+        peer,
+        &c,
+        o.request_secondary_layout,
+        o.secondary_layout_bind,
+        o.receive_selection.clone(),
+    )?;
     let diagnostics = o
         .input_diagnostics
         .then(input_diagnostics::DiagnosticWindow::start)
@@ -961,6 +992,7 @@ async fn run_inner(
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
             receive_display: o.receive_selection.clone(),
+            secondary: secondary.as_ref(),
         },
     )
     .await;
@@ -1007,6 +1039,19 @@ async fn exchange_hello(
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+
+    #[test]
+    fn secondary_layout_flags_require_the_existing_native_and_display_permissions() {
+        for flag in [
+            "--request-secondary-layout=127.0.0.1:24878",
+            "--secondary-layout-bind=127.0.0.1:24878",
+        ] {
+            assert!(
+                Cli::try_parse_from(["peerglide", "listen", "--peer-cert", "peer.der", flag])
+                    .is_err()
+            );
+        }
+    }
 
     #[test]
     fn alternate_receive_display_requires_native_and_local_consent() {
