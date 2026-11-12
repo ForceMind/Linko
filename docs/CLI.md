@@ -147,19 +147,20 @@ Ctrl+Alt+Esc 结束远程会话。未开启键盘捕获时，本机按键仍会�
 先结束网络发送。原所有者等到这些输入和恢复期间新按下的输入全部抬起，再归还本机。
 Wayland 使用单独的接收入口，仍沿用现有 v5 连接和固定证书。
 
-### Wayland 指针接收候选
+### Wayland 键鼠接收候选
 
 ```text
 peerglide listen-wayland --peer-cert SOURCE.der --allow-pointer-control
 ```
 
-在 Wayland 桌面运行后，先在系统 RemoteDesktop 对话框同意指针访问。可分别加
-`--allow-buttons` 或 `--allow-scroll`。合成器提供多个绝对指针区域时，使用
+在 Wayland 桌面运行后，先在系统 RemoteDesktop 对话框同意所请求的设备。可分别加
+`--allow-buttons`、`--allow-scroll` 或 `--allow-keyboard`。合成器提供多个绝对指针区域时，使用
 `--region X,Y` 指定其报告的区域原点。
 
 此入口通过 `liboeffis.so.1` 和 `libei.so.1` 使用系统已提供的 EIS 接口，
-要求 libei 支持 1.4 的往返确认。收到有效 v5 租约才开始发送指针事件。使用 Ctrl+C
-或系统共享控制结束会话。键盘接收、Wayland 主动发送和本机物理输入自动接管待开发。
+要求 libei 支持 1.4 的往返确认。收到有效 v5 租约才向合成器提交输入。
+键盘沿用 HID 物理键位。电源键和有重复 evdev 编码的非美式井号位置未声明为可接收键。
+使用 Ctrl+C 或系统共享控制结束会话。Wayland 主动发送和本机物理输入自动接管待开发。
 
 ## 麦克风音频候选
 
