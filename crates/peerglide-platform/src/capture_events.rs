@@ -143,8 +143,13 @@ impl Drop for CaptureEventSender {
 }
 
 impl CaptureEvents {
+    /// A source commit must still describe the last consumed pointer sample.
+    pub fn position_current(&self) -> bool {
+        self.position.revision.load(Ordering::SeqCst) == self.seen_position
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.queue.is_empty() && self.position.revision.load(Ordering::SeqCst) == self.seen_position
+        self.queue.is_empty() && self.position_current()
     }
 
     fn try_event(&mut self) -> Option<Captured> {

@@ -558,9 +558,14 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 } else {
                     let p = CGEventGetLocation(event);
                     let b = CGDisplayBounds(CGMainDisplayID());
+                    let (x, y) = if s.gate.0.routed_target.get().is_some() {
+                        (p.x, p.y)
+                    } else {
+                        (p.x - b.origin.x, p.y - b.origin.y)
+                    };
                     Captured::Position {
-                        x: p.x - b.origin.x,
-                        y: p.y - b.origin.y,
+                        x,
+                        y,
                         width: b.size.width,
                         height: b.size.height,
                         route,

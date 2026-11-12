@@ -48,7 +48,10 @@ pub enum Error {
     Overlap,
 }
 
+#[derive(Clone, Copy)]
 pub struct Route {
+    /// Stable within this table and snapshot, including adjacent links to one peer.
+    pub segment: usize,
     pub target: Target,
     pub fraction: f64,
 }
@@ -100,7 +103,7 @@ impl Table {
         if self.revision != layout.revision() || !layout.anchor_is_current(anchor) {
             return None;
         }
-        let link = self.links.iter().find(|link| {
+        let (segment, link) = self.links.iter().enumerate().find(|(_, link)| {
             link.source_display == anchor.display
                 && link.source_edge == anchor.edge
                 && link.source_span.contains(anchor.fraction)
@@ -110,6 +113,7 @@ impl Table {
         let fraction =
             link.target_span.start + unit * (link.target_span.end - link.target_span.start);
         Some(Route {
+            segment,
             target: link.target,
             fraction: fraction.clamp(link.target_span.start, link.target_span.end),
         })

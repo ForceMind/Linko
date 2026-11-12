@@ -225,7 +225,14 @@ impl HookState {
         }
     }
     fn reject_target(&mut self, event: Input) -> bool {
-        if self.gate.active() && !self.target.supports(event) {
+        if !self.gate.active() {
+            return false;
+        }
+        let supported = self.gate.0.routed_target.get().map_or_else(
+            || self.target.supports(event),
+            |target| target.supports(event),
+        );
+        if !supported {
             self.gate.disable();
             self.toggle_armed = false;
             self.toggle_route = None;
@@ -391,7 +398,7 @@ impl HookState {
             && alt
             && fresh
             && usage == 0x4f
-            && self.target.motion()
+            && (self.target.motion() || (route.remote() && self.gate.0.routed_target.get().is_some()))
             && (route.remote() || self.pairs.debt == 0)
             && !self.stopping
         {

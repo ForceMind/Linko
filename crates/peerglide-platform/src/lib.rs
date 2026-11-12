@@ -232,7 +232,48 @@ struct GateState {
     #[cfg(any(windows, target_os = "macos"))]
     receive_display: OnceLock<Arc<ReceiveDisplay>>,
     return_pending: std::sync::atomic::AtomicBool,
+    routed_target: OnceLock<RoutedTarget>,
     diagnostics: OnceLock<Arc<input_diagnostics::InputDiagnostics>>,
+}
+
+/// Published by the session worker before the Local-to-Remote CAS. A callback
+/// reads these words only in Remote, and the next publisher waits for Local.
+#[derive(Default)]
+struct RoutedTarget {
+    keys: [AtomicU64; 4],
+    discrete: AtomicU64,
+}
+impl RoutedTarget {
+    fn publish(&self, caps: &InputCapabilities) {
+        for (index, slot) in self.keys.iter().enumerate() {
+            let base = (index * 64) as u16;
+            let word = (0..64u16).fold(0u64, |word, bit| {
+                word | (u64::from(caps.supports(Input::Key { usage: base + bit, down: true })) << bit)
+            });
+            slot.store(word, Ordering::Relaxed);
+        }
+        let buttons = (1..=3u8).fold(0, |bits, button| {
+            bits | (u64::from(caps.supports(Input::Button { button, down: true })) << (button - 1))
+        });
+        let scroll = u64::from(caps.supports(Input::Scroll { x: 0, y: 1 }));
+        self.discrete.store(buttons | (scroll << 3), Ordering::Relaxed);
+    }
+
+    #[cfg(any(windows, target_os = "macos", test))]
+    fn supports(&self, event: Input) -> bool {
+        if !event.valid() {
+            return false;
+        }
+        match event {
+            Input::Key { usage, .. } => {
+                self.keys[usize::from(usage / 64)].load(Ordering::Relaxed) & (1 << (usage % 64)) != 0
+            }
+            Input::Button { button, .. } => {
+                self.discrete.load(Ordering::Relaxed) & (1 << (button - 1)) != 0
+            }
+            Input::Scroll { .. } => self.discrete.load(Ordering::Relaxed) & 8 != 0,
+        }
+    }
 }
 #[derive(Clone)]
 pub struct CaptureGate(Arc<GateState>);
@@ -263,6 +304,7 @@ impl Default for CaptureGate {
             #[cfg(any(windows, target_os = "macos"))]
             receive_display: OnceLock::new(),
             return_pending: std::sync::atomic::AtomicBool::new(false),
+            routed_target: OnceLock::new(),
             diagnostics: OnceLock::new(),
         }))
     }
@@ -288,6 +330,9 @@ impl CaptureGate {
         self.publish_mode(if remote { ACTIVE } else { 0 })
     }
     fn publish_mode(&self, mode: u64) -> Option<CaptureEpoch> {
+        if mode == ACTIVE && self.0.routed_target.get().is_some() {
+            return None;
+        }
         let old = self.0.control.load(Ordering::Acquire);
         if old & (ACTIVE | RECEIVING | IN_CALLBACK | STOPPED | ADMISSIONS_CLOSED | COUNT) != 0 {
             return None;
@@ -659,11 +704,45 @@ impl Drop for CaptureSession {
         }
     }
 }
+/// An immutable return point on the source display of a configured route.
+#[derive(Clone, Copy)]
+pub struct RouteReturn {
+    target: display_layout::PlacementTarget,
+    placement: display_layout::Placement,
+}
+impl RouteReturn {
+    pub fn new(layout: &display_layout::Layout, display: display_layout::DisplayId, (x, y): (f64, f64)) -> Option<Self> {
+        let target = layout.placement_target(display)?;
+        Some(Self { target, placement: layout.place(target, ReceivePoint { x, y })? })
+    }
+
+    fn restore(self) -> Result<()> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            #[cfg(windows)]
+            let _dpi = windows_display::PhysicalContext::enter()?;
+            native::receive_on_display(self.target.display(), self.target.desktop(), self.placement)
+                .map_err(|error| anyhow::anyhow!("native source return failed: {error:?}"))
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = (self.target, self.placement);
+            anyhow::bail!("native source return unavailable")
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SourceReturn {
+    Primary(f64, f64),
+    Display(RouteReturn),
+}
+
 pub struct CaptureSession {
     pub gate: CaptureGate,
     #[cfg(any(windows, target_os = "macos"))]
     _thread: CaptureThread,
-    return_position: std::sync::Mutex<Option<(f64, f64)>>,
+    return_position: std::sync::Mutex<Option<SourceReturn>>,
     receive_driver: Option<ReceiveDriver>,
     receive_control: Option<ReceiveControl>,
 }
@@ -746,7 +825,7 @@ impl CaptureSession {
                 .return_position
                 .lock()
                 .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))? =
-                Some((return_x, return_y));
+                Some(SourceReturn::Primary(return_x, return_y));
             // Windows derives relative movement from hook coordinates and
             // needs room beyond the edge. macOS reads native event deltas.
             #[cfg(windows)]
@@ -768,13 +847,52 @@ impl CaptureSession {
         return_x: f64,
         return_y: f64,
     ) -> Result<CaptureCommit> {
+        self.begin_from(token, deadline, SourceReturn::Primary(return_x, return_y), None, || true)
+    }
+
+    /// The async sender supplies the capability set from this route's pinned
+    /// connection and an observation check for the latest local position.
+    pub fn begin_configured_route(
+        &self,
+        token: CaptureCommitToken,
+        deadline: u64,
+        position: RouteReturn,
+        target: &InputCapabilities,
+        position_current: impl Fn() -> bool,
+    ) -> Result<CaptureCommit> {
+        if !target.motion() {
+            return Ok(CaptureCommit::Cancelled);
+        }
+        self.begin_from(token, deadline, SourceReturn::Display(position), Some(target), position_current)
+    }
+
+    fn begin_from(
+        &self,
+        token: CaptureCommitToken,
+        deadline: u64,
+        position: SourceReturn,
+        target: Option<&InputCapabilities>,
+        position_current: impl Fn() -> bool,
+    ) -> Result<CaptureCommit> {
+        let routed = self.gate.0.routed_target.get();
+        if routed.is_some() != target.is_some() {
+            return Ok(CaptureCommit::Cancelled);
+        }
+        if !position_current() {
+            return Ok(CaptureCommit::Retry);
+        }
         if self.receive_control.as_ref().is_some_and(|control| {
             control.stop_requested() || control.outcome() != ReceiveAck::Retired
         }) || self.return_pending_claim_failed()
         {
             return Ok(CaptureCommit::Cancelled);
         }
-        let result = self.gate.commit_from(token, deadline, now_ms());
+        let result = if let Some((slot, caps)) = routed.zip(target) {
+            let word = self.gate.0.control.load(Ordering::Acquire);
+            self.gate.commit_from_word(token, deadline, now_ms(), word, || slot.publish(caps))
+        } else {
+            self.gate.commit_from(token, deadline, now_ms())
+        };
         let CaptureCommit::Committed(epoch) = result else {
             self.gate.0.return_pending.store(false, Ordering::Release);
             return Ok(result);
@@ -782,6 +900,7 @@ impl CaptureSession {
         // SourceHealth's observed permission/source loss closes this same gate.
         // No extra OS permission query runs on the short asynchronous retry path.
         if now_ms() >= deadline
+            || !position_current()
             || !self.gate.source_commit_current(epoch)
             || self.receive_control.as_ref().is_some_and(|control| {
                 control.stop_requested() || control.outcome() != ReceiveAck::Retired
@@ -796,7 +915,7 @@ impl CaptureSession {
                 .return_position
                 .lock()
                 .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))? =
-                Some((return_x, return_y));
+                Some(position);
             // Do not post an absolute move when taking over macOS's relative
             // motion stream. Its displacement can affect the next event.
             // macOS instead disconnects the cursor; event deltas stay valid.
@@ -862,8 +981,11 @@ impl CaptureSession {
             .return_position
             .lock()
             .map_err(|_| anyhow::anyhow!("capture position lock poisoned"))?;
-        if let Some((x, y)) = *position {
-            pointer(x, y)?;
+        if let Some(point) = *position {
+            match point {
+                SourceReturn::Primary(x, y) => pointer(x, y)?,
+                SourceReturn::Display(point) => point.restore()?,
+            }
             *position = None;
         }
         self.gate.0.return_pending.store(false, Ordering::Release);
@@ -1236,7 +1358,23 @@ pub fn capture_with_receive_display(
     diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
     receive_display: Option<Arc<ReceiveDisplay>>,
 ) -> Result<CaptureSession> {
+    capture_with_gate(tx, target, diagnostics, receive_display, CaptureGate::default())
+}
+
+/// Use the original native owner, choosing outgoing capabilities per committed route.
+pub fn capture_routed_source(tx: CaptureEventSender) -> Result<CaptureSession> {
     let gate = CaptureGate::default();
+    anyhow::ensure!(gate.0.routed_target.set(RoutedTarget::default()).is_ok(), "routed capture already initialized");
+    capture_with_gate(tx, InputCapabilities::default(), None, None, gate)
+}
+
+fn capture_with_gate(
+    tx: CaptureEventSender,
+    target: InputCapabilities,
+    diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
+    receive_display: Option<Arc<ReceiveDisplay>>,
+    gate: CaptureGate,
+) -> Result<CaptureSession> {
     if let Some(diagnostics) = diagnostics {
         let _ = gate.0.diagnostics.set(diagnostics);
     }
@@ -1725,14 +1863,27 @@ mod tests {
     fn checked_restore_reports_failure_and_keeps_the_return_position() {
         let session = CaptureSession {
             gate: CaptureGate::default(),
-            return_position: std::sync::Mutex::new(Some((0.2, 0.3))),
+            return_position: std::sync::Mutex::new(Some(SourceReturn::Primary(0.2, 0.3))),
             receive_driver: None,
             receive_control: None,
         };
         assert!(session.gate.try_activate());
         assert!(session.restore_checked().is_err());
         assert!(!session.gate.active());
-        assert_eq!(*session.return_position.lock().unwrap(), Some((0.2, 0.3)));
+        assert!(matches!(*session.return_position.lock().unwrap(), Some(SourceReturn::Primary(0.2, 0.3))));
+    }
+    #[test]
+    fn routed_capabilities_replace_every_previous_key_button_and_scroll_permission() {
+        let target = RoutedTarget::default();
+        let key = Input::Key { usage: 0xe7, down: true };
+        let left = Input::Button { button: 1, down: true };
+        let scroll = Input::Scroll { x: 0, y: 1 };
+        target.publish(&InputCapabilities::new(&[0xe7], true, 1, true).unwrap());
+        assert!(target.supports(key) && target.supports(left) && target.supports(scroll));
+        target.publish(&InputCapabilities::new(&[4], true, 2, false).unwrap());
+        assert!(!target.supports(key) && !target.supports(left) && !target.supports(scroll));
+        assert!(target.supports(Input::Key { usage: 4, down: true }));
+        assert!(target.supports(Input::Button { button: 2, down: false }));
     }
     #[test]
     fn source_cursor_freeze_follows_only_the_exact_live_remote_phase() {
