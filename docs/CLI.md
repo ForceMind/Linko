@@ -160,7 +160,21 @@ peerglide listen-wayland --peer-cert SOURCE.der --allow-pointer-control
 此入口通过 `liboeffis.so.1` 和 `libei.so.1` 使用系统已提供的 EIS 接口，
 要求 libei 支持 1.4 的往返确认。收到有效 v5 租约才向合成器提交输入。
 键盘沿用 HID 物理键位。电源键和有重复 evdev 编码的非美式井号位置未声明为可接收键。
-使用 Ctrl+C 或系统共享控制结束会话。Wayland 主动发送和本机物理输入自动接管待开发。
+使用 Ctrl+C 或系统共享控制结束会话。Wayland 接收端的本机物理输入自动接管待开发。
+
+### Wayland 键鼠发送候选
+
+```text
+peerglide send-wayland RECEIVER_IP:24870 --peer-cert RECEIVER.der --edge right --allow-pointer-capture
+```
+
+批准系统 InputCapture 对话框后，向指定外沿移动。可加 `--zone=-1920,0` 限定
+一个合成器区域。可分别加 `--allow-button-capture`、`--allow-scroll-capture` 和
+`--allow-keyboard-capture`。接收端仍需核验证书并授予 v5 输入租约。
+
+接收端进入边可回程。Ctrl+C、系统撤权、屏幕布局变化或断线都会关闭此次捕获。
+启用键盘时可用 Ctrl+Alt+Esc 退出。当前入口每次只使用一个系统授权会话和一个远程
+租约。布局变化后重新运行可取得新区域。滚轮发送使用 EIS 的离散滚动数据。
 
 ## 麦克风音频候选
 

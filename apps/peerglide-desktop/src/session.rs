@@ -18,6 +18,8 @@ use tokio::sync::mpsc;
 mod recovery;
 pub(super) mod routed_source;
 #[cfg(target_os = "linux")]
+pub(super) mod wayland_source;
+#[cfg(target_os = "linux")]
 pub(super) mod x11_source;
 use recovery::Recovery;
 

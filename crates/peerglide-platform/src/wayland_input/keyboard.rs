@@ -39,6 +39,10 @@ pub(super) fn usages() -> impl Iterator<Item = u16> {
         .filter(|&usage| code(usage).is_some())
 }
 
+pub(super) fn usage_from_evdev(keycode: u32) -> Option<u16> {
+    usages().find(|&usage| code(usage) == Some(keycode))
+}
+
 pub(super) struct Keys {
     held: [bool; 256],
 }

@@ -1,4 +1,5 @@
 //! A portal-authorized EIS sender for one local Wayland input lease.
+pub mod capture;
 mod ffi;
 mod keyboard;
 
@@ -139,6 +140,15 @@ fn readable(fd: c_int) -> Result<bool> {
         "the Wayland input connection ended"
     );
     Ok(descriptor.revents & libc::POLLIN != 0)
+}
+
+fn ensure_wayland_session() -> Result<()> {
+    ensure!(
+        std::env::var_os("WAYLAND_DISPLAY").is_some()
+            || std::env::var("XDG_SESSION_TYPE").ok().as_deref() == Some("wayland"),
+        "Wayland input requires a local Wayland session"
+    );
+    Ok(())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -287,11 +297,7 @@ pub struct WaylandInput {
 
 impl WaylandInput {
     pub async fn open(options: Options) -> Result<Self> {
-        ensure!(
-            std::env::var_os("WAYLAND_DISPLAY").is_some()
-                || std::env::var("XDG_SESSION_TYPE").ok().as_deref() == Some("wayland"),
-            "Wayland input requires a local Wayland session"
-        );
+        ensure_wayland_session()?;
         let reservation = Reservation::acquire()?;
         let api = EiApi::load()?;
         let (portal, fd) = Portal::open(options.keyboard).await?;
