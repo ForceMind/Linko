@@ -555,4 +555,51 @@ mod tests {
         assert_eq!(base.routes[0].local_span, [0.2, 0.6]);
         Ok(())
     }
+
+    #[test]
+    fn releasing_a_projected_drag_updates_only_the_in_memory_editor() -> Result<()> {
+        let (layout, plan) = fixture();
+        let layout = Arc::new(layout);
+        let projection = Projection::new(&plan, layout.clone())?;
+        let mut editor = projection.editor.lock().unwrap();
+        let ctx = egui::Context::default();
+        let mut frame = |events| {
+            ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(660.0, 420.0),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| editor.draw(ui, &layout),
+            )
+        };
+        let first = frame(Vec::new());
+        let center = first
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Circle(circle) if circle.radius == 7.0 => Some(circle.center),
+                _ => None,
+            })
+            .context("missing projected drag handle")?;
+        let moved = center + egui::vec2(0.0, 45.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = frame(vec![egui::Event::PointerMoved(center)]);
+        let _ = frame(vec![button(center, true)]);
+        let _ = frame(vec![egui::Event::PointerMoved(moved)]);
+        let _ = frame(vec![button(moved, false)]);
+        assert!(editor.plan.routes[0].local_span[0] > plan.routes[0].local_span[0]);
+        assert!(editor.decision.is_none());
+        assert!(projection.base.routes[0] == plan.routes[0]);
+        Ok(())
+    }
 }
