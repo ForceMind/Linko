@@ -71,11 +71,7 @@ impl Offer {
         (Instant::now() >= self.expires).then_some(EXPIRED)
     }
 
-    pub(super) fn ui(
-        &mut self,
-        app: &App,
-        ui: &mut egui::Ui,
-    ) -> Result<Option<&'static str>> {
+    pub(super) fn ui(&mut self, app: &App, ui: &mut egui::Ui) -> Result<Option<&'static str>> {
         if let Some(notice) = self.poll(app, ui.ctx()) {
             return Ok(Some(notice));
         }

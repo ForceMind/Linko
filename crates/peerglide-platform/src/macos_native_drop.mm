@@ -24,6 +24,15 @@ using Clock = std::chrono::steady_clock;
 static LinkoNativeCopySource* active_drag = nil;
 
 @implementation LinkoNativeCopySource
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        outcome.store(0, std::memory_order_relaxed);
+        allowed.store(false, std::memory_order_relaxed);
+    }
+    return self;
+}
+
 - (BOOL)offerAvailable {
     return allowed.load(std::memory_order_acquire) && Clock::now() < deadline;
 }
@@ -76,16 +85,16 @@ static int32_t start_drag(NSPasteboardItem* data, LinkoNativeCopySource* source,
     if (!view || !event || event.window != window || event.type != NSEventTypeLeftMouseDown) {
         return -3;
     }
+    source->allowed.store(true, std::memory_order_release);
     NSDraggingItem* item = [[NSDraggingItem alloc] initWithPasteboardWriter:data];
     NSPoint point = [view convertPoint:event.locationInWindow fromView:nil];
     NSRect preview = NSMakeRect(point.x - 16, point.y - 16, 32, 32);
     [item setDraggingFrame:preview contents:[NSImage imageNamed:NSImageNameMultipleDocuments]];
 
-    source->outcome.store(0, std::memory_order_relaxed);
-    source->allowed.store(true, std::memory_order_relaxed);
     active_drag = source;
     NSDraggingSession* session = [view beginDraggingSessionWithItems:@[item] event:event source:source];
     if (!session) {
+        source->allowed.store(false, std::memory_order_release);
         active_drag = nil;
         return -4;
     }

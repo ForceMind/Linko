@@ -600,7 +600,7 @@ mod tests {
                     assert_eq!(text, "屏跃");
                 }
                 (Decision::PrepareDrag, Mode::Image, Some(DragPayload::Png(png))) => {
-                    assert_eq!(png, Image::normalize(data::TEST_PNG)?.as_png());
+                    assert_eq!(png, Image::normalize(&data::TEST_PNG)?.as_png());
                 }
                 (Decision::ClipboardChanged, _, None) => (),
                 _ => anyhow::bail!("unexpected clipboard drag payload"),

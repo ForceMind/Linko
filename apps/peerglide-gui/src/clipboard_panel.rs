@@ -88,7 +88,11 @@ impl Panel {
 
     pub(super) fn tick(&mut self, app: &App, _ctx: &egui::Context) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        if let Some(notice) = self.drag_offer.as_ref().and_then(|offer| offer.poll(app, _ctx)) {
+        if let Some(notice) = self
+            .drag_offer
+            .as_ref()
+            .and_then(|offer| offer.poll(app, _ctx))
+        {
             self.drag_offer = None;
             self.notice = notice.into();
         }
