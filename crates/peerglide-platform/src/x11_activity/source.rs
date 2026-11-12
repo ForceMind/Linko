@@ -2,25 +2,21 @@
 use super::{unique, Activity, DeviceType, Event, MAX_EVENTS};
 use anyhow::{ensure, Context, Result};
 use peerglide_protocol::Edge;
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+use std::collections::BTreeMap;
 use x11rb::{
     connection::Connection as _,
     protocol::{
+        shape::{ConnectionExt as _, SK, SO},
         xinput::{
             ConnectionExt as _, DeviceClassData, Fp3232, RawMotionEvent, ValuatorMode, XIDeviceInfo,
         },
         xproto::{
-            ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask, GrabMode,
-            GrabStatus, Window, WindowClass,
+            Allow, ChangeWindowAttributesAux, ClipOrdering, ConnectionExt as _, CreateWindowAux,
+            EventMask, GrabMode, GrabStatus, Window, WindowClass,
         },
     },
     CURRENT_TIME, NONE,
 };
-
-const BUTTON_DRAIN: Duration = Duration::from_millis(500);
 
 pub enum PointerSample {
     Idle,
@@ -73,8 +69,18 @@ impl PointerSource {
             .check()?;
         let geometry = connection.get_geometry(activity.root)?.reply()?;
         let bounds = (
-            i16::try_from(geometry.width.checked_sub(1).context("Xorg width is zero")?)?,
-            i16::try_from(geometry.height.checked_sub(1).context("Xorg height is zero")?)?,
+            i16::try_from(
+                geometry
+                    .width
+                    .checked_sub(1)
+                    .context("Xorg width is zero")?,
+            )?,
+            i16::try_from(
+                geometry
+                    .height
+                    .checked_sub(1)
+                    .context("Xorg height is zero")?,
+            )?,
         );
         ensure!(bounds.0 > 1 && bounds.1 > 1, "Xorg root is too small");
         Ok(Self {
@@ -120,6 +126,9 @@ impl PointerSource {
                 Event::XinputRawButtonPress(event) | Event::XinputRawButtonRelease(event) => {
                     local_input |= !self.activity.xtest.contains(&event.sourceid);
                 }
+                Event::ButtonPress(_) | Event::ButtonRelease(_) if self.confinement.is_some() => {
+                    local_input = true;
+                }
                 Event::XinputHierarchy(_) | Event::ConfigureNotify(_) | Event::Error(_) => {
                     anyhow::bail!("Xorg input or root geometry changed");
                 }
@@ -146,7 +155,14 @@ impl PointerSource {
             return Ok(false);
         }
         let admitted = (|| -> Result<bool> {
-            Ok(self.no_local_input()? && matches!(self.poll()?, PointerSample::Idle))
+            if !self.no_local_input()? || !matches!(self.poll()?, PointerSample::Idle) {
+                return Ok(false);
+            }
+            self.activity
+                .connection
+                .allow_events(Allow::SYNC_POINTER, CURRENT_TIME)?
+                .check()?;
+            Ok(true)
         })();
         if !matches!(admitted, Ok(true)) {
             self.release()?;
@@ -204,13 +220,17 @@ impl PointerSource {
                 &CreateWindowAux::new().override_redirect(1),
             )?
             .check()?;
+        // The confinement window must not become the local click target.
+        connection
+            .shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, window, 0, 0, &[])?
+            .check()?;
         connection.map_window(window)?.check()?;
         let reply = connection
             .grab_pointer(
                 false,
                 root,
                 EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE,
-                GrabMode::ASYNC,
+                GrabMode::SYNC,
                 GrabMode::ASYNC,
                 window,
                 NONE,
@@ -230,24 +250,17 @@ impl PointerSource {
         let Some(window) = self.confinement.take() else {
             return Ok(());
         };
-        // A press captured during the lease still owns its local release.
-        // Forwarding has already ended. Keep the grab briefly while draining
-        // the pair, then return control even if the device never reports up.
-        let drained = (|| -> Result<()> {
-            let limit = Instant::now() + BUTTON_DRAIN;
-            while !self.buttons_up()? {
-                ensure!(
-                    Instant::now() < limit,
-                    "Xorg captured pointer button release is unconfirmed"
-                );
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            Ok(())
-        })();
         let connection = &self.activity.connection;
+        // SyncPointer freezes on the first button event. Let the server
+        // reprocess that same event locally, with its original button pair.
+        // ReplayPointer is a no-op when a button did not freeze the grab.
+        let replay = connection
+            .allow_events(Allow::REPLAY_POINTER, CURRENT_TIME)?
+            .check();
         connection.ungrab_pointer(CURRENT_TIME)?.check()?;
         connection.destroy_window(window)?.check()?;
-        drained
+        replay?;
+        Ok(())
     }
 }
 
@@ -268,8 +281,8 @@ fn fraction(bounds: (i16, i16), (x, y): (i16, i16), edge: Edge) -> Option<f64> {
 fn relative_axes(device: &XIDeviceInfo, labels: [u32; 2]) -> Option<[u16; 2]> {
     let axis = |label| {
         let axes = device.classes.iter().filter_map(|class| match &class.data {
-            DeviceClassData::Valuator(axis) if axis.mode == ValuatorMode::RELATIVE
-                && label != NONE && axis.label == label =>
+            DeviceClassData::Valuator(axis)
+                if axis.mode == ValuatorMode::RELATIVE && label != NONE && axis.label == label =>
             {
                 Some(axis.number)
             }
@@ -286,7 +299,11 @@ fn relative_axes(device: &XIDeviceInfo, labels: [u32; 2]) -> Option<[u16; 2]> {
 fn axis_value(event: &RawMotionEvent, axis: u16) -> f64 {
     let word = usize::from(axis / 32);
     let flag = 1u32 << (axis % 32);
-    let Some(mask) = event.valuator_mask.get(word).filter(|mask| *mask & flag != 0) else {
+    let Some(mask) = event
+        .valuator_mask
+        .get(word)
+        .filter(|mask| *mask & flag != 0)
+    else {
         return 0.0;
     };
     let preceding: u32 = event.valuator_mask[..word]
@@ -294,9 +311,12 @@ fn axis_value(event: &RawMotionEvent, axis: u16) -> f64 {
         .map(|mask| mask.count_ones())
         .sum();
     let index = preceding + (*mask & (flag - 1)).count_ones();
-    event.axisvalues.get(index as usize).map_or(0.0, |Fp3232 { integral, frac }| {
-        f64::from(*integral) + f64::from(*frac) / 4_294_967_296.0
-    })
+    event
+        .axisvalues
+        .get(index as usize)
+        .map_or(0.0, |Fp3232 { integral, frac }| {
+            f64::from(*integral) + f64::from(*frac) / 4_294_967_296.0
+        })
 }
 
 #[cfg(test)]
@@ -311,7 +331,10 @@ mod tests {
         let event = RawMotionEvent {
             valuator_mask: vec![1 << 2, 1 << 3],
             axisvalues: vec![
-                Fp3232 { integral: -3, frac: 1 << 31 },
+                Fp3232 {
+                    integral: -3,
+                    frac: 1 << 31,
+                },
                 Fp3232 { integral: 7, frac: 0 },
             ],
             ..RawMotionEvent::default()

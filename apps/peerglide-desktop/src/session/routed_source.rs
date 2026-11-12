@@ -673,7 +673,8 @@ mod tests {
                 Ok::<_, anyhow::Error>(())
             };
             let sender = async {
-                let mut link = Link::connect(&source, &peer, platform::input_capabilities()).await?;
+                let mut link =
+                    Link::connect(&source, &peer, platform::input_capabilities()).await?;
                 let acquire = link.acquire_proposal(Edge::Right, 0.25).await;
                 assert_eq!(acquire.is_some(), allowed);
                 if let Some(acquire) = acquire {
@@ -771,7 +772,8 @@ mod tests {
                 Ok::<_, anyhow::Error>(())
             };
             let handoff = async {
-                let mut link = Link::connect(&source, &peer, platform::input_capabilities()).await?;
+                let mut link =
+                    Link::connect(&source, &peer, platform::input_capabilities()).await?;
                 send(
                     &mut link.tx,
                     &Message::Acquire {

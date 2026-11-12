@@ -206,10 +206,16 @@ pub(crate) async fn run(
     edge: Edge,
     allow: bool,
 ) -> Result<()> {
-    ensure!(allow, "Xorg pointer sending requires explicit local consent");
+    ensure!(
+        allow,
+        "Xorg pointer sending requires explicit local consent"
+    );
     let identity = transport::Identity::load(identity)?;
     let certificate = transport::read_certificate(certificate)?;
-    ensure!(certificate != identity.certificate, "Xorg source cannot control itself");
+    ensure!(
+        certificate != identity.certificate,
+        "Xorg source cannot control itself"
+    );
     let peer = Peer {
         address,
         certificate,
@@ -256,12 +262,17 @@ async fn connect_at_edge(
     identity: &transport::Identity,
     peer: &Peer,
 ) -> Result<(Link, f64)> {
-    let along = (&mut native.edge).await.context("Xorg edge owner stopped")?;
+    let along = (&mut native.edge)
+        .await
+        .context("Xorg edge owner stopped")?;
     let capabilities = InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg)?;
     let link = tokio::time::timeout(PENDING, Link::connect(identity, peer, capabilities))
         .await
         .context("Xorg peer connection timed out")??;
-    ensure!(link.capabilities.motion(), "selected peer does not receive pointer motion");
+    ensure!(
+        link.capabilities.motion(),
+        "selected peer does not receive pointer motion"
+    );
     Ok((link, along))
 }
 
@@ -312,7 +323,10 @@ async fn send_pointer(
         return Ok(None);
     }
     native.thread.unpark();
-    if !matches!(tokio::time::timeout(CLEANUP, &mut native.ready).await, Ok(Ok(()))) {
+    if !matches!(
+        tokio::time::timeout(CLEANUP, &mut native.ready).await,
+        Ok(Ok(()))
+    ) {
         return Ok(None);
     }
     println!("Pointer lease active. Move back across the entry edge or press a local key to stop.");
@@ -370,11 +384,19 @@ mod tests {
     #[test]
     fn xorg_send_requires_explicit_local_permission_and_outward_motion() {
         assert!(crate::Cli::try_parse_from([
-            "peerglide", "send-x11", "127.0.0.1:24870", "--peer-cert", "peer.der"
+            "peerglide",
+            "send-x11",
+            "127.0.0.1:24870",
+            "--peer-cert",
+            "peer.der"
         ])
         .is_err());
         assert!(crate::Cli::try_parse_from([
-            "peerglide", "send-x11", "127.0.0.1:24870", "--peer-cert", "peer.der",
+            "peerglide",
+            "send-x11",
+            "127.0.0.1:24870",
+            "--peer-cert",
+            "peer.der",
             "--allow-pointer-capture"
         ])
         .is_ok());
@@ -390,12 +412,102 @@ mod tests {
         assert!(!flags.lease_live());
     }
 
+    #[tokio::test]
+    async fn xorg_route_waits_for_the_grant_and_retires_with_the_return_cursor() -> Result<()> {
+        let source = transport::Identity::generate()?;
+        let destination = transport::Identity::generate()?;
+        let endpoint = transport::endpoint("127.0.0.1:0".parse()?, &destination, &source.certificate)?;
+        let peer = Peer {
+            address: endpoint.local_addr()?,
+            certificate: destination.certificate,
+            secondary_layout: None,
+        };
+        let capabilities = InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg)?;
+        let (observed, acquire_received) = oneshot::channel();
+        let (checked, can_grant) = oneshot::channel();
+        let (arrived, motion_received) = oneshot::channel();
+        let (claim, mut permit) = oneshot::channel();
+        let (admitted, ready) = oneshot::channel();
+        let (motion, motions) = mpsc::channel(2);
+        let (_no_edge, edge) = oneshot::channel();
+        let (_closed, done) = oneshot::channel();
+        let mut native = Native {
+            flags: Arc::new(Flags::default()),
+            thread: thread::current(),
+            edge,
+            claim: Some(claim),
+            ready,
+            motions,
+            done,
+        };
+        let server = async {
+            let connection = endpoint.accept().await.context("listener closed")?.await?;
+            transport::verify_peer(&connection, &source.certificate)?;
+            let (mut send, mut receive) = connection.accept_bi().await?;
+            crate::exchange_hello(&mut send, &mut receive, capabilities.clone()).await?;
+            assert!(matches!(
+                transport::receive(&mut receive).await?,
+                Message::Acquire { lease: LEASE, edge: Edge::Right, along } if along == 0.5
+            ));
+            observed.send(()).expect("native gate observer");
+            can_grant.await?;
+            transport::send(&mut send, &Message::Granted { lease: LEASE }).await?;
+            let bytes = connection.read_datagram().await?;
+            let cursor = peerglide_protocol::decode::<Motion>(&bytes).map_err(anyhow::Error::msg)?;
+            assert_eq!(cursor.lease, LEASE);
+            assert!(cursor.x > 0.19 && cursor.x < 0.21 && cursor.y == 0.5);
+            arrived.send(()).expect("native motion observer");
+            loop {
+                match transport::receive(&mut receive).await? {
+                    Message::Ping { lease: LEASE } => {
+                        transport::send(&mut send, &Message::Pong { lease: LEASE }).await?;
+                    }
+                    Message::Release { lease: LEASE, cursor: Some(cursor) } => {
+                        assert!(cursor.sequence > 1 && cursor.x == 0.0);
+                        break;
+                    }
+                    _ => anyhow::bail!("unexpected Xorg route frame"),
+                }
+            }
+            connection.close(0u8.into(), super::super::NATIVE_INPUT_RECOVERED);
+            endpoint.wait_idle().await;
+            Ok::<_, anyhow::Error>(())
+        };
+        let native_input = async {
+            acquire_received.await?;
+            assert!(matches!(permit.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            checked.send(()).expect("grant observer");
+            permit.await?;
+            admitted.send(()).expect("native admission observer");
+            motion.send((0.2, 0.0)).await?;
+            motion_received.await?;
+            motion.send((-0.3, 0.0)).await?;
+            // Keep the source available until the return cursor is consumed.
+            motion.closed().await;
+            Ok::<_, anyhow::Error>(())
+        };
+        let client = async {
+            let mut link = Link::connect(&source, &peer, capabilities.clone()).await?;
+            let mut attempted = false;
+            let cursor = send_pointer(&mut link, &mut native, Edge::Right, 0.5, &mut attempted)
+                .await?
+                .context("missing return cursor")?;
+            assert!(attempted);
+            native.stop();
+            native.motions.close();
+            link.retire(Some(cursor)).await
+        };
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(server, native_input, client)
+        })
+        .await??;
+        Ok(())
+    }
+
     #[test]
     #[ignore = "requires the dedicated GitHub Actions Xvfb server"]
     fn xorg_source_watchdog_releases_the_native_pointer_owner() -> Result<()> {
-        use peerglide_platform::{
-            x11_activity::Activity, x11_inject::Injector, ReceivePoint,
-        };
+        use peerglide_platform::{x11_activity::Activity, x11_inject::Injector, ReceivePoint};
 
         ensure!(
             std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
@@ -406,7 +518,9 @@ mod tests {
         let injector = Injector::open_after_explicit_consent()?;
         injector.pointer(ReceivePoint { x: 1.0, y: 0.5 })?;
         assert!(matches!(source.poll()?, PointerSample::Idle));
-        let along = source.edge_fraction(Edge::Right)?.context("right edge not reached")?;
+        let along = source
+            .edge_fraction(Edge::Right)?
+            .context("right edge not reached")?;
         assert!(source.claim(Edge::Right, along)?);
         assert!(Activity::open_for_local_takeover().is_err());
         injector.pointer(ReceivePoint { x: 0.0, y: 0.5 })?;

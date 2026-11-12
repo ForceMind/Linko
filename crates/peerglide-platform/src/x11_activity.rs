@@ -217,6 +217,37 @@ mod tests {
             }
         }
         assert_eq!(pairs, [(5, true), (5, false), (7, true), (7, false)]);
+
+        drop(activity);
+        let observer = local_connection()?.0;
+        observer
+            .change_window_attributes(
+                root,
+                &ChangeWindowAttributesAux::new()
+                    .event_mask(CoreEventMask::BUTTON_PRESS | CoreEventMask::BUTTON_RELEASE),
+            )?
+            .check()?;
+        let mut source = PointerSource::open()?;
+        injector.pointer(ReceivePoint { x: 1.0, y: 0.5 })?;
+        assert!(matches!(source.poll()?, PointerSample::Idle));
+        let edge = peerglide_protocol::Edge::Right;
+        let along = source.edge_fraction(edge)?.context("right edge not reached")?;
+        assert!(source.claim(edge, along)?);
+        assert!(injector.button(2, true)?);
+        assert!(matches!(source.poll()?, PointerSample::LocalInput));
+        assert!(observer.poll_for_event()?.is_none());
+        source.release()?;
+        assert!(injector.button(2, false)?);
+        let mut local_pair = Vec::new();
+        for _ in 0..16 {
+            match observer.poll_for_event()? {
+                Some(Event::ButtonPress(event)) => local_pair.push((event.detail, true)),
+                Some(Event::ButtonRelease(event)) => local_pair.push((event.detail, false)),
+                Some(_) => (),
+                None => break,
+            }
+        }
+        assert_eq!(local_pair, [(3, true), (3, false)]);
         Ok(())
     }
 
