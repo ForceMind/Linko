@@ -150,6 +150,29 @@ struct LocalFile {
 /// The input worker owns only the short-lived proof, never the local file.
 pub struct WorkerSlot(Reservations<()>);
 
+/// The target has the v5 lease. Only the worker can publish the proof after
+/// its local supervisor confirms readiness for the same lease.
+pub struct PendingWorkerClaim(Reservation);
+
+impl PendingWorkerClaim {
+    pub fn is_live(&self) -> bool {
+        Instant::now() < self.0.expires
+            && self
+                .0
+                .confirmation
+                .as_ref()
+                .is_none_or(|(sender, _)| !sender.is_closed())
+    }
+
+    pub fn confirm(self) -> bool {
+        self.is_live()
+            && self
+                .0
+                .confirmation
+                .is_none_or(|(sender, record)| sender.send(record).is_ok())
+    }
+}
+
 struct Reservations<P>(Mutex<Option<Prepared<P>>>);
 
 struct Prepared<P> {
@@ -249,7 +272,7 @@ impl Slot {
     ) -> Result<Option<Claim>> {
         Ok(self
             .0
-            .claim(input, pin, granted_lease, true, |prepared| {
+            .take_matching(input, pin, granted_lease, |prepared| {
                 Some(prepared.local.context) == current
                     && admission
                         .file_ready(
@@ -261,9 +284,9 @@ impl Slot {
                         )
                         .is_ok()
             })?
-            .map(|local| Claim {
-                file: local.file,
-                ticket: local.ticket,
+            .map(|prepared| Claim {
+                file: prepared.local.file,
+                ticket: prepared.local.ticket,
             }))
     }
 }
@@ -291,18 +314,18 @@ impl WorkerSlot {
         self.0.clear()
     }
 
-    /// Report only an already-granted input lease, once.
-    pub fn claim(
+    /// Take one claim for an already-granted lease without publishing it.
+    pub fn begin_claim(
         &self,
         input: &Connection,
         pin: &[u8],
         granted_lease: u64,
         current: bool,
-    ) -> Result<bool> {
+    ) -> Result<Option<PendingWorkerClaim>> {
         Ok(self
             .0
-            .claim(input, pin, granted_lease, true, |_| current)?
-            .is_some())
+            .take_matching(input, pin, granted_lease, |_| current)?
+            .and_then(|prepared| prepared.reservation.map(PendingWorkerClaim)))
     }
 
     /// Denial of the exact lease retires its file proof without granting it.
@@ -315,7 +338,7 @@ impl WorkerSlot {
     ) -> Result<bool> {
         Ok(self
             .0
-            .claim(input, pin, lease, false, |_| current)?
+            .take_matching(input, pin, lease, |_| current)?
             .is_some())
     }
 }
@@ -341,14 +364,13 @@ impl<P> Reservations<P> {
         Ok(())
     }
 
-    fn claim(
+    fn take_matching(
         &self,
         input: &Connection,
         pin: &[u8],
         granted_lease: u64,
-        granted: bool,
         current: impl FnOnce(&Prepared<P>) -> bool,
-    ) -> Result<Option<P>> {
+    ) -> Result<Option<Prepared<P>>> {
         let mut state = self.lock()?;
         let Some(prepared) = live(&mut state, current) else {
             return Ok(None);
@@ -364,19 +386,7 @@ impl<P> Reservations<P> {
         {
             return Ok(None);
         }
-        let Some(mut prepared) = state.take() else {
-            return Ok(None);
-        };
-        if granted {
-            if let Some((sender, record)) = prepared
-                .reservation
-                .as_mut()
-                .and_then(|reservation| reservation.confirmation.take())
-            {
-                let _ = sender.send(record);
-            }
-        }
-        Ok(Some(prepared.local))
+        Ok(state.take())
     }
 
     fn publish(
@@ -414,7 +424,9 @@ impl<P> Reservations<P> {
         prepared.reservation = Some(Reservation {
             lease: request.lease,
             input,
-            expires: Instant::now() + Duration::from_millis(LEASE_MS),
+            expires: prepared
+                .expires
+                .min(Instant::now() + Duration::from_millis(LEASE_MS)),
             confirmation,
         });
         Ok(Some(Published {

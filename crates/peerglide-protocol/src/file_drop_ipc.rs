@@ -23,6 +23,11 @@ pub enum Command {
         lifetime_ms: u32,
         proof: String,
     },
+    Ready {
+        session: u32,
+        request: u32,
+        lease: u64,
+    },
     Cancel {
         session: u32,
         request: u32,
@@ -72,6 +77,11 @@ impl Command {
                     }
                 }
             }
+            "ready" => Self::Ready {
+                session: identifier(fields.next()?)?,
+                request: identifier(fields.next()?)?,
+                lease: hex_id(fields.next()?, 16)?,
+            },
             "cancel" => Self::Cancel {
                 session: identifier(fields.next()?)?,
                 request: identifier(fields.next()?)?,
@@ -100,20 +110,29 @@ impl Command {
                 lifetime_ms,
                 proof,
             } => format!("fd send {session:x} {request:x} {lifetime_ms} {target} {proof}"),
+            Self::Ready {
+                session,
+                request,
+                lease,
+            } => format!("fd ready {session:x} {request:x} {lease:x}"),
             Self::Cancel { session, request } => format!("fd cancel {session:x} {request:x}"),
         }
     }
 }
 
 fn identifier(field: &str) -> Option<u32> {
-    if field.len() > 8
+    u32::try_from(hex_id(field, 8)?).ok()
+}
+
+fn hex_id(field: &str, limit: usize) -> Option<u64> {
+    if field.len() > limit
         || !field
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
         return None;
     }
-    let value = u32::from_str_radix(field, 16).ok()?;
+    let value = u64::from_str_radix(field, 16).ok()?;
     (value != 0).then_some(value)
 }
 
@@ -124,6 +143,7 @@ pub enum State {
     Armed,
     Rejected,
     Cancelled,
+    Matched,
     Claimed,
     SourceArmed,
     SourceCommitted,
@@ -178,7 +198,7 @@ impl Event {
                 && event.session != 0
                 && (event.request == 0) == (event.state == State::Session)
                 && match event.state {
-                    State::Claimed | State::SourceCommitted => {
+                    State::Matched | State::Claimed | State::SourceCommitted => {
                         event.lease.is_some_and(|lease| lease != 0) && event.port.is_none()
                     }
                     State::Armed => {
@@ -220,6 +240,22 @@ mod tests {
         assert!(Command::parse(&line.replace("60000", "60001")).is_none());
         assert!(Command::parse(&line.replace("ab", "AB")).is_none());
         assert!(Command::parse("fd cancel 0 1").is_none());
+        let ready = Command::Ready {
+            session: 1,
+            request: 2,
+            lease: u64::MAX,
+        };
+        assert!(matches!(
+            Command::parse(&ready.line()),
+            Some(Command::Ready {
+                session: 1,
+                request: 2,
+                lease: u64::MAX
+            })
+        ));
+        assert!(Command::parse("fd ready 1 2 0").is_none());
+        assert!(Command::parse("fd ready 1 2 10000000000000000").is_none());
+        assert!(Command::parse("fd ready 1 2 AB").is_none());
     }
 
     #[test]
