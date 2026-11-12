@@ -1,9 +1,12 @@
 //! Opt-in LAN hints only. Nothing here authenticates or grants remote control.
 use anyhow::Result;
-use mdns_sd::{DaemonEvent, DaemonStatus, Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{
+    DaemonEvent, DaemonStatus, IfKind, Receiver, ResolvedService, ScopedIp, ServiceDaemon,
+    ServiceEvent, ServiceInfo,
+};
 use std::{
     collections::BTreeMap,
-    net::{Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV6},
     time::{Duration, Instant},
 };
 pub const SERVICE: &str = "_peerglide._udp.local.";
@@ -48,8 +51,7 @@ impl UntrustedHint {
             name,
             fingerprint,
             version,
-            addresses,
-            port,
+            addresses.into_iter().map(|ip| SocketAddr::from((ip, port))),
             now,
         )
     }
@@ -71,8 +73,7 @@ impl UntrustedHint {
             name,
             fingerprint,
             input_version,
-            addresses,
-            port,
+            addresses.into_iter().map(|ip| SocketAddr::from((ip, port))),
             now,
         )
     }
@@ -81,8 +82,7 @@ impl UntrustedHint {
         name: &str,
         fingerprint: &str,
         version: &str,
-        addresses: impl IntoIterator<Item = Ipv4Addr>,
-        port: u16,
+        addresses: impl IntoIterator<Item = SocketAddr>,
         now: Instant,
     ) -> Option<Self> {
         if name.len() > 255
@@ -91,15 +91,26 @@ impl UntrustedHint {
             || !fingerprint_valid(fingerprint)
             || (version.len() > 5
                 || version.parse::<u16>().ok() != Some(peerglide_protocol::VERSION))
-            || port == 0
         {
             return None;
         }
         let mut addresses: Vec<_> = addresses
             .into_iter()
             .take(64)
-            .filter(|a| a.is_private() || a.is_link_local())
-            .map(|a| SocketAddr::from((a, port)))
+            .filter(|address| {
+                address.port() != 0
+                    && match address {
+                        SocketAddr::V4(address) => {
+                            address.ip().is_private() || address.ip().is_link_local()
+                        }
+                        SocketAddr::V6(address) => {
+                            purpose == Purpose::Pairing
+                                && (address.ip().is_unique_local()
+                                    || (address.ip().is_unicast_link_local()
+                                        && address.scope_id() != 0))
+                        }
+                    }
+            })
             .take(16)
             .collect();
         addresses.sort();
@@ -116,6 +127,26 @@ impl UntrustedHint {
         })
     }
 }
+fn resolved_addresses(info: &ResolvedService, ipv6: bool) -> impl Iterator<Item = SocketAddr> + '_ {
+    let port = info.get_port();
+    info.get_addresses()
+        .iter()
+        .take(64)
+        .filter_map(move |address| match address {
+            ScopedIp::V4(address) if !ipv6 => Some(SocketAddr::from((*address.addr(), port))),
+            ScopedIp::V6(address) if ipv6 => {
+                let ip = *address.addr();
+                let scope = if ip.is_unicast_link_local() {
+                    address.scope_id().index
+                } else {
+                    0
+                };
+                Some(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, scope)))
+            }
+            _ => None,
+        })
+}
+
 #[derive(Default)]
 pub struct HintTable(BTreeMap<String, UntrustedHint>);
 impl HintTable {
@@ -207,13 +238,17 @@ impl Discovery {
                     {
                         continue;
                     }
+                    let ipv6 = match info.get_property_val_str("f") {
+                        Some("6") if self.purpose == Purpose::Pairing => true,
+                        Some("4") | None => false,
+                        _ => continue,
+                    };
                     if let Some(hint) = UntrustedHint::for_purpose(
                         self.purpose,
                         info.get_fullname(),
                         info.get_property_val_str("fp").unwrap_or(""),
                         info.get_property_val_str("v").unwrap_or(""),
-                        info.get_addresses_v4(),
-                        info.get_port(),
+                        resolved_addresses(&info, ipv6),
                         now,
                     ) {
                         if own_fingerprint != Some(hint.fingerprint.as_str()) {
@@ -244,11 +279,28 @@ impl Discovery {
     /// Explicitly publish a public fingerprint for an already running listener.
     /// Never publishes the OS hostname, username, private key, permission or file.
     pub fn advertise(&mut self, fp: &str, port: u16) -> Result<()> {
+        self.advertise_family(fp, port, false)
+    }
+
+    pub fn advertise_pairing_ipv6(&mut self, fp: &str, port: u16) -> Result<()> {
+        anyhow::ensure!(
+            self.purpose == Purpose::Pairing,
+            "IPv6 offer is for short-code pairing"
+        );
+        self.advertise_family(fp, port, true)
+    }
+
+    fn advertise_family(&mut self, fp: &str, port: u16, ipv6: bool) -> Result<()> {
         anyhow::ensure!(
             fingerprint_valid(fp) && port != 0,
             "valid public fingerprint/listener port required"
         );
         anyhow::ensure!(self.published.is_none(), "already advertising");
+        if ipv6 {
+            // Ordered before registration: the address family matches the
+            // actual listening socket, including the daemon's auto addresses.
+            self.daemon.disable_interface(IfKind::IPv4)?;
+        }
         let prefix = &fp[..12];
         let instance = format!("PeerGlide-{prefix}");
         let host = format!("peerglide-{prefix}.local.");
@@ -256,6 +308,9 @@ impl Discovery {
         let mut properties = vec![("v", version.as_str()), ("fp", fp)];
         if self.purpose == Purpose::Pairing {
             properties.push(("p", "2"));
+            if ipv6 {
+                properties.push(("f", "6"));
+            }
         }
         let info = ServiceInfo::new(
             self.purpose.service(),
@@ -309,6 +364,36 @@ mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn ipv6_pairing_hints_keep_only_lan_addresses_and_local_link_scope() {
+        let name = format!("node.{PAIRING_SERVICE}");
+        let addresses: Vec<SocketAddr> = [
+            "[fd00::2]:24871",
+            "[fe80::1%4]:24871",
+            "[fe80::1]:24871",
+            "[2001:db8::3]:24871",
+            "[::1]:24871",
+            "[fd00::3]:0",
+        ]
+        .into_iter()
+        .map(|address| address.parse().unwrap())
+        .collect();
+        let hint = UntrustedHint::for_purpose(
+            Purpose::Pairing,
+            &name,
+            &"a".repeat(64),
+            "5",
+            addresses,
+            Instant::now(),
+        )
+        .unwrap();
+        assert_eq!(hint.addresses.len(), 2);
+        assert!(hint.addresses.contains(&"[fd00::2]:24871".parse().unwrap()));
+        assert!(hint
+            .addresses
+            .contains(&"[fe80::1%4]:24871".parse().unwrap()));
+    }
+
     #[test]
     fn hint_metadata_is_bounded_versioned_and_lan_only() {
         let now = Instant::now();
@@ -407,7 +492,11 @@ mod tests {
     }
     #[test]
     fn daemon_lifecycle_with_disabled_interfaces_withdraws_and_stops() -> Result<()> {
-        for purpose in [Purpose::Input, Purpose::Pairing] {
+        for (purpose, ipv6) in [
+            (Purpose::Input, false),
+            (Purpose::Pairing, false),
+            (Purpose::Pairing, true),
+        ] {
             let socket = std::net::UdpSocket::bind("127.0.0.1:0")?;
             let port = socket.local_addr()?.port();
             drop(socket);
@@ -416,7 +505,11 @@ mod tests {
             daemon.disable_interface(mdns_sd::IfKind::All)?;
             let mut discovery = Discovery::for_purpose(daemon, purpose)?;
             assert!(!discovery.is_advertising());
-            discovery.advertise(&"a".repeat(64), 24871)?;
+            if ipv6 {
+                discovery.advertise_pairing_ipv6(&"a".repeat(64), 24871)?;
+            } else {
+                discovery.advertise(&"a".repeat(64), 24871)?;
+            }
             assert!(discovery.is_advertising());
             discovery.unpublish()?;
             assert!(!discovery.is_advertising());
