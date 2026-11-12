@@ -95,10 +95,15 @@ impl Panel {
             self.draw_peers(app, ui, draft);
             if let Some(layout) = app.display_inventory.snapshot() {
                 self.draw_routes(app, ui, draft, &layout);
-                if ui.add_enabled(
-                    projection_allowed(app) && !draft.plan.routes.is_empty() && !ui.ctx().embed_viewports(),
-                    egui::Button::new("投影分段布局…"),
-                ).clicked() {
+                if ui
+                    .add_enabled(
+                        projection_allowed(app)
+                            && !draft.plan.routes.is_empty()
+                            && !ui.ctx().embed_viewports(),
+                        egui::Button::new("投影分段布局…"),
+                    )
+                    .clicked()
+                {
                     match super::route_projection::Projection::new(&draft.plan, layout.clone()) {
                         Ok(projection) => self.projection = Some(projection),
                         Err(error) => app.notice = format!("无法投影布局：{error:#}"),
@@ -167,12 +172,21 @@ impl Panel {
             self.close_projection(ctx);
             return;
         }
-        let Some(projection) = self.projection.as_ref() else { return; };
-        let Some(decision) = projection.ui(ctx) else { return; };
+        let Some(projection) = self.projection.as_ref() else {
+            return;
+        };
+        let Some(decision) = projection.ui(ctx) else {
+            return;
+        };
         if let Decision::Save(plan) = decision {
             let result = (|| {
-                let draft = self.local.as_mut().and_then(|local| local.as_mut().ok()).context("分段草稿不可写")?;
-                let current = peerglide_platform::read_display_layout().context("无法重新读取当前屏幕")?;
+                let draft = self
+                    .local
+                    .as_mut()
+                    .and_then(|local| local.as_mut().ok())
+                    .context("分段草稿不可写")?;
+                let current =
+                    peerglide_platform::read_display_layout().context("无法重新读取当前屏幕")?;
                 projection.validate_save(&draft.plan, &plan, &current)?;
                 draft.save(plan)
             })();
