@@ -235,15 +235,16 @@ impl<'a> Source<'a> {
         let edges = chosen.edges();
         let along = chosen.route.fraction;
         *attempted = true;
-        send(
-            &mut link.tx,
-            &Message::Acquire {
+        if !link
+            .send(&Message::Acquire {
                 lease: LEASE,
                 edge: edges.wire_edge(),
                 along,
-            },
-        )
-        .await?;
+            })
+            .await?
+        {
+            return Ok(Exit::Local(None));
+        }
         let mut pending = Some(request);
         loop {
             if now_ms() >= request.deadline || !self.capture.gate.commit_pending(request.token) {
@@ -252,8 +253,9 @@ impl<'a> Source<'a> {
             tokio::select! {
                 biased;
                 stop = &mut self.ending => return Ok(Exit::Stop(stop)),
-                message = link.messages.recv() => {
-                    match message.context("route peer closed before grant")?? {
+                message = link.next() => {
+                    let Some(message) = message? else { return Ok(Exit::Local(None)); };
+                    match message {
                         Message::Granted { lease: LEASE } => {
                             if !pending.as_mut().is_some_and(|request| request.grant(LEASE, now_ms())) {
                                 return Ok(Exit::Local(None));
@@ -313,10 +315,11 @@ impl<'a> Source<'a> {
                     if self.input.is_empty() && edges.crossed_back(position) && self.capture.restore_at_boundary(epoch)? {
                         return Ok(Exit::Local(Some(next_motion(&mut sequence, position)?)));
                     }
-                    send(&mut link.tx, &Message::Ping { lease: LEASE }).await?;
+                    if !link.send(&Message::Ping { lease: LEASE }).await? { return Ok(Exit::Local(None)); }
                 }
-                message = link.messages.recv() => {
-                    match message.context("route peer closed during control")?? {
+                message = link.next() => {
+                    let Some(message) = message? else { return Ok(Exit::Local(None)); };
+                    match message {
                         Message::Release { lease: LEASE, .. } => return Ok(Exit::Local(None)),
                         Message::Pong { lease: LEASE } => {
                             last_pong = now_ms();
@@ -345,7 +348,7 @@ impl<'a> Source<'a> {
                             if !link.capabilities.supports(event) { return Ok(Exit::Local(None)); }
                             let cursor = next_motion(&mut sequence, position)?;
                             outbox.latest = None;
-                            send(&mut link.tx, &Message::Input { lease: LEASE, event, cursor }).await?;
+                            if !link.send(&Message::Input { lease: LEASE, event, cursor }).await? { return Ok(Exit::Local(None)); }
                         }
                         Captured::Toggle { .. } => return Ok(Exit::Local(Some(next_motion(&mut sequence, position)?))),
                         _ => (),
@@ -446,6 +449,29 @@ impl Link {
         }
     }
 
+    async fn next(&mut self) -> Result<Option<Message>> {
+        match self.messages.recv().await {
+            Some(Ok(message)) => Ok(Some(message)),
+            Some(Err(error)) if error.is::<transport::InvalidMessageFrame>() => Err(error),
+            Some(Err(error))
+                if error.is::<transport::MessageStreamEnded>()
+                    || self.connection.close_reason().is_some() =>
+            {
+                Ok(None)
+            }
+            Some(Err(error)) => Err(error),
+            None => Ok(None),
+        }
+    }
+
+    async fn send(&mut self, message: &Message) -> Result<bool> {
+        match send(&mut self.tx, message).await {
+            Ok(()) => Ok(true),
+            Err(_) if self.connection.close_reason().is_some() => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     async fn retire(&mut self, cursor: Option<Motion>) -> Result<()> {
         if self.connection.close_reason().is_none() {
             // Even a write racing with close can succeed through the peer's
@@ -476,6 +502,13 @@ impl Link {
 mod tests {
     use super::*;
 
+    #[derive(Clone, Copy)]
+    enum ReleaseOrder {
+        SourceFirst,
+        PeerFirst,
+        InvalidFrame,
+    }
+
     #[tokio::test]
     async fn pinned_route_releases_the_same_lease_before_accepting_the_close_receipt() -> Result<()>
     {
@@ -483,12 +516,18 @@ mod tests {
         let first = transport::Identity::generate()?;
         let second = transport::Identity::generate()?;
         let bind = "127.0.0.1:0".parse()?;
-        for (target, confirmed) in [(&first, true), (&second, true), (&first, false)] {
+        for (target, confirmed, order) in [
+            (&first, true, ReleaseOrder::SourceFirst),
+            (&second, true, ReleaseOrder::PeerFirst),
+            (&first, false, ReleaseOrder::SourceFirst),
+            (&second, false, ReleaseOrder::InvalidFrame),
+        ] {
             let endpoint = transport::endpoint(bind, target, &source.certificate)?;
             let peer = Peer {
                 address: endpoint.local_addr()?,
                 certificate: target.certificate.clone(),
             };
+            let (saw_fin, fin_observed) = tokio::sync::oneshot::channel();
             let receive = async {
                 let c = endpoint
                     .accept()
@@ -508,16 +547,29 @@ mod tests {
                     Message::Acquire { lease: LEASE, .. }
                 ));
                 send(&mut tx, &Message::Granted { lease: LEASE }).await?;
-                assert!(matches!(
-                    transport::receive(&mut rx).await?,
-                    Message::Release {
-                        lease: LEASE,
-                        cursor: None
+                match order {
+                    ReleaseOrder::SourceFirst => {
+                        assert!(matches!(
+                            transport::receive(&mut rx).await?,
+                            Message::Release {
+                                lease: LEASE,
+                                cursor: None
+                            }
+                        ));
+                        assert!(
+                            matches!(transport::receive(&mut rx).await, Err(error) if error.is::<transport::MessageStreamEnded>())
+                        );
                     }
-                ));
-                assert!(
-                    matches!(transport::receive(&mut rx).await, Err(error) if error.is::<transport::MessageStreamEnded>())
-                );
+                    ReleaseOrder::PeerFirst => {
+                        tx.finish()?;
+                        fin_observed.await?;
+                    }
+                    ReleaseOrder::InvalidFrame => {
+                        tx.write_all(&[0; 4]).await?;
+                        tx.finish()?;
+                        fin_observed.await?;
+                    }
+                }
                 // Isolated receiver fixture. No Native driver or OS input is used.
                 let reason: &[u8] = if confirmed {
                     NATIVE_INPUT_RECOVERED
@@ -540,9 +592,22 @@ mod tests {
                 )
                 .await?;
                 assert!(matches!(
-                    link.messages.recv().await.unwrap()?,
-                    Message::Granted { lease: LEASE }
+                    link.next().await?,
+                    Some(Message::Granted { lease: LEASE })
                 ));
+                match order {
+                    ReleaseOrder::SourceFirst => (),
+                    ReleaseOrder::PeerFirst => {
+                        assert!(link.next().await?.is_none());
+                        assert!(saw_fin.send(()).is_ok());
+                    }
+                    ReleaseOrder::InvalidFrame => {
+                        assert!(
+                            matches!(link.next().await, Err(error) if error.is::<transport::InvalidMessageFrame>())
+                        );
+                        assert!(saw_fin.send(()).is_ok());
+                    }
+                }
                 let retired = link.retire(None).await;
                 assert_eq!(retired.is_ok(), confirmed);
                 Ok::<_, anyhow::Error>(())
