@@ -1185,6 +1185,14 @@ mod context_cli_tests {
     use super::*;
 
     #[test]
+    fn configured_routes_require_explicit_native_consent() {
+        let args = ["peerglide", "connect-routes", "--layout", "routes.json"];
+        assert!(Cli::try_parse_from(args).is_err());
+        let cli = Cli::try_parse_from(args.into_iter().chain(["--native"])).unwrap();
+        assert!(matches!(cli.command, Command::ConnectRoutes { native: true, .. }));
+    }
+
+    #[test]
     fn remote_entry_edge_requires_native_mode_and_preserves_local_direction() {
         let options = [
             "peerglide",

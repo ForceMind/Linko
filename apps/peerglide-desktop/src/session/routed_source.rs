@@ -263,12 +263,7 @@ impl<'a> Source<'a> {
                         other => link.reply(other).await?,
                     }
                 }
-                event = self.input.recv() => {
-                    let event = event.context("native capture channel closed")?;
-                    if matches!(event, Captured::Emergency) { return Ok(Exit::Stop(Ok(()))); }
-                    if !self.update_choice(event, &mut chosen) { return Ok(Exit::Local(None)); }
-                }
-                _ = pending_wake(pending.map(PendingAcquire::wake_at)) => {
+                _ = pending_wake(pending.map(PendingAcquire::wake_at)), if self.input.position_current() => {
                     let step = advance_pending(&mut pending, now_ms(), self.capture.gate.commit_pending(request.token), |token, deadline| {
                         let position = RouteReturn::new(self.layout, chosen.anchor.display, entry_position(chosen.anchor.edge, chosen.anchor.fraction))
                             .context("configured route source display is unavailable")?;
@@ -283,6 +278,11 @@ impl<'a> Source<'a> {
                         PendingStep::Cancelled { .. } => return Ok(Exit::Local(None)),
                         PendingStep::Waiting => (),
                     }
+                }
+                event = self.input.recv() => {
+                    let event = event.context("native capture channel closed")?;
+                    if matches!(event, Captured::Emergency) { return Ok(Exit::Stop(Ok(()))); }
+                    if !self.update_choice(event, &mut chosen) { return Ok(Exit::Local(None)); }
                 }
             }
         }
