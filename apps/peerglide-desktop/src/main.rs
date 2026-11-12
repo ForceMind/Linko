@@ -573,10 +573,16 @@ fn main() -> Result<()> {
                 native,
                 "configured routing requires explicit native consent"
             );
-            run_cli_future(|| run_routed_worker(
-                &identity, &layout, managed,
-                expected_layout_fingerprint.as_deref().zip(expected_local_fingerprint.as_deref()),
-            ))
+            run_cli_future(|| {
+                run_routed_worker(
+                    &identity,
+                    &layout,
+                    managed,
+                    expected_layout_fingerprint
+                        .as_deref()
+                        .zip(expected_local_fingerprint.as_deref()),
+                )
+            })
         }
         Command::Connect {
             address,
@@ -818,7 +824,9 @@ fn managed_stop_reader(
                 Ok(Some(line)) if line.trim() == "stop" => break,
                 Ok(Some(line)) => {
                     if let Some(layout) = &layout {
-                        if let Some(update) = peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line) {
+                        if let Some(update) =
+                            peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line)
+                        {
                             layout.submit(update);
                         }
                     }
@@ -840,22 +848,41 @@ async fn run_routed_worker(
     managed: bool,
     expected: Option<(&str, &str)>,
 ) -> Result<()> {
-    anyhow::ensure!(managed == expected.is_some(), "managed route startup requires both confirmed fingerprints");
+    anyhow::ensure!(
+        managed == expected.is_some(),
+        "managed route startup requires both confirmed fingerprints"
+    );
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let _requested = managed.then(|| managed_stop_reader(stop.clone(), None));
     let mut reporter = InputReporter::new(managed);
     reporter.set(WorkerInputState::Disabled);
     let result = {
-        let mut work = Box::pin(session::routed_source::run(identity, layout, expected, stopped, &mut reporter));
+        let mut work = Box::pin(session::routed_source::run(
+            identity,
+            layout,
+            expected,
+            stopped,
+            &mut reporter,
+        ));
         tokio::select! {
             result = &mut work => result,
             _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); request_native_stop(); work.await },
         }
     };
     let terminal = reporter.finish();
-    worker_event(managed, if result.is_ok() && terminal != WorkerInputState::RecoveryUnconfirmed { WorkerState::Stopped } else { WorkerState::Failed });
+    worker_event(
+        managed,
+        if result.is_ok() && terminal != WorkerInputState::RecoveryUnconfirmed {
+            WorkerState::Stopped
+        } else {
+            WorkerState::Failed
+        },
+    );
     result?;
-    anyhow::ensure!(terminal != WorkerInputState::RecoveryUnconfirmed, "native input recovery remains unconfirmed");
+    anyhow::ensure!(
+        terminal != WorkerInputState::RecoveryUnconfirmed,
+        "native input recovery remains unconfirmed"
+    );
     Ok(())
 }
 
@@ -1239,13 +1266,26 @@ mod context_cli_tests {
 
     #[test]
     fn managed_routes_require_both_confirmed_fingerprints() {
-        let managed = ["peerglide", "connect-routes", "--layout", "draft.json", "--native", "--managed"];
+        let managed = [
+            "peerglide",
+            "connect-routes",
+            "--layout",
+            "draft.json",
+            "--native",
+            "--managed",
+        ];
         assert!(Cli::try_parse_from(managed).is_err());
         let cli = Cli::try_parse_from(managed.into_iter().chain([
-            "--expected-layout-fingerprint", "layout",
-            "--expected-local-fingerprint", "local",
-        ])).unwrap();
-        assert!(matches!(cli.command, Command::ConnectRoutes { managed: true, .. }));
+            "--expected-layout-fingerprint",
+            "layout",
+            "--expected-local-fingerprint",
+            "local",
+        ]))
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::ConnectRoutes { managed: true, .. }
+        ));
     }
 
     #[test]
