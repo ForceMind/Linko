@@ -10,7 +10,7 @@ use peerglide_platform::{
     now_ms,
     x11_activity::{PointerSample, PointerSource},
 };
-use peerglide_protocol::{encode, Edge, InputCapabilities, Message, Motion};
+use peerglide_protocol::{encode, Edge, Input, InputCapabilities, Message, Motion};
 use std::{
     net::SocketAddr,
     path::Path,
@@ -33,6 +33,7 @@ const WATCHDOG_MS: u64 = 1_000;
 struct Flags {
     stop: AtomicBool,
     deadline: AtomicU64,
+    drain_progress: AtomicU64,
 }
 
 impl Flags {
@@ -50,13 +51,36 @@ impl Flags {
     }
 }
 
+struct PointerPermissions {
+    local: InputCapabilities,
+    peer: InputCapabilities,
+}
+
+impl PointerPermissions {
+    fn supports(&self, input: Input) -> bool {
+        self.local.supports(input) && self.peer.supports(input)
+    }
+
+    fn check_mapping(&self, source: &PointerSource) -> Result<()> {
+        let buttons = (1..=3).any(|button| self.supports(Input::Button { button, down: true }));
+        let wheel = self.supports(Input::Scroll { x: 0, y: 1 });
+        source.check_button_mapping(buttons, wheel)
+    }
+}
+
+struct PointerEvent {
+    dx: f64,
+    dy: f64,
+    input: Option<Input>,
+}
+
 struct Native {
     flags: Arc<Flags>,
     thread: Thread,
     edge: oneshot::Receiver<f64>,
-    claim: Option<oneshot::Sender<()>>,
+    claim: Option<oneshot::Sender<PointerPermissions>>,
     ready: oneshot::Receiver<()>,
-    motions: mpsc::Receiver<(f64, f64)>,
+    events: mpsc::Receiver<PointerEvent>,
     done: oneshot::Receiver<Result<()>>,
 }
 
@@ -67,12 +91,12 @@ impl Native {
         let (arrived, position) = oneshot::channel();
         let (claim, permit) = oneshot::channel();
         let (admitted, ready) = oneshot::channel();
-        let (motion, motions) = mpsc::channel(16);
+        let (publish, events) = mpsc::channel(16);
         let (closed, done) = oneshot::channel();
         let owner = thread::Builder::new()
             .name("linko-xorg-pointer-source".into())
             .spawn(move || {
-                let result = native_source(edge, &owned, arrived, permit, admitted, motion);
+                let result = native_source(edge, &owned, arrived, permit, admitted, publish);
                 owned.stop.store(true, Ordering::Release);
                 let _ = closed.send(result);
             })?;
@@ -82,7 +106,7 @@ impl Native {
             edge: position,
             claim: Some(claim),
             ready,
-            motions,
+            events,
             done,
         })
     }
@@ -94,10 +118,21 @@ impl Native {
 
     async fn finish(&mut self) -> Result<()> {
         self.stop();
-        tokio::time::timeout(CLEANUP, &mut self.done)
-            .await
-            .context("Xorg local pointer recovery is unconfirmed")?
-            .context("Xorg source owner ended unexpectedly")?
+        let mut reported = false;
+        loop {
+            if let Ok(done) = tokio::time::timeout(CLEANUP, &mut self.done).await {
+                return done.context("Xorg source owner ended unexpectedly")?;
+            }
+            let progress = self.flags.drain_progress.load(Ordering::Acquire);
+            ensure!(
+                progress != 0 && now_ms().saturating_sub(progress - 1) < WATCHDOG_MS,
+                "Xorg local pointer recovery is unconfirmed"
+            );
+            if !reported {
+                eprintln!("Release the held mouse buttons to restore the local pointer.");
+                reported = true;
+            }
+        }
     }
 }
 
@@ -111,9 +146,9 @@ fn native_source(
     edge: Edge,
     flags: &Flags,
     arrived: oneshot::Sender<f64>,
-    mut permit: oneshot::Receiver<()>,
+    mut permit: oneshot::Receiver<PointerPermissions>,
     admitted: oneshot::Sender<()>,
-    motion: mpsc::Sender<(f64, f64)>,
+    publish: mpsc::Sender<PointerEvent>,
 ) -> Result<()> {
     let mut source = PointerSource::open()?;
     let mut gate = EdgeGate::default();
@@ -149,18 +184,26 @@ fn native_source(
             _ => (),
         }
         match permit.try_recv() {
-            Ok(()) => {
+            Ok(permissions) => {
+                if !flags.lease_live() {
+                    return Ok(());
+                }
+                permissions.check_mapping(&source)?;
                 if !flags.lease_live() || !source.claim(edge, along)? {
                     return Ok(());
                 }
                 let result = if flags.lease_live() && admitted.send(()).is_ok() {
-                    forward_native(&source, flags, &motion)
+                    forward_native(&mut source, flags, &permissions, &publish)
                 } else {
                     Ok(())
                 };
                 // Stop the network side before releasing the local owner.
                 flags.stop.store(true, Ordering::Release);
-                source.release()?;
+                source.release(|| {
+                    flags
+                        .drain_progress
+                        .store(now_ms().saturating_add(1), Ordering::Release);
+                })?;
                 return result;
             }
             Err(oneshot::error::TryRecvError::Closed) => return Ok(()),
@@ -171,24 +214,49 @@ fn native_source(
 }
 
 fn forward_native(
-    source: &PointerSource,
+    source: &mut PointerSource,
     flags: &Flags,
-    motion: &mpsc::Sender<(f64, f64)>,
+    permissions: &PointerPermissions,
+    publish: &mpsc::Sender<PointerEvent>,
 ) -> Result<()> {
     while flags.lease_live() {
-        let keep_running = match source.poll()? {
-            PointerSample::Idle => true,
-            PointerSample::LocalInput => false,
-            PointerSample::Motion { dx, dy } => {
-                flags.lease_live() && motion.try_send((dx, dy)).is_ok()
+        let event = match source.poll()? {
+            PointerSample::Idle => None,
+            PointerSample::LocalInput => break,
+            PointerSample::Motion { dx, dy } => Some(PointerEvent { dx, dy, input: None }),
+            PointerSample::Button { dx, dy, number, down } => {
+                let Some(input) = pointer_input(number, down) else {
+                    break;
+                };
+                if !flags.lease_live() || !permissions.supports(input) {
+                    break;
+                }
+                source.accept_button(number, down)?;
+                let input = (number < 4 || down).then_some(input);
+                (input.is_some() || dx != 0.0 || dy != 0.0)
+                    .then_some(PointerEvent { dx, dy, input })
             }
         };
-        if !keep_running {
+        if event.is_some_and(|event| !flags.lease_live() || publish.try_send(event).is_err()) {
             break;
         }
         thread::park_timeout(NATIVE_POLL);
     }
     Ok(())
+}
+
+fn pointer_input(number: u8, down: bool) -> Option<Input> {
+    Some(match number {
+        1..=3 => Input::Button {
+            button: [1, 3, 2][usize::from(number - 1)],
+            down,
+        },
+        4 => Input::Scroll { x: 0, y: 1 },
+        5 => Input::Scroll { x: 0, y: -1 },
+        6 => Input::Scroll { x: -1, y: 0 },
+        7 => Input::Scroll { x: 1, y: 0 },
+        _ => return None,
+    })
 }
 
 fn outward(edge: Edge, dx: f64, dy: f64) -> bool {
@@ -206,6 +274,8 @@ pub(crate) async fn run(
     address: SocketAddr,
     edge: Edge,
     allow: bool,
+    buttons: bool,
+    scroll: bool,
 ) -> Result<()> {
     ensure!(
         allow,
@@ -223,13 +293,15 @@ pub(crate) async fn run(
         secondary_layout: None,
     };
     let mut native = Native::start(edge)?;
+    let offered =
+        InputCapabilities::new(&[], true, if buttons { 7 } else { 0 }, scroll).map_err(anyhow::Error::msg)?;
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
     println!("Move the local pointer to the selected edge. Ctrl+C stops pointer sending.");
     let setup = tokio::select! {
         biased;
         stopped = &mut stop => stopped.map(|()| None).map_err(Into::into),
-        result = connect_at_edge(&mut native, &identity, &peer) => result.map(Some),
+        result = connect_at_edge(&mut native, &identity, &peer, offered.clone()) => result.map(Some),
     };
     let (mut link, along) = match setup {
         Ok(Some(setup)) => setup,
@@ -242,7 +314,7 @@ pub(crate) async fn run(
     let result = tokio::select! {
         biased;
         stopped = &mut stop => stopped.map(|()| None).map_err(Into::into),
-        result = send_pointer(&mut link, &mut native, edge, along, &mut attempted) => result,
+        result = send_pointer(&mut link, &mut native, edge, along, offered, &mut attempted) => result,
     };
     native.stop();
     let cursor = result.as_ref().ok().copied().flatten();
@@ -262,11 +334,11 @@ async fn connect_at_edge(
     native: &mut Native,
     identity: &transport::Identity,
     peer: &Peer,
+    capabilities: InputCapabilities,
 ) -> Result<(Link, f64)> {
     let along = (&mut native.edge)
         .await
         .context("Xorg edge owner stopped")?;
-    let capabilities = InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg)?;
     let link = tokio::time::timeout(PENDING, Link::connect(identity, peer, capabilities))
         .await
         .context("Xorg peer connection timed out")??;
@@ -282,6 +354,7 @@ async fn send_pointer(
     native: &mut Native,
     edge: Edge,
     along: f64,
+    offered: InputCapabilities,
     attempted: &mut bool,
 ) -> Result<Option<Motion>> {
     if !native.flags.running() {
@@ -320,14 +393,16 @@ async fn send_pointer(
     }
     native.flags.refresh();
     let claim = native.claim.take().context("Xorg claim already used")?;
-    if claim.send(()).is_err() {
+    if claim.send(PointerPermissions { local: offered, peer: link.capabilities.clone() }).is_err() {
         return Ok(None);
     }
     native.thread.unpark();
-    if !matches!(
-        tokio::time::timeout(CLEANUP, &mut native.ready).await,
-        Ok(Ok(()))
-    ) {
+    let ready = tokio::select! {
+        biased;
+        _ = link.connection.closed() => false,
+        result = tokio::time::timeout(CLEANUP, &mut native.ready) => matches!(result, Ok(Ok(()))),
+    };
+    if !ready {
         return Ok(None);
     }
     println!("Pointer lease active. Move back across the entry edge or press a local key to stop.");
@@ -342,12 +417,13 @@ async fn forward(
 ) -> Result<Option<Motion>> {
     let mut position = edges.positions(along).0;
     let mut sequence = 0;
+    let mut held = [false; 3];
     let mut ticks = tokio::time::interval(HEARTBEAT);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     while native.flags.lease_live() {
         tokio::select! {
             _ = ticks.tick() => {
-                if !link.send(&Message::Ping { lease: LEASE }).await? {
+                if !native.flags.lease_live() || !link.send(&Message::Ping { lease: LEASE }).await? {
                     return Ok(None);
                 }
             }
@@ -359,18 +435,33 @@ async fn forward(
                     other => link.reply(other).await?,
                 }
             }
-            event = native.motions.recv() => {
-                let Some((dx, dy)) = event.filter(|_| native.flags.lease_live()) else {
+            event = native.events.recv() => {
+                let Some(PointerEvent { dx, dy, input }) = event.filter(|_| native.flags.lease_live()) else {
                     return Ok(None);
                 };
                 let (dx, dy) = edges.motion(dx, dy);
                 position.0 = (position.0 + dx).clamp(0.0, 1.0);
                 position.1 = (position.1 + dy).clamp(0.0, 1.0);
                 let cursor = next_motion(&mut sequence, position)?;
-                if edges.crossed_back(position) {
-                    return Ok(Some(cursor));
+                if let Some(event) = input {
+                    ensure!(link.capabilities.supports(event), "Xorg peer capability changed");
+                    if !link.send(&Message::Input { lease: LEASE, event, cursor }).await? {
+                        return Ok(None);
+                    }
+                    if let Input::Button { button, down } = event {
+                        held[usize::from(button - 1)] = down;
+                    }
                 }
-                let _ = link.connection.send_datagram(encode(&cursor)?.into());
+                if edges.crossed_back(position) && !held.contains(&true) {
+                    return if input.is_some() {
+                        Ok(Some(next_motion(&mut sequence, position)?))
+                    } else {
+                        Ok(Some(cursor))
+                    };
+                }
+                if input.is_none() {
+                    let _ = link.connection.send_datagram(encode(&cursor)?.into());
+                }
             }
         }
     }
@@ -413,6 +504,24 @@ mod tests {
         assert!(!flags.lease_live());
     }
 
+    #[test]
+    fn standard_xorg_buttons_and_axes_use_only_the_shared_capabilities() -> Result<()> {
+        let local = InputCapabilities::new(&[], true, 7, true).map_err(anyhow::Error::msg)?;
+        let peer = InputCapabilities::new(&[], true, 2, false).map_err(anyhow::Error::msg)?;
+        let permissions = PointerPermissions { local, peer };
+        assert_eq!(pointer_input(3, true), Some(Input::Button { button: 2, down: true }));
+        assert!(permissions.supports(pointer_input(3, true).unwrap()));
+        assert!(permissions.supports(pointer_input(3, false).unwrap()));
+        assert!(!permissions.supports(pointer_input(1, true).unwrap()));
+        assert!(!permissions.supports(pointer_input(4, true).unwrap()));
+        assert_eq!(pointer_input(4, true), Some(Input::Scroll { x: 0, y: 1 }));
+        assert_eq!(pointer_input(5, true), Some(Input::Scroll { x: 0, y: -1 }));
+        assert_eq!(pointer_input(6, true), Some(Input::Scroll { x: -1, y: 0 }));
+        assert_eq!(pointer_input(7, true), Some(Input::Scroll { x: 1, y: 0 }));
+        assert!(pointer_input(8, true).is_none());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn xorg_route_waits_for_the_grant_and_retires_with_the_return_cursor() -> Result<()> {
         let source = transport::Identity::generate()?;
@@ -425,13 +534,13 @@ mod tests {
             secondary_layout: None,
         };
         let capabilities =
-            InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg)?;
+            InputCapabilities::new(&[], true, 7, true).map_err(anyhow::Error::msg)?;
         let (observed, acquire_received) = oneshot::channel();
         let (checked, can_grant) = oneshot::channel();
         let (arrived, motion_received) = oneshot::channel();
         let (claim, mut permit) = oneshot::channel();
         let (admitted, ready) = oneshot::channel();
-        let (motion, motions) = mpsc::channel(2);
+        let (publish, events) = mpsc::channel(2);
         let (_no_edge, edge) = oneshot::channel();
         let (_closed, done) = oneshot::channel();
         let mut native = Native {
@@ -440,7 +549,7 @@ mod tests {
             edge,
             claim: Some(claim),
             ready,
-            motions,
+            events,
             done,
         };
         let server = async {
@@ -461,16 +570,29 @@ mod tests {
             assert_eq!(cursor.lease, LEASE);
             assert!(cursor.x > 0.19 && cursor.x < 0.21 && cursor.y == 0.5);
             arrived.send(()).expect("native motion observer");
+            let mut expected = [
+                Input::Button { button: 2, down: true },
+                Input::Scroll { x: -1, y: 0 },
+                Input::Button { button: 2, down: false },
+            ]
+            .into_iter();
+            let mut sequence = cursor.sequence;
             loop {
                 match transport::receive(&mut receive).await? {
                     Message::Ping { lease: LEASE } => {
                         transport::send(&mut send, &Message::Pong { lease: LEASE }).await?;
                     }
+                    Message::Input { lease: LEASE, event, cursor } => {
+                        assert_eq!(Some(event), expected.next());
+                        assert!(cursor.sequence > sequence && cursor.y == 0.5);
+                        sequence = cursor.sequence;
+                    }
                     Message::Release {
                         lease: LEASE,
                         cursor: Some(cursor),
                     } => {
-                        assert!(cursor.sequence > 1 && cursor.x == 0.0);
+                        assert!(expected.next().is_none());
+                        assert!(cursor.sequence > sequence && cursor.x == 0.0);
                         break;
                     }
                     _ => anyhow::bail!("unexpected Xorg route frame"),
@@ -487,24 +609,32 @@ mod tests {
                 Err(oneshot::error::TryRecvError::Empty)
             ));
             checked.send(()).expect("grant observer");
-            permit.await?;
+            let permissions = permit.await?;
+            assert!(permissions.supports(Input::Scroll { x: -1, y: 0 }));
             admitted.send(()).expect("native admission observer");
-            motion.send((0.2, 0.0)).await?;
+            publish.send(PointerEvent { dx: 0.2, dy: 0.0, input: None }).await?;
             motion_received.await?;
-            motion.send((-0.3, 0.0)).await?;
+            for (dx, input) in [
+                (0.0, pointer_input(3, true)),
+                (-0.3, None),
+                (0.0, pointer_input(6, true)),
+                (0.0, pointer_input(3, false)),
+            ] {
+                publish.send(PointerEvent { dx, dy: 0.0, input }).await?;
+            }
             // Keep the source available until the return cursor is consumed.
-            motion.closed().await;
+            publish.closed().await;
             Ok::<_, anyhow::Error>(())
         };
         let client = async {
             let mut link = Link::connect(&source, &peer, capabilities.clone()).await?;
             let mut attempted = false;
-            let cursor = send_pointer(&mut link, &mut native, Edge::Right, 0.5, &mut attempted)
+            let cursor = send_pointer(&mut link, &mut native, Edge::Right, 0.5, capabilities.clone(), &mut attempted)
                 .await?
                 .context("missing return cursor")?;
             assert!(attempted);
             native.stop();
-            native.motions.close();
+            native.events.close();
             link.retire(Some(cursor)).await
         };
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -537,10 +667,14 @@ mod tests {
         assert_eq!(source.edge_fraction(Edge::Right)?, Some(along));
         let flags = Flags::default();
         flags.deadline.store(now_ms() + 50, Ordering::Release);
-        let (motion, _events) = mpsc::channel(1);
-        forward_native(&source, &flags, &motion)?;
+        let (publish, _events) = mpsc::channel(1);
+        let permissions = PointerPermissions {
+            local: InputCapabilities::default(),
+            peer: InputCapabilities::default(),
+        };
+        forward_native(&mut source, &flags, &permissions, &publish)?;
         assert!(!flags.lease_live());
-        source.release()?;
+        source.release(|| {})?;
         injector.pointer(ReceivePoint { x: 0.0, y: 0.5 })?;
         assert!(source.edge_fraction(Edge::Left)?.is_some());
         drop(source);
