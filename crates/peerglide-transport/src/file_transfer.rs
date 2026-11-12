@@ -1,5 +1,8 @@
 //! File offer and disk orchestration on the authenticated data connection.
-use crate::data;
+use crate::{
+    data,
+    file_drop_link::{Receipt, ReceivedReceipt, SentReceipt},
+};
 use anyhow::{ensure, Context, Result};
 pub use peerglide_transfer::drop_admission;
 use peerglide_transfer::{
@@ -138,6 +141,7 @@ pub struct ReceivedFile {
     path: PathBuf,
     manifest: Manifest,
     origin: DropOrigin,
+    receipt: Option<Arc<ReceivedReceipt>>,
 }
 
 /// Locally retained provenance of one committed transfer. Never put the
@@ -177,6 +181,7 @@ impl DropOrigin {
 pub struct PreparedDropPath {
     path: PathBuf,
     _source: File,
+    pub(crate) receipt: Option<Arc<ReceivedReceipt>>,
     #[cfg(any(target_os = "macos", all(windows, target_env = "msvc"), test))]
     manifest: Manifest,
 }
@@ -200,6 +205,7 @@ impl ReceivedFile {
         Ok(PreparedDropPath {
             path: self.path.clone(),
             _source: source,
+            receipt: self.receipt.clone(),
             #[cfg(any(target_os = "macos", all(windows, target_env = "msvc"), test))]
             manifest: actual,
         })
@@ -252,6 +258,23 @@ impl Source {
 pub struct SentProgress {
     pub queued_bytes: u64,
     pub total_bytes: u64,
+}
+
+/// Send one explicitly selected file and require the matching terminal receipt.
+/// Call this for a file locally selected for a later drag reservation.
+pub async fn send_for_drop(
+    connection: &Connection,
+    pinned_peer: &[u8],
+    source: Source,
+    stop: Cancellation,
+    progress: impl FnMut(SentProgress),
+) -> Result<(FileOutcome, Option<SentReceipt>)> {
+    let receipt = Receipt::from_data(connection, pinned_peer, source.id())?;
+    let outcome = send(connection, pinned_peer, source, stop, progress).await?;
+    Ok((
+        outcome,
+        (outcome == FileOutcome::Committed).then_some(SentReceipt(receipt)),
+    ))
 }
 
 /// Send one explicitly selected file and require the matching terminal receipt.
@@ -420,6 +443,7 @@ where
     // the transfer ID and local directory supplied by the controller.
     let origin = consent.file_receive_origin(id)?;
     let peer = origin.peer;
+    let receipt = Receipt::from_data(connection, pinned_peer, id).ok();
     let total_chunks = manifest.chunks();
     let verified_manifest = manifest.clone();
     let storage = tokio::task::spawn_blocking({
@@ -520,6 +544,12 @@ where
         path,
         manifest: verified_manifest,
         origin,
+        receipt: receipt.map(|binding| {
+            Arc::new(ReceivedReceipt {
+                binding,
+                connection: origin.connection(),
+            })
+        }),
     });
     Ok(result)
 }
@@ -545,7 +575,8 @@ async fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Identity;
+    use crate::{file_drop_link, layout_reservation, Identity};
+    use quinn::Endpoint;
     use std::{fs, net::SocketAddr};
 
     struct TestDirectory(PathBuf);
@@ -573,6 +604,7 @@ mod tests {
             manifest: Manifest::from_file(path)?,
             path: path.to_path_buf(),
             origin: DropOrigin::new([1; 16], [2; 32], [3; 32]),
+            receipt: None,
         })
     }
 
@@ -732,17 +764,7 @@ mod tests {
         let address: SocketAddr = "127.0.0.1:0".parse()?;
         let left = data::endpoint(address, &source, &peer.certificate)?;
         let right = data::endpoint(address, &peer, &source.certificate)?;
-        let (client, server) = tokio::try_join!(
-            async {
-                Ok::<_, anyhow::Error>(
-                    left.connect(right.local_addr()?, "peerglide.local")?
-                        .await?,
-                )
-            },
-            async {
-                Ok::<_, anyhow::Error>(right.accept().await.context("missing connection")?.await?)
-            }
-        )?;
+        let (client, server) = connect_pair(&left, &right).await?;
         let mut last_progress = None;
         let receiver = receive(
             &server,
@@ -770,7 +792,7 @@ mod tests {
             |progress| last_progress = Some(progress),
         );
         let mut first_progress = None;
-        let sender = send(
+        let sender = send_for_drop(
             &client,
             &peer.certificate,
             prepared,
@@ -779,7 +801,7 @@ mod tests {
                 first_progress.get_or_insert(progress.queued_bytes);
             },
         );
-        let (received, sent) = tokio::try_join!(receiver, sender)?;
+        let (received, (sent, receipt)) = tokio::try_join!(receiver, sender)?;
         assert_eq!(received.outcome, sent);
         assert!(received.report_queued);
         if approve {
@@ -802,6 +824,13 @@ mod tests {
             assert!(origin.matches_peer(&source.fingerprint()));
             assert!(!origin.matches_peer(&peer.fingerprint()));
             assert_ne!(origin.connection(), [0; 32]);
+            exercise_drop_reservation(
+                &source,
+                &peer,
+                &file,
+                receipt.context("missing committed send receipt")?,
+            )
+            .await?;
             let prepared = file.prepare_drop(|| Ok(()))?;
             assert_eq!(fs::canonicalize(prepared.path())?, fs::canonicalize(&path)?);
             drop(prepared);
@@ -809,10 +838,199 @@ mod tests {
             assert!(file.prepare_drop(|| Ok(())).is_err());
         } else {
             assert_eq!(sent, FileOutcome::Declined);
+            assert!(receipt.is_none());
             assert!(received.file.is_none());
             assert!(last_progress.is_none());
             assert!(fs::read_dir(destination)?.next().is_none());
         }
         Ok(())
+    }
+
+    async fn connect_pair(
+        client: &Endpoint,
+        server: &Endpoint,
+    ) -> Result<(Connection, Connection)> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(
+                async {
+                    let connecting = client.connect(server.local_addr()?, "peerglide.local")?;
+                    Ok::<_, anyhow::Error>(connecting.await?)
+                },
+                async {
+                    let incoming = server.accept().await.context("missing connection")?;
+                    Ok::<_, anyhow::Error>(incoming.await?)
+                }
+            )
+        })
+        .await?
+    }
+
+    async fn exercise_drop_reservation(
+        source: &Identity,
+        target: &Identity,
+        file: &ReceivedFile,
+        receipt: SentReceipt,
+    ) -> Result<()> {
+        use drop_admission::{Admission, Content, Context as DropContext, Effect};
+        let bind: SocketAddr = "127.0.0.1:0".parse()?;
+        let a = crate::endpoint(bind, source, &target.certificate)?;
+        let b = crate::endpoint(bind, target, &source.certificate)?;
+        let input = connect_pair(&a, &b).await?;
+        let replacement = connect_pair(&a, &b).await?;
+        let sender = layout_reservation::endpoint(bind, source, &target.certificate)?;
+        let receiver = layout_reservation::endpoint(bind, target, &source.certificate)?;
+
+        let origin = file.drop_origin();
+        let context = DropContext {
+            connection: origin.connection(),
+            layout_epoch: (1, 1),
+            gesture_generation: 1,
+            focused: true,
+        };
+        let mut admission = Admission::default();
+        let ticket = admission
+            .begin(context, origin.transfer(), Content::File, 0, true)
+            .unwrap();
+        admission.verified(ticket, context, 1, true).unwrap();
+        let slot = file_drop_link::Slot::arm(
+            file.prepare_drop(|| Ok(()))?,
+            &mut admission,
+            ticket,
+            context,
+            2,
+            true,
+        )?;
+
+        let other_data_source = data::endpoint(bind, source, &target.certificate)?;
+        let other_data_target = data::endpoint(bind, target, &source.certificate)?;
+        let other_data = connect_pair(&other_data_source, &other_data_target).await?;
+        let wrong = Receipt::from_data(&other_data.0, &target.certificate, origin.transfer())?;
+        let sidecar = connect_pair(&sender, &receiver).await?;
+        let lease = 7;
+        let rejected = tokio::try_join!(
+            file_drop_link::reserve(
+                &sidecar.0,
+                &input.0,
+                &target.certificate,
+                SentReceipt(wrong),
+                lease
+            ),
+            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(
+                context
+            )),
+        )?;
+        assert_eq!(
+            rejected,
+            (false, false),
+            "a matching transfer id alone is insufficient"
+        );
+
+        let sidecar = connect_pair(&sender, &receiver).await?;
+        let rejected = tokio::try_join!(
+            file_drop_link::reserve(
+                &sidecar.0,
+                &replacement.0,
+                &target.certificate,
+                SentReceipt(receipt.0.clone()),
+                lease
+            ),
+            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(
+                context
+            )),
+        )?;
+        assert_eq!(
+            rejected,
+            (false, false),
+            "file proof cannot move to another input connection"
+        );
+
+        let sidecar = connect_pair(&sender, &receiver).await?;
+        let accepted = tokio::try_join!(
+            file_drop_link::reserve(&sidecar.0, &input.0, &target.certificate, receipt, lease),
+            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(
+                context
+            )),
+        )?;
+        assert_eq!(accepted, (true, true));
+        let granted = confirm_input_lease(&input, lease).await?;
+        assert!(slot
+            .claim(
+                &input.1,
+                &source.certificate,
+                lease + 1,
+                Some(context),
+                &mut admission,
+                3
+            )?
+            .is_none());
+        assert!(slot
+            .claim(
+                &replacement.1,
+                &source.certificate,
+                lease,
+                Some(context),
+                &mut admission,
+                3
+            )?
+            .is_none());
+        let claim = slot
+            .claim(
+                &input.1,
+                &source.certificate,
+                granted,
+                Some(context),
+                &mut admission,
+                4,
+            )?
+            .context("current lease did not claim its file")?;
+        assert!(claim.ticket == ticket && claim.file.path() == file.path.as_path());
+        admission
+            .submit(claim.ticket, context, 5, true, Effect::Copy)
+            .unwrap();
+        assert!(slot
+            .claim(
+                &input.1,
+                &source.certificate,
+                lease,
+                Some(context),
+                &mut admission,
+                6
+            )?
+            .is_none());
+        Ok(())
+    }
+
+    async fn confirm_input_lease(input: &(Connection, Connection), lease: u64) -> Result<u64> {
+        use peerglide_protocol::{Edge, Message};
+        let (granted, _) = tokio::try_join!(
+            async {
+                let (mut send, mut receive) = input.0.open_bi().await?;
+                crate::send(
+                    &mut send,
+                    &Message::Acquire {
+                        lease,
+                        edge: Edge::Right,
+                        along: 0.5,
+                    },
+                )
+                .await?;
+                match crate::receive(&mut receive).await? {
+                    Message::Granted { lease: granted } if granted == lease => Ok(granted),
+                    _ => anyhow::bail!("test v5 lease not granted"),
+                }
+            },
+            async {
+                let (mut send, mut receive) = input.1.accept_bi().await?;
+                match crate::receive(&mut receive).await? {
+                    Message::Acquire {
+                        lease: requested, ..
+                    } if requested == lease => {
+                        crate::send(&mut send, &Message::Granted { lease }).await
+                    }
+                    _ => anyhow::bail!("test v5 acquire differed"),
+                }
+            },
+        )?;
+        Ok(granted)
     }
 }
