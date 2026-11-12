@@ -199,7 +199,24 @@ peerglide probe-route --identity PATH --layout routes.json --point=-1,450 --edge
 
 目标使用 `listen` 或 `listen-peers` 的默认通信模式。探测只连接这个分段指定的
 电脑，并核对精确证书、v5 协商和可靠流回执。共用边、屏内点和失效布局无路由，
-目标离线时直接报错。这个入口只做诊断，自动跨屏切换仍在开发。
+目标离线时直接报错。
+
+### 启用分段键鼠发送
+
+Windows 和 macOS 可用同一布局文件启动分段发送。各接收电脑须分别核对来源证书并
+允许来源控制。下例在目标端保持串行原生监听，以便发送端回到本机后重新选择路线。
+
+```text
+peerglide listen-peers --peer-cert source.der --native-peer-cert source.der --serial-native --allow-control-peer-cert source.der
+peerglide connect-routes --identity PATH --layout routes.json --native
+```
+
+发送端回到屏内后才能再次跨边。目的地由实际光标到达的唯一分段决定。共用边和多个
+分段相交的角点保留本机控制。连接失败时也留在本机。发送端拒绝从这些连接接收键鼠。
+返回本机时，旧连接必须确认清理完成才继续选择。恢复未确认时会停止分段发送。
+`Ctrl+Alt+Right` 可从当前目标返回本机，`Ctrl+Alt+Esc` 和 `Ctrl+C` 结束发送。
+分段发送使用目标当前的接收屏幕。显式远端副屏预留、可编辑的图形入口及物理多机
+切换仍需后续开发或验收。
 
 ## 查询已核验电脑的屏幕表
 

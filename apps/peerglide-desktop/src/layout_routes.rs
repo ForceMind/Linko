@@ -1,22 +1,28 @@
 //! Bind local display segments to explicitly pinned peers before opening any connection.
-use crate::{exchange_hello, layout_probe::unspecified_for, probe_roundtrip, transport};
+use crate::transport;
+#[cfg(any(windows, target_os = "macos", test))]
+use crate::{exchange_hello, layout_probe::unspecified_for, probe_roundtrip};
 use anyhow::{ensure, Context, Result};
 use peerglide_platform::{
-    display_layout::Layout,
+    display_layout::{EdgeAnchor, Layout},
     display_routes::{Link, Route, Span, Table, Target},
 };
-use peerglide_protocol::{Edge, InputCapabilities};
+use peerglide_protocol::Edge;
+#[cfg(any(windows, target_os = "macos", test))]
+use peerglide_protocol::InputCapabilities;
 use serde::Deserialize;
+#[cfg(any(windows, target_os = "macos", test))]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
     fs::File,
     io::Read,
     net::SocketAddr,
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 const MAX_PLAN_BYTES: u64 = 128 * 1024;
+#[cfg(any(windows, target_os = "macos", test))]
 const TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Deserialize)]
@@ -45,18 +51,18 @@ struct RouteSpec {
     remote_span: [f64; 2],
 }
 
-struct Peer {
-    address: SocketAddr,
-    certificate: Vec<u8>,
+pub(super) struct Peer {
+    pub address: SocketAddr,
+    pub certificate: Vec<u8>,
 }
 
-struct Routes {
+pub(super) struct Routes {
     table: Table,
     peers: BTreeMap<[u8; 32], Peer>,
 }
 
 impl Routes {
-    fn load(path: &Path, local: &[u8], layout: &Layout) -> Result<Self> {
+    pub(super) fn load(path: &Path, local: &[u8], layout: &Layout) -> Result<Self> {
         let metadata = std::fs::metadata(path).context("inspect display route plan")?;
         ensure!(
             metadata.is_file(),
@@ -158,11 +164,29 @@ impl Routes {
         Ok(Self { table, peers })
     }
 
-    fn resolve(&self, layout: &Layout, edge: Edge, (x, y): (f64, f64)) -> Option<(Route, &Peer)> {
+    pub(super) fn resolve(
+        &self,
+        layout: &Layout,
+        edge: Edge,
+        (x, y): (f64, f64),
+    ) -> Option<(EdgeAnchor, Route, &Peer)> {
         let anchor = layout.edge_at(edge, x, y, 1.0)?;
         let route = self.table.resolve(layout, anchor)?;
         let peer = self.peers.get(&route.target.peer)?;
-        Some((route, peer))
+        Some((anchor, route, peer))
+    }
+
+    pub(super) fn select_at(
+        &self,
+        layout: &Layout,
+        point: (f64, f64),
+    ) -> Option<(EdgeAnchor, Route, &Peer)> {
+        let mut matches = [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom]
+            .into_iter()
+            .filter_map(|edge| self.resolve(layout, edge, point));
+        let selection = matches.next()?;
+        // Two adjacent configured edges can meet at a corner. No implicit priority.
+        matches.next().is_none().then_some(selection)
     }
 }
 
@@ -170,6 +194,7 @@ fn span([start, end]: [f64; 2]) -> Span {
     Span { start, end }
 }
 
+#[cfg(any(windows, target_os = "macos", test))]
 async fn probe(identity: &transport::Identity, peer: &Peer) -> Result<()> {
     let endpoint = transport::endpoint(unspecified_for(peer.address), identity, &peer.certificate)?;
     let result = tokio::time::timeout(TIMEOUT, async {
@@ -189,7 +214,7 @@ pub(super) async fn run(identity: &Path, path: &Path, point: (f64, f64), edge: E
     let identity = transport::Identity::load(identity)?;
     let layout = peerglide_platform::read_display_layout()?;
     let routes = Routes::load(path, &identity.certificate, &layout)?;
-    let (route, peer) = routes
+    let (_, route, peer) = routes
         .resolve(&layout, edge, point)
         .context("no route on that exposed display edge")?;
     probe(&identity, peer)
@@ -305,8 +330,9 @@ mod tests {
         assert!(routes
             .resolve(&test_layout(), Edge::Right, (-1.0, 60.0))
             .is_none());
-        let (first_route, first_peer) = routes.resolve(&layout, Edge::Right, (-1.0, 30.0)).unwrap();
-        let (second_route, second_peer) =
+        let (_, first_route, first_peer) =
+            routes.resolve(&layout, Edge::Right, (-1.0, 30.0)).unwrap();
+        let (_, second_route, second_peer) =
             routes.resolve(&layout, Edge::Right, (-1.0, 50.0)).unwrap();
         assert_eq!(first_peer.certificate, first.certificate);
         assert_eq!(second_peer.certificate, second.certificate);
@@ -333,6 +359,23 @@ mod tests {
         tokio::time::timeout(TIMEOUT, incorrect).await???;
         first_endpoint.close(0u8.into(), b"offline test");
         assert!(probe(&local, first_peer).await.is_err());
+
+        plan["routes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "local_origin": [-100, 0], "local_edge": "Bottom", "local_span": [0, 1],
+                "peer": 0, "remote_edge": "Top", "remote_span": [0, 1],
+            }));
+        std::fs::write(&path, serde_json::to_vec(&plan)?)?;
+        let corners = Routes::load(&path, &local.certificate, &layout)?;
+        assert!(corners
+            .resolve(&layout, Edge::Right, (-1.0, 99.0))
+            .is_some());
+        assert!(corners
+            .resolve(&layout, Edge::Bottom, (-1.0, 99.0))
+            .is_some());
+        assert!(corners.select_at(&layout, (-1.0, 99.0)).is_none());
 
         plan["routes"][1]["local_span"] = serde_json::json!([0.4, 1]);
         std::fs::write(&path, serde_json::to_vec(&plan)?)?;
