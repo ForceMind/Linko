@@ -4,6 +4,7 @@ use anyhow::{ensure, Result};
 use eframe::egui;
 use std::{
     process::{Child, Command, Stdio},
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -23,10 +24,42 @@ struct Job {
     forced: bool,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct OutputDevice {
+    id: String,
+    name: String,
+}
+
+#[cfg(windows)]
+fn output_devices() -> Result<Vec<OutputDevice>> {
+    Ok(peerglide_platform::windows_audio::output_devices()
+        .into_iter()
+        .map(|device| OutputDevice {
+            id: device.id.to_string(),
+            name: device.name,
+        })
+        .collect())
+}
+
+#[cfg(target_os = "macos")]
+fn output_devices() -> Result<Vec<OutputDevice>> {
+    Ok(peerglide_platform::macos_audio::output_devices()?
+        .into_iter()
+        .map(|device| OutputDevice {
+            id: device.uid,
+            name: device.name,
+        })
+        .collect())
+}
+
 pub(super) struct Panel {
     job: Option<Job>,
     address: String,
     volume: u8,
+    output: Option<OutputDevice>,
+    devices: Vec<OutputDevice>,
+    device_result: Option<mpsc::Receiver<Result<Vec<OutputDevice>>>>,
+    device_status: Option<&'static str>,
     status: &'static str,
 }
 
@@ -36,6 +69,10 @@ impl Default for Panel {
             job: None,
             address: String::new(),
             volume: 100,
+            output: None,
+            devices: Vec::new(),
+            device_result: None,
+            device_status: None,
             status: "音频共享已停止",
         }
     }
@@ -56,6 +93,7 @@ impl Panel {
     }
 
     pub(super) fn tick(&mut self, app: &App) {
+        self.poll_devices();
         if self.job.as_ref().is_some_and(|job| !job.pin.matches(app)) {
             self.stop();
         }
@@ -89,6 +127,90 @@ impl Panel {
         }
     }
 
+    fn query_devices(&mut self, app: &App) -> Result<()> {
+        ensure!(self.device_result.is_none(), "正在读取播放设备");
+        let (send, receive) = mpsc::sync_channel(1);
+        let wake = app.wake_ui.clone();
+        std::thread::Builder::new()
+            .name("linko-audio-devices".into())
+            .spawn(move || {
+                let _ = send.send(output_devices());
+                wake();
+            })?;
+        self.device_result = Some(receive);
+        self.device_status = Some("正在读取播放设备");
+        Ok(())
+    }
+
+    fn poll_devices(&mut self) {
+        let Some(result) = self.device_result.as_ref() else {
+            return;
+        };
+        let devices = match result.try_recv() {
+            Ok(Ok(devices)) => devices,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                self.devices.clear();
+                self.device_result = None;
+                self.device_status = Some("读取播放设备失败。请选择系统默认或重试。");
+                return;
+            }
+        };
+        self.device_result = None;
+        self.device_status = devices.is_empty().then_some("没有找到可选播放设备");
+        self.devices = devices;
+    }
+
+    fn selected_output(&self) -> Result<Option<&str>> {
+        let Some(output) = self.output.as_ref() else {
+            return Ok(None);
+        };
+        ensure!(
+            self.device_result.is_none() && self.devices.contains(output),
+            "选中的播放设备已不可用或正在刷新，请重新选择"
+        );
+        Ok(Some(&output.id))
+    }
+
+    fn output_controls(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        let selection = self
+            .output
+            .as_ref()
+            .map_or("系统默认", |device| {
+                if self.devices.contains(device) {
+                    device.name.as_str()
+                } else {
+                    "已选设备不可用"
+                }
+            })
+            .to_owned();
+        ui.horizontal_wrapped(|ui| {
+            ui.label("播放设备");
+            egui::ComboBox::from_id_salt("audio-output-device")
+                .selected_text(selection)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.output, None, "系统默认");
+                    for device in &self.devices {
+                        ui.selectable_value(&mut self.output, Some(device.clone()), &device.name);
+                    }
+                });
+            if ui
+                .add_enabled(
+                    self.device_result.is_none(),
+                    egui::Button::new("刷新播放设备"),
+                )
+                .clicked()
+            {
+                if let Err(error) = self.query_devices(app) {
+                    app.feedback(Err(error), "");
+                }
+            }
+        });
+        if let Some(status) = self.device_status {
+            ui.label(status);
+        }
+    }
+
     fn start(&mut self, app: &App, mode: Mode) -> Result<()> {
         ensure!(!self.is_active(), "请先停止当前音频会话");
         let (pin, identity, peer) = data_access::Pin::load(app)?;
@@ -102,6 +224,9 @@ impl Panel {
         let status = match mode {
             Mode::Playback => {
                 command.args(["play-audio", "--volume", &self.volume.to_string()]);
+                if let Some(device) = self.selected_output()? {
+                    command.args(["--device", device]);
+                }
                 "音频接收任务运行中"
             }
             Mode::ShareSystem => {
@@ -158,7 +283,8 @@ impl Panel {
                 .suffix("%")
                 .text("播放音量"),
         );
-        ui.label("接收使用本机默认输出和 UDP 端口 24874。");
+        self.output_controls(app, ui);
+        ui.label("接收使用 UDP 端口 24874。");
         if ui.button("在本机接收并播放").clicked() {
             let result = self.start(app, Mode::Playback);
             app.feedback(result, "已请求启动音频接收。");
@@ -180,6 +306,23 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn losing_the_selected_device_does_not_select_the_system_default() -> Result<()> {
+        let mut panel = Panel::default();
+        assert_eq!(panel.selected_output()?, None);
+        panel.devices = vec![OutputDevice {
+            id: "7".into(),
+            name: "Headphones".into(),
+        }];
+        panel.output = panel.devices.first().cloned();
+        assert_eq!(panel.selected_output()?, Some("7"));
+        panel.devices[0].name = "Speakers".into();
+        assert!(panel.selected_output().is_err());
+        panel.devices.clear();
+        assert!(panel.selected_output().is_err());
+        Ok(())
+    }
 
     #[test]
     fn an_unpaired_profile_cannot_start_either_audio_direction() -> Result<()> {
