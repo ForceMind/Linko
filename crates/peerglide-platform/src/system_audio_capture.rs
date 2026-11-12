@@ -1,4 +1,4 @@
-//! Explicit system audio capture owned by its creating worker thread.
+//! Explicit audio capture owned by its creating worker thread.
 use anyhow::{ensure, Result};
 use peerglide_protocol::audio::{CHANNELS, SAMPLES};
 use std::{ffi::c_void, ptr::null_mut};
@@ -7,6 +7,8 @@ use std::{ffi::c_void, ptr::null_mut};
 extern "C" {
     #[link_name = "linko_wasapi_open"]
     fn native_open(output: *mut *mut c_void) -> i32;
+    #[link_name = "linko_wasapi_mic_open"]
+    fn native_microphone(output: *mut *mut c_void) -> i32;
     #[link_name = "linko_wasapi_read"]
     fn native_read(owner: *mut c_void, output: *mut i16, capacity: u32, written: *mut u32) -> i32;
     #[link_name = "linko_wasapi_stop"]
@@ -27,56 +29,72 @@ extern "C" {
     fn native_drop(owner: *mut c_void);
 }
 
-pub struct SystemAudio {
+pub struct AudioCapture {
     owner: *mut c_void,
+    source: &'static str,
 }
 
-impl SystemAudio {
+pub type SystemAudio = AudioCapture;
+
+type Open = unsafe extern "C" fn(*mut *mut c_void) -> i32;
+
+impl AudioCapture {
     pub fn open_after_explicit_consent() -> Result<Self> {
+        Self::open(native_open, "system audio")
+    }
+
+    #[cfg(all(windows, target_env = "msvc"))]
+    pub fn open_microphone_after_explicit_consent() -> Result<Self> {
+        Self::open(native_microphone, "microphone")
+    }
+
+    fn open(open: Open, source: &'static str) -> Result<Self> {
         let mut owner = null_mut();
         // SAFETY: the writable slot receives an owned, thread-bound capture.
-        let result = unsafe { native_open(&mut owner) };
-        check(result, "open")?;
-        ensure!(!owner.is_null(), "system audio capture owner unavailable");
-        Ok(Self { owner })
+        let result = unsafe { open(&mut owner) };
+        check(result, source, "open")?;
+        ensure!(!owner.is_null(), "{source} capture owner unavailable");
+        Ok(Self { owner, source })
     }
 
     /// Returns the number of interleaved samples written, at most one frame.
     pub fn read(&mut self, output: &mut [i16]) -> Result<usize> {
         ensure!(
             !output.is_empty() && output.len() <= SAMPLES && output.len().is_multiple_of(CHANNELS),
-            "invalid system audio output buffer"
+            "invalid {} output buffer",
+            self.source
         );
         let capacity = (output.len() / CHANNELS) as u32;
         let mut frames = 0;
         // SAFETY: the live capture belongs to this thread. output is sized for
         // capacity stereo frames, and the native adapter honors that bound.
         let result = unsafe { native_read(self.owner, output.as_mut_ptr(), capacity, &mut frames) };
-        check(result, "read")?;
+        check(result, self.source, "read")?;
         ensure!(
             frames <= capacity,
-            "system capture returned oversized audio"
+            "{} capture returned oversized audio",
+            self.source
         );
         Ok(frames as usize * CHANNELS)
     }
 
     pub fn stop(&mut self) -> Result<()> {
         // SAFETY: this owner is live and stays on the creating capture thread.
-        check(unsafe { native_stop(self.owner) }, "stop")
+        check(unsafe { native_stop(self.owner) }, self.source, "stop")
     }
 }
 
-impl Drop for SystemAudio {
+impl Drop for AudioCapture {
     fn drop(&mut self) {
         // SAFETY: this is the sole owner. Native destruction closes capture resources.
         unsafe { native_drop(self.owner) };
     }
 }
 
-fn check(result: i32, operation: &'static str) -> Result<()> {
+fn check(result: i32, source: &'static str, operation: &'static str) -> Result<()> {
     ensure!(
         result >= 0,
-        "system audio {operation} failed ({result:#010x})"
+        "{source} {operation} failed ({result:#010x})"
     );
     Ok(())
 }
@@ -87,13 +105,15 @@ mod tests {
 
     #[test]
     fn invalid_pcm_buffer_is_rejected_before_entering_native_capture() {
-        let mut inert = SystemAudio { owner: null_mut() };
-        for samples in [0, 1, SAMPLES + 2] {
-            let mut output = vec![0; samples];
-            assert_eq!(
-                inert.read(&mut output).unwrap_err().to_string(),
-                "invalid system audio output buffer"
-            );
+        for source in ["system audio", "microphone"] {
+            let mut inert = AudioCapture { owner: null_mut(), source };
+            for samples in [0, 1, SAMPLES + 2] {
+                let mut output = vec![0; samples];
+                assert_eq!(
+                    inert.read(&mut output).unwrap_err().to_string(),
+                    format!("invalid {source} output buffer")
+                );
+            }
         }
     }
 }
