@@ -5,6 +5,7 @@ use peerglide_protocol::{Edge, LEASE_MS};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};
 use std::{
     net::SocketAddr,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -86,6 +87,77 @@ impl Granted {
     }
 }
 
+/// One pending reservation for one local input controller. The original v5
+/// Acquire still independently checks input consent and native owner admission.
+#[derive(Default)]
+pub struct ReservationSlot(Mutex<SlotState>);
+
+#[derive(Default)]
+struct SlotState {
+    sequence: u64,
+    pending: Option<(u64, Granted)>,
+}
+
+struct Registration<'a> {
+    slot: &'a ReservationSlot,
+    sequence: u64,
+    generation: u64,
+    sent: bool,
+}
+
+impl Registration<'_> {
+    fn confirm(mut self) {
+        self.sent = true;
+    }
+}
+
+impl Drop for Registration<'_> {
+    fn drop(&mut self) {
+        if self.sent {
+            return;
+        }
+        if let Ok(mut state) = self.slot.0.lock() {
+            if state.pending.as_ref().is_some_and(|(sequence, _)| *sequence == self.sequence) {
+                state.pending = None;
+            }
+        }
+    }
+}
+
+impl ReservationSlot {
+    fn register(&self, grant: Granted) -> Result<Option<Registration<'_>>> {
+        let mut state = self.0.lock().map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?;
+        if state.pending.as_ref().is_some_and(|(_, current)| Instant::now() < current.expires) {
+            return Ok(None);
+        }
+        let sequence = state.sequence.checked_add(1).context("display reservation sequence exhausted")?;
+        let generation = grant.generation;
+        state.sequence = sequence;
+        state.pending = Some((sequence, grant));
+        Ok(Some(Registration { slot: self, sequence, generation, sent: false }))
+    }
+
+    pub fn consume(&self, input: &Connection, pin: &[u8], lease: u64, generation: u64) -> Result<Option<Request>> {
+        let mut state = self.0.lock().map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?;
+        let Some((_, current)) = &state.pending else {
+            return Ok(None);
+        };
+        if Instant::now() >= current.expires || current.generation != generation {
+            state.pending = None;
+            return Ok(None);
+        }
+        if current.request.lease != lease || !current.binding.matches(input, pin, &current.proof)? {
+            return Ok(None);
+        }
+        Ok(state.pending.take().map(|(_, current)| current.request))
+    }
+
+    pub fn clear(&self) -> Result<()> {
+        self.0.lock().map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?.pending = None;
+        Ok(())
+    }
+}
+
 pub fn endpoint(address: SocketAddr, local: &Identity, pinned_peer: &[u8]) -> Result<Endpoint> {
     ensure!(
         local.certificate.as_slice() != pinned_peer,
@@ -140,6 +212,28 @@ pub async fn accept(
     pinned_peer: &[u8],
     choose: impl FnOnce(Request) -> Option<u64>,
 ) -> Result<Option<Granted>> {
+    accept_request(sidecar, input, pinned_peer, choose, None).await.map(|(grant, _)| grant)
+}
+
+/// Publish before acknowledging the offer so an immediate v5 Acquire can see
+/// the slot. Cancellation or a failed reply withdraws that same publication.
+pub async fn accept_for_slot(
+    sidecar: &Connection,
+    input: &Connection,
+    pinned_peer: &[u8],
+    slot: &ReservationSlot,
+    choose: impl FnOnce(Request) -> Option<u64>,
+) -> Result<bool> {
+    accept_request(sidecar, input, pinned_peer, choose, Some(slot)).await.map(|(_, published)| published)
+}
+
+async fn accept_request(
+    sidecar: &Connection,
+    input: &Connection,
+    pinned_peer: &[u8],
+    choose: impl FnOnce(Request) -> Option<u64>,
+    slot: Option<&ReservationSlot>,
+) -> Result<(Option<Granted>, bool)> {
     verify_sidecar(sidecar, pinned_peer)?;
     let binding = Binding::from_v5(input, pinned_peer)?;
     tokio::time::timeout(IO_TIMEOUT, async {
@@ -149,7 +243,7 @@ pub async fn accept(
         receive.read_exact(&mut bytes).await?;
         require_end(&mut receive).await?;
         let (request, proof) = Request::decode(bytes)?;
-        let grant = if binding.matches(input, pinned_peer, &proof)? {
+        let mut grant = if binding.matches(input, pinned_peer, &proof)? {
             choose(request)
                 .filter(|generation| *generation != 0)
                 .map(|generation| Granted {
@@ -162,16 +256,27 @@ pub async fn accept(
         } else {
             None
         };
+        let registration = match slot {
+            Some(slot) => grant.take().map(|grant| slot.register(grant)).transpose()?.flatten(),
+            None => None,
+        };
+        let generation = registration.as_ref().map_or_else(
+            || grant.as_ref().map_or(0, |grant| grant.generation),
+            |registration| registration.generation,
+        );
         let mut reply = [0; REPLY_BYTES];
         reply[..4].copy_from_slice(MAGIC);
         reply[4] = 2;
-        reply[5] = u8::from(grant.is_some());
+        reply[5] = u8::from(generation != 0);
         reply[8..16].copy_from_slice(&request.lease.to_le_bytes());
-        let generation = grant.as_ref().map_or(0, |grant| grant.generation);
         reply[16..].copy_from_slice(&generation.to_le_bytes());
         send.write_all(&reply).await?;
         send.finish()?;
-        Ok(grant)
+        let published = registration.is_some();
+        if let Some(registration) = registration {
+            registration.confirm();
+        }
+        Ok((grant, published))
     })
     .await
     .context("display offer timed out")?
@@ -301,6 +406,49 @@ mod tests {
                 assert!(consumed.is_none());
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn immediate_v5_acquire_consumes_only_its_published_reservation() -> Result<()> {
+        use std::sync::Arc;
+
+        let a = Identity::generate()?;
+        let b = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let input_a = crate::endpoint(bind, &a, &b.certificate)?;
+        let input_b = crate::endpoint(bind, &b, &a.certificate)?;
+        let sidecar_a = endpoint(bind, &a, &b.certificate)?;
+        let sidecar_b = endpoint(bind, &b, &a.certificate)?;
+        let (source, target) = pair(&input_a, &input_b).await?;
+        let (_unrelated_source, unrelated_target) = pair(&input_a, &input_b).await?;
+        let (sender, receiver) = pair(&sidecar_a, &sidecar_b).await?;
+        let request = Request { lease: 7, display: 1, edge: Edge::Right, fraction: 0.5 };
+        let slot = Arc::new(ReservationSlot::default());
+        let worker_slot = slot.clone();
+        let worker_target = target.clone();
+        let worker_pin = a.certificate.clone();
+        let worker = tokio::spawn(async move {
+            accept_for_slot(&receiver, &worker_target, &worker_pin, &worker_slot, |_| Some(2)).await
+        });
+        assert_eq!(reserve(&sender, &source, &b.certificate, request).await?, Some(2));
+        assert!(slot.consume(&unrelated_target, &a.certificate, request.lease, 2)?.is_none());
+        assert!(slot.consume(&target, &a.certificate, request.lease + 1, 2)?.is_none());
+        assert_eq!(slot.consume(&target, &a.certificate, request.lease, 2)?.unwrap().display, 1);
+        assert!(slot.consume(&target, &a.certificate, request.lease, 2)?.is_none());
+        assert!(worker.await??);
+
+        let binding = Binding::from_v5(&target, &a.certificate)?;
+        let proof = binding.proof();
+        let unfinished = slot.register(Granted {
+            request,
+            binding,
+            proof,
+            generation: 2,
+            expires: Instant::now() + RESERVATION_TIMEOUT,
+        })?.context("reservation slot should be free")?;
+        drop(unfinished);
+        assert!(slot.consume(&target, &a.certificate, request.lease, 2)?.is_none());
         Ok(())
     }
 
