@@ -18,6 +18,8 @@ mod discovery_panel;
 #[cfg(any(windows, target_os = "macos"))]
 mod display_inventory;
 mod enrollment_store;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+mod file_edge_drop;
 mod file_panel;
 mod gesture_lab;
 mod gesture_rules;
@@ -1801,7 +1803,7 @@ impl App {
             self.audio_panel = audio;
         }
         let mut files = std::mem::take(&mut self.file_panel);
-        files.tick(self);
+        files.tick(self, ctx);
         self.file_panel = files;
         if self.window_hidden && self.recovery_blocked {
             self.show_window(ctx);
