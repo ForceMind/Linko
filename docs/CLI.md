@@ -166,6 +166,36 @@ peerglide connect HOST:24870 --peer-cert HOST.der --native --edge right --reques
 读不到、恢复未确认或指定了任意一端的接收屏幕时，需要先检查本机状态。真实热插拔和
 两端恢复仍待验收。
 
+## 探测分段屏幕路由
+
+Windows 和 macOS 可以用当前显示器布局核对一个指定外沿点。先独立核对各电脑的
+证书指纹，再把证书路径和目标地址写入本机布局文件。相对证书路径从布局文件所在目录
+解析，`peer` 是 `peers` 中从零开始的位置。坐标用本机显示器列表中的桌面坐标。
+
+```json
+{
+  "version": 1,
+  "peers": [
+    {"certificate": "office.der", "address": "192.168.1.21:24870"},
+    {"certificate": "studio.der", "address": "192.168.1.22:24870"}
+  ],
+  "routes": [
+    {"local_origin": [-1920, 0], "local_edge": "Right", "local_span": [0, 0.5],
+     "peer": 0, "remote_edge": "Left", "remote_span": [0, 1]},
+    {"local_origin": [-1920, 0], "local_edge": "Right", "local_span": [0.5, 1],
+     "peer": 1, "remote_edge": "Top", "remote_span": [0, 1]}
+  ]
+}
+```
+
+```text
+peerglide probe-route --identity PATH --layout routes.json --point=-1,450 --edge right
+```
+
+目标可使用现有 `listen` 或 `listen-peers` 提供通信检查。探测只连接这个分段指定的
+电脑，并核对精确证书、v5 协商和可靠流回执。共用边、屏内点和失效布局无路由，
+目标离线时直接报错。这个入口只做诊断，自动跨屏切换仍在开发。
+
 ## 查询已核验电脑的屏幕表
 
 Windows/macOS 发送端可明确临时共享一次屏幕位置、比例和方向。两台电脑需分别

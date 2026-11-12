@@ -9,6 +9,8 @@ mod audio_stop;
 mod input_diagnostics;
 mod layout_control;
 mod layout_probe;
+#[cfg(any(windows, target_os = "macos", test))]
+mod layout_routes;
 mod multi_peer;
 mod pairing_worker;
 mod reconnect;
@@ -271,6 +273,18 @@ enum Command {
         #[arg(long, required = true)]
         share_display_layout: bool,
     },
+    /// Resolve one local display edge segment and check its pinned v5 peer.
+    #[cfg(any(windows, target_os = "macos"))]
+    ProbeRoute {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        layout: PathBuf,
+        #[arg(long, value_parser = parse_display_origin, allow_hyphen_values = true)]
+        point: (f64, f64),
+        #[arg(long, value_enum)]
+        edge: Side,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -522,6 +536,13 @@ fn main() -> Result<()> {
             );
             run_cli_future(|| layout_probe::listen(&identity, &peer_cert, bind, layout_bind))
         }
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::ProbeRoute {
+            identity,
+            layout,
+            point,
+            edge,
+        } => run_cli_future(|| layout_routes::run(&identity, &layout, point, edge.into())),
         Command::Connect {
             address,
             options,
@@ -1032,14 +1053,7 @@ async fn run_inner(
         input_status.set(WorkerInputState::Disabled);
         let result = tokio::select! {
             result = async {
-                transport::send(&mut tx, &Message::Ping { lease: 0 }).await?;
-                anyhow::ensure!(
-                    matches!(
-                        tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??,
-                        Message::Pong { lease: 0 }
-                    ),
-                    "probe response mismatch"
-                );
+                probe_roundtrip(&mut tx, &mut rx).await?;
                 println!("PASS: mutual TLS, protocol negotiation, reliable roundtrip.");
                 worker_event(o.managed, WorkerState::ProbePassed);
                 Ok::<_, anyhow::Error>(())
@@ -1122,6 +1136,18 @@ async fn exchange_hello(
         } if capabilities.valid() => Ok(capabilities),
         _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
     }
+}
+
+async fn probe_roundtrip(tx: &mut quinn::SendStream, rx: &mut quinn::RecvStream) -> Result<()> {
+    transport::send(tx, &Message::Ping { lease: 0 }).await?;
+    anyhow::ensure!(
+        matches!(
+            tokio::time::timeout(Duration::from_secs(3), transport::receive(rx)).await??,
+            Message::Pong { lease: 0 }
+        ),
+        "probe response mismatch"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
