@@ -324,12 +324,38 @@ async fn main() -> Result<()> {
             .await
         }
         #[cfg(any(windows, target_os = "macos"))]
-        Command::PlayMicrophone { identity, peer_cert, bind, device, volume, duration_secs } => {
-            audio_playback::play_microphone(&identity, &peer_cert, bind, device.as_deref(), volume, Duration::from_secs(duration_secs)).await
+        Command::PlayMicrophone {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => {
+            audio_playback::play_microphone(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
         }
         #[cfg(all(windows, target_env = "msvc"))]
-        Command::ShareMicrophone { address, identity, peer_cert, duration_secs } => {
-            audio_source::share_microphone(&identity, &peer_cert, address, Duration::from_secs(duration_secs)).await
+        Command::ShareMicrophone {
+            address,
+            identity,
+            peer_cert,
+            duration_secs,
+        } => {
+            audio_source::share_microphone(
+                &identity,
+                &peer_cert,
+                address,
+                Duration::from_secs(duration_secs),
+            )
+            .await
         }
         Command::Connect {
             address,

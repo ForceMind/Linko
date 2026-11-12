@@ -58,7 +58,14 @@ pub(super) async fn share_system(
     address: std::net::SocketAddr,
     duration: std::time::Duration,
 ) -> Result<()> {
-    share(Source::System, identity, peer_certificate, address, duration).await
+    share(
+        Source::System,
+        identity,
+        peer_certificate,
+        address,
+        duration,
+    )
+    .await
 }
 
 #[cfg(all(windows, target_env = "msvc"))]
@@ -68,7 +75,14 @@ pub(super) async fn share_microphone(
     address: std::net::SocketAddr,
     duration: std::time::Duration,
 ) -> Result<()> {
-    share(Source::Microphone, identity, peer_certificate, address, duration).await
+    share(
+        Source::Microphone,
+        identity,
+        peer_certificate,
+        address,
+        duration,
+    )
+    .await
 }
 
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]

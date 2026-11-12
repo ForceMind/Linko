@@ -58,7 +58,16 @@ pub(super) async fn run(
     volume: u8,
     duration: Duration,
 ) -> Result<()> {
-    play(Source::System, identity, peer_certificate, bind, device, volume, duration).await
+    play(
+        Source::System,
+        identity,
+        peer_certificate,
+        bind,
+        device,
+        volume,
+        duration,
+    )
+    .await
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -70,7 +79,16 @@ pub(super) async fn play_microphone(
     volume: u8,
     duration: Duration,
 ) -> Result<()> {
-    play(Source::Microphone, identity, peer_certificate, bind, device, volume, duration).await
+    play(
+        Source::Microphone,
+        identity,
+        peer_certificate,
+        bind,
+        device,
+        volume,
+        duration,
+    )
+    .await
 }
 
 #[cfg(any(windows, target_os = "macos"))]
