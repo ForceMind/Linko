@@ -118,8 +118,9 @@ peerglide listen-x11 --peer-cert SOURCE.der --allow-pointer-control
 仅在本机 Xorg 会话使用。接收端先核对来源证书，发送端用已有 v5 `connect --native`。
 显式启动后最多接收一次指针租约。另加 `--allow-discrete-input` 可允许此会话接收
 本机 XKB 支持的键位和三键鼠标按钮。本机活动、断线、租约过期或 Ctrl+C 会结束会话
-并尝试释放工作器提交的按下事件。滚轮、主动发起控制和 Wayland 仍待接入。
-实际 Xorg 键鼠、接管和注入来源由集中验收确认。
+并尝试释放工作器提交的按下事件。标准 X11 按钮映射可用时，`--allow-scroll` 独立
+允许双轴滚轮，每帧每轴最多 12 步。Linux 主动发起控制和 Wayland 仍待接入。
+实际 Xorg 键鼠、滚轮方向、接管和注入来源由集中验收确认。
 
 ## 麦克风音频候选
 
