@@ -117,7 +117,11 @@ impl Drop for Registration<'_> {
             return;
         }
         if let Ok(mut state) = self.slot.0.lock() {
-            if state.pending.as_ref().is_some_and(|(sequence, _)| *sequence == self.sequence) {
+            if state
+                .pending
+                .as_ref()
+                .is_some_and(|(sequence, _)| *sequence == self.sequence)
+            {
                 state.pending = None;
             }
         }
@@ -126,19 +130,43 @@ impl Drop for Registration<'_> {
 
 impl ReservationSlot {
     fn register(&self, grant: Granted) -> Result<Option<Registration<'_>>> {
-        let mut state = self.0.lock().map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?;
-        if state.pending.as_ref().is_some_and(|(_, current)| Instant::now() < current.expires) {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?;
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|(_, current)| Instant::now() < current.expires)
+        {
             return Ok(None);
         }
-        let sequence = state.sequence.checked_add(1).context("display reservation sequence exhausted")?;
+        let sequence = state
+            .sequence
+            .checked_add(1)
+            .context("display reservation sequence exhausted")?;
         let generation = grant.generation;
         state.sequence = sequence;
         state.pending = Some((sequence, grant));
-        Ok(Some(Registration { slot: self, sequence, generation, sent: false }))
+        Ok(Some(Registration {
+            slot: self,
+            sequence,
+            generation,
+            sent: false,
+        }))
     }
 
-    pub fn consume(&self, input: &Connection, pin: &[u8], lease: u64, generation: u64) -> Result<Option<Request>> {
-        let mut state = self.0.lock().map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?;
+    pub fn consume(
+        &self,
+        input: &Connection,
+        pin: &[u8],
+        lease: u64,
+        generation: u64,
+    ) -> Result<Option<Request>> {
+        let mut state = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?;
         let Some((_, current)) = &state.pending else {
             return Ok(None);
         };
@@ -153,7 +181,10 @@ impl ReservationSlot {
     }
 
     pub fn clear(&self) -> Result<()> {
-        self.0.lock().map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?.pending = None;
+        self.0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("display reservation slot unavailable"))?
+            .pending = None;
         Ok(())
     }
 }
@@ -212,7 +243,9 @@ pub async fn accept(
     pinned_peer: &[u8],
     choose: impl FnOnce(Request) -> Option<u64>,
 ) -> Result<Option<Granted>> {
-    accept_request(sidecar, input, pinned_peer, choose, None).await.map(|(grant, _)| grant)
+    accept_request(sidecar, input, pinned_peer, choose, None)
+        .await
+        .map(|(grant, _)| grant)
 }
 
 /// Publish before acknowledging the offer so an immediate v5 Acquire can see
@@ -224,7 +257,9 @@ pub async fn accept_for_slot(
     slot: &ReservationSlot,
     choose: impl FnOnce(Request) -> Option<u64>,
 ) -> Result<bool> {
-    accept_request(sidecar, input, pinned_peer, choose, Some(slot)).await.map(|(_, published)| published)
+    accept_request(sidecar, input, pinned_peer, choose, Some(slot))
+        .await
+        .map(|(_, published)| published)
 }
 
 async fn accept_request(
@@ -257,7 +292,11 @@ async fn accept_request(
             None
         };
         let registration = match slot {
-            Some(slot) => grant.take().map(|grant| slot.register(grant)).transpose()?.flatten(),
+            Some(slot) => grant
+                .take()
+                .map(|grant| slot.register(grant))
+                .transpose()?
+                .flatten(),
             None => None,
         };
         let generation = registration.as_ref().map_or_else(
@@ -423,32 +462,58 @@ mod tests {
         let (source, target) = pair(&input_a, &input_b).await?;
         let (_unrelated_source, unrelated_target) = pair(&input_a, &input_b).await?;
         let (sender, receiver) = pair(&sidecar_a, &sidecar_b).await?;
-        let request = Request { lease: 7, display: 1, edge: Edge::Right, fraction: 0.5 };
+        let request = Request {
+            lease: 7,
+            display: 1,
+            edge: Edge::Right,
+            fraction: 0.5,
+        };
         let slot = Arc::new(ReservationSlot::default());
         let worker_slot = slot.clone();
         let worker_target = target.clone();
         let worker_pin = a.certificate.clone();
         let worker = tokio::spawn(async move {
-            accept_for_slot(&receiver, &worker_target, &worker_pin, &worker_slot, |_| Some(2)).await
+            accept_for_slot(&receiver, &worker_target, &worker_pin, &worker_slot, |_| {
+                Some(2)
+            })
+            .await
         });
-        assert_eq!(reserve(&sender, &source, &b.certificate, request).await?, Some(2));
-        assert!(slot.consume(&unrelated_target, &a.certificate, request.lease, 2)?.is_none());
-        assert!(slot.consume(&target, &a.certificate, request.lease + 1, 2)?.is_none());
-        assert_eq!(slot.consume(&target, &a.certificate, request.lease, 2)?.unwrap().display, 1);
-        assert!(slot.consume(&target, &a.certificate, request.lease, 2)?.is_none());
+        assert_eq!(
+            reserve(&sender, &source, &b.certificate, request).await?,
+            Some(2)
+        );
+        assert!(slot
+            .consume(&unrelated_target, &a.certificate, request.lease, 2)?
+            .is_none());
+        assert!(slot
+            .consume(&target, &a.certificate, request.lease + 1, 2)?
+            .is_none());
+        assert_eq!(
+            slot.consume(&target, &a.certificate, request.lease, 2)?
+                .unwrap()
+                .display,
+            1
+        );
+        assert!(slot
+            .consume(&target, &a.certificate, request.lease, 2)?
+            .is_none());
         assert!(worker.await??);
 
         let binding = Binding::from_v5(&target, &a.certificate)?;
         let proof = binding.proof();
-        let unfinished = slot.register(Granted {
-            request,
-            binding,
-            proof,
-            generation: 2,
-            expires: Instant::now() + RESERVATION_TIMEOUT,
-        })?.context("reservation slot should be free")?;
+        let unfinished = slot
+            .register(Granted {
+                request,
+                binding,
+                proof,
+                generation: 2,
+                expires: Instant::now() + RESERVATION_TIMEOUT,
+            })?
+            .context("reservation slot should be free")?;
         drop(unfinished);
-        assert!(slot.consume(&target, &a.certificate, request.lease, 2)?.is_none());
+        assert!(slot
+            .consume(&target, &a.certificate, request.lease, 2)?
+            .is_none());
         Ok(())
     }
 
