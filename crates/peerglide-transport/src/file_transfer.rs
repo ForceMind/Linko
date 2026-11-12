@@ -538,13 +538,15 @@ mod tests {
         };
 
         let mut checks = 0;
-        let collision = file.prepare_drop(|| Ok(()))?.copy_to_drop_destination(&target, || {
-            checks += 1;
-            if checks == 4 {
-                fs::write(&target, b"new local file")?;
-            }
-            Ok(())
-        });
+        let collision = file
+            .prepare_drop(|| Ok(()))?
+            .copy_to_drop_destination(&target, || {
+                checks += 1;
+                if checks == 4 {
+                    fs::write(&target, b"new local file")?;
+                }
+                Ok(())
+            });
         assert!(collision.is_err());
         assert_eq!(fs::read(&target)?, b"new local file");
         assert_eq!(fs::read_dir(&directory.0)?.count(), 2);
@@ -570,20 +572,24 @@ mod tests {
             path: original.clone(),
         };
         let mut checks = 0;
-        let cancelled = file.prepare_drop(|| Ok(()))?.copy_to_drop_destination(&target, || {
-            checks += 1;
-            if checks == 3 {
-                return Err(io::ErrorKind::Interrupted.into());
-            }
-            Ok(())
-        });
+        let cancelled = file
+            .prepare_drop(|| Ok(()))?
+            .copy_to_drop_destination(&target, || {
+                checks += 1;
+                if checks == 3 {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                Ok(())
+            });
         assert!(cancelled.is_err());
         assert_eq!(fs::read_dir(&directory.0)?.count(), 1);
         assert_eq!(fs::read(&original)?, content);
 
         let prepared = file.prepare_drop(|| Ok(()))?;
         fs::write(&original, vec![21; CHUNK_BYTES + 1])?;
-        assert!(prepared.copy_to_drop_destination(&target, || Ok(())).is_err());
+        assert!(prepared
+            .copy_to_drop_destination(&target, || Ok(()))
+            .is_err());
         assert_eq!(fs::read_dir(&directory.0)?.count(), 1);
         Ok(())
     }
