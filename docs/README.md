@@ -12,4 +12,10 @@
 - [架构](ARCHITECTURE.md) · [安全模型](SECURITY.md) · [ADR](ADR/)
 - [验证记录](VALIDATION.md) · [官网](https://github.com/ForceMind/Linko/blob/v0.3.16-dev/website/README.md)
 
+## 增量技术研究
+
+- [跨设备窗口研究与选型（2026-11-13）](research/LINKO_REMOTE_WINDOW_RESEARCH_2026-11-13.zh-CN.md)：TwinDesk、Viewflow 等项目的固定提交证据、取舍与许可边界
+- [远程窗口技术架构](research/LINKO_REMOTE_WINDOW_ARCHITECTURE_2026-11-13.zh-CN.md)：保留原运行时、独立媒体通道、双向窗口代理与安全恢复
+- [实施与验收清单](research/LINKO_REMOTE_WINDOW_EXECUTION_2026-11-13.zh-CN.md)：接续 PR #69 / RW01–RW09，并与活跃集成工作协调；方案不代表功能已实现
+
 工程计划、交接和验证记录包含历史阶段，结论只适用于记录的版本，不替代当前用户说明与实机验收。当前入口以首页、快速开始和对应 Release 为准；原始排障与许可来源记录不用于产品宣传。
