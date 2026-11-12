@@ -285,7 +285,15 @@ pub(super) async fn run(
             Ok::<_, anyhow::Error>(tokio::time::timeout(Duration::from_secs(5), incoming).await??)
         } => result?,
     };
-    serve(&endpoint, &connection, &peer, &mut stop, allow_discrete, allow_scroll).await
+    serve(
+        &endpoint,
+        &connection,
+        &peer,
+        &mut stop,
+        allow_discrete,
+        allow_scroll,
+    )
+    .await
 }
 
 async fn serve<F>(
@@ -518,8 +526,7 @@ mod tests {
                 let (mut send, mut recv) = connection.open_bi().await?;
                 let capabilities =
                     InputCapabilities::new(&[], true, 1, false).map_err(anyhow::Error::msg)?;
-                let peer =
-                    super::super::exchange_hello(&mut send, &mut recv, capabilities).await?;
+                let peer = super::super::exchange_hello(&mut send, &mut recv, capabilities).await?;
                 let event = Input::Button {
                     button: 1,
                     down: true,
