@@ -284,6 +284,18 @@ mod tests {
         observer
             .set_input_focus(InputFocus::PARENT, root, CURRENT_TIME)?
             .check()?;
+        let local_keys = || -> Result<Vec<bool>> {
+            let mut keys = Vec::new();
+            for _ in 0..32 {
+                match observer.poll_for_event()? {
+                    Some(Event::KeyPress(_)) => keys.push(true),
+                    Some(Event::KeyRelease(_)) => keys.push(false),
+                    Some(_) => (),
+                    None => return Ok(keys),
+                }
+            }
+            anyhow::bail!("unexpected local Xvfb event backlog");
+        };
         injector.pointer(ReceivePoint { x: 1.0, y: 0.5 })?;
         let along = source
             .edge_fraction(Edge::Right)?
@@ -334,7 +346,7 @@ mod tests {
             .freeze(&source.activity, &escape_event, true, false)
             .is_none());
         keyboard.frozen = None;
-        assert!(observer.poll_for_event()?.is_none());
+        assert!(local_keys()?.is_empty());
 
         assert!(injector.key(0x29, true)?);
         assert!(matches!(source.poll()?, PointerSample::LocalInput));
@@ -343,17 +355,10 @@ mod tests {
             assert!(injector.key(usage, false)?);
         }
         source.release(|| {})?;
-        assert!(observer.poll_for_event()?.is_none());
+        assert!(local_keys()?.is_empty());
         assert!(injector.key(0x29, true)?);
         assert!(injector.key(0x29, false)?);
-        assert!(matches!(
-            observer.poll_for_event()?,
-            Some(Event::KeyPress(_))
-        ));
-        assert!(matches!(
-            observer.poll_for_event()?,
-            Some(Event::KeyRelease(_))
-        ));
+        assert_eq!(local_keys()?, [true, false]);
         Ok(())
     }
 }
