@@ -555,8 +555,15 @@ fn main() -> Result<()> {
             point,
             edge,
         } => run_cli_future(|| layout_routes::run(&identity, &layout, point, edge.into())),
-        Command::ConnectRoutes { identity, layout, native } => {
-            anyhow::ensure!(native, "configured routing requires explicit native consent");
+        Command::ConnectRoutes {
+            identity,
+            layout,
+            native,
+        } => {
+            anyhow::ensure!(
+                native,
+                "configured routing requires explicit native consent"
+            );
             run_cli_future(|| session::routed_source::run(&identity, &layout))
         }
         Command::Connect {

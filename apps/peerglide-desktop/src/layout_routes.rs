@@ -11,6 +11,8 @@ use peerglide_protocol::Edge;
 #[cfg(any(windows, target_os = "macos", test))]
 use peerglide_protocol::InputCapabilities;
 use serde::Deserialize;
+#[cfg(any(windows, target_os = "macos", test))]
+use std::time::Duration;
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -18,8 +20,6 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
 };
-#[cfg(any(windows, target_os = "macos", test))]
-use std::time::Duration;
 
 const MAX_PLAN_BYTES: u64 = 128 * 1024;
 #[cfg(any(windows, target_os = "macos", test))]
@@ -164,14 +164,23 @@ impl Routes {
         Ok(Self { table, peers })
     }
 
-    pub(super) fn resolve(&self, layout: &Layout, edge: Edge, (x, y): (f64, f64)) -> Option<(EdgeAnchor, Route, &Peer)> {
+    pub(super) fn resolve(
+        &self,
+        layout: &Layout,
+        edge: Edge,
+        (x, y): (f64, f64),
+    ) -> Option<(EdgeAnchor, Route, &Peer)> {
         let anchor = layout.edge_at(edge, x, y, 1.0)?;
         let route = self.table.resolve(layout, anchor)?;
         let peer = self.peers.get(&route.target.peer)?;
         Some((anchor, route, peer))
     }
 
-    pub(super) fn select_at(&self, layout: &Layout, point: (f64, f64)) -> Option<(EdgeAnchor, Route, &Peer)> {
+    pub(super) fn select_at(
+        &self,
+        layout: &Layout,
+        point: (f64, f64),
+    ) -> Option<(EdgeAnchor, Route, &Peer)> {
         let mut matches = [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom]
             .into_iter()
             .filter_map(|edge| self.resolve(layout, edge, point));
@@ -321,7 +330,8 @@ mod tests {
         assert!(routes
             .resolve(&test_layout(), Edge::Right, (-1.0, 60.0))
             .is_none());
-        let (_, first_route, first_peer) = routes.resolve(&layout, Edge::Right, (-1.0, 30.0)).unwrap();
+        let (_, first_route, first_peer) =
+            routes.resolve(&layout, Edge::Right, (-1.0, 30.0)).unwrap();
         let (_, second_route, second_peer) =
             routes.resolve(&layout, Edge::Right, (-1.0, 50.0)).unwrap();
         assert_eq!(first_peer.certificate, first.certificate);
@@ -350,14 +360,21 @@ mod tests {
         first_endpoint.close(0u8.into(), b"offline test");
         assert!(probe(&local, first_peer).await.is_err());
 
-        plan["routes"].as_array_mut().unwrap().push(serde_json::json!({
-            "local_origin": [-100, 0], "local_edge": "Bottom", "local_span": [0, 1],
-            "peer": 0, "remote_edge": "Top", "remote_span": [0, 1],
-        }));
+        plan["routes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "local_origin": [-100, 0], "local_edge": "Bottom", "local_span": [0, 1],
+                "peer": 0, "remote_edge": "Top", "remote_span": [0, 1],
+            }));
         std::fs::write(&path, serde_json::to_vec(&plan)?)?;
         let corners = Routes::load(&path, &local.certificate, &layout)?;
-        assert!(corners.resolve(&layout, Edge::Right, (-1.0, 99.0)).is_some());
-        assert!(corners.resolve(&layout, Edge::Bottom, (-1.0, 99.0)).is_some());
+        assert!(corners
+            .resolve(&layout, Edge::Right, (-1.0, 99.0))
+            .is_some());
+        assert!(corners
+            .resolve(&layout, Edge::Bottom, (-1.0, 99.0))
+            .is_some());
         assert!(corners.select_at(&layout, (-1.0, 99.0)).is_none());
 
         plan["routes"][1]["local_span"] = serde_json::json!([0.4, 1]);
