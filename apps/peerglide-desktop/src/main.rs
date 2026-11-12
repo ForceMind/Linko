@@ -1,5 +1,6 @@
 mod input_diagnostics;
 mod layout_control;
+mod layout_probe;
 mod multi_peer;
 mod pairing_worker;
 mod reconnect;
@@ -131,6 +132,30 @@ enum Command {
         #[arg(long, default_value = "0.0.0.0:24870")]
         bind: SocketAddr,
     },
+    /// Read the opted-in display geometry from one verified computer.
+    ProbeDisplays {
+        address: SocketAddr,
+        layout_address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+    },
+    /// Offer the local display geometry to one verified computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    ListenDisplays {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24876")]
+        bind: SocketAddr,
+        #[arg(long, default_value = "0.0.0.0:24877")]
+        layout_bind: SocketAddr,
+        /// Explicit local consent to offer display metadata during this query.
+        #[arg(long, required = true)]
+        share_display_layout: bool,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -225,6 +250,26 @@ async fn main() -> Result<()> {
             peer_cert,
             bind,
         } => multi_peer::run(&identity, &peer_cert, bind).await,
+        Command::ProbeDisplays {
+            address,
+            layout_address,
+            identity,
+            peer_cert,
+        } => layout_probe::probe(&identity, &peer_cert, address, layout_address).await,
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::ListenDisplays {
+            identity,
+            peer_cert,
+            bind,
+            layout_bind,
+            share_display_layout,
+        } => {
+            anyhow::ensure!(
+                share_display_layout,
+                "local display sharing requires explicit consent"
+            );
+            layout_probe::listen(&identity, &peer_cert, bind, layout_bind).await
+        }
         Command::Connect {
             address,
             options,

@@ -70,3 +70,15 @@ peerglide listen-peers --identity PATH --bind 0.0.0.0:24870 --peer-cert A.der --
 每个证书必须分别线下核对。对方使用已有的 `connect --probe` 检查
 同一个端口。监听可保持多条 v5 诊断连接，实际键鼠许可始终关闭。
 Ctrl+C 停止监听及这些连接。
+
+## 查询已核验电脑的屏幕表
+
+Windows/macOS 发送端可明确临时共享一次屏幕位置、比例和方向。两台电脑需分别
+核对证书，查询使用独立的 v5 认证探针与布局连接。
+
+```text
+peerglide listen-displays --identity PATH --peer-cert REQUESTER.der --share-display-layout
+peerglide probe-displays HOST:24876 HOST:24877 --identity PATH --peer-cert HOST.der
+```
+
+屏幕编号只用于本次查询。此命令不授予键鼠控制权限。
