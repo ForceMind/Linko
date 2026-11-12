@@ -190,11 +190,7 @@ impl Panel {
                         !active.stopping && source_context(app, _ctx) && active.pin.matches(app)
                     }) {
                         match SourceHandoff::new(app, active.pin.clone(), target, receipt) {
-                            Ok(handoff) => {
-                                self.sending_handoff = Some(handoff);
-                                self.notice = notice.into();
-                                continue;
-                            }
+                            Ok(handoff) => self.sending_handoff = Some(handoff),
                             Err(_) => {
                                 self.notice = format!("{notice} 无法准备本次跨机拖动。");
                                 continue;
@@ -714,6 +710,7 @@ fn source_context(app: &App, ctx: &egui::Context) -> bool {
     data_access::ready(app)
         && app.page == super::Page::Transfers
         && !app.routed_active
+        && (app.child.is_none() || app.active_mode == Some(super::SessionMode::Native))
         && !app.window_hidden
         && !app.recovery_blocked
         && !app.input_terminal
