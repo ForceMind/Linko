@@ -581,6 +581,17 @@ pub(super) async fn run_with_diagnostics(
         // Process already-received reliable Release/Denied/stream errors before
         // retrying. Keep the other select branches fair; only retries yield.
         let network_ready=!messages.is_empty();
+        if !network_ready {
+            if let Some(scope) = &drop_scope {
+                let live_lease = recovery.receiver.active().filter(|lease| {
+                    recovery.receiver.accepts(*lease, now)
+                        && (!native || recovery.snapshot() == ReceiveSnapshot::Active)
+                });
+                if let Some(event) = scope.advance_claim(live_lease) {
+                    input_status.reporter.file_drop(event);
+                }
+            }
+        }
         let defer_commit=network_ready && current && pending.is_some_and(|request|now<request.deadline);
         // Stage-only diagnostics: never key/button contents, positions or lease ids.
         let peer_granted=pending.is_some_and(|request|request.commit.is_some());
@@ -2494,19 +2505,43 @@ mod tests {
         );
     }
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum FileDecision {
+        Ready,
+        CancelBeforeGrant,
+        CancelAfterGrant,
+        ReleaseBeforeReady,
+        Expire,
+    }
+
     #[tokio::test]
-    async fn managed_file_reservation_is_reported_only_after_the_matching_v5_grant() -> Result<()> {
-        exercise_file_worker(false).await
+    async fn managed_file_reservation_requires_v5_grant_and_matching_local_readiness() -> Result<()> {
+        exercise_file_worker(FileDecision::Ready).await
     }
 
     #[tokio::test]
     async fn local_cancel_before_v5_grant_retires_the_file_reservation() -> Result<()> {
-        exercise_file_worker(true).await
+        exercise_file_worker(FileDecision::CancelBeforeGrant).await
     }
 
-    async fn exercise_file_worker(cancelled: bool) -> Result<()> {
+    #[tokio::test]
+    async fn local_cancel_after_v5_grant_withholds_the_file_proof() -> Result<()> {
+        exercise_file_worker(FileDecision::CancelAfterGrant).await
+    }
+
+    #[tokio::test]
+    async fn v5_release_retires_the_pending_local_file_claim() -> Result<()> {
+        exercise_file_worker(FileDecision::ReleaseBeforeReady).await
+    }
+
+    #[tokio::test]
+    async fn expired_local_file_claim_cannot_be_confirmed() -> Result<()> {
+        exercise_file_worker(FileDecision::Expire).await
+    }
+
+    async fn exercise_file_worker(decision: FileDecision) -> Result<()> {
         use file_transfer::drop_admission::{Admission, Content, Context as DropContext};
-        use peerglide_protocol::file_drop_ipc::{Command, State};
+        use peerglide_protocol::file_drop_ipc::{Command, Event, State};
         use transport::{file_drop_link, file_transfer, layout_reservation};
 
         let a = Identity::generate()?;
@@ -2612,7 +2647,7 @@ mod tests {
                 file_drop_link::reserve_for_worker(&side, &c, &b.certificate, receipt, lease)
                     .await?
                     .context("receiver declined initial reservation")?;
-            if cancelled {
+            if decision == FileDecision::CancelBeforeGrant {
                 let event = controller
                     .submit(Command::Cancel { session, request })
                     .context("cancel not accepted")?;
@@ -2630,21 +2665,50 @@ mod tests {
             assert!(
                 matches!(transport::receive(&mut rx).await?, Message::Granted { lease: granted } if granted == lease)
             );
-            let proof =
-                tokio::time::timeout(Duration::from_secs(2), confirmation.confirm()).await?;
-            assert_eq!(proof.is_ok(), !cancelled);
+            let mut confirm = std::pin::pin!(confirmation.confirm());
+            if decision != FileDecision::CancelBeforeGrant {
+                let matched = observed.recv().await.context("missing match before claim")?;
+                assert_eq!(matched, Event::new(session, request, State::Matched, Some(lease)));
+                let ready = |session, request, lease| Command::Ready { session, request, lease };
+                match decision {
+                    FileDecision::Ready => {
+                        controller.submit(ready(session + 1, request, lease));
+                        controller.submit(ready(session, request + 1, lease));
+                        controller.submit(ready(session, request, lease + 1));
+                        assert!(tokio::time::timeout(Duration::from_millis(50), confirm.as_mut())
+                            .await
+                            .is_err());
+                        controller.submit(ready(session, request, lease));
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::Claimed, Some(lease)))
+                        );
+                        controller.submit(ready(session, request, lease));
+                    }
+                    FileDecision::CancelAfterGrant => {
+                        let cancelled = controller
+                            .submit(Command::Cancel { session, request })
+                            .context("pending claim cancel not accepted")?;
+                        assert_eq!(cancelled.state, State::Cancelled);
+                        controller.submit(ready(session, request, lease));
+                    }
+                    FileDecision::ReleaseBeforeReady | FileDecision::Expire => {
+                        if decision == FileDecision::ReleaseBeforeReady {
+                            send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                        }
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::Rejected, None))
+                        );
+                        controller.submit(ready(session, request, lease));
+                    }
+                    FileDecision::CancelBeforeGrant => unreachable!("already cancelled"),
+                }
+            }
+            let proof = tokio::time::timeout(Duration::from_secs(3), confirm.as_mut()).await?;
+            assert_eq!(proof.is_ok(), decision == FileDecision::Ready);
             side.close(0u8.into(), b"reservation resolved");
-            if !cancelled {
-                let claimed = observed.recv().await.context("missing claim")?;
-                assert_eq!(
-                    (
-                        claimed.session,
-                        claimed.request,
-                        claimed.state,
-                        claimed.lease
-                    ),
-                    (session, request, State::Claimed, Some(lease))
-                );
+            if decision == FileDecision::Ready {
                 admission
                     .submit(
                         local.ticket,

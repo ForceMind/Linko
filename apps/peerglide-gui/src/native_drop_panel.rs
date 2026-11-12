@@ -294,10 +294,8 @@ impl Export {
         let now = Instant::now();
         ensure!(handoff.attempt.current(now), "接棒布局或时限已变化");
         let source = self.source.as_ref().context("没有已接收文件")?;
-        let already_matched = handoff.reservation.matched().is_some();
         handoff.reservation.tick(app, &source.pin, now)?;
-        if !already_matched && handoff.reservation.matched().is_some() {
-            source.pin.recheck(app)?;
+        if let Some(lease) = handoff.reservation.pending_lease() {
             handoff.attempt.scope.verify_layout()?;
             self.admission
                 .file_ready(
@@ -308,6 +306,7 @@ impl Export {
                     true,
                 )
                 .map_err(admission_error)?;
+            handoff.reservation.confirm_ready(app, &source.pin, lease, now)?;
         }
         Ok(())
     }
@@ -574,7 +573,7 @@ impl Export {
                     ui.label(format!("本机 UDP {port} 已预约，等待已配对电脑。"));
                 }
                 Status::Matched => {
-                    ui.label("文件预约已匹配输入租约。");
+                    ui.label("文件预约已确认当前输入租约。");
                 }
             }
             if ui.button("撤回文件预约").clicked() {

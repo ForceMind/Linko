@@ -29,6 +29,14 @@ struct Active {
     session: u32,
     watermark: u32,
     sender: watch::Sender<Option<Arc<Arm>>>,
+    claim: Option<LocalClaim>,
+}
+
+struct LocalClaim {
+    request: u32,
+    lease: u64,
+    proof: file_drop_link::PendingWorkerClaim,
+    ready: bool,
 }
 
 pub(super) struct Arm {
@@ -76,6 +84,7 @@ impl Controller {
             session,
             watermark: 0,
             sender,
+            claim: None,
         });
         Ok((
             Scope {
@@ -119,22 +128,41 @@ impl Controller {
                 Direction::Send(target),
                 proof,
             ),
+            Command::Ready {
+                session,
+                request,
+                lease,
+            } => {
+                let claim = active.claim.as_mut().filter(|claim| {
+                    session == active.session
+                        && claim.request == request
+                        && claim.lease == lease
+                        && claim.proof.is_live()
+                })?;
+                if !claim.ready {
+                    claim.ready = true;
+                    active.sender.send_modify(|_| {});
+                }
+                return None;
+            }
             Command::Cancel { session, request } => {
-                if session != active.session
-                    || !active
-                        .sender
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|arm| arm.request == request)
-                {
+                let pending = active.claim.as_ref().is_some_and(|claim| claim.request == request);
+                let armed = active
+                    .sender
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|arm| arm.request == request);
+                if session != active.session || !(armed || pending) {
                     return None;
                 }
+                active.claim = None;
                 active.sender.send_replace(None);
                 return Some(Event::new(session, request, State::Cancelled, None));
             }
         };
         if session == active.session && request > active.watermark {
             active.watermark = request;
+            active.claim = None;
             let deadline = now_ms().saturating_add(u64::from(lifetime_ms));
             active.sender.send_replace(Some(Arc::new(Arm {
                 request,
@@ -175,8 +203,8 @@ impl Scope<'_> {
         }
     }
 
-    /// Called only after the normal v5 receive grant. The supervisor can
-    /// revoke the arm even while the peer's sidecar reply is in flight.
+    /// Called after the ordinary v5 admission decision. A match is sent to
+    /// the GUI so it can check local readiness before the proof goes on wire.
     pub(super) fn resolve(
         &self,
         route: &Route,
@@ -192,24 +220,42 @@ impl Scope<'_> {
         let active = state.active.as_mut()?;
         let current =
             active.session == self.session && matches_arm(&active.sender.borrow(), route.request);
-        let matched = if granted {
-            route.slot.claim(input, pin, lease, current)
+        let event = if granted {
+            let proof = route.slot.begin_claim(input, pin, lease, current).ok()??;
+            active.claim = Some(LocalClaim {
+                request: route.request,
+                lease,
+                proof,
+                ready: false,
+            });
+            route.claimed.store(true, Ordering::Release);
+            Event::new(self.session, route.request, State::Matched, Some(lease))
         } else {
-            route.slot.retire_denied(input, pin, lease, current)
+            if !route.slot.retire_denied(input, pin, lease, current).ok()? {
+                return None;
+            }
+            self.event(route.request, State::Rejected)
         };
-        if !matched.ok()? {
+        active.sender.send_replace(None);
+        Some(event)
+    }
+
+    pub(super) fn advance_claim(&self, live_lease: Option<u64>) -> Option<Event> {
+        let mut state = self.controller.0.lock().ok()?;
+        let active = state.active.as_mut().filter(|active| active.session == self.session)?;
+        let claim = active.claim.as_ref()?;
+        let live = live_lease == Some(claim.lease) && claim.proof.is_live();
+        if live && !claim.ready {
             return None;
         }
-        if granted {
-            route.claimed.store(true, Ordering::Release);
-        }
-        active.sender.send_replace(None);
-        Some(if granted {
-            Event::new(self.session, route.request, State::Claimed, Some(lease))
+        let claim = active.claim.take()?;
+        Some(if live && claim.proof.confirm() {
+            Event::new(self.session, claim.request, State::Claimed, Some(claim.lease))
         } else {
-            self.event(route.request, State::Rejected)
+            self.event(claim.request, State::Rejected)
         })
     }
+
 }
 
 impl Drop for Scope<'_> {
@@ -411,8 +457,8 @@ impl Target {
 
 impl Drop for Target {
     fn drop(&mut self) {
-        // A matched v5 grant retired the slot and woke the bounded reply.
-        // Let that one reply finish after the session removes this route.
+        // A matched v5 grant moves the bounded reply into the local claim.
+        // The route no longer owns whether that reply is sent.
         if !self.claimed.load(Ordering::Acquire) {
             self.task.abort();
             let _ = self.slot.clear();
