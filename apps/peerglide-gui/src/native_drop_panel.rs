@@ -58,7 +58,7 @@ pub(super) struct Export {
     notice: Option<&'static str>,
 }
 
-fn eligible(app: &App) -> bool {
+pub(super) fn eligible(app: &App) -> bool {
     super::data_access::ready(app)
         && !app.window_hidden
         && !app.recovery_blocked

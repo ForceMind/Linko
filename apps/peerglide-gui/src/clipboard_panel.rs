@@ -9,12 +9,26 @@ use transport::clipboard_worker::{
     self, Classification, Event, Job, LocalPayload, LocalText, Mode, PendingClipboard, TextOutcome,
 };
 
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+use super::clipboard_drop;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+use transport::clipboard_worker::DragPayload;
+
 const PORT: u16 = 24872;
+
+enum Decision {
+    Import,
+    Decline,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    ImportForDrag,
+}
 
 struct Active {
     pin: Pin,
     job: Job,
     pending: Option<PendingClipboard>,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    drag_payload: Option<DragPayload>,
     stopping: bool,
 }
 
@@ -26,6 +40,8 @@ pub(super) struct Panel {
     bind: String,
     notice: String,
     local_outcome: Option<TextOutcome>,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    drag_offer: Option<clipboard_drop::Offer>,
 }
 
 impl Default for Panel {
@@ -38,25 +54,48 @@ impl Default for Panel {
             bind: format!("0.0.0.0:{PORT}"),
             notice: String::new(),
             local_outcome: None,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            drag_offer: None,
         }
     }
 }
 
 impl Panel {
     pub(super) fn is_active(&self) -> bool {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.drag_offer.is_some() {
+            return true;
+        }
         self.active.is_some()
     }
 
     pub(super) fn stop(&mut self) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.drag_offer.take().is_some() {
+            self.notice = "已撤下本次复制拖放。".into();
+        }
         if let Some(active) = self.active.as_mut().filter(|active| !active.stopping) {
             active.job.stop();
             active.pending = None;
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            {
+                active.drag_payload = None;
+            }
             active.stopping = true;
             self.notice = "已请求停止本次剪贴板共享。".into();
         }
     }
 
-    pub(super) fn tick(&mut self, app: &App) {
+    pub(super) fn tick(&mut self, app: &App, _ctx: &egui::Context) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if let Some(notice) = self
+            .drag_offer
+            .as_ref()
+            .and_then(|offer| offer.poll(app, _ctx))
+        {
+            self.drag_offer = None;
+            self.notice = notice.into();
+        }
         if self
             .active
             .as_ref()
@@ -67,6 +106,10 @@ impl Panel {
         let Some(active) = self.active.as_mut() else {
             return;
         };
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if !clipboard_drop::eligible(app, _ctx) || !clipboard_drop::focused(_ctx) {
+            active.drag_payload = None;
+        }
         let finished = active.job.is_finished();
         while let Some(event) = active.job.poll() {
             if active.stopping {
@@ -91,6 +134,13 @@ impl Panel {
                 }
                 Event::Finished(outcome) => {
                     active.pending = None;
+                    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                    if outcome == TextOutcome::Submitted {
+                        self.drag_offer = active
+                            .drag_payload
+                            .take()
+                            .map(|payload| clipboard_drop::Offer::new(active.pin.clone(), payload));
+                    }
                     outcome_label(outcome).into()
                 }
                 Event::Stopped => "本次剪贴板共享已停止。".into(),
@@ -117,6 +167,10 @@ impl Panel {
 
     fn start(&mut self, app: &App, send: bool) -> Result<()> {
         anyhow::ensure!(self.active.is_none(), "请先结束当前共享");
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        {
+            self.drag_offer = None;
+        }
         let (pin, identity, peer) = Pin::load(app)?;
         let wake = app.wake_ui.clone();
         let job = if send {
@@ -137,6 +191,8 @@ impl Panel {
             pin,
             job,
             pending: None,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            drag_payload: None,
             stopping: false,
         });
         self.notice = if send {
@@ -175,18 +231,26 @@ impl Panel {
         }
     }
 
-    fn decide(&mut self, app: &App, import: bool) -> Result<()> {
+    fn decide(&mut self, app: &App, decision: Decision) -> Result<()> {
         let active = self.active.as_mut().context("没有待处理的剪贴板内容")?;
         let pending = active.pending.take().context("没有待处理的剪贴板内容")?;
         let (pin, _, _) = Pin::load(app)?;
         anyhow::ensure!(pin == active.pin && !active.stopping, "配对状态已变化");
-        let completion = if import {
-            pending
-                .import(self.clipboard.as_mut().context("系统剪贴板不可用")?)
-                .context("本次导入授权已结束")?
-        } else {
-            pending.decline().context("本次导入授权已结束")?
-        };
+        let completion = match decision {
+            Decision::Import => {
+                pending.import(self.clipboard.as_mut().context("系统剪贴板不可用")?)
+            }
+            Decision::Decline => pending.decline(),
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            Decision::ImportForDrag => {
+                let (completion, payload) = pending
+                    .import_for_drag(self.clipboard.as_mut().context("系统剪贴板不可用")?)
+                    .context("本次导入授权已结束")?;
+                active.drag_payload = payload;
+                Ok(completion)
+            }
+        }
+        .context("本次导入授权已结束")?;
         self.local_outcome = Some(completion.outcome());
         self.notice = "正在向发送端报告处理结果。".into();
         active
@@ -238,11 +302,9 @@ impl Panel {
             let can_stop = !active.stopping;
             ui.horizontal_wrapped(|ui| {
                 if pending {
-                    let import = ui.button("导入到本机剪贴板").clicked();
-                    let decline = ui.button("拒绝").clicked();
-                    if import || decline {
-                        let result = self.decide(app, import);
-                        if let Err(error) = result {
+                    let decision = pending_decision(app, ui);
+                    if let Some(decision) = decision {
+                        if let Err(error) = self.decide(app, decision) {
                             self.stop();
                             self.notice = error.to_string();
                         }
@@ -256,6 +318,20 @@ impl Panel {
                 }
             });
         }
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if let Some(offer) = self.drag_offer.as_mut() {
+            match offer.ui(app, ui) {
+                Ok(None) => (),
+                Ok(Some(notice)) => {
+                    self.drag_offer = None;
+                    self.notice = notice.into();
+                }
+                Err(_) => {
+                    self.drag_offer = None;
+                    self.notice = "系统未能开始复制拖放，请检查目标应用。".into();
+                }
+            }
+        }
         if let Some(label) = self
             .local_outcome
             .map(outcome_label)
@@ -267,6 +343,27 @@ impl Panel {
             ui.label(&self.notice);
         }
     }
+}
+
+fn pending_decision(_app: &App, ui: &mut egui::Ui) -> Option<Decision> {
+    let import = ui.button("导入到本机剪贴板").clicked();
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    let prepare_drag = ui
+        .add_enabled(
+            clipboard_drop::eligible(_app, ui.ctx()) && clipboard_drop::focused(ui.ctx()),
+            egui::Button::new("导入并准备拖放"),
+        )
+        .on_hover_text("导入到本机剪贴板，并准备一次本机复制拖放。")
+        .clicked();
+    let decline = ui.button("拒绝").clicked();
+    if import {
+        return Some(Decision::Import);
+    }
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    if prepare_drag {
+        return Some(Decision::ImportForDrag);
+    }
+    decline.then_some(Decision::Decline)
 }
 
 fn outcome_label(outcome: TextOutcome) -> &'static str {

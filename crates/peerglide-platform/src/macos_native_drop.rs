@@ -1,9 +1,22 @@
 //! Copy-only AppKit drag from a real local mouse-down event on the UI thread.
+use crate::copy_drag::{drag_millis, validate_png, validate_text};
 use anyhow::{ensure, Context, Result};
-use std::{ffi::c_void, path::Path, ptr::null_mut};
+use std::{ffi::c_void, path::Path, ptr::null_mut, time::Duration};
 
 extern "C" {
     fn linko_macos_copy_drag_start(path: *const u8, bytes: usize, owner: *mut *mut c_void) -> i32;
+    fn linko_macos_copy_drag_text(
+        text: *const u8,
+        bytes: usize,
+        millis: u32,
+        owner: *mut *mut c_void,
+    ) -> i32;
+    fn linko_macos_copy_drag_png(
+        png: *const u8,
+        bytes: usize,
+        millis: u32,
+        owner: *mut *mut c_void,
+    ) -> i32;
     fn linko_macos_copy_drag_outcome(owner: *mut c_void) -> i32;
     fn linko_macos_copy_drag_cancel(owner: *mut c_void);
     fn linko_macos_copy_drag_release(owner: *mut c_void);
@@ -33,10 +46,34 @@ impl Drag {
             "native drop requires a regular file"
         );
         let path = bounded_path(path)?;
+        Self::start(|owner| {
+            // SAFETY: path is bounded UTF-8 and AppKit copies it before returning.
+            unsafe { linko_macos_copy_drag_start(path.as_ptr(), path.len(), owner) }
+        })
+    }
+
+    pub fn start_text(text: &str, remaining: Duration) -> Result<Self> {
+        validate_text(text)?;
+        let millis = drag_millis(remaining)?;
+        Self::start(|owner| {
+            // SAFETY: text is bounded UTF-8 and AppKit owns the data used by the drag.
+            unsafe { linko_macos_copy_drag_text(text.as_ptr(), text.len(), millis, owner) }
+        })
+    }
+
+    /// The caller supplies a PNG already normalized by the clipboard receive path.
+    pub fn start_png(png: &[u8], remaining: Duration) -> Result<Self> {
+        validate_png(png)?;
+        let millis = drag_millis(remaining)?;
+        Self::start(|owner| {
+            // SAFETY: the bounded PNG stays alive through the call. AppKit copies it.
+            unsafe { linko_macos_copy_drag_png(png.as_ptr(), png.len(), millis, owner) }
+        })
+    }
+
+    fn start(call: impl FnOnce(&mut *mut c_void) -> i32) -> Result<Self> {
         let mut owner = null_mut();
-        // SAFETY: path is bounded UTF-8 and owner is a writable output slot.
-        // AppKit copies the path and keeps the asynchronous source separately.
-        let result = unsafe { linko_macos_copy_drag_start(path.as_ptr(), path.len(), &mut owner) };
+        let result = call(&mut owner);
         ensure!(
             result == 0 && !owner.is_null(),
             "macOS native copy drag could not start ({result})"
