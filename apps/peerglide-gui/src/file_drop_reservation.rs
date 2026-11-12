@@ -153,7 +153,9 @@ mod native {
     }
 
     pub(crate) fn next_request(app: &mut App) -> Result<u32> {
-        app.file_drop_sequence = app.file_drop_sequence.checked_add(1)
+        app.file_drop_sequence = app
+            .file_drop_sequence
+            .checked_add(1)
             .context("文件接棒请求已达上限")?;
         Ok(app.file_drop_sequence)
     }
@@ -207,10 +209,20 @@ mod native {
             target: SocketAddr,
             expires: Instant,
         ) -> Self {
-            Self::with_direction(receipt.into_local_worker(), request, Direction::Send(target), expires)
+            Self::with_direction(
+                receipt.into_local_worker(),
+                request,
+                Direction::Send(target),
+                expires,
+            )
         }
 
-        fn with_direction(proof: String, request: u32, direction: Direction, expires: Instant) -> Self {
+        fn with_direction(
+            proof: String,
+            request: u32,
+            direction: Direction,
+            expires: Instant,
+        ) -> Self {
             Self {
                 proof: Some(proof),
                 request,
@@ -247,17 +259,38 @@ mod native {
             self.register(app, pin, link, session, now)
         }
 
-        fn register(&mut self, app: &mut App, pin: &Pin, link: Link, session: u32, now: Instant) -> Result<()> {
+        fn register(
+            &mut self,
+            app: &mut App,
+            pin: &Pin,
+            link: Link,
+            session: u32,
+            now: Instant,
+        ) -> Result<()> {
             pin.recheck(app)?;
             let lifetime_ms = u32::try_from(
-                self.expires.saturating_duration_since(Instant::now()).as_millis()
+                self.expires
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
             )?;
             ensure!(lifetime_ms != 0, "文件接棒已过期");
             let proof = self.proof.take().context("文件接棒已经登记")?;
             let request = self.request;
             let command = match self.direction {
-                Direction::Receive(bind) => Command::Arm { session, request, bind, lifetime_ms, proof },
-                Direction::Send(target) => Command::Send { session, request, target, lifetime_ms, proof },
+                Direction::Receive(bind) => Command::Arm {
+                    session,
+                    request,
+                    bind,
+                    lifetime_ms,
+                    proof,
+                },
+                Direction::Send(target) => Command::Send {
+                    session,
+                    request,
+                    target,
+                    lifetime_ms,
+                    proof,
+                },
             };
             link.send(app, command)?;
             self.phase = Phase::Registering(link, session, now + REPLY_TIMEOUT);
@@ -378,7 +411,9 @@ mod native {
                         if event.session == *session && event.request == self.request =>
                     {
                         let expected = match self.direction {
-                            Direction::Receive(bind) => event.state == State::Armed && event.port == Some(bind.port()),
+                            Direction::Receive(bind) => {
+                                event.state == State::Armed && event.port == Some(bind.port())
+                            }
                             Direction::Send(_) => event.state == State::SourceArmed,
                         };
                         ensure!(expected, "工作进程未确认文件接棒");
@@ -390,11 +425,17 @@ mod native {
                         let lease = event.lease.context("接棒回执缺少输入租约")?;
                         self.phase = match self.direction {
                             Direction::Receive(_) => {
-                                ensure!(event.state == State::Matched && event_fence == lease_fence, "接棒回执的输入租约已结束");
+                                ensure!(
+                                    event.state == State::Matched && event_fence == lease_fence,
+                                    "接棒回执的输入租约已结束"
+                                );
                                 Phase::Matched(link.clone(), *session, lease, lease_fence)
                             }
                             Direction::Send(_) => {
-                                ensure!(event.state == State::SourceCommitted, "文件接棒已撤销或被拒绝");
+                                ensure!(
+                                    event.state == State::SourceCommitted,
+                                    "文件接棒已撤销或被拒绝"
+                                );
                                 Phase::SourceCommitted(link.clone(), *session, lease)
                             }
                         };
@@ -402,7 +443,10 @@ mod native {
                     Phase::SourceCommitted(_, session, lease)
                         if event.session == *session && event.request == self.request =>
                     {
-                        ensure!(event.state == State::SourceReleased && event.lease == Some(*lease), "文件接棒已结束");
+                        ensure!(
+                            event.state == State::SourceReleased && event.lease == Some(*lease),
+                            "文件接棒已结束"
+                        );
                         self.phase = Phase::SourceReleased;
                     }
                     Phase::AwaitingClaim(_, session, lease, _, _)
@@ -553,7 +597,8 @@ mod native {
         }
 
         #[test]
-        fn source_pipe_waits_for_an_explicit_press_and_accepts_only_the_matching_release() -> Result<()> {
+        fn source_pipe_waits_for_an_explicit_press_and_accepts_only_the_matching_release(
+        ) -> Result<()> {
             let fixture = crate::tests::Fixture::new()?;
             let mut app = App::load(fixture.path.clone());
             Identity::create(&app.identity_dir())?;
@@ -577,7 +622,11 @@ mod native {
             app.active_mode = Some(SessionMode::Native);
             app.connected = true;
             let worker = Arc::new(WorkerSnapshot::default());
-            worker.7.lock().unwrap().connection(WorkerState::Authenticated);
+            worker
+                .7
+                .lock()
+                .unwrap()
+                .connection(WorkerState::Authenticated);
             app.worker_state = Some(worker.clone());
             let now = Instant::now();
             assert_eq!(next_request(&mut app)?, 1);
@@ -590,7 +639,11 @@ mod native {
             );
             assert!(reservation.press(&mut app, &pin, now).is_err());
             reservation.tick(&mut app, &pin, now)?;
-            worker.7.lock().unwrap().publish(Event::new(3, 0, State::Session, None));
+            worker
+                .7
+                .lock()
+                .unwrap()
+                .publish(Event::new(3, 0, State::Session, None));
             reservation.tick(&mut app, &pin, now)?;
             assert!(matches!(reservation.status(), Status::Press));
             reservation.press(&mut app, &pin, now)?;
@@ -605,7 +658,12 @@ mod native {
             }
             reservation.tick(&mut app, &pin, now)?;
             assert!(matches!(reservation.status(), Status::SourceCommitted));
-            worker.7.lock().unwrap().publish(Event::new(3, request, State::SourceReleased, Some(9)));
+            worker.7.lock().unwrap().publish(Event::new(
+                3,
+                request,
+                State::SourceReleased,
+                Some(9),
+            ));
             reservation.tick(&mut app, &pin, now)?;
             assert!(matches!(reservation.status(), Status::SourceReleased));
             reservation.cancel(&mut app);

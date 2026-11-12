@@ -577,7 +577,10 @@ impl Export {
                 Status::Matched => {
                     ui.label("文件预约已确认当前输入租约。");
                 }
-                Status::Press | Status::SourceArmed | Status::SourceCommitted | Status::SourceReleased => {
+                Status::Press
+                | Status::SourceArmed
+                | Status::SourceCommitted
+                | Status::SourceReleased => {
                     unreachable!("source reservation in the receive panel");
                 }
             }

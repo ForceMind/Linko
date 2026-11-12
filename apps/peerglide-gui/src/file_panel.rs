@@ -180,7 +180,10 @@ impl Panel {
         self.progress = active.job.progress();
         while let Some(event) = active.job.poll() {
             self.notice = match event {
-                Event::Sent { outcome, handoff: _handoff } => {
+                Event::Sent {
+                    outcome,
+                    handoff: _handoff,
+                } => {
                     let notice = outcome_label(outcome, false);
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if let Some((target, receipt)) = _handoff.filter(|_| {
@@ -199,7 +202,7 @@ impl Panel {
                         }
                     }
                     notice.into()
-                },
+                }
                 Event::Received(result) => {
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if !active.stopping && active.pin.matches(app) {
@@ -416,28 +419,44 @@ impl Panel {
         match handoff.reservation.status() {
             Status::WaitingForWorker => {
                 ui.label("请让另一台电脑准备跨机接收，然后连接键鼠。");
-                if ui.add_enabled(app.native_start_available(), egui::Button::new("开启键鼠协同")).clicked() {
+                if ui
+                    .add_enabled(
+                        app.native_start_available(),
+                        egui::Button::new("开启键鼠协同"),
+                    )
+                    .clicked()
+                {
                     app.workspace_action(super::desktop_state::Action::StartInput);
                 }
             }
             Status::Press => {
-                let drag = ui.add(egui::Button::new("按住并拖向切换边沿").sense(egui::Sense::drag()));
+                let drag =
+                    ui.add(egui::Button::new("按住并拖向切换边沿").sense(egui::Sense::drag()));
                 let pressed = ui.input(|input| {
-                    input.focused && input.pointer.button_pressed(egui::PointerButton::Primary)
+                    input.focused
+                        && input.pointer.button_pressed(egui::PointerButton::Primary)
                         && input.pointer.primary_down()
                 });
                 if drag.hovered() && pressed {
                     let result = handoff.check_layout().and_then(|()| {
-                        handoff.reservation.press(app, &handoff.pin, std::time::Instant::now())
+                        handoff
+                            .reservation
+                            .press(app, &handoff.pin, std::time::Instant::now())
                     });
                     if result.is_err() {
                         self.cancel_source_handoff(app);
                     }
                 }
             }
-            Status::Confirming => { ui.label("等待键鼠会话确认。"); }
-            Status::SourceArmed => { ui.label("保持按住，拖向切换边沿。"); }
-            Status::SourceCommitted => { ui.label("已交给另一台电脑，移动到目标后释放。"); }
+            Status::Confirming => {
+                ui.label("等待键鼠会话确认。");
+            }
+            Status::SourceArmed => {
+                ui.label("保持按住，拖向切换边沿。");
+            }
+            Status::SourceCommitted => {
+                ui.label("已交给另一台电脑，移动到目标后释放。");
+            }
             Status::SourceReleased => (),
             Status::Listening(_) | Status::Matched => unreachable!("receive reservation in sender"),
         }
@@ -502,7 +521,10 @@ impl Panel {
                 }
                 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                 if ui
-                    .add_enabled(source_context(app, ui.ctx()), egui::Button::new("发送并准备跨机拖动"))
+                    .add_enabled(
+                        source_context(app, ui.ctx()),
+                        egui::Button::new("发送并准备跨机拖动"),
+                    )
                     .clicked()
                 {
                     if let Err(error) = self.start(app, true, true) {

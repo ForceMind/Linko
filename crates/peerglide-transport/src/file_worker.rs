@@ -226,7 +226,10 @@ async fn run(
                 file_transfer::send_for_drop(&connection, &pinned_peer, source, stop, progress)
                     .await?
             } else {
-                (file_transfer::send(&connection, &pinned_peer, source, stop, progress).await?, None)
+                (
+                    file_transfer::send(&connection, &pinned_peer, source, stop, progress).await?,
+                    None,
+                )
             };
             Ok(Event::Sent {
                 outcome,

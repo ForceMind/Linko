@@ -199,7 +199,10 @@ impl Event {
                 && event.session != 0
                 && (event.request == 0) == (event.state == State::Session)
                 && match event.state {
-                    State::Matched | State::Claimed | State::SourceCommitted | State::SourceReleased => {
+                    State::Matched
+                    | State::Claimed
+                    | State::SourceCommitted
+                    | State::SourceReleased => {
                         event.lease.is_some_and(|lease| lease != 0) && event.port.is_none()
                     }
                     State::Armed => {
