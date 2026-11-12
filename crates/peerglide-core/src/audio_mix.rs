@@ -25,9 +25,18 @@ pub struct Mix {
 
 impl Default for Mix {
     fn default() -> Self {
-        let owner = NEXT_MIX
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-            .unwrap_or(0);
+        let owner = loop {
+            let current = NEXT_MIX.load(Ordering::Relaxed);
+            let Some(next) = current.checked_add(1) else {
+                break 0;
+            };
+            if NEXT_MIX
+                .compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                break current;
+            }
+        };
         Self {
             owner,
             inputs: Default::default(),
