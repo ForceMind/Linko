@@ -215,34 +215,26 @@ impl<'a> Source<'a> {
         if let Some(change) = layout_change(Some(self.layout), current_layout.as_ref()) {
             return Err(change.into());
         }
-        while !self.input.position_current() {
-            let event = tokio::select! {
-                biased;
-                stop = &mut self.ending => return Ok(Exit::Stop(stop)),
-                _ = pending_wake(Some(request.deadline)) => return Ok(Exit::Local(None)),
-                event = self.input.recv() => event.context("native capture channel closed")?,
-            };
-            if matches!(event, Captured::Emergency) {
-                return Ok(Exit::Stop(Ok(())));
-            }
-            if !self.update_choice(event, &mut chosen) {
-                return Ok(Exit::Local(None));
-            }
-        }
-        if now_ms() >= request.deadline || !self.capture.gate.commit_pending(request.token) {
-            return Ok(Exit::Local(None));
+        if let Some(exit) = self.check_choice(&mut chosen, request).await? {
+            return Ok(exit);
         }
         let edges = chosen.edges();
         let along = chosen.route.fraction;
+        let acquire = tokio::select! {
+            biased;
+            stop = &mut self.ending => return Ok(Exit::Stop(stop)),
+            _ = pending_wake(Some(request.deadline)) => return Ok(Exit::Local(None)),
+            acquire = link.acquire_proposal(edges.wire_edge(), along) => acquire,
+        };
+        let Some(acquire) = acquire else {
+            eprintln!("Selected route did not confirm the configured receive display.");
+            return Ok(Exit::Local(None));
+        };
+        if let Some(exit) = self.check_choice(&mut chosen, request).await? {
+            return Ok(exit);
+        }
         *attempted = true;
-        if !link
-            .send(&Message::Acquire {
-                lease: LEASE,
-                edge: edges.wire_edge(),
-                along,
-            })
-            .await?
-        {
+        if !link.send(&acquire).await? {
             return Ok(Exit::Local(None));
         }
         let mut pending = Some(request);
@@ -286,6 +278,33 @@ impl<'a> Source<'a> {
                     if matches!(event, Captured::Emergency) { return Ok(Exit::Stop(Ok(()))); }
                     if !self.update_choice(event, &mut chosen) { return Ok(Exit::Local(None)); }
                 }
+            }
+        }
+    }
+
+    async fn check_choice(
+        &mut self,
+        chosen: &mut Choice<'a>,
+        request: PendingAcquire,
+    ) -> Result<Option<Exit>> {
+        loop {
+            if now_ms() >= request.deadline || !self.capture.gate.commit_pending(request.token) {
+                return Ok(Some(Exit::Local(None)));
+            }
+            if self.input.position_current() {
+                return Ok(None);
+            }
+            let event = tokio::select! {
+                biased;
+                stop = &mut self.ending => return Ok(Some(Exit::Stop(stop))),
+                _ = pending_wake(Some(request.deadline)) => return Ok(Some(Exit::Local(None))),
+                event = self.input.recv() => event.context("native capture channel closed")?,
+            };
+            if matches!(event, Captured::Emergency) {
+                return Ok(Some(Exit::Stop(Ok(()))));
+            }
+            if !self.update_choice(event, chosen) {
+                return Ok(Some(Exit::Local(None)));
             }
         }
     }
@@ -406,6 +425,7 @@ struct Link {
     tx: quinn::SendStream,
     messages: mpsc::Receiver<Result<Message>>,
     capabilities: InputCapabilities,
+    secondary: Option<crate::secondary_layout::Routes>,
     _reader: Abort,
     _endpoint: quinn::Endpoint,
 }
@@ -418,6 +438,14 @@ impl Link {
         transport::verify_peer(&connection, &peer.certificate)?;
         let (mut tx, mut rx) = connection.open_bi().await?;
         let capabilities = exchange_hello(&mut tx, &mut rx, platform::input_capabilities()).await?;
+        let secondary = crate::secondary_layout::Routes::start(
+            identity,
+            &peer.certificate,
+            &connection,
+            peer.secondary_layout,
+            None,
+            None,
+        )?;
         let (sender, messages) = mpsc::channel(64);
         let reader = tokio::spawn(async move {
             loop {
@@ -433,8 +461,25 @@ impl Link {
             tx,
             messages,
             capabilities,
+            secondary,
             _reader: Abort(reader),
             _endpoint: endpoint,
+        })
+    }
+
+    async fn acquire_proposal(&self, edge: Edge, along: f64) -> Option<Message> {
+        let confirmed = match &self.secondary {
+            Some(layout) => {
+                layout
+                    .reserve_outbound(&self.connection, LEASE, edge, along)
+                    .await
+            }
+            None => true,
+        };
+        confirmed.then_some(Message::Acquire {
+            lease: LEASE,
+            edge,
+            along,
         })
     }
 
@@ -502,6 +547,83 @@ impl Link {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn routed_secondary_proposes_acquire_only_after_the_bound_reservation() -> Result<()> {
+        use transport::layout_reservation as wire;
+
+        let source = transport::Identity::generate()?;
+        let target = transport::Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        for allowed in [true, false] {
+            let input = transport::endpoint(bind, &target, &source.certificate)?;
+            let layout = wire::endpoint(bind, &target, &source.certificate)?;
+            let peer = Peer {
+                address: input.local_addr()?,
+                certificate: target.certificate.clone(),
+                secondary_layout: Some(layout.local_addr()?),
+            };
+            let receiver = async {
+                let c = input
+                    .accept()
+                    .await
+                    .context("input endpoint closed")?
+                    .await?;
+                let (mut tx, mut rx) = c.accept_bi().await?;
+                exchange_hello(&mut tx, &mut rx, InputCapabilities::default()).await?;
+                let sidecar = layout
+                    .accept()
+                    .await
+                    .context("layout endpoint closed")?
+                    .await?;
+                let slot = wire::ReservationSlot::default();
+                let published =
+                    wire::accept_for_slot(&sidecar, &c, &source.certificate, &slot, |proposal| {
+                        assert_eq!(proposal.lease, LEASE);
+                        assert_eq!(proposal.edge, Edge::Right);
+                        assert_eq!(proposal.fraction, 0.25);
+                        allowed.then_some(1)
+                    })
+                    .await?;
+                assert_eq!(published, allowed);
+                if allowed {
+                    let msg = transport::receive(&mut rx).await?;
+                    let Message::Acquire { lease, edge, along } = msg else {
+                        bail!("expected reserved acquire")
+                    };
+                    let grant = slot
+                        .consume(&c, &source.certificate, lease, 1)?
+                        .context("reservation missing")?;
+                    assert_eq!(
+                        (grant.lease, grant.edge, grant.fraction),
+                        (lease, edge, along)
+                    );
+                } else {
+                    assert!(
+                        matches!(transport::receive(&mut rx).await, Err(error) if error.is::<transport::MessageStreamEnded>())
+                    );
+                }
+                c.close(0u8.into(), b"test ended");
+                Ok::<_, anyhow::Error>(())
+            };
+            let sender = async {
+                let mut link = Link::connect(&source, &peer).await?;
+                let acquire = link.acquire_proposal(Edge::Right, 0.25).await;
+                assert_eq!(acquire.is_some(), allowed);
+                if let Some(acquire) = acquire {
+                    assert!(link.send(&acquire).await?);
+                }
+                link.tx.finish()?;
+                let _ = link.connection.closed().await;
+                Ok::<_, anyhow::Error>(())
+            };
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(receiver, sender)
+            })
+            .await??;
+        }
+        Ok(())
+    }
+
     #[derive(Clone, Copy)]
     enum ReleaseOrder {
         SourceFirst,
@@ -526,6 +648,7 @@ mod tests {
             let peer = Peer {
                 address: endpoint.local_addr()?,
                 certificate: target.certificate.clone(),
+                secondary_layout: None,
             };
             let (saw_fin, fin_observed) = tokio::sync::oneshot::channel();
             let receive = async {

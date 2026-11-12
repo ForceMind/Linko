@@ -215,8 +215,13 @@ peerglide connect-routes --identity PATH --layout routes.json --native
 分段相交的角点保留本机控制。连接失败时也留在本机。发送端拒绝从这些连接接收键鼠。
 返回本机时，旧连接必须确认清理完成才继续选择。恢复未确认时会停止分段发送。
 `Ctrl+Alt+Right` 可从当前目标返回本机，`Ctrl+Alt+Esc` 和 `Ctrl+C` 结束发送。
-分段发送使用目标当前的接收屏幕。显式远端副屏预留、可编辑的图形入口及物理多机
-切换仍需后续开发或验收。
+
+在某台目标的 `peers` 记录加入 `"secondary_layout": "192.168.1.22:24877"`，可要求
+每次接管先确认该目标明确选定的副屏。该电脑须用 `listen` 启用 `--native --allow-control`，
+指定 `--receive-display=X,Y --secondary-layout-bind=0.0.0.0:24877`，并把自己的 `--edge`
+设为发送端配置的 `remote_edge`。可用 `--reconnect` 接受后续分段连接。预留失败时，
+光标留在本机。省略该字段时，继续使用目标接收会话的默认行为。副屏由接收端选择。
+可编辑的图形入口及物理多机切换仍待开发与验收。
 
 ## 查询已核验电脑的屏幕表
 
