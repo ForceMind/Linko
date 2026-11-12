@@ -78,7 +78,7 @@ where
     loop {
         tokio::select! {
             biased;
-            result = &mut stop => return Ok(result?),
+            result = &mut stop => return result.map_err(Into::into),
             _ = tokio::time::sleep_until(deadline) => return Ok(()),
             closed = workers.join_next(), if !workers.is_empty() => {
                 let source = closed.context("audio source disappeared")??;
