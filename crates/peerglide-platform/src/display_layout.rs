@@ -183,7 +183,11 @@ impl Layout {
             bottom: outer.bottom.max(display.bounds.bottom),
         });
         (desktop.valid() && bounds.right - bounds.left >= 1.0 && bounds.bottom - bounds.top >= 1.0)
-            .then_some(PlacementTarget { revision: self.revision(), display, desktop })
+            .then_some(PlacementTarget {
+                revision: self.revision(),
+                display,
+                desktop,
+            })
     }
 
     /// Translate a v5 position within the selected display. The previous
@@ -339,7 +343,15 @@ mod tests {
         assert_eq!((last.desktop_x, last.desktop_y), (-1.0, 1719.0));
         assert_eq!(last.virtual_absolute[1], 65535);
         assert!(last.virtual_absolute[0] < 32768);
-        assert!(layout.place(target, ReceivePoint { x: f64::NAN, y: 0.0 }).is_none());
+        assert!(layout
+            .place(
+                target,
+                ReceivePoint {
+                    x: f64::NAN,
+                    y: 0.0
+                }
+            )
+            .is_none());
         let other = Layout::new(primary.id, vec![primary, left]).unwrap();
         assert!(other.place(target, start).is_none());
         left.scale = 2.0;
