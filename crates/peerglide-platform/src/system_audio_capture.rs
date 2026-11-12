@@ -124,10 +124,7 @@ impl Drop for AudioCapture {
 }
 
 fn check(result: i32, source: &'static str, operation: &'static str) -> Result<()> {
-    ensure!(
-        result >= 0,
-        "{source} {operation} failed ({result:#010x})"
-    );
+    ensure!(result >= 0, "{source} {operation} failed ({result:#010x})");
     Ok(())
 }
 
@@ -138,7 +135,10 @@ mod tests {
     #[test]
     fn invalid_pcm_buffer_is_rejected_before_entering_native_capture() {
         for source in ["system audio", "microphone"] {
-            let mut inert = AudioCapture { owner: null_mut(), source };
+            let mut inert = AudioCapture {
+                owner: null_mut(),
+                source,
+            };
             for samples in [0, 1, SAMPLES + 2] {
                 let mut output = vec![0; samples];
                 assert_eq!(
