@@ -2717,6 +2717,14 @@ macOS 可见窗口的 NoNative 仅通信约 30 秒，GUI 平均 CPU 1.232%、峰
 的添加电脑、启动确认、停止协同和布局修改，操作结果一致。设置保存在桌面偏好中。
 真实 Windows/macOS 外观与键盘可访问性留到集中验收。
 
+### Windows CLI 启动栈
+
+[Windows 无设备探测](https://github.com/ForceMind/Linko/actions/runs/43146799475/job/130946399000)
+在 `--version` 复现调试版主线程栈溢出。此前配对测试卡在子进程进入监听前。
+解析命令后按实际子命令分配 Future，副屏确认只在显式启用时分配，原生恢复与原测试期限保留。
+[Windows 启动与配对回归](https://github.com/ForceMind/Linko/actions/runs/43148511574/job/130951925339)
+通过 `--version` 和 `cargo test --workspace --locked` 的实际配对子进程用例。
+
 ## 集中验收清单
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
