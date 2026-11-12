@@ -1,9 +1,17 @@
 //! Copy a verified local receive result through an explicit gesture in Linko.
-use super::{data_access::Pin, egui, transport::file_transfer::{PreparedDropPath, ReceivedFile}, App, SessionMode};
+use super::{
+    data_access::Pin,
+    egui,
+    transport::file_transfer::{PreparedDropPath, ReceivedFile},
+    App, SessionMode,
+};
 use anyhow::{Context, Result};
 use std::{
     io,
-    sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -55,7 +63,10 @@ fn eligible(app: &App) -> bool {
         && !app.window_hidden
         && !app.recovery_blocked
         && (app.child.is_none()
-            || matches!(app.active_mode, Some(SessionMode::Communication | SessionMode::Probe)))
+            || matches!(
+                app.active_mode,
+                Some(SessionMode::Communication | SessionMode::Probe)
+            ))
         && app.pending_start != Some(SessionMode::Native)
 }
 
@@ -67,7 +78,10 @@ impl Export {
     pub(super) fn received(&mut self, pin: Pin, file: ReceivedFile) {
         self.state = State::Idle;
         self.notice = None;
-        self.source = Some(Source { pin, file: Arc::new(file) });
+        self.source = Some(Source {
+            pin,
+            file: Arc::new(file),
+        });
     }
 
     pub(super) fn stop(&mut self) {
@@ -78,7 +92,11 @@ impl Export {
     }
 
     pub(super) fn tick(&mut self, app: &App) {
-        if self.source.as_ref().is_some_and(|source| !source.pin.matches(app)) {
+        if self
+            .source
+            .as_ref()
+            .is_some_and(|source| !source.pin.matches(app))
+        {
             self.stop();
             self.source = None;
         }
@@ -95,7 +113,10 @@ impl Export {
             State::Ready(_) => (),
             State::Preparing(preparation) => match preparation.result.try_recv() {
                 Ok(Ok(path)) => {
-                    self.state = State::Ready(Prepared { path, expires: Instant::now() + PREPARED_FOR });
+                    self.state = State::Ready(Prepared {
+                        path,
+                        expires: Instant::now() + PREPARED_FOR,
+                    });
                     self.notice = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => (),
@@ -126,24 +147,32 @@ impl Export {
     fn prepare(&mut self, app: &App) -> Result<()> {
         let source = self.source.as_ref().context("没有已接收文件")?;
         let (pin, _, _) = Pin::load(app)?;
-        anyhow::ensure!(source.pin == pin && eligible(app), "当前状态无法开始本机复制拖放");
+        anyhow::ensure!(
+            source.pin == pin && eligible(app),
+            "当前状态无法开始本机复制拖放"
+        );
         let file = source.file.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_stop = cancelled.clone();
         let wake = app.wake_ui.clone();
         let (result, receive) = mpsc::sync_channel(1);
-        std::thread::Builder::new().name("linko-prepare-copy-drop".into()).spawn(move || {
-            let prepared = file.prepare_drop(|| {
-                if worker_stop.load(Ordering::Acquire) {
-                    Err(io::ErrorKind::Interrupted.into())
-                } else {
-                    Ok(())
-                }
-            });
-            let _ = result.send(prepared);
-            wake();
-        })?;
-        self.state = State::Preparing(Preparation { cancelled, result: receive });
+        std::thread::Builder::new()
+            .name("linko-prepare-copy-drop".into())
+            .spawn(move || {
+                let prepared = file.prepare_drop(|| {
+                    if worker_stop.load(Ordering::Acquire) {
+                        Err(io::ErrorKind::Interrupted.into())
+                    } else {
+                        Ok(())
+                    }
+                });
+                let _ = result.send(prepared);
+                wake();
+            })?;
+        self.state = State::Preparing(Preparation {
+            cancelled,
+            result: receive,
+        });
         self.notice = None;
         Ok(())
     }
@@ -155,7 +184,10 @@ impl Export {
         anyhow::ensure!(
             Instant::now() < prepared.expires
                 && eligible(app)
-                && self.source.as_ref().is_some_and(|source| source.pin.matches(app)),
+                && self
+                    .source
+                    .as_ref()
+                    .is_some_and(|source| source.pin.matches(app)),
             "请重新准备复制拖放"
         );
         #[cfg(all(windows, target_env = "msvc"))]
@@ -169,14 +201,18 @@ impl Export {
         }
         #[cfg(target_os = "macos")]
         {
-            let drag = peerglide_platform::macos_native_drop::Drag::start_prepared_file(prepared.path.path())?;
+            let drag = peerglide_platform::macos_native_drop::Drag::start_prepared_file(
+                prepared.path.path(),
+            )?;
             self.state = State::Dragging { drag, prepared };
         }
         Ok(())
     }
 
     pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
-        let Some(source) = &self.source else { return; };
+        let Some(source) = &self.source else {
+            return;
+        };
         ui.separator();
         ui.label(format!("已接收 {}", source.file.name()));
         if !eligible(app) {
