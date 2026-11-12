@@ -12,7 +12,7 @@ pub(super) fn ready(app: &App) -> bool {
         && app.config.fingerprint.is_some()
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct Pin {
     local: String,
     peer: String,
