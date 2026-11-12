@@ -1,44 +1,119 @@
 //! A bounded v5 listener for multiple pins and at most one native session.
-use crate::{exchange_hello, session, transport, InputReporter, Side};
+use crate::{exchange_hello, session, transport, InputReporter, Side, WorkerInputState};
 use anyhow::{Context, Result};
 use peerglide_protocol::{Edge, InputCapabilities, Message};
 use std::{
-    future::Future,
+    future::{pending, Future},
     net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
 use tokio::{
     sync::watch,
-    task::{JoinSet, LocalSet},
+    task::{JoinHandle, JoinSet, LocalSet},
 };
 use transport::trusted_listener::{Listener, MAX_TRUSTED_PEERS};
 
 #[derive(clap::Args)]
 pub(super) struct Options {
-    /// Start native input for the first connection from this enrolled certificate.
+    /// Select a native peer. Repeat only with --serial-native.
     #[arg(long)]
-    native_peer_cert: Option<PathBuf>,
-    /// Explicit permission for the selected computer to control this one.
+    native_peer_cert: Vec<PathBuf>,
+    /// Permit another selected peer after the prior native session recovers.
+    #[arg(long, requires = "native_peer_cert", conflicts_with = "allow_control")]
+    serial_native: bool,
+    /// In serial mode, individually permit incoming control from this certificate.
+    #[arg(long, requires = "serial_native")]
+    allow_control_peer_cert: Vec<PathBuf>,
+    /// Permit incoming control from the single selected native peer.
     #[arg(long, requires = "native_peer_cert")]
     allow_control: bool,
     #[arg(long, value_enum, default_value = "right")]
     edge: Side,
 }
 
+#[derive(Clone)]
 struct Selection {
     certificate: Vec<u8>,
     allow: bool,
     edge: Edge,
 }
 
-fn take_selected(
-    selection: &mut Option<Selection>,
-    connection: &quinn::Connection,
-) -> Option<Selection> {
-    let route = selection.as_ref()?;
-    transport::verify_peer(connection, &route.certificate).ok()?;
-    selection.take()
+#[derive(Default)]
+struct NativeRoutes {
+    choices: Vec<Selection>,
+    serial: bool,
+    blocked: bool,
+}
+
+impl NativeRoutes {
+    fn load(options: Options, peers: &[Vec<u8>]) -> Result<Self> {
+        if options.native_peer_cert.is_empty() {
+            return Ok(Self::default());
+        }
+        anyhow::ensure!(
+            cfg!(any(windows, target_os = "macos")),
+            "selected native input requires Windows or macOS"
+        );
+        anyhow::ensure!(
+            options.native_peer_cert.len() <= MAX_TRUSTED_PEERS
+                && options.allow_control_peer_cert.len() <= MAX_TRUSTED_PEERS
+                && (options.serial_native || options.native_peer_cert.len() == 1),
+            "multiple native peers require serial mode"
+        );
+        let selected = read_distinct(&options.native_peer_cert, peers)?;
+        let allowed = read_distinct(&options.allow_control_peer_cert, &selected)?;
+        let choices = selected
+            .into_iter()
+            .map(|certificate| Selection {
+                allow: options.allow_control || allowed.contains(&certificate),
+                certificate,
+                edge: options.edge.into(),
+            })
+            .collect();
+        Ok(Self {
+            choices,
+            serial: options.serial_native,
+            blocked: false,
+        })
+    }
+
+    fn admit(&mut self, connection: &quinn::Connection) -> Option<Selection> {
+        if self.blocked {
+            return None;
+        }
+        let index = self
+            .choices
+            .iter()
+            .position(|route| transport::verify_peer(connection, &route.certificate).is_ok())?;
+        Some(if self.serial {
+            self.choices[index].clone()
+        } else {
+            self.choices.remove(index)
+        })
+    }
+
+    fn recovered(&mut self, clean: bool) {
+        if !clean {
+            self.blocked = true;
+            eprintln!(
+                "Native recovery was not confirmed. Restart explicitly after checking local input."
+            );
+        }
+    }
+}
+
+fn read_distinct(paths: &[PathBuf], candidates: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+    let mut chosen = Vec::with_capacity(paths.len());
+    for path in paths {
+        let certificate = transport::read_certificate(path)?;
+        anyhow::ensure!(
+            candidates.contains(&certificate) && !chosen.contains(&certificate),
+            "native peer certificate must be individually selected and unique"
+        );
+        chosen.push(certificate);
+    }
+    Ok(chosen)
 }
 
 pub(super) async fn run(
@@ -56,24 +131,7 @@ pub(super) async fn run(
         .iter()
         .map(|path| transport::read_certificate(path))
         .collect::<Result<Vec<_>>>()?;
-    let selection = if let Some(path) = &options.native_peer_cert {
-        anyhow::ensure!(
-            cfg!(any(windows, target_os = "macos")),
-            "selected native input requires Windows or macOS"
-        );
-        let certificate = transport::read_certificate(path)?;
-        anyhow::ensure!(
-            peers.contains(&certificate),
-            "selected native certificate must be in the enrolled set"
-        );
-        Some(Selection {
-            certificate,
-            allow: options.allow_control,
-            edge: options.edge.into(),
-        })
-    } else {
-        None
-    };
+    let selection = NativeRoutes::load(options, &peers)?;
     let listener = Listener::bind(bind, &identity, peers)?;
     println!(
         "Listening for authenticated peers on {}.",
@@ -84,55 +142,66 @@ pub(super) async fn run(
         .await
 }
 
-async fn listen<F>(listener: &Listener, stop: F, mut selection: Option<Selection>) -> Result<()>
+async fn listen<F>(listener: &Listener, stop: F, mut routes: NativeRoutes) -> Result<()>
 where
     F: Future<Output = std::io::Result<()>>,
 {
-    let mut sessions = JoinSet::new();
+    let mut diagnostics = JoinSet::new();
+    let mut native = None;
     let (stop_all, stopped) = watch::channel(false);
-    tokio::pin!(stop);
+    let incoming = listener.accept();
+    tokio::pin!(stop, incoming);
     let result = loop {
-        while sessions.try_join_next().is_some() {}
-        if sessions.len() >= MAX_TRUSTED_PEERS {
-            tokio::select! {
-                biased;
-                result = &mut stop => break result,
-                _ = sessions.join_next() => (),
-            }
-            continue;
-        }
+        let capacity = diagnostics.len() + usize::from(native.is_some()) < MAX_TRUSTED_PEERS;
         tokio::select! {
             biased;
             result = &mut stop => break result,
-            incoming = listener.accept() => {
-                if let Ok(peer) = incoming {
+            finished = native_result(native.as_mut()) => {
+                routes.recovered(finished.unwrap_or(false));
+                native = None;
+            }
+            _ = diagnostics.join_next(), if !diagnostics.is_empty() => (),
+            incoming_peer = &mut incoming, if capacity => {
+                if let Ok(peer) = incoming_peer {
                     let (connection, _) = peer.into_parts();
-                    if let Some(selected) = take_selected(&mut selection, &connection) {
+                    let selected = native.is_none().then(|| routes.admit(&connection)).flatten();
+                    if let Some(selected) = selected {
                         let stopped = stopped.clone();
-                        // The existing capture owner must remain on its original thread.
-                        sessions.spawn_local(async move {
-                            match serve_selected(&connection, selected, stopped).await {
-                                Ok(()) => println!("Selected session ended. Restart the listener to select another native session."),
-                                Err(error) => eprintln!("Selected native session ended: {error}"),
-                            }
+                        // The existing native owner stays on the same thread.
+                        native = Some(tokio::task::spawn_local(async move {
+                            let clean = serve_selected(&connection, selected, stopped).await;
                             connection.close(0u8.into(), b"selected input connection ended");
-                        });
+                            clean
+                        }));
                     } else {
-                        sessions.spawn(async move {
+                        diagnostics.spawn(async move {
                             let _ = serve_diagnostic(&connection).await;
                             connection.close(0u8.into(), b"diagnostic connection ended");
                         });
                     }
                 }
+                incoming.set(listener.accept());
             }
         }
     };
     stop_all.send_replace(true);
     crate::request_native_stop();
     listener.close();
-    while sessions.join_next().await.is_some() {}
+    if let Some(native) = native {
+        routes.recovered(native.await.unwrap_or(false));
+    }
+    while diagnostics.join_next().await.is_some() {}
     result?;
     Ok(())
+}
+
+async fn native_result(
+    current: Option<&mut JoinHandle<bool>>,
+) -> Result<bool, tokio::task::JoinError> {
+    match current {
+        Some(current) => current.await,
+        None => pending().await,
+    }
 }
 
 async fn open_stream(
@@ -151,11 +220,18 @@ async fn serve_selected(
     connection: &quinn::Connection,
     selected: Selection,
     stopped: watch::Receiver<bool>,
-) -> Result<()> {
+) -> bool {
     let local = peerglide_platform::input_capabilities();
-    let (send, receive, peer) = open_stream(connection, local.clone()).await?;
+    let (send, receive, peer) = match open_stream(connection, local.clone()).await {
+        Ok(streams) => streams,
+        Err(error) => {
+            eprintln!("Selected session negotiation ended: {error}");
+            return true;
+        }
+    };
     if !local.motion() || !peer.motion() {
-        return diagnostic_stream(send, receive).await;
+        let _ = diagnostic_stream(send, receive).await;
+        return true;
     }
     let mut reporter = InputReporter::new(false);
     let result = session::run_with_diagnostics(
@@ -174,8 +250,13 @@ async fn serve_selected(
         session::SessionControls::default(),
     )
     .await;
-    reporter.finish();
-    result
+    if let Err(error) = result {
+        eprintln!("Selected native session ended: {error}");
+    }
+    matches!(
+        reporter.finish(),
+        WorkerInputState::Local | WorkerInputState::Disabled
+    )
 }
 
 async fn serve_diagnostic(connection: &quinn::Connection) -> Result<()> {
@@ -223,7 +304,7 @@ mod tests {
                     .await
                     .map_err(|_| std::io::Error::other("diagnostic test ended"))
             },
-            None,
+            NativeRoutes::default(),
         );
         let clients = async {
             let (first, second) = tokio::try_join!(
@@ -256,11 +337,14 @@ mod tests {
             vec![chosen.certificate.clone(), other.certificate.clone()],
         )?;
         let address = listener.local_addr()?;
-        let mut selection = Some(Selection {
-            certificate: chosen.certificate.clone(),
-            allow: false,
-            edge: Edge::Right,
-        });
+        let mut selection = NativeRoutes {
+            choices: vec![Selection {
+                certificate: chosen.certificate.clone(),
+                allow: false,
+                edge: Edge::Right,
+            }],
+            ..NativeRoutes::default()
+        };
         tokio::time::timeout(Duration::from_secs(10), async {
             for (identity, expected) in [(&other, false), (&chosen, true), (&chosen, false)] {
                 let endpoint = transport::endpoint(bind, identity, &local.certificate)?;
@@ -268,7 +352,7 @@ mod tests {
                 let (accepted, client) = tokio::join!(listener.accept(), connecting);
                 let _client = client?;
                 let (server, _) = accepted?.into_parts();
-                let selected = take_selected(&mut selection, &server);
+                let selected = selection.admit(&server);
                 assert_eq!(selected.is_some(), expected);
                 if let Some(selected) = selected {
                     assert!(!selected.allow);
@@ -279,6 +363,76 @@ mod tests {
         })
         .await??;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn serial_native_routes_keep_incoming_permissions_per_peer_and_block_on_failed_recovery(
+    ) -> Result<()> {
+        let local = transport::Identity::generate()?;
+        let left = transport::Identity::generate()?;
+        let right = transport::Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let listener = Listener::bind(
+            bind,
+            &local,
+            vec![left.certificate.clone(), right.certificate.clone()],
+        )?;
+        let address = listener.local_addr()?;
+        let mut routes = NativeRoutes {
+            choices: vec![
+                Selection {
+                    certificate: left.certificate.clone(),
+                    allow: true,
+                    edge: Edge::Right,
+                },
+                Selection {
+                    certificate: right.certificate.clone(),
+                    allow: false,
+                    edge: Edge::Right,
+                },
+            ],
+            serial: true,
+            blocked: false,
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for (identity, expected, clean) in [
+                (&left, Some(true), true),
+                (&right, Some(false), false),
+                (&left, None, false),
+            ] {
+                let endpoint = transport::endpoint(bind, identity, &local.certificate)?;
+                let (accepted, client) = tokio::join!(
+                    listener.accept(),
+                    endpoint.connect(address, "peerglide.local")?
+                );
+                let _client = client?;
+                let (server, _) = accepted?.into_parts();
+                assert_eq!(routes.admit(&server).map(|route| route.allow), expected);
+                if expected.is_some() {
+                    routes.recovered(clean);
+                }
+                server.close(0u8.into(), b"serial route fixture ended");
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    #[test]
+    fn serial_route_rejects_a_global_incoming_permission() {
+        use clap::Parser;
+        assert!(crate::Cli::try_parse_from([
+            "peerglide",
+            "listen-peers",
+            "--peer-cert",
+            "peer.der",
+            "--native-peer-cert",
+            "peer.der",
+            "--serial-native",
+            "--allow-control",
+        ])
+        .is_err());
     }
 
     struct Probe {
