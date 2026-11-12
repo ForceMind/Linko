@@ -250,12 +250,24 @@ async fn main() -> Result<()> {
             peer_cert,
             bind,
         } => multi_peer::run(&identity, &peer_cert, bind).await,
-        Command::ProbeDisplays { address, layout_address, identity, peer_cert } => {
-            layout_probe::probe(&identity, &peer_cert, address, layout_address).await
-        }
+        Command::ProbeDisplays {
+            address,
+            layout_address,
+            identity,
+            peer_cert,
+        } => layout_probe::probe(&identity, &peer_cert, address, layout_address).await,
         #[cfg(any(windows, target_os = "macos"))]
-        Command::ListenDisplays { identity, peer_cert, bind, layout_bind, share_display_layout } => {
-            anyhow::ensure!(share_display_layout, "local display sharing requires explicit consent");
+        Command::ListenDisplays {
+            identity,
+            peer_cert,
+            bind,
+            layout_bind,
+            share_display_layout,
+        } => {
+            anyhow::ensure!(
+                share_display_layout,
+                "local display sharing requires explicit consent"
+            );
             layout_probe::listen(&identity, &peer_cert, bind, layout_bind).await
         }
         Command::Connect {
