@@ -416,13 +416,15 @@ mod tests {
     async fn xorg_route_waits_for_the_grant_and_retires_with_the_return_cursor() -> Result<()> {
         let source = transport::Identity::generate()?;
         let destination = transport::Identity::generate()?;
-        let endpoint = transport::endpoint("127.0.0.1:0".parse()?, &destination, &source.certificate)?;
+        let endpoint =
+            transport::endpoint("127.0.0.1:0".parse()?, &destination, &source.certificate)?;
         let peer = Peer {
             address: endpoint.local_addr()?,
             certificate: destination.certificate,
             secondary_layout: None,
         };
-        let capabilities = InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg)?;
+        let capabilities =
+            InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg)?;
         let (observed, acquire_received) = oneshot::channel();
         let (checked, can_grant) = oneshot::channel();
         let (arrived, motion_received) = oneshot::channel();
@@ -453,7 +455,8 @@ mod tests {
             can_grant.await?;
             transport::send(&mut send, &Message::Granted { lease: LEASE }).await?;
             let bytes = connection.read_datagram().await?;
-            let cursor = peerglide_protocol::decode::<Motion>(&bytes).map_err(anyhow::Error::msg)?;
+            let cursor =
+                peerglide_protocol::decode::<Motion>(&bytes).map_err(anyhow::Error::msg)?;
             assert_eq!(cursor.lease, LEASE);
             assert!(cursor.x > 0.19 && cursor.x < 0.21 && cursor.y == 0.5);
             arrived.send(()).expect("native motion observer");
@@ -462,7 +465,10 @@ mod tests {
                     Message::Ping { lease: LEASE } => {
                         transport::send(&mut send, &Message::Pong { lease: LEASE }).await?;
                     }
-                    Message::Release { lease: LEASE, cursor: Some(cursor) } => {
+                    Message::Release {
+                        lease: LEASE,
+                        cursor: Some(cursor),
+                    } => {
                         assert!(cursor.sequence > 1 && cursor.x == 0.0);
                         break;
                     }
@@ -475,7 +481,10 @@ mod tests {
         };
         let native_input = async {
             acquire_received.await?;
-            assert!(matches!(permit.try_recv(), Err(oneshot::error::TryRecvError::Empty)));
+            assert!(matches!(
+                permit.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ));
             checked.send(()).expect("grant observer");
             permit.await?;
             admitted.send(()).expect("native admission observer");

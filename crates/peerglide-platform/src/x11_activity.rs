@@ -231,7 +231,9 @@ mod tests {
         injector.pointer(ReceivePoint { x: 1.0, y: 0.5 })?;
         assert!(matches!(source.poll()?, PointerSample::Idle));
         let edge = peerglide_protocol::Edge::Right;
-        let along = source.edge_fraction(edge)?.context("right edge not reached")?;
+        let along = source
+            .edge_fraction(edge)?
+            .context("right edge not reached")?;
         assert!(source.claim(edge, along)?);
         assert!(injector.button(2, true)?);
         assert!(matches!(source.poll()?, PointerSample::LocalInput));

@@ -222,7 +222,15 @@ impl PointerSource {
             .check()?;
         // The confinement window must not become the local click target.
         connection
-            .shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, window, 0, 0, &[])?
+            .shape_rectangles(
+                SO::SET,
+                SK::INPUT,
+                ClipOrdering::UNSORTED,
+                window,
+                0,
+                0,
+                &[],
+            )?
             .check()?;
         connection.map_window(window)?.check()?;
         let reply = connection
@@ -335,7 +343,10 @@ mod tests {
                     integral: -3,
                     frac: 1 << 31,
                 },
-                Fp3232 { integral: 7, frac: 0 },
+                Fp3232 {
+                    integral: 7,
+                    frac: 0,
+                },
             ],
             ..RawMotionEvent::default()
         };
