@@ -96,10 +96,11 @@ impl Offer {
         let (pin, _, _) = Pin::load(app)?;
         let remaining = self.expires.saturating_duration_since(Instant::now());
         ensure!(pin == self.pin && !remaining.is_zero(), "复制拖放已失效");
-        let payload = match &self.state {
-            State::Ready(payload) => payload,
-            #[cfg(target_os = "macos")]
-            State::Dragging(_) => return Ok(None),
+        #[cfg(all(windows, target_env = "msvc"))]
+        let State::Ready(payload) = &self.state;
+        #[cfg(target_os = "macos")]
+        let State::Ready(payload) = &self.state else {
+            return Ok(None);
         };
         #[cfg(all(windows, target_env = "msvc"))]
         {
