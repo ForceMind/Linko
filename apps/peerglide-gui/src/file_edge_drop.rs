@@ -395,11 +395,12 @@ mod tests {
             "/tmp/one.txt"
         });
         let file: egui::DroppedFileHandle = Arc::new(Dropped(absolute.clone()));
+        let single_file = std::slice::from_ref(&file);
         assert!(
-            matches!(drop_event(&[file.clone()], true), Some(Event::File(path)) if path == absolute)
+            matches!(drop_event(single_file, true), Some(Event::File(path)) if path == absolute)
         );
         assert!(matches!(
-            drop_event(&[file.clone()], false),
+            drop_event(single_file, false),
             Some(Event::PositionUnavailable)
         ));
         assert!(matches!(
