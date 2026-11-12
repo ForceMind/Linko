@@ -14,17 +14,38 @@ use std::path::Path;
 const LEASE: u64 = 1;
 type Ending<'a> = Pin<&'a mut dyn Future<Output = Result<()>>>;
 
-pub(crate) async fn run(identity: &Path, plan: &Path) -> Result<()> {
+pub(crate) async fn run(
+    identity: &Path,
+    plan: &Path,
+    expected: Option<(&str, &str)>,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+    reporter: &mut crate::InputReporter,
+) -> Result<()> {
+    if *stop.borrow() || stop.has_changed().is_err() {
+        return Ok(());
+    }
     let layout = monitor_layout(true)
         .context("configured native routing needs a Windows or macOS display snapshot")?;
     let identity = transport::Identity::load(identity)?;
-    let routes = Routes::load(plan, &identity.certificate, &layout)?;
+    if let Some((_, local)) = expected {
+        ensure!(identity.fingerprint() == local, "local identity changed after route confirmation");
+    }
+    let routes = Routes::load_for_launch(plan, &identity.certificate, &layout, expected.map(|(layout, _)| layout))?;
+    if *stop.borrow() || stop.has_changed().is_err() {
+        return Ok(());
+    }
     let (tx, mut input) = platform::capture_event_channel();
     let mut capture = platform::capture_routed_source(tx)?;
+    let driver = capture.take_receive_driver()?;
+    let _registration = driver.as_ref().map(|driver| crate::NativeRecoveryRegistration::new(
+        driver.control(), *stop.borrow() || stop.has_changed().is_err(),
+    ));
+    reporter.set(WorkerInputState::Local);
+    crate::worker_event(reporter.managed, crate::WorkerState::Listening);
     let ending = async {
         tokio::select! {
             biased;
-            interrupted = tokio::signal::ctrl_c() => Ok(interrupted?),
+            _ = crate::stop_requested(&mut stop) => Ok(()),
             changed = watch_display_layout(Some(&layout)) => changed,
         }
     };
@@ -35,22 +56,24 @@ pub(crate) async fn run(identity: &Path, plan: &Path) -> Result<()> {
         capture: &capture,
         input: &mut input,
         ending: ending.as_mut(),
+        reporter,
     }
     .run(&identity)
     .await;
 
-    let mut reporter = super::super::InputReporter::new(false);
-    let mut status = InputStatus::new(true, &mut reporter);
+    let mut status = InputStatus::new(true, reporter);
     let started = std::time::Instant::now();
     let first = (capture.shutdown_poll(), capture.shutdown_pending());
-    drain_capture(
+    let shutdown = drain_capture(
         first,
         || (capture.shutdown_poll(), capture.shutdown_pending()),
         &mut status,
         started,
         Duration::from_millis(500),
     )
-    .await?;
+    .await;
+    status.finish(shutdown.is_ok());
+    shutdown?;
     result
 }
 
@@ -83,6 +106,7 @@ struct Source<'a> {
     capture: &'a CaptureSession,
     input: &'a mut CaptureEvents,
     ending: Ending<'a>,
+    reporter: &'a mut crate::InputReporter,
 }
 
 impl<'a> Source<'a> {
@@ -155,6 +179,7 @@ impl<'a> Source<'a> {
                 continue;
             };
             let request = PendingAcquire::new(LEASE, token, now_ms());
+            self.reporter.switch(crate::WorkerSwitchState::Pending);
             let dial = tokio::time::timeout(
                 Duration::from_millis(request.deadline.saturating_sub(now_ms())),
                 Link::connect(identity, chosen.peer),
@@ -168,6 +193,7 @@ impl<'a> Source<'a> {
                 Ok(Ok(link)) if link.capabilities.motion() => link,
                 _ => {
                     eprintln!("Selected route is unavailable or has no native input capability.");
+                    self.reporter.switch(crate::WorkerSwitchState::PeerUnavailable);
                     continue;
                 }
             };
@@ -178,6 +204,7 @@ impl<'a> Source<'a> {
             // Stop suppression before waiting on any peer. Every possibly sent
             // Acquire is retired on its own connection before the next route.
             let local = if attempted {
+                self.reporter.set(WorkerInputState::Recovering);
                 self.capture.restore_checked()
             } else {
                 Ok(())
@@ -191,8 +218,13 @@ impl<'a> Source<'a> {
             } else {
                 Ok(())
             };
+            if local.is_err() || peer.is_err() {
+                self.reporter.set(WorkerInputState::RecoveryUnconfirmed);
+            }
             local?;
             peer?;
+            self.reporter.set(WorkerInputState::Local);
+            self.reporter.switch(crate::WorkerSwitchState::Idle);
             if let Exit::Stop(stop) = result? {
                 return stop;
             }
@@ -267,6 +299,8 @@ impl<'a> Source<'a> {
                         PendingStep::Committed { epoch, .. } => {
                             let bounds = display_bounds(self.layout, chosen.anchor.display).context("configured source display disappeared")?;
                             let size = (bounds.right - bounds.left, bounds.bottom - bounds.top);
+                            self.reporter.switch(crate::WorkerSwitchState::Idle);
+                            self.reporter.set(WorkerInputState::ControllingRemote);
                             return self.forward(link, edges, entry_position(edges.remote, along), size, epoch).await;
                         }
                         PendingStep::Cancelled { .. } => return Ok(Exit::Local(None)),
@@ -546,6 +580,16 @@ impl Link {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_stop_before_routed_start_reports_disabled_without_loading_identity() -> Result<()> {
+        let (_stop, stopped) = tokio::sync::watch::channel(true);
+        let mut reporter = crate::InputReporter::new(false);
+        reporter.set(WorkerInputState::Disabled);
+        run(Path::new("missing-identity"), Path::new("missing-plan"), None, stopped, &mut reporter).await?;
+        assert_eq!(reporter.finish(), WorkerInputState::Disabled);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn routed_secondary_proposes_acquire_only_after_the_bound_reservation() -> Result<()> {

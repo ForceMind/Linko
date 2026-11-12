@@ -33,7 +33,17 @@ pub(super) struct Routes {
 }
 
 impl Routes {
+    #[cfg(any(windows, target_os = "macos", test))]
     pub(super) fn load(path: &Path, local: &[u8], layout: &Layout) -> Result<Self> {
+        Self::load_for_launch(path, local, layout, None)
+    }
+
+    pub(super) fn load_for_launch(
+        path: &Path,
+        local: &[u8],
+        layout: &Layout,
+        expected: Option<&str>,
+    ) -> Result<Self> {
         let metadata = std::fs::metadata(path).context("inspect display route plan")?;
         ensure!(
             metadata.is_file(),
@@ -56,7 +66,25 @@ impl Routes {
             bytes.len() as u64 <= MAX_PLAN_BYTES,
             "display route plan too large"
         );
-        let plan: Plan = serde_json::from_slice(&bytes).context("invalid display route plan")?;
+        let plan = match expected {
+            Some(expected) => {
+                ensure!(
+                    blake3::hash(&bytes).to_hex().as_str() == expected,
+                    "display route plan changed after confirmation"
+                );
+                let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+                let plan: Plan = if value.get("store_version").is_some() {
+                    let stored: peerglide_protocol::route_plan::StoredPlan = serde_json::from_value(value)?;
+                    ensure!(stored.store_version == 1, "unsupported desktop route draft version");
+                    stored.data
+                } else {
+                    serde_json::from_value(value)?
+                };
+                ensure!(plan.peers.iter().all(|peer| peer.fingerprint.is_some()), "managed routes require fixed certificate fingerprints");
+                plan
+            }
+            None => serde_json::from_slice(&bytes).context("invalid display route plan")?,
+        };
         let directory = path.parent().unwrap_or_else(|| Path::new("."));
         Self::bind(plan, directory, local, layout)
     }
@@ -338,6 +366,14 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec(&plan)?)?;
         assert!(Routes::load(&path, &local.certificate, &layout).is_err());
         plan["peers"][1]["fingerprint"] = serde_json::json!(second.fingerprint());
+        plan["peers"][0]["fingerprint"] = serde_json::json!(first.fingerprint());
+        let mut draft = serde_json::to_vec(&serde_json::json!({"store_version": 1, "data": &plan}))?;
+        let expected = blake3::hash(&draft).to_hex();
+        std::fs::write(&path, &draft)?;
+        Routes::load_for_launch(&path, &local.certificate, &layout, Some(expected.as_str()))?;
+        draft.push(b'\n');
+        std::fs::write(&path, &draft)?;
+        assert!(Routes::load_for_launch(&path, &local.certificate, &layout, Some(expected.as_str())).is_err());
         let serve_first = tokio::spawn(answer(first_endpoint.clone(), local.certificate.clone()));
         let serve_second = tokio::spawn(answer(second_endpoint.clone(), local.certificate.clone()));
         probe(&local, first_peer).await?;
