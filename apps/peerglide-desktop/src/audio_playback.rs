@@ -83,12 +83,7 @@ pub(super) async fn run(
         }
         result = audio::accept(&connection, &pin, audio::Direction::Playback, duration) => result?,
     };
-    #[cfg(windows)]
-    let device = device
-        .map(str::parse::<u32>)
-        .transpose()
-        .context("Windows audio device must be a numeric output ID")?;
-    let mut player = native::Player::open_after_explicit_consent(device)?;
+    let mut player = open_player(device)?;
     let result = drive(&session, &mut stop, |samples| {
         player.submit(samples, volume)
     })
@@ -97,6 +92,16 @@ pub(super) async fn run(
     // Attempt device cleanup even when networking or sample submission fails.
     player.stop().context("local audio output cleanup failed")?;
     result
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+pub(super) fn open_player(device: Option<&str>) -> Result<native::Player> {
+    #[cfg(windows)]
+    let device = device
+        .map(str::parse::<u32>)
+        .transpose()
+        .context("Windows audio device must be a numeric output ID")?;
+    native::Player::open_after_explicit_consent(device)
 }
 
 async fn drive<F>(
