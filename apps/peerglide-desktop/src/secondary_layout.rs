@@ -97,6 +97,20 @@ impl Routes {
         edge: Edge,
         fraction: f64,
     ) -> bool {
+        tokio::select! {
+            biased;
+            _ = super::stop_requested(stop) => false,
+            confirmed = self.reserve_outbound(input, lease, edge, fraction) => confirmed,
+        }
+    }
+
+    pub(super) async fn reserve_outbound(
+        &self,
+        input: &Connection,
+        lease: u64,
+        edge: Edge,
+        fraction: f64,
+    ) -> bool {
         let Some((endpoint, address)) = &self.source else {
             return true;
         };
@@ -112,11 +126,10 @@ impl Routes {
             sidecar.close(0u8.into(), b"display reservation finished");
             result
         };
-        tokio::select! {
-            biased;
-            _ = super::stop_requested(stop) => false,
-            confirmation = tokio::time::timeout(OUTBOUND_BUDGET, result) => matches!(confirmation, Ok(Ok(Some(_)))),
-        }
+        matches!(
+            tokio::time::timeout(OUTBOUND_BUDGET, result).await,
+            Ok(Ok(Some(_)))
+        )
     }
 
     pub(super) fn accepts_incoming(
