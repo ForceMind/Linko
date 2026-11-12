@@ -13,7 +13,7 @@ use peerglide_protocol::LEASE_MS;
 use peerglide_transfer::drop_admission::{Admission, Context as DropContext, Ticket};
 use quinn::{crypto::rustls::HandshakeData, Connection};
 use std::{
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -26,7 +26,7 @@ const READY: u8 = 2;
 const DECLINED: u8 = 3;
 
 /// Shared secret of a single authenticated file transfer. Never serialized.
-#[derive(Clone)]
+#[cfg_attr(test, derive(Clone))]
 pub(crate) struct Receipt {
     transfer: [u8; 16],
     peer: blake3::Hash,
@@ -86,7 +86,7 @@ struct Prepared {
     ticket: Ticket,
     expires: Instant,
     file: PreparedDropPath,
-    receipt: Receipt,
+    receipt: Arc<Receipt>,
     reservation: Option<Reservation>,
 }
 

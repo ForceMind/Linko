@@ -141,7 +141,7 @@ pub struct ReceivedFile {
     path: PathBuf,
     manifest: Manifest,
     origin: DropOrigin,
-    receipt: Option<Receipt>,
+    receipt: Option<Arc<Receipt>>,
 }
 
 /// Locally retained provenance of one committed transfer. Never put the
@@ -182,7 +182,7 @@ pub struct PreparedDropPath {
     path: PathBuf,
     _source: File,
     pub(crate) origin: DropOrigin,
-    pub(crate) receipt: Option<Receipt>,
+    pub(crate) receipt: Option<Arc<Receipt>>,
     #[cfg(any(target_os = "macos", all(windows, target_env = "msvc"), test))]
     manifest: Manifest,
 }
@@ -546,7 +546,7 @@ where
         path,
         manifest: verified_manifest,
         origin,
-        receipt,
+        receipt: receipt.map(Arc::new),
     });
     Ok(result)
 }
