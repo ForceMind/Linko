@@ -2145,7 +2145,8 @@ pub(super) mod safety_dialog_tests {
     }
 
     #[test]
-    fn escape_dismisses_safety_dialog_without_closing_pairing_or_releasing_recovery() -> Result<()> {
+    fn escape_dismisses_safety_dialog_without_closing_pairing_or_releasing_recovery() -> Result<()>
+    {
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let before = app.config.clone();
