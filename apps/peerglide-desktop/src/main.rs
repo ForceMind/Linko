@@ -219,7 +219,7 @@ enum Command {
         #[arg(long, requires = "allow_pointer_control")]
         allow_scroll: bool,
     },
-    /// Receive one verified computer's pointer through a Wayland RemoteDesktop session.
+    /// Receive one verified computer's input through a Wayland RemoteDesktop session.
     #[cfg(target_os = "linux")]
     ListenWayland {
         #[arg(long, default_value = "identity")]
@@ -234,6 +234,9 @@ enum Command {
         allow_buttons: bool,
         #[arg(long, requires = "allow_pointer_control")]
         allow_scroll: bool,
+        /// Also request keyboard permission and receive supported physical keys.
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_keyboard: bool,
         /// Select an EIS region by its compositor-provided X,Y origin.
         #[arg(long, value_parser = wayland_receive::parse_region)]
         region: Option<(u32, u32)>,
@@ -550,6 +553,7 @@ fn main() -> Result<()> {
             allow_pointer_control,
             allow_buttons,
             allow_scroll,
+            allow_keyboard,
             region,
         } => run_cli_future(|| {
             wayland_receive::run(
@@ -560,6 +564,7 @@ fn main() -> Result<()> {
                 peerglide_platform::wayland_input::Options {
                     buttons: allow_buttons,
                     scroll: allow_scroll,
+                    keyboard: allow_keyboard,
                     region,
                 },
             )

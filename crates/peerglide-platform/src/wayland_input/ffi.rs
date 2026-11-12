@@ -41,9 +41,11 @@ macro_rules! api {
     };
 }
 
+pub(super) const PORTAL_KEYBOARD: u32 = 1;
 pub(super) const PORTAL_POINTER: u32 = 1 << 1;
 pub(super) const PORTAL_CONNECTED: c_int = 1;
 pub(super) const CAP_ABSOLUTE: c_uint = 1 << 1;
+pub(super) const CAP_KEYBOARD: c_uint = 1 << 2;
 pub(super) const CAP_SCROLL: c_uint = 1 << 4;
 pub(super) const CAP_BUTTON: c_uint = 1 << 5;
 pub(super) const DISCONNECT: c_int = 2;
@@ -94,6 +96,7 @@ api!(EiApi, "libei.so.1", {
     ei_device_stop_emulating: unsafe extern "C" fn(*mut Device),
     ei_device_pointer_motion_absolute: unsafe extern "C" fn(*mut Device, f64, f64),
     ei_device_button_button: unsafe extern "C" fn(*mut Device, u32, bool),
+    ei_device_keyboard_key: unsafe extern "C" fn(*mut Device, u32, bool),
     ei_device_scroll_discrete: unsafe extern "C" fn(*mut Device, i32, i32),
     ei_device_scroll_cancel: unsafe extern "C" fn(*mut Device, bool, bool),
     ei_device_frame: unsafe extern "C" fn(*mut Device, u64),
