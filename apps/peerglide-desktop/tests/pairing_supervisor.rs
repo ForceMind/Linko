@@ -42,7 +42,11 @@ fn wait(
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    anyhow::bail!("pairing parent process deadline exceeded")
+    anyhow::bail!(
+        "pairing parent process deadline exceeded (offer {:?}, join {:?})",
+        a.phase(),
+        b.phase()
+    )
 }
 fn start_offer(
     a: &mut Supervisor,
@@ -56,7 +60,7 @@ fn start_offer(
         Mode::Offer("127.0.0.1:0".parse()?),
         Arc::new(|| {}),
     )?;
-    wait(a, b, |a, _| a.displayed_code().is_some())?;
+    wait(a, b, |a, _| a.displayed_code().is_some()).context("wait for the offer listener")?;
     let (code, address) = a.displayed_code().context("missing private display code")?;
     assert_eq!(a.offer_hint_state(), Some((address, 5)));
     Ok((code.to_owned(), address))
