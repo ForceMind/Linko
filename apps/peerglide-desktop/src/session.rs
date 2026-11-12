@@ -804,7 +804,8 @@ pub(super) async fn run_with_diagnostics(
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         // Sign tallies only; displacement values are never recorded.
                         if dx>0.0 {count(Count::MovePositive);} else if dx<0.0 {count(Count::MoveNegative);}
-                        position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
+                        let (dx,dy)=departure.motion(dx/size.0,dy/size.1);
+                        position.0=(position.0+dx).clamp(0.0,1.0);position.1=(position.1+dy).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
                         if departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),route)? {
                             count(Count::EdgeReturn);
@@ -1164,6 +1165,23 @@ impl OutgoingEdges {
 
     fn crossed_back(&self, (x, y): (f64, f64)) -> bool {
         distance(self.remote, x, y) <= 0.001
+    }
+
+    fn motion(&self, dx: f64, dy: f64) -> (f64, f64) {
+        // Progress out of the source edge becomes progress into the receiver.
+        // Keep the along-edge direction consistent with both endpoint fractions.
+        let (forward, along) = match self.local {
+            Edge::Left => (-dx, dy),
+            Edge::Right => (dx, dy),
+            Edge::Top => (-dy, dx),
+            Edge::Bottom => (dy, dx),
+        };
+        match self.remote {
+            Edge::Left => (forward, along),
+            Edge::Right => (-forward, along),
+            Edge::Top => (along, forward),
+            Edge::Bottom => (along, -forward),
+        }
     }
 }
 fn distance(edge: Edge, x: f64, y: f64) -> f64 {
@@ -1826,6 +1844,7 @@ mod tests {
             assert_eq!(departure.wire_edge(), edge);
             assert_eq!(entry, entry_position(edge.opposite(), 0.5));
             assert_eq!(local_return, entry_position(edge, 0.5));
+            assert_eq!(departure.motion(0.1, -0.25), (0.1, -0.25));
             assert!(!departure.crossed_back(entry));
             assert!(!departure.crossed_back((0.5, 0.5)));
             let boundary = match edge {
@@ -1845,6 +1864,8 @@ mod tests {
         assert_eq!(departure.wire_edge(), Edge::Bottom);
         assert_eq!(entry, (0.25, 0.002));
         assert_eq!(local_return, (0.998, 0.25));
+        assert_eq!(departure.motion(0.1, 0.25), (0.25, 0.1));
+        assert_eq!(departure.motion(-0.1, 0.25), (0.25, -0.1));
         assert!(departure.crossed_back((0.25, 0.0)));
         assert!(!departure.crossed_back((0.0, 0.25)));
     }
