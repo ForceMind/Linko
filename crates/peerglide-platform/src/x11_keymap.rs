@@ -59,6 +59,10 @@ impl KeyMap {
         self.codes.get(usize::from(usage)).copied().flatten()
     }
 
+    pub(super) fn usage(&self, code: u8) -> Option<u16> {
+        self.codes.iter().position(|mapped| *mapped == Some(code)).map(|usage| usage as u16)
+    }
+
     pub(super) fn usages(&self) -> impl Iterator<Item = u16> + '_ {
         self.codes
             .iter()

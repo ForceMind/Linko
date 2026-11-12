@@ -236,6 +236,9 @@ enum Command {
         /// Also send standard horizontal and vertical Xorg wheel steps.
         #[arg(long, requires = "allow_pointer_capture")]
         allow_scroll_capture: bool,
+        /// Also send supported XKB physical keys. Ctrl+Alt+Esc ends the lease.
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_keyboard_capture: bool,
     },
     /// Play the microphone of one explicitly verified computer.
     #[cfg(any(windows, target_os = "macos"))]
@@ -527,15 +530,19 @@ fn main() -> Result<()> {
             allow_pointer_capture,
             allow_button_capture,
             allow_scroll_capture,
+            allow_keyboard_capture,
         } => run_cli_future(|| {
             session::x11_source::run(
                 &identity,
                 &peer_cert,
                 address,
                 edge.into(),
-                allow_pointer_capture,
-                allow_button_capture,
-                allow_scroll_capture,
+                session::x11_source::OptIn {
+                    pointer: allow_pointer_capture,
+                    buttons: allow_button_capture,
+                    scroll: allow_scroll_capture,
+                    keyboard: allow_keyboard_capture,
+                },
             )
         }),
         #[cfg(any(windows, target_os = "macos"))]

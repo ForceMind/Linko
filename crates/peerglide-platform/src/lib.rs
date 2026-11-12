@@ -36,6 +36,8 @@ pub mod tray;
 pub mod x11_activity;
 #[cfg(target_os = "linux")]
 pub mod x11_inject;
+#[cfg(target_os = "linux")]
+mod x11_keymap;
 pub use capture_events::{CaptureEventSender, CaptureEvents};
 pub use receive_driver::{
     ReceiveAck, ReceiveControl, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot,
