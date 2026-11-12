@@ -1050,7 +1050,7 @@ impl App {
             .fingerprint
             .as_deref()
             .context("缺少已登记证书指纹")?;
-        let mut cmd = self.worker_command(
+        let cmd = self.worker_command(
             executable,
             cert,
             mode,
@@ -1058,7 +1058,11 @@ impl App {
             (&local.fingerprint(), peer_fingerprint),
         );
         #[cfg(any(windows, target_os = "macos"))]
-        self.configure_receive_display(&mut cmd, mode)?;
+        let cmd = {
+            let mut cmd = cmd;
+            self.configure_receive_display(&mut cmd, mode)?;
+            cmd
+        };
         self.spawn_session(cmd, mode, false)
     }
 
