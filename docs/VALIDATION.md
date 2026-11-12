@@ -2657,6 +2657,21 @@ PR180 审阅提交 `7916b5e4eada6fe8580eb164fd4943ba0cb83b12` 的
 通过。便携回滚在 runner 隔离目录验证。实际系统音频、原生拖放、
 多设备路由、安装和 #3/C06 按最终候选记录。
 
+### 集成版本 2026.11.12-0900
+
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43131489508) 的审阅
+提交为 `81a5f6253ba70731a3ce6449c92aea342f9907d1`。已读取两份便携包，
+`BUILD_SOURCE.json` 的实际检出为 `52d6b7174fdc941c351c0b040abee3c4c3fccbe7`，
+源码树为 `5a222668e12c899db706f201e6f0015fc2cb3b3e`，与审阅提交树一致。
+内层 ZIP 的实算 SHA-256 分别等于各自摘要。
+
+| 包 | SHA-256 |
+| --- | --- |
+| [Windows x64](https://github.com/ForceMind/Linko/actions/runs/43131489508/artifacts/13905499578) | `11c609e7e61e247690a69c7901191c392ed90307950152e62ea9556c9492c9f7` |
+| [macOS arm64](https://github.com/ForceMind/Linko/actions/runs/43131489508/artifacts/13906522740) | `e3326478b8f18bf461fc8d0b8fc36455522f83ebf11053add3e32162707ead83` |
+
+此记录用于阶段证据，统一验收以最后冻结的匹配包为准。
+
 ### F16 中文字重资源对照
 
 基线 `d4c872b` 使用同一静态字体字节及 400、550、650 三个实例，试验
@@ -2688,9 +2703,9 @@ PR180 审阅提交 `7916b5e4eada6fe8580eb164fd4943ba0cb83b12` 的
 | 配对、发现、权限和后台 | [IPv6 短码配对发现](https://github.com/ForceMind/Linko/actions/runs/43121334625)；[隔离 X11 窗口与流程](https://github.com/ForceMind/Linko/actions/runs/43123212190/artifacts/13901353937) | Windows/macOS 实际配对提示、IPv6 多网卡与作用域、关闭到托盘、从托盘停止、输入权限变化和键盘可访问性待验。 |
 | 本机手势 | [Windows 受控库工作器](https://github.com/ForceMind/Linko/actions/runs/43091867388)；隔离窗口录制、预览与规则回归 | G1 全局捕获和动作保持关闭。G2 保留设计，远程动作和脚本执行不在本次候选能力内。 |
 | 剪贴板与文件 | [双工作器文本及文件回归](https://github.com/ForceMind/Linko/actions/runs/43102482924)；[显式 PNG 导入和系统后端](https://github.com/ForceMind/Linko/actions/runs/43107244245) | 双向测试文本、PNG、同意／拒绝、撤权和外部剪贴板变化；文件测试续传、取消、历史、同名文件及文件负载下的键鼠。 |
-| 多台电脑、多屏与 Linux | [多证书通信诊断](https://github.com/ForceMind/Linko/actions/runs/43118044990)；[X11 键位映射](https://github.com/ForceMind/Linko/actions/runs/43120612721) | [多机原生会话](https://github.com/ForceMind/Linko/pull/215)、[副屏预留](https://github.com/ForceMind/Linko/pull/209)和 [Xorg 指针接收](https://github.com/ForceMind/Linko/pull/222)各自推进。多机动态切换、布局档案、热插拔、精确副屏目标、Linux 主动捕获、Wayland 和完整触摸板手势仍需开发与验证。 |
+| 多台电脑、多屏与 Linux | [多机监听单台原生选择](https://github.com/ForceMind/Linko/actions/runs/43129410058)、[副屏预留](https://github.com/ForceMind/Linko/actions/runs/43125086927)、[Xorg 指针接收](https://github.com/ForceMind/Linko/actions/runs/43127952779)通过三平台 CI；[Xvfb 指针位置](https://github.com/ForceMind/Linko/actions/runs/43131250029/job/130895658074)已验隔离合成。 | 主屏档案及本机副屏选择各在 [PR226](https://github.com/ForceMind/Linko/pull/226)、[PR233](https://github.com/ForceMind/Linko/pull/233)验证。多机动态切换、热插拔、跨机副屏协商、Linux 主动捕获、Wayland 和完整触摸板手势仍需开发与验证。 |
 | 原生拖放 | [Windows 适配器](https://github.com/ForceMind/Linko/actions/runs/43121324256)、[macOS 适配器](https://github.com/ForceMind/Linko/actions/runs/43121330845)与[已接收文件复核](https://github.com/ForceMind/Linko/actions/runs/43123048040) | Finder、Explorer 和其他目标应用的跨机文字、PNG、文件拖放仍待接线；验证保留复制、取消、失焦和原文件安全。 |
-| 系统音频 | [Windows WASAPI 与 macOS ScreenCaptureKit](https://github.com/ForceMind/Linko/actions/runs/43119118577)完成编译和会话回归；`d4c872b` 的集成已复验 | [桌面独立授权](https://github.com/ForceMind/Linko/pull/213)、[本机输出选择](https://github.com/ForceMind/Linko/pull/220)和[四来源播放](https://github.com/ForceMind/Linko/pull/219)仍按各自提交验证。真实设备、录制提示、断线静音、输出切换及持续音质待验；麦克风和虚拟音频设备仍待开发。 |
+| 系统音频 | [Windows WASAPI 与 macOS ScreenCaptureKit](https://github.com/ForceMind/Linko/actions/runs/43119118577)完成编译和会话回归；`d4c872b` 的集成已复验 | [桌面独立授权](https://github.com/ForceMind/Linko/actions/runs/43125086706)和[本机输出选择](https://github.com/ForceMind/Linko/actions/runs/43127954327)已通过各自的三平台 CI。[四来源播放](https://github.com/ForceMind/Linko/pull/219)与[麦克风](https://github.com/ForceMind/Linko/pull/230)按各自提交验证。真实设备、录制提示、断线静音、输出切换及持续音质待验；麦克风和虚拟音频设备仍待开发。 |
 | 便携包、安装和回滚 | [同源与校验](https://github.com/ForceMind/Linko/actions/runs/43110809035)；[隔离暂存、切换和回滚](https://github.com/ForceMind/Linko/actions/runs/43110821243) | 最终统一候选须核对两端包的版本、检出树与 SHA-256。真实安装、升级、回滚及长期资源观察待验。正式签名、公证、开机启动、系统服务、官网部署和发布按项目授权处理。 |
 
 ### 物理回报

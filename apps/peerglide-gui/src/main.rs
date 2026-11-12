@@ -19,6 +19,7 @@ mod file_panel;
 mod gesture_lab;
 mod gesture_rules;
 mod icons;
+mod layout_profiles;
 mod layout_updates;
 mod motion;
 mod pairing_discovery;
@@ -453,6 +454,7 @@ struct App {
     capsule_motion: motion::Retrigger<(&'static str, desktop_style::Tone)>,
     notice_details: bool,
     connection_details_open: bool,
+    layout_profiles: layout_profiles::Panel,
     peer_address_edit: Option<PeerAddressEdit>,
     settings_section: SettingsSection,
     recording_mode: bool,
@@ -598,6 +600,7 @@ impl App {
             capsule_motion: motion::Retrigger::default(),
             notice_details: false,
             connection_details_open: false,
+            layout_profiles: layout_profiles::Panel::default(),
             peer_address_edit: None,
             settings_section: SettingsSection::General,
             device_tab: DeviceTab::Device,

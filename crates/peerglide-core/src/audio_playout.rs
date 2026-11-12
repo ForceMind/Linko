@@ -87,7 +87,12 @@ impl Buffer {
             return Admission::Late;
         };
         if distance >= WINDOW as u64 {
-            return Admission::TooFarAhead;
+            if active.started || active.queued != 0 {
+                return Admission::TooFarAhead;
+            }
+            // After silence the sender's live sequence can be beyond the old
+            // window. Re-anchor only when there is nothing still to play.
+            active.next = frame.sequence;
         }
         let slot = &mut self.frames[(frame.sequence % WINDOW as u64) as usize];
         if slot.is_some() {
@@ -169,6 +174,31 @@ mod tests {
         assert_eq!(output, [3; SAMPLES]);
         assert_eq!(buffer.render(epoch, &mut output), Playout::Audio);
         assert_eq!(output, [4; SAMPLES]);
+    }
+
+    #[test]
+    fn empty_rebuffer_recovers_after_a_gap_longer_than_the_receive_window() {
+        let mut buffer = Buffer::default();
+        let epoch = buffer.start().unwrap();
+        let mut output = [0; SAMPLES];
+        for sequence in 1..=3 {
+            assert_eq!(buffer.push(epoch, frame(sequence, 1)), Admission::Queued);
+        }
+        for _ in 0..3 {
+            assert_eq!(buffer.render(epoch, &mut output), Playout::Audio);
+        }
+        assert_eq!(buffer.push(epoch, frame(90, 2)), Admission::TooFarAhead);
+        for _ in 0..REBUFFER_GAP {
+            assert_eq!(buffer.render(epoch, &mut output), Playout::Gap);
+            assert_eq!(output, [0; SAMPLES]);
+        }
+        assert_eq!(buffer.render(epoch, &mut output), Playout::Buffering);
+        for sequence in 90..=92 {
+            assert_eq!(buffer.push(epoch, frame(sequence, 2)), Admission::Queued);
+        }
+        assert_eq!(buffer.push(epoch, frame(6, 1)), Admission::Late);
+        assert_eq!(buffer.render(epoch, &mut output), Playout::Audio);
+        assert_eq!(output, [2; SAMPLES]);
     }
 
     #[test]

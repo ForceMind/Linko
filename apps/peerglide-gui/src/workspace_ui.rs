@@ -616,6 +616,11 @@ impl App {
                 }
                 ui.separator();
                 self.connection_details(ui);
+                if open {
+                    let mut profiles = std::mem::take(&mut self.layout_profiles);
+                    profiles.ui(self, ui);
+                    self.layout_profiles = profiles;
+                }
             });
         });
     }

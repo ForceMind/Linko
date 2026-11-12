@@ -80,18 +80,7 @@ pub struct Injector {
 
 impl Injector {
     pub fn open_after_explicit_consent() -> Result<Self> {
-        ensure!(
-            std::env::var_os("WAYLAND_DISPLAY").is_none()
-                && std::env::var("XDG_SESSION_TYPE").ok().as_deref() != Some("wayland"),
-            "X11 injection is unavailable in a Wayland session"
-        );
-        let display = std::env::var("DISPLAY").context("local X11 display unavailable")?;
-        ensure!(
-            local_display(&display),
-            "only a local X11 display is supported"
-        );
-        let (connection, screen) = x11rb::connect(Some(&display))
-            .map_err(|_| anyhow::anyhow!("could not connect to the local X11 display"))?;
+        let (connection, screen) = local_connection()?;
         let version = connection
             .xtest_get_version(2, 2)
             .map_err(|_| anyhow::anyhow!("X11 XTEST extension unavailable"))?
@@ -130,6 +119,15 @@ impl Injector {
     }
 
     pub fn pointer(&self, point: ReceivePoint) -> Result<()> {
+        self.pointer_if(point, || Ok(true)).map(|_| ())
+    }
+
+    /// Recheck local ownership after the geometry reply, before submitting XTEST.
+    pub fn pointer_if(
+        &self,
+        point: ReceivePoint,
+        admit: impl FnOnce() -> Result<bool>,
+    ) -> Result<bool> {
         let (x, y) =
             coordinates(point, self.width, self.height).context("invalid X11 pointer position")?;
         // Refuse a stale geometry instead of interpreting a position in a new root.
@@ -138,7 +136,11 @@ impl Injector {
             geometry.width == self.width && geometry.height == self.height,
             "X11 root geometry changed"
         );
-        post(&self.connection, self.root, MOTION_NOTIFY_EVENT, 0, x, y)
+        if !admit()? {
+            return Ok(false);
+        }
+        post(&self.connection, self.root, MOTION_NOTIFY_EVENT, 0, x, y)?;
+        Ok(true)
     }
 
     pub fn button(&mut self, button: u8, down: bool) -> Result<bool> {
@@ -193,6 +195,21 @@ impl Drop for Injector {
     fn drop(&mut self) {
         let _ = self.release_owned();
     }
+}
+
+pub(super) fn local_connection() -> Result<(RustConnection, usize)> {
+    ensure!(
+        std::env::var_os("WAYLAND_DISPLAY").is_none()
+            && std::env::var("XDG_SESSION_TYPE").ok().as_deref() != Some("wayland"),
+        "X11 injection is unavailable in a Wayland session"
+    );
+    let display = std::env::var("DISPLAY").context("local X11 display unavailable")?;
+    ensure!(
+        local_display(&display),
+        "only a local X11 display is supported"
+    );
+    x11rb::connect(Some(&display))
+        .map_err(|_| anyhow::anyhow!("could not connect to the local X11 display"))
 }
 
 fn local_display(display: &str) -> bool {

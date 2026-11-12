@@ -1,4 +1,6 @@
 #[cfg(any(windows, target_os = "macos", test))]
+mod audio_mix_playback;
+#[cfg(any(windows, target_os = "macos", test))]
 mod audio_playback;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
 mod audio_source;
@@ -10,6 +12,8 @@ mod multi_peer;
 mod pairing_worker;
 mod reconnect;
 mod session;
+#[cfg(target_os = "linux")]
+mod x11_receive;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
@@ -127,7 +131,7 @@ enum Command {
     },
     /// Accept a connection from exactly the enrolled certificate. No input permission by default.
     Listen(Options),
-    /// Verify communication with several enrolled peers on one listener.
+    /// Listen for several enrolled peers with at most one selected native session.
     ListenPeers {
         #[arg(long, default_value = "identity")]
         identity: PathBuf,
@@ -136,6 +140,8 @@ enum Command {
         peer_cert: Vec<PathBuf>,
         #[arg(long, default_value = "0.0.0.0:24870")]
         bind: SocketAddr,
+        #[command(flatten)]
+        native_route: multi_peer::Options,
     },
     /// List the local playback devices without opening an audio stream.
     #[cfg(any(windows, target_os = "macos"))]
@@ -159,6 +165,22 @@ enum Command {
         #[command(flatten)]
         supervisor: audio_stop::Options,
     },
+    /// Mix audio from up to four explicitly verified computers to one local output.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayAudioMix {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long, required = true)]
+        peer_cert: Vec<PathBuf>,
+        #[arg(long, default_value = "0.0.0.0:24874")]
+        bind: SocketAddr,
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
     /// Share the local system audio with one verified computer.
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     ShareSystemAudio {
@@ -171,6 +193,46 @@ enum Command {
         duration_secs: u64,
         #[command(flatten)]
         supervisor: audio_stop::Options,
+    },
+    /// Receive pointer motion from one verified peer on the local Xorg desktop.
+    #[cfg(target_os = "linux")]
+    ListenX11 {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+        /// Explicitly allow the selected computer to move the local pointer.
+        #[arg(long, required = true)]
+        allow_pointer_control: bool,
+    },
+    /// Play the microphone of one explicitly verified computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayMicrophone {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24875")]
+        bind: SocketAddr,
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
+    /// Share the local microphone with one explicitly verified computer.
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    ShareMicrophone {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
     },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
@@ -282,7 +344,8 @@ async fn main() -> Result<()> {
             identity,
             peer_cert,
             bind,
-        } => multi_peer::run(&identity, &peer_cert, bind).await,
+            native_route,
+        } => multi_peer::run(&identity, &peer_cert, bind, native_route).await,
         #[cfg(any(windows, target_os = "macos"))]
         Command::AudioOutputDevices => audio_playback::list_outputs(),
         #[cfg(any(windows, target_os = "macos"))]
@@ -306,6 +369,25 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayAudioMix {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => {
+            audio_mix_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareSystemAudio {
             address,
@@ -320,6 +402,47 @@ async fn main() -> Result<()> {
                 address,
                 Duration::from_secs(duration_secs),
                 &supervisor,
+            )
+            .await
+        }
+        #[cfg(target_os = "linux")]
+        Command::ListenX11 {
+            identity,
+            peer_cert,
+            bind,
+            allow_pointer_control,
+        } => x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control).await,
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayMicrophone {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => {
+            audio_playback::play_microphone(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        Command::ShareMicrophone {
+            address,
+            identity,
+            peer_cert,
+            duration_secs,
+        } => {
+            audio_source::share_microphone(
+                &identity,
+                &peer_cert,
+                address,
+                Duration::from_secs(duration_secs),
             )
             .await
         }

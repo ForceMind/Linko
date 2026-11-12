@@ -1,5 +1,6 @@
-// Audio-only ScreenCaptureKit adapter. No screen output is registered.
+// Audio-only adapters for separately authorized system and microphone sources.
 #import <Foundation/Foundation.h>
+#import <AVFoundation/AVFoundation.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreAudio/CoreAudioTypes.h>
@@ -8,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -101,10 +103,34 @@ API_AVAILABLE(macos(13.0))
 }
 @end
 
+@interface LinkoMicrophoneOutput : NSObject <AVCaptureAudioDataOutputSampleBufferDelegate> {
+@public
+    std::shared_ptr<Ring> ring;
+}
+@end
+
+@implementation LinkoMicrophoneOutput
+- (void)captureOutput:(AVCaptureOutput*)output didOutputSampleBuffer:(CMSampleBufferRef)sample
+       fromConnection:(AVCaptureConnection*)connection {
+    (void)output;
+    (void)connection;
+    if (sample) {
+        ring->publish(sample);
+    }
+}
+@end
+
 namespace {
 struct Capture {
     SCStream* stream = nil;
     LinkoAudioOutput* output = nil;
+    AVCaptureSession* microphone = nil;
+    AVCaptureAudioDataOutput* microphone_output = nil;
+    LinkoMicrophoneOutput* microphone_delegate = nil;
+    dispatch_queue_t microphone_control = nil;
+    id microphone_error = nil;
+    id microphone_disconnected = nil;
+    std::chrono::steady_clock::time_point last_microphone_check{};
     std::shared_ptr<Ring> ring = std::make_shared<Ring>();
     std::array<int16_t, max_frames * channels> packet{};
     uint32_t count = 0;
@@ -113,10 +139,31 @@ struct Capture {
 
     int32_t stop(bool wait) {
         ring->accepting.store(false, std::memory_order_release);
-        if (!stream || requested_stop) {
+        if (requested_stop || (!stream && !microphone)) {
             return 0;
         }
         requested_stop = true;
+        if (microphone) {
+            NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+            if (microphone_error) {
+                [center removeObserver:microphone_error];
+            }
+            if (microphone_disconnected) {
+                [center removeObserver:microphone_disconnected];
+            }
+            AVCaptureSession* live_session = microphone;
+            AVCaptureAudioDataOutput* live_output = microphone_output;
+            LinkoMicrophoneOutput* live_delegate = microphone_delegate;
+            dispatch_semaphore_t ready = dispatch_semaphore_create(0);
+            __block int32_t result = unavailable;
+            dispatch_async(microphone_control, ^{
+                [live_output setSampleBufferDelegate:nil queue:nil];
+                [live_session stopRunning];
+                result = !live_delegate || live_session.isRunning ? unavailable : 0;
+                dispatch_semaphore_signal(ready);
+            });
+            return !wait ? 0 : wait_for(ready) ? result : timed_out;
+        }
         // Keep both Objective-C owners alive even if the asynchronous stop
         // reply arrives after the caller's deadline.
         SCStream* live_stream = stream;
@@ -134,6 +181,35 @@ struct Capture {
         stop(false);
     }
 };
+
+using AllowMicrophone = uint8_t (*)(const void*);
+
+bool wait_for_microphone(dispatch_semaphore_t ready, AllowMicrophone allow, const void* token) {
+    for (int attempt = 0; attempt < 100 && allow(token); ++attempt) {
+        if (dispatch_semaphore_wait(ready, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_MSEC * 100)) == 0) {
+            return allow(token) != 0;
+        }
+    }
+    return false;
+}
+
+bool microphone_authorized(AllowMicrophone allow, const void* token) {
+    id purpose = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSMicrophoneUsageDescription"];
+    if (!allow(token) || ![purpose isKindOfClass:[NSString class]] || [(NSString*)purpose length] == 0) {
+        return false;
+    }
+    const auto status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+    if (status != AVAuthorizationStatusNotDetermined) {
+        return status == AVAuthorizationStatusAuthorized;
+    }
+    dispatch_semaphore_t ready = dispatch_semaphore_create(0);
+    __block BOOL granted = NO;
+    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL allowed) {
+        granted = allowed;
+        dispatch_semaphore_signal(ready);
+    }];
+    return wait_for_microphone(ready, allow, token) && granted;
+}
 
 int32_t read_packet(Capture* capture) {
     CMSampleBufferRef sample = capture->ring->take();
@@ -293,6 +369,97 @@ extern "C" int32_t linko_mac_audio_open(void** owner) {
     }
 }
 
+extern "C" int32_t linko_mac_mic_open(void** owner, AllowMicrophone allow, const void* token) {
+    if (!owner || !allow || !token) {
+        return invalid;
+    }
+    *owner = nullptr;
+    @autoreleasepool {
+        if (!microphone_authorized(allow, token)) {
+            return unavailable;
+        }
+        AVCaptureDevice* device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+        if (!device) {
+            return unavailable;
+        }
+        AVCaptureDeviceInput* input = [AVCaptureDeviceInput deviceInputWithDevice:device error:nullptr];
+        if (!input) {
+            return unavailable;
+        }
+        std::unique_ptr<Capture> capture;
+        try {
+            capture = std::make_unique<Capture>();
+        } catch (const std::bad_alloc&) {
+            return unavailable;
+        }
+        capture->microphone_control = dispatch_queue_create("linko.microphone.lifecycle", DISPATCH_QUEUE_SERIAL);
+        AVCaptureSession* session = [AVCaptureSession new];
+        AVCaptureAudioDataOutput* output = [AVCaptureAudioDataOutput new];
+        LinkoMicrophoneOutput* delegate = [LinkoMicrophoneOutput new];
+        delegate->ring = capture->ring;
+        output.audioSettings = @{
+            AVFormatIDKey: @(kAudioFormatLinearPCM),
+            AVSampleRateKey: @48000,
+            AVNumberOfChannelsKey: @2,
+            AVLinearPCMBitDepthKey: @16,
+            AVLinearPCMIsFloatKey: @NO,
+            AVLinearPCMIsBigEndianKey: @NO,
+            AVLinearPCMIsNonInterleaved: @NO,
+        };
+        [output setSampleBufferDelegate:delegate queue:dispatch_queue_create("linko.microphone.samples", DISPATCH_QUEUE_SERIAL)];
+        [session beginConfiguration];
+        if (![session canAddInput:input]) {
+            [session commitConfiguration];
+            return unavailable;
+        }
+        [session addInput:input];
+        if (![session canAddOutput:output]) {
+            [session commitConfiguration];
+            return unavailable;
+        }
+        [session addOutput:output];
+        [session commitConfiguration];
+        capture->microphone = session;
+        capture->microphone_output = output;
+        capture->microphone_delegate = delegate;
+        const auto ring = capture->ring;
+        void (^stop_on_failure)(NSNotification*) = ^(NSNotification* notice) {
+            (void)notice;
+            ring->accepting.store(false, std::memory_order_release);
+            ring->ended.store(true, std::memory_order_release);
+        };
+        NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+        capture->microphone_error = [center addObserverForName:AVCaptureSessionRuntimeErrorNotification
+            object:session queue:nil usingBlock:stop_on_failure];
+        capture->microphone_disconnected = [center addObserverForName:AVCaptureDeviceWasDisconnectedNotification
+            object:device queue:nil usingBlock:stop_on_failure];
+        if (!allow(token)) {
+            return stopped;
+        }
+        ring->accepting.store(true, std::memory_order_release);
+        dispatch_semaphore_t ready = dispatch_semaphore_create(0);
+        __block BOOL started = NO;
+        dispatch_async(capture->microphone_control, ^{
+            if (ring->accepting.load(std::memory_order_acquire)) {
+                [session startRunning];
+                started = session.isRunning && ring->accepting.load(std::memory_order_acquire);
+                if (!started && session.isRunning) {
+                    [session stopRunning];
+                }
+            }
+            dispatch_semaphore_signal(ready);
+        });
+        if (!wait_for_microphone(ready, allow, token)) {
+            return timed_out;
+        }
+        if (!started) {
+            return unavailable;
+        }
+        *owner = capture.release();
+        return 0;
+    }
+}
+
 extern "C" int32_t linko_mac_audio_read(void* owner, int16_t* output, uint32_t capacity,
                                        uint32_t* written) {
     if (!owner || !output || !written || capacity == 0) {
@@ -302,6 +469,16 @@ extern "C" int32_t linko_mac_audio_read(void* owner, int16_t* output, uint32_t c
     *written = 0;
     if (capture->ring->ended.load(std::memory_order_acquire) || capture->requested_stop) {
         return stopped;
+    }
+    if (capture->microphone) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - capture->last_microphone_check >= std::chrono::milliseconds(500)) {
+            capture->last_microphone_check = now;
+            if ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio] != AVAuthorizationStatusAuthorized) {
+                capture->ring->accepting.store(false, std::memory_order_release);
+                return stopped;
+            }
+        }
     }
     if (capture->consumed == capture->count) {
         const auto result = read_packet(capture);

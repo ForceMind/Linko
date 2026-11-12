@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.peerglide.PeerGlide.worker</string>
+    <key>CFBundleDisplayName</key>
+    <string>屏跃音频工作进程</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>仅在您开启麦克风共享并连接到已核验的电脑时使用麦克风。</string>
+</dict>
+</plist>

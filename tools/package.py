@@ -27,6 +27,7 @@ APP_DISPLAY_NAME = "Linko · 屏跃"
 APP_ICON_FILE = "Linko.icns"
 APP_IDENTIFIER = "com.peerglide.PeerGlide"
 WORKER_IDENTIFIER = APP_IDENTIFIER + ".worker"
+MICROPHONE_PURPOSE = "仅在您开启麦克风共享并连接到已核验的电脑时使用麦克风。"
 SOURCE_MANIFEST = "BUILD_SOURCE.json"
 _OBJECT_ID = re.compile(r"[0-9a-f]{40}")
 
@@ -115,6 +116,7 @@ def bundle_info(version):
             "CFBundleExecutable": "peerglide-gui", "NSHighResolutionCapable": True,
             "CFBundleIconFile": APP_ICON_FILE,
             "LSMinimumSystemVersion": "13.0", "NSBonjourServices": ["_peerglide._udp", "_peerglide-pair._tcp"],
+            "NSMicrophoneUsageDescription": MICROPHONE_PURPOSE,
             "NSLocalNetworkUsageDescription": "屏跃使用本地网络连接已核验的电脑，并转发用户明确同意的键鼠输入。发现设备不会自动登记信任或授予控制权限。"}
 
 
