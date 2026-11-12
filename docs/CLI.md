@@ -72,7 +72,10 @@ peerglide listen-peers --identity PATH --bind 0.0.0.0:24870 --peer-cert A.der --
 额外指定 `--native-peer-cert A.der --edge right`，让该证书的首次连接
 进入现有原生会话。只有再加 `--allow-control` 才允许它接管本机。
 其余已登记连接继续提供通信诊断。切换原生目标需先 Ctrl+C 停止，再
-重新指定证书启动。真实多机输入留到集中验收。
+重新指定证书启动。使用 `--serial-native` 可重复列出明确允许原生会话的
+`--native-peer-cert`。在上一会话确认本机恢复后，同一监听可以接入下一台。
+串行模式的接收控制分别用 `--allow-control-peer-cert` 指定。已选为原生候选但未获
+接收许可的电脑，只能由本机主动控制。其他连接仍可通信诊断。真实多机输入留到集中验收。
 
 ## 从一台可信电脑播放音频
 
