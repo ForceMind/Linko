@@ -33,6 +33,8 @@ mod quit_check;
 mod resource_check;
 #[cfg(any(windows, target_os = "macos"))]
 mod route_plan;
+#[cfg(any(windows, target_os = "macos"))]
+mod route_projection;
 mod shell_ui;
 mod visual_assets;
 mod worker_output;
@@ -1869,6 +1871,10 @@ impl App {
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.logic_tick(ctx);
+        #[cfg(any(windows, target_os = "macos"))]
+        if !route_plan::projection_allowed(self) {
+            self.route_plan.close_projection(ctx);
+        }
         if !self.cursor_overlay_available() {
             self.cursor_overlay.clear(ctx);
         }
@@ -1879,6 +1885,12 @@ impl eframe::App for App {
                 .rect_filled(root.max_rect(), 0.0, cursor_overlay::root_background());
         }
         self.desktop(root);
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let mut plan = std::mem::take(&mut self.route_plan);
+            plan.projection_ui(self, root.ctx());
+            self.route_plan = plan;
+        }
         if self.cursor_overlay_available() {
             self.cursor_overlay.ui(
                 root.ctx(),
