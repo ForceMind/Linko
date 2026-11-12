@@ -613,6 +613,11 @@ impl App {
                         && self.pending_start != Some(SessionMode::Native);
                     self.display_inventory
                         .ui(ui, enabled, can_choose, &self.wake_ui);
+                    if enabled {
+                        let mut editor = std::mem::take(&mut self.route_plan);
+                        editor.ui(self, ui);
+                        self.route_plan = editor;
+                    }
                 }
                 ui.separator();
                 self.connection_details(ui);

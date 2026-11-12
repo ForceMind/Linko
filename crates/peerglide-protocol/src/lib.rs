@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod audio;
 pub mod pairing_worker;
+pub mod route_plan;
 
 pub const VERSION: u16 = 5;
 pub const ALPN: &[u8] = b"peerglide/5";
