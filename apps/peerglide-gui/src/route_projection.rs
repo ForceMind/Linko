@@ -564,7 +564,7 @@ mod tests {
         let mut editor = projection.editor.lock().unwrap();
         let ctx = egui::Context::default();
         let mut frame = |events| {
-            ctx.run_ui(
+            let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -575,7 +575,9 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| editor.draw(ui, &layout),
-            )
+            );
+            output.textures_delta.clear();
+            output
         };
         let first = frame(Vec::new());
         let center = first
