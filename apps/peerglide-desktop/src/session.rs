@@ -343,6 +343,7 @@ pub(super) struct SessionControls<'a> {
     pub receive_display: Option<std::sync::Arc<platform::ReceiveDisplay>>,
     pub secondary: Option<&'a super::secondary_layout::Routes>,
     pub rebuilding_display_layout: bool,
+    pub remote_entry_edge: Option<Edge>,
 }
 
 // Store the optional network negotiation outside the inline session future.
@@ -386,6 +387,7 @@ pub(super) async fn run_with_diagnostics(
         receive_display,
         secondary,
         rebuilding_display_layout,
+        remote_entry_edge,
     } = controls;
     let Policy {
         allow,
@@ -569,6 +571,7 @@ pub(super) async fn run_with_diagnostics(
             },
         }
         let acquire_wake=pending.map(PendingAcquire::wake_at);
+        let departure=OutgoingEdges::new(edge,remote_entry_edge);
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
             changed=&mut display_change,if native && cfg!(any(windows,target_os="macos"))=>return changed,
@@ -620,7 +623,7 @@ pub(super) async fn run_with_diagnostics(
                         count(Count::PongTimeout);
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
-                    }else if input.is_empty() && returned_to_source(edge,position.0,position.1) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
+                    }else if input.is_empty() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
                         count(Count::EdgeReturn);
                         // A motion can wake this task before its callback drops.
                         // Retry on the existing tick after older captured input
@@ -782,15 +785,16 @@ pub(super) async fn run_with_diagnostics(
                             let Some(token)=cap.gate.prepare_commit(epoch) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let acquire=PendingAcquire::new(next_lease,token,now_ms());
-                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, edge, along) {
+                            let wire_edge=departure.wire_edge();
+                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, wire_edge, along) {
                                 if !confirmation.await {
                                     edge_gate.require_interior();
                                     input_status.reporter.switch(super::WorkerSwitchState::Denied);
                                     continue;
                                 }
                             }
-                            position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
-                            pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
+                            (position,local_return)=departure.positions(along);
+                            pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge:wire_edge,along}).await?;
                         }
                     },
                     Captured::Toggle{route}=>{
@@ -801,22 +805,24 @@ pub(super) async fn run_with_diagnostics(
                             let Some(token)=cap.gate.prepare_commit(epoch) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let acquire=PendingAcquire::new(next_lease,token,now_ms());
-                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, edge, 0.5) {
+                            let wire_edge=departure.wire_edge();
+                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, wire_edge, 0.5) {
                                 if !confirmation.await {
                                     edge_gate.require_interior();
                                     input_status.reporter.switch(super::WorkerSwitchState::Denied);
                                     continue;
                                 }
                             }
-                            position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
+                            (position,local_return)=departure.positions(0.5);pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge:wire_edge,along:0.5}).await?;
                         }}
                     },
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         // Sign tallies only; displacement values are never recorded.
                         if dx>0.0 {count(Count::MovePositive);} else if dx<0.0 {count(Count::MoveNegative);}
-                        position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
+                        let (dx,dy)=departure.motion(dx/size.0,dy/size.1);
+                        position.0=(position.0+dx).clamp(0.0,1.0);position.1=(position.1+dy).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
-                        if returned_to_source(edge, position.0, position.1) && input_status.restore_at_boundary(capture.as_ref(),route)? {
+                        if departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),route)? {
                             count(Count::EdgeReturn);
                             // Same reliable stream as earlier discrete input: motion cannot
                             // overtake those events and revoke their lease at the receiver.
@@ -1147,8 +1153,51 @@ fn primary_edge_entry(
     gate.update(at_edge, now).then_some(along)
 }
 
-fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
-    distance(source_edge.opposite(), x, y) <= 0.001
+struct OutgoingEdges {
+    local: Edge,
+    remote: Edge,
+}
+
+impl OutgoingEdges {
+    fn new(local: Edge, remote: Option<Edge>) -> Self {
+        Self {
+            local,
+            remote: remote.unwrap_or_else(|| local.opposite()),
+        }
+    }
+
+    /// v5 receivers place the cursor on the opposite edge of the Acquire.
+    fn wire_edge(&self) -> Edge {
+        self.remote.opposite()
+    }
+
+    fn positions(&self, along: f64) -> ((f64, f64), (f64, f64)) {
+        (
+            entry_position(self.remote, along),
+            entry_position(self.local, along),
+        )
+    }
+
+    fn crossed_back(&self, (x, y): (f64, f64)) -> bool {
+        distance(self.remote, x, y) <= 0.001
+    }
+
+    fn motion(&self, dx: f64, dy: f64) -> (f64, f64) {
+        // Progress out of the source edge becomes progress into the receiver.
+        // Keep the along-edge direction consistent with both endpoint fractions.
+        let (forward, along) = match self.local {
+            Edge::Left => (-dx, dy),
+            Edge::Right => (dx, dy),
+            Edge::Top => (-dy, dx),
+            Edge::Bottom => (dy, dx),
+        };
+        match self.remote {
+            Edge::Left => (forward, along),
+            Edge::Right => (-forward, along),
+            Edge::Top => (along, forward),
+            Edge::Bottom => (along, -forward),
+        }
+    }
 }
 fn distance(edge: Edge, x: f64, y: f64) -> f64 {
     match edge {
@@ -1862,17 +1911,35 @@ mod tests {
     #[test]
     fn source_return_boundary_handles_all_edges_without_minimum_travel() {
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
-            let entry = entry_position(edge.opposite(), 0.5);
-            assert!(!returned_to_source(edge, entry.0, entry.1));
-            assert!(!returned_to_source(edge, 0.5, 0.5));
+            let departure = OutgoingEdges::new(edge, None);
+            let (entry, local_return) = departure.positions(0.5);
+            assert_eq!(departure.wire_edge(), edge);
+            assert_eq!(entry, entry_position(edge.opposite(), 0.5));
+            assert_eq!(local_return, entry_position(edge, 0.5));
+            assert_eq!(departure.motion(0.1, -0.25), (0.1, -0.25));
+            assert!(!departure.crossed_back(entry));
+            assert!(!departure.crossed_back((0.5, 0.5)));
             let boundary = match edge {
                 Edge::Left => (1.0, 0.5),
                 Edge::Right => (0.0, 0.5),
                 Edge::Top => (0.5, 1.0),
                 Edge::Bottom => (0.5, 0.0),
             };
-            assert!(returned_to_source(edge, boundary.0, boundary.1));
+            assert!(departure.crossed_back(boundary));
         }
+    }
+
+    #[test]
+    fn outgoing_entry_and_return_follow_the_selected_remote_edge() {
+        let departure = OutgoingEdges::new(Edge::Right, Some(Edge::Top));
+        let (entry, local_return) = departure.positions(0.25);
+        assert_eq!(departure.wire_edge(), Edge::Bottom);
+        assert_eq!(entry, (0.25, 0.002));
+        assert_eq!(local_return, (0.998, 0.25));
+        assert_eq!(departure.motion(0.1, 0.25), (0.25, 0.1));
+        assert_eq!(departure.motion(-0.1, 0.25), (0.25, -0.1));
+        assert!(departure.crossed_back((0.25, 0.0)));
+        assert!(!departure.crossed_back((0.0, 0.25)));
     }
     #[test]
     fn physical_takeover_at_each_edge_cannot_immediately_reverse_control() {

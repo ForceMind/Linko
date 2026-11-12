@@ -357,6 +357,9 @@ struct Options {
     wait_for_peer_secs: Option<u64>,
     #[arg(long, value_enum, default_value = "right")]
     edge: Side,
+    /// Choose the remote entry edge independently of the local departure edge.
+    #[arg(long, value_enum, requires = "native")]
+    remote_entry_edge: Option<Side>,
 }
 fn parse_display_origin(text: &str) -> std::result::Result<(f64, f64), &'static str> {
     let parse = |value: &str| {
@@ -772,6 +775,10 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
 
 async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     anyhow::ensure!(
+        o.remote_entry_edge.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
+        "remote entry edge requires a native Windows or macOS session"
+    );
+    anyhow::ensure!(
         o.receive_display.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
         "local receive display requires a native Windows or macOS session"
     );
@@ -1095,6 +1102,7 @@ async fn run_inner(
             receive_display: o.receive_selection.clone(),
             secondary: secondary.as_ref(),
             rebuilding_display_layout,
+            remote_entry_edge: o.remote_entry_edge.map(Edge::from),
         },
     )
     .await;
@@ -1155,6 +1163,29 @@ async fn probe_roundtrip(tx: &mut quinn::SendStream, rx: &mut quinn::RecvStream)
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+
+    #[test]
+    fn remote_entry_edge_requires_native_mode_and_preserves_local_direction() {
+        let options = [
+            "peerglide",
+            "connect",
+            "127.0.0.1:24870",
+            "--peer-cert",
+            "peer.der",
+            "--edge",
+            "right",
+            "--remote-entry-edge",
+            "top",
+        ];
+        assert!(Cli::try_parse_from(options).is_err());
+        let enabled = options.into_iter().chain(["--native"]);
+        let Command::Connect { options, .. } = Cli::try_parse_from(enabled).unwrap().command else {
+            panic!("expected connect");
+        };
+        assert_eq!(Edge::from(options.edge), Edge::Right);
+        assert_eq!(options.remote_entry_edge.map(Edge::from), Some(Edge::Top));
+        assert!(!options.allow_control);
+    }
 
     #[test]
     fn secondary_layout_flags_require_the_existing_native_and_display_permissions() {
