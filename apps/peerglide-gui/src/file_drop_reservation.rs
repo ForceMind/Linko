@@ -159,7 +159,7 @@ mod native {
         Armed(Link, u32),
         Matched(Link, u32, u64, u64),
         AwaitingClaim(Link, u32, u64, u64, Instant),
-        Claimed(Link, u32, u64, u64),
+        Claimed(Link, u32, u64),
     }
 
     pub(crate) enum Status {
@@ -290,7 +290,7 @@ mod native {
                 .context("文件接棒回执已失效")?;
             if let Phase::Matched(_, _, _, original_fence)
             | Phase::AwaitingClaim(_, _, _, original_fence, _)
-            | Phase::Claimed(_, _, _, original_fence) = self.phase
+            | Phase::Claimed(_, _, original_fence) = self.phase
             {
                 ensure!(lease_fence == original_fence, "已匹配的输入租约已结束");
             }
@@ -348,7 +348,7 @@ mod native {
                                 && event_fence == lease_fence,
                             "文件接棒就绪确认已失效"
                         );
-                        self.phase = Phase::Claimed(link.clone(), *session, *lease, lease_fence);
+                        self.phase = Phase::Claimed(link.clone(), *session, lease_fence);
                     }
                     _ => (),
                 }
@@ -367,7 +367,7 @@ mod native {
             | Phase::Armed(link, session)
             | Phase::Matched(link, session, _, _)
             | Phase::AwaitingClaim(link, session, _, _, _)
-            | Phase::Claimed(link, session, _, _) = self.phase
+            | Phase::Claimed(link, session, _) = self.phase
             {
                 let _ = link.send(
                     app,
@@ -382,7 +382,7 @@ mod native {
 
     #[cfg(test)]
     mod tests {
-        use super::super::{Event, WorkerState};
+        use super::super::{Event, WorkerInputState, WorkerState};
         use super::*;
         use crate::Identity;
         use std::{
