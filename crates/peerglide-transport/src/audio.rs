@@ -13,7 +13,7 @@ use std::{
 };
 
 pub(super) const ALPN: &[u8] = b"peerglide-audio/1";
-const HELLO_MAGIC: &[u8; 4] = b"PGAH";
+pub(super) const MICROPHONE_ALPN: &[u8] = b"peerglide-microphone/1";
 const HELLO_BYTES: usize = 8;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(4);
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -21,6 +21,28 @@ const MAX_CONSENT: Duration = Duration::from_secs(60 * 60);
 // The source emits a 5 ms frame on its clock. Permit up to 1 ms of
 // scheduling jitter without allowing multiple immediately queued frames.
 const MIN_SEND_INTERVAL: Duration = Duration::from_millis(4);
+
+#[derive(Clone, Copy)]
+enum Scope {
+    System,
+    Microphone,
+}
+
+impl Scope {
+    fn alpn(self) -> &'static [u8] {
+        match self {
+            Self::System => ALPN,
+            Self::Microphone => MICROPHONE_ALPN,
+        }
+    }
+
+    fn hello_magic(self) -> [u8; 4] {
+        match self {
+            Self::System => *b"PGAH",
+            Self::Microphone => *b"PGMH",
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -30,34 +52,35 @@ pub enum Direction {
 }
 
 impl Direction {
-    fn hello(self) -> [u8; HELLO_BYTES] {
-        [
-            HELLO_MAGIC[0],
-            HELLO_MAGIC[1],
-            HELLO_MAGIC[2],
-            HELLO_MAGIC[3],
-            1,
-            self as u8,
-            0,
-            0,
-        ]
+    fn hello(self, scope: Scope) -> [u8; HELLO_BYTES] {
+        let [a, b, c, d] = scope.hello_magic();
+        [a, b, c, d, 1, self as u8, 0, 0]
     }
 
-    fn matches(self, peer: [u8; HELLO_BYTES]) -> bool {
+    fn matches(self, scope: Scope, peer: [u8; HELLO_BYTES]) -> bool {
         let opposite = match self {
             Self::Send => Self::Playback,
             Self::Playback => Self::Send,
         };
-        peer == opposite.hello()
+        peer == opposite.hello(scope)
     }
 }
 
 pub fn endpoint(address: SocketAddr, local: &Identity, pinned_peer: &[u8]) -> Result<Endpoint> {
+    scoped_endpoint(address, local, pinned_peer, Scope::System)
+}
+
+fn scoped_endpoint(
+    address: SocketAddr,
+    local: &Identity,
+    pinned_peer: &[u8],
+    scope: Scope,
+) -> Result<Endpoint> {
     ensure!(
         local.certificate.as_slice() != pinned_peer,
         "audio peer must have a distinct identity"
     );
-    endpoint_alpn(address, local, pinned_peer, ALPN)
+    endpoint_alpn(address, local, pinned_peer, scope.alpn())
 }
 
 /// A local set of individually authorized playback sources on one audio port.
@@ -128,7 +151,15 @@ pub async fn open(
     direction: Direction,
     consent: Duration,
 ) -> Result<Session> {
-    establish(connection, pinned_peer, direction, consent, true).await
+    establish(
+        connection,
+        pinned_peer,
+        direction,
+        consent,
+        Scope::System,
+        true,
+    )
+    .await
 }
 
 pub async fn accept(
@@ -137,7 +168,57 @@ pub async fn accept(
     direction: Direction,
     consent: Duration,
 ) -> Result<Session> {
-    establish(connection, pinned_peer, direction, consent, false).await
+    establish(
+        connection,
+        pinned_peer,
+        direction,
+        consent,
+        Scope::System,
+        false,
+    )
+    .await
+}
+
+/// Separate microphone consent domain. Only the caller may obtain local
+/// recording or playback permission before using these entry points.
+pub mod microphone {
+    use super::*;
+
+    pub fn endpoint(address: SocketAddr, local: &Identity, pinned_peer: &[u8]) -> Result<Endpoint> {
+        scoped_endpoint(address, local, pinned_peer, Scope::Microphone)
+    }
+
+    pub async fn open(
+        connection: &Connection,
+        pinned_peer: &[u8],
+        consent: Duration,
+    ) -> Result<Session> {
+        establish(
+            connection,
+            pinned_peer,
+            Direction::Send,
+            consent,
+            Scope::Microphone,
+            true,
+        )
+        .await
+    }
+
+    pub async fn accept(
+        connection: &Connection,
+        pinned_peer: &[u8],
+        consent: Duration,
+    ) -> Result<Session> {
+        establish(
+            connection,
+            pinned_peer,
+            Direction::Playback,
+            consent,
+            Scope::Microphone,
+            false,
+        )
+        .await
+    }
 }
 
 async fn establish(
@@ -145,6 +226,7 @@ async fn establish(
     pinned_peer: &[u8],
     direction: Direction,
     consent: Duration,
+    scope: Scope,
     connector: bool,
 ) -> Result<Session> {
     let started = Instant::now();
@@ -158,7 +240,7 @@ async fn establish(
         .downcast::<HandshakeData>()
         .map_err(|_| anyhow::anyhow!("unexpected audio handshake"))?;
     ensure!(
-        handshake.protocol.as_deref() == Some(ALPN),
+        handshake.protocol.as_deref() == Some(scope.alpn()),
         "unexpected audio ALPN"
     );
     let result = tokio::time::timeout(HELLO_TIMEOUT.min(consent), async {
@@ -177,13 +259,19 @@ async fn establish(
         ensure!(send.id().index() == 0, "audio hello already used");
         let mut peer = [0; HELLO_BYTES];
         if connector {
-            send.write_all(&direction.hello()).await?;
+            send.write_all(&direction.hello(scope)).await?;
             receive.read_exact(&mut peer).await?;
-            ensure!(direction.matches(peer), "incompatible audio direction");
+            ensure!(
+                direction.matches(scope, peer),
+                "incompatible audio direction"
+            );
         } else {
             receive.read_exact(&mut peer).await?;
-            ensure!(direction.matches(peer), "incompatible audio direction");
-            send.write_all(&direction.hello()).await?;
+            ensure!(
+                direction.matches(scope, peer),
+                "incompatible audio direction"
+            );
+            send.write_all(&direction.hello(scope)).await?;
         }
         send.finish()?;
         Ok::<_, anyhow::Error>(())
@@ -368,6 +456,83 @@ mod tests {
         }
         listener.close();
         drop((left_endpoint, right_endpoint));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn microphone_cannot_reuse_the_system_audio_transport() -> Result<()> {
+        let source = Identity::generate()?;
+        let sink = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let system_left = endpoint(bind, &source, &sink.certificate)?;
+        let system_right = endpoint(bind, &sink, &source.certificate)?;
+        let (system_client, system_server) = tokio::try_join!(
+            async {
+                Ok::<_, anyhow::Error>(
+                    system_left
+                        .connect(system_right.local_addr()?, "peerglide.local")?
+                        .await?,
+                )
+            },
+            async {
+                Ok::<_, anyhow::Error>(
+                    system_right
+                        .accept()
+                        .await
+                        .context("missing system audio peer")?
+                        .await?,
+                )
+            },
+        )?;
+        let consent = Duration::from_secs(5);
+        assert!(microphone::open(&system_client, &sink.certificate, consent)
+            .await
+            .is_err());
+        assert!(
+            microphone::accept(&system_server, &source.certificate, consent)
+                .await
+                .is_err()
+        );
+        let left = microphone::endpoint(bind, &source, &sink.certificate)?;
+        let right = microphone::endpoint(bind, &sink, &source.certificate)?;
+        let (client, server) = tokio::try_join!(
+            async {
+                Ok::<_, anyhow::Error>(
+                    left.connect(right.local_addr()?, "peerglide.local")?
+                        .await?,
+                )
+            },
+            async {
+                Ok::<_, anyhow::Error>(
+                    right
+                        .accept()
+                        .await
+                        .context("missing microphone peer")?
+                        .await?,
+                )
+            },
+        )?;
+        assert!(open(&client, &sink.certificate, Direction::Send, consent)
+            .await
+            .is_err());
+        assert!(
+            accept(&server, &source.certificate, Direction::Playback, consent)
+                .await
+                .is_err()
+        );
+        let (mut capture, playback) = tokio::try_join!(
+            microphone::open(&client, &sink.certificate, consent),
+            microphone::accept(&server, &source.certificate, consent),
+        )?;
+        let fixture = Frame {
+            sequence: 1,
+            samples: [3; SAMPLES],
+        };
+        assert!(capture.send(&fixture)?);
+        assert_eq!(playback.receive().await?.samples, fixture.samples);
+        assert!(
+            !Direction::Send.matches(Scope::Microphone, Direction::Playback.hello(Scope::System))
+        );
         Ok(())
     }
 

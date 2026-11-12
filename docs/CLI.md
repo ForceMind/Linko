@@ -115,3 +115,14 @@ peerglide listen-x11 --peer-cert SOURCE.der --allow-pointer-control
 仅在本机 Xorg 会话使用。接收端先核对来源证书，发送端用已有 v5 `connect --native`。
 显式启动后最多接收一次指针租约。本机活动、断线、租约过期或 Ctrl+C 会结束它。
 键盘、按钮、滚轮和 Linux 主动发起控制仍待接入。实际 Xorg 设备及接管行为待验收。
+
+## 麦克风音频候选
+
+播放端在 Windows 或 macOS 明确指定麦克风来源，默认使用 UDP 24875。
+发送端明确指定已核验的播放端。Windows 使用默认通信麦克风，macOS 使用默认录音设备并由系统确认权限。
+设备会在本次会话认证成功后打开，Ctrl+C、断线和许可到期结束会话。
+
+```text
+peerglide play-microphone --identity PATH --peer-cert SOURCE.der
+peerglide share-microphone RECEIVER_IP:24875 --identity PATH --peer-cert RECEIVER.der
+```

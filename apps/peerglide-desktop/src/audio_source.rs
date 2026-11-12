@@ -44,12 +44,57 @@ impl Packet {
 }
 
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+#[derive(Clone, Copy)]
+enum Source {
+    System,
+    Microphone,
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 pub(super) async fn share_system(
     identity: &std::path::Path,
     peer_certificate: &std::path::Path,
     address: std::net::SocketAddr,
     duration: std::time::Duration,
     supervisor: &super::audio_stop::Options,
+) -> Result<()> {
+    share(
+        Source::System,
+        identity,
+        peer_certificate,
+        address,
+        duration,
+        Some(supervisor),
+    )
+    .await
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+pub(super) async fn share_microphone(
+    identity: &std::path::Path,
+    peer_certificate: &std::path::Path,
+    address: std::net::SocketAddr,
+    duration: std::time::Duration,
+) -> Result<()> {
+    share(
+        Source::Microphone,
+        identity,
+        peer_certificate,
+        address,
+        duration,
+        None,
+    )
+    .await
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+async fn share(
+    source: Source,
+    identity: &std::path::Path,
+    peer_certificate: &std::path::Path,
+    address: std::net::SocketAddr,
+    duration: std::time::Duration,
+    supervisor: Option<&super::audio_stop::Options>,
 ) -> Result<()> {
     use anyhow::Context;
     use peerglide_protocol::audio::Frame;
@@ -65,14 +110,19 @@ pub(super) async fn share_system(
 
     let identity = transport::Identity::load(identity)?;
     let pin = transport::read_certificate(peer_certificate)?;
-    supervisor.verify(&identity.certificate, &pin)?;
+    if let Some(supervisor) = supervisor {
+        supervisor.verify(&identity.certificate, &pin)?;
+    }
     let bind = if address.is_ipv4() {
         SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
     } else {
         SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
     };
-    let endpoint = audio::endpoint(bind, &identity, &pin)?;
-    let stop = super::audio_stop::requested(supervisor.managed);
+    let endpoint = match source {
+        Source::System => audio::endpoint(bind, &identity, &pin)?,
+        Source::Microphone => audio::microphone::endpoint(bind, &identity, &pin)?,
+    };
+    let stop = super::audio_stop::requested(supervisor.is_some_and(|owner| owner.managed));
     tokio::pin!(stop);
     let connection = tokio::select! {
         biased;
@@ -92,14 +142,19 @@ pub(super) async fn share_system(
             connection.close(0u8.into(), b"audio cancelled");
             return Ok(());
         }
-        result = audio::open(&connection, &pin, audio::Direction::Send, duration) => result?,
+        result = async {
+            match source {
+                Source::System => audio::open(&connection, &pin, audio::Direction::Send, duration).await,
+                Source::Microphone => audio::microphone::open(&connection, &pin, duration).await,
+            }
+        } => result?,
     };
     let stopped = Arc::new(AtomicBool::new(false));
     let stop_capture = stopped.clone();
     let (samples, mut received) = tokio::sync::mpsc::channel(2);
     let worker = std::thread::Builder::new()
-        .name("linko-system-audio".into())
-        .spawn(move || capture_samples(&stop_capture, samples))?;
+        .name("linko-audio-source".into())
+        .spawn(move || capture_samples(source, &stop_capture, samples))?;
     let mut sequence = 0u64;
     let result = async {
         loop {
@@ -122,7 +177,7 @@ pub(super) async fn share_system(
     tokio::task::spawn_blocking(move || {
         worker
             .join()
-            .map_err(|_| anyhow::anyhow!("local system audio worker ended unexpectedly"))?
+            .map_err(|_| anyhow::anyhow!("local audio worker ended unexpectedly"))?
     })
     .await??;
     result
@@ -130,11 +185,12 @@ pub(super) async fn share_system(
 
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 fn capture_samples(
+    source: Source,
     stopped: &std::sync::atomic::AtomicBool,
     samples: tokio::sync::mpsc::Sender<[i16; SAMPLES]>,
 ) -> Result<()> {
     use anyhow::Context;
-    use peerglide_platform::system_audio_capture::SystemAudio;
+    use peerglide_platform::system_audio_capture::AudioCapture;
     use std::{
         sync::atomic::Ordering,
         time::{Duration, Instant},
@@ -144,7 +200,19 @@ fn capture_samples(
     if stopped.load(Ordering::Acquire) {
         return Ok(());
     }
-    let mut capture = SystemAudio::open_after_explicit_consent()?;
+    let opened = match source {
+        Source::System => AudioCapture::open_after_explicit_consent(),
+        Source::Microphone => AudioCapture::open_microphone_after_explicit_consent(stopped),
+    };
+    if stopped.load(Ordering::Acquire) {
+        if let Ok(mut capture) = opened {
+            capture
+                .stop()
+                .context("local audio capture cleanup failed")?;
+        }
+        return Ok(());
+    }
+    let mut capture = opened?;
     let mut packet = Packet::new();
     let period = Duration::from_millis(5);
     let result = (|| -> Result<()> {
@@ -165,7 +233,7 @@ fn capture_samples(
     })();
     capture
         .stop()
-        .context("local system audio cleanup failed")?;
+        .context("local audio capture cleanup failed")?;
     result
 }
 

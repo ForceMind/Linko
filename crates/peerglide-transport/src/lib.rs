@@ -242,7 +242,7 @@ fn transport(alpn: &[u8]) -> Arc<quinn::TransportConfig> {
         Duration::from_secs(4).try_into().expect("constant timeout"),
     ));
     t.keep_alive_interval(Some(Duration::from_millis(400)));
-    if alpn == audio::ALPN {
+    if alpn == audio::ALPN || alpn == audio::MICROPHONE_ALPN {
         let frame = peerglide_protocol::audio::FRAME_BYTES;
         t.datagram_receive_buffer_size(Some(16 * frame));
         t.datagram_send_buffer_size(4 * frame);

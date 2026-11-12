@@ -24,7 +24,13 @@ fn main() {
             .file("src/macos_system_audio.mm")
             .file("src/macos_native_drop.mm")
             .compile("linko_macos_native");
-        for framework in ["AppKit", "Foundation", "CoreMedia", "ScreenCaptureKit"] {
+        for framework in [
+            "AppKit",
+            "AVFoundation",
+            "Foundation",
+            "CoreMedia",
+            "ScreenCaptureKit",
+        ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
     }

@@ -44,6 +44,12 @@ fn print_device(id: &str, name: &str) {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
+enum Source {
+    System,
+    Microphone,
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 pub(super) async fn run(
     identity: &Path,
     peer_certificate: &Path,
@@ -53,15 +59,64 @@ pub(super) async fn run(
     duration: Duration,
     supervisor: &super::audio_stop::Options,
 ) -> Result<()> {
+    play(
+        Source::System,
+        identity,
+        peer_certificate,
+        bind,
+        (device, volume),
+        duration,
+        Some(supervisor),
+    )
+    .await
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+pub(super) async fn play_microphone(
+    identity: &Path,
+    peer_certificate: &Path,
+    bind: SocketAddr,
+    device: Option<&str>,
+    volume: u8,
+    duration: Duration,
+) -> Result<()> {
+    play(
+        Source::Microphone,
+        identity,
+        peer_certificate,
+        bind,
+        (device, volume),
+        duration,
+        None,
+    )
+    .await
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+async fn play(
+    source: Source,
+    identity: &Path,
+    peer_certificate: &Path,
+    bind: SocketAddr,
+    output: (Option<&str>, u8),
+    duration: Duration,
+    supervisor: Option<&super::audio_stop::Options>,
+) -> Result<()> {
+    let (device, volume) = output;
     let identity = transport::Identity::load(identity)?;
     let pin = transport::read_certificate(peer_certificate)?;
-    supervisor.verify(&identity.certificate, &pin)?;
-    let endpoint = audio::endpoint(bind, &identity, &pin)?;
+    if let Some(supervisor) = supervisor {
+        supervisor.verify(&identity.certificate, &pin)?;
+    }
+    let endpoint = match source {
+        Source::System => audio::endpoint(bind, &identity, &pin)?,
+        Source::Microphone => audio::microphone::endpoint(bind, &identity, &pin)?,
+    };
     println!(
         "Waiting for the authenticated audio source on {}.",
         endpoint.local_addr()?
     );
-    let stop = super::audio_stop::requested(supervisor.managed);
+    let stop = super::audio_stop::requested(supervisor.is_some_and(|owner| owner.managed));
     tokio::pin!(stop);
     let connection = tokio::select! {
         biased;
@@ -81,7 +136,12 @@ pub(super) async fn run(
             connection.close(0u8.into(), b"playback cancelled");
             return Ok(());
         }
-        result = audio::accept(&connection, &pin, audio::Direction::Playback, duration) => result?,
+        result = async {
+            match source {
+                Source::System => audio::accept(&connection, &pin, audio::Direction::Playback, duration).await,
+                Source::Microphone => audio::microphone::accept(&connection, &pin, duration).await,
+            }
+        } => result?,
     };
     let mut player = open_player(device)?;
     let result = drive(&session, &mut stop, |samples| {
