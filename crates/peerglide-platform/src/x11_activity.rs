@@ -113,6 +113,40 @@ mod tests {
     use x11rb::protocol::xinput::{HierarchyEvent, RawKeyPressEvent, RawMotionEvent};
 
     #[test]
+    #[ignore = "requires the dedicated GitHub Actions Xvfb server"]
+    fn isolated_xvfb_pointer_moves_only_after_local_admission() -> Result<()> {
+        use crate::{x11_inject::Injector, ReceivePoint};
+        use x11rb::protocol::xproto::ConnectionExt as _;
+
+        ensure!(
+            std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
+                && std::env::var("LINKO_TEST_ISOLATED_X11").ok().as_deref() == Some("1"),
+            "this test requires the dedicated CI display"
+        );
+        let activity = Activity::open_for_local_takeover()?;
+        let injector = Injector::open_after_explicit_consent()?;
+        let roots = &activity.connection.setup().roots;
+        ensure!(roots.len() == 1, "CI display must have one screen");
+        let root = roots[0].root;
+        let bounds = activity.connection.get_geometry(root)?.reply()?;
+        ensure!(bounds.width == 1024 && bounds.height == 768, "unexpected CI display geometry");
+        let before = activity.connection.query_pointer(root)?.reply()?;
+        let (point, expected) = if before.root_x == 0 && before.root_y == 0 {
+            (ReceivePoint { x: 1.0, y: 1.0 }, (1023, 767))
+        } else {
+            (ReceivePoint { x: 0.0, y: 0.0 }, (0, 0))
+        };
+        assert!(!injector.pointer_if(point, || Ok(false))?);
+        let blocked = activity.connection.query_pointer(root)?.reply()?;
+        assert_eq!((blocked.root_x, blocked.root_y), (before.root_x, before.root_y));
+        assert!(injector.pointer_if(point, || Ok(true))?);
+        let after = activity.connection.query_pointer(root)?.reply()?;
+        assert_eq!((after.root_x, after.root_y), expected);
+        assert!(!activity.local_activity()?);
+        Ok(())
+    }
+
+    #[test]
     fn takeover_uses_only_source_and_topology_without_accessing_input_payloads() {
         let xtest = [5, 6];
         for sourceid in [5, 6] {
