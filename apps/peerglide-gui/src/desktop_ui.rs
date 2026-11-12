@@ -583,12 +583,13 @@ impl App {
                             let result = self.set_desktop_preferences(ctx, preferences);
                             self.feedback(result, "已保存界面动效偏好。");
                         }
-                        if cursor_overlay::SUPPORTED && ui
-                            .add_enabled(
-                                !self.desktop_preferences.reduce_motion,
-                                egui::Checkbox::new(&mut preferences.cursor_trail, "光标拖尾"),
-                            )
-                            .changed()
+                        if cursor_overlay::SUPPORTED
+                            && ui
+                                .add_enabled(
+                                    !self.desktop_preferences.reduce_motion,
+                                    egui::Checkbox::new(&mut preferences.cursor_trail, "光标拖尾"),
+                                )
+                                .changed()
                         {
                             let result = self.set_desktop_preferences(ctx, preferences);
                             if result.is_ok() {
@@ -597,9 +598,13 @@ impl App {
                             self.feedback(result, "已保存光标拖尾偏好。");
                         }
                     });
-                    if cursor_overlay::SUPPORTED && ui
-                        .add_enabled(self.cursor_overlay_available(), egui::Button::new("定位光标"))
-                        .clicked()
+                    if cursor_overlay::SUPPORTED
+                        && ui
+                            .add_enabled(
+                                self.cursor_overlay_available(),
+                                egui::Button::new("定位光标"),
+                            )
+                            .clicked()
                     {
                         self.cursor_overlay.locate(Instant::now());
                     }

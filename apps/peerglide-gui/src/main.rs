@@ -1875,11 +1875,15 @@ impl eframe::App for App {
     }
     fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
         if self.cursor_overlay.visible() {
-            root.painter().rect_filled(root.max_rect(), 0.0, cursor_overlay::root_background());
+            root.painter()
+                .rect_filled(root.max_rect(), 0.0, cursor_overlay::root_background());
         }
         self.desktop(root);
         if self.cursor_overlay_available() {
-            self.cursor_overlay.ui(root.ctx(), self.desktop_preferences.cursor_trail && !self.desktop_preferences.reduce_motion);
+            self.cursor_overlay.ui(
+                root.ctx(),
+                self.desktop_preferences.cursor_trail && !self.desktop_preferences.reduce_motion,
+            );
         } else {
             self.cursor_overlay.clear(root.ctx());
         }
@@ -1888,7 +1892,11 @@ impl eframe::App for App {
         self.request_activity_tick(root.ctx());
     }
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
-        if self.cursor_overlay.visible() { [0.0; 4] } else { cursor_overlay::root_background().to_normalized_gamma_f32() }
+        if self.cursor_overlay.visible() {
+            [0.0; 4]
+        } else {
+            cursor_overlay::root_background().to_normalized_gamma_f32()
+        }
     }
 }
 
@@ -1903,7 +1911,10 @@ impl App {
             && !self.resource_check_mode
             && !self.quit_check_mode
             && self.layout_report.is_none()
-            && matches!(self.input_state, None | Some(WorkerInputState::Local | WorkerInputState::Disabled))
+            && matches!(
+                self.input_state,
+                None | Some(WorkerInputState::Local | WorkerInputState::Disabled)
+            )
     }
 }
 impl Drop for App {
@@ -1995,7 +2006,8 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(move |cc| {
             #[cfg(target_os = "macos")]
-            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Transparent(false));
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Transparent(false));
             let mut app = App::new(cc, dir);
             app.quit_check_mode = quit_check.is_some();
             app.quit_check = quit_check;

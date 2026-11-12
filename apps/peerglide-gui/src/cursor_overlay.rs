@@ -2,7 +2,10 @@
 use super::egui;
 use std::{
     collections::VecDeque,
-    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -90,15 +93,18 @@ impl Overlay {
             self.locate_until = None;
         }
         if trail {
-            self.trail.retain(|sample| now.duration_since(sample.at) < TRAIL);
+            self.trail
+                .retain(|sample| now.duration_since(sample.at) < TRAIL);
         } else {
             self.trail.clear();
         }
     }
 
     pub(super) fn ui(&mut self, ctx: &egui::Context, trail: bool) {
-        if ctx.embed_viewports() || self.rejected_focus.load(Ordering::Acquire)
-            || ctx.input(|input| input.viewport().minimized == Some(true)) {
+        if ctx.embed_viewports()
+            || self.rejected_focus.load(Ordering::Acquire)
+            || ctx.input(|input| input.viewport().minimized == Some(true))
+        {
             self.clear(ctx);
             return;
         }
@@ -123,16 +129,29 @@ impl Overlay {
             self.close(ctx);
             return;
         }
-        let Some(point) = points(sample.desktop, cfg!(windows), ctx.pixels_per_point(), ctx.zoom_factor()) else {
+        let Some(point) = points(
+            sample.desktop,
+            cfg!(windows),
+            ctx.pixels_per_point(),
+            ctx.zoom_factor(),
+        ) else {
             self.close(ctx);
             return;
         };
-        let origin = *self.window_origin.get_or_insert_with(|| point - egui::Vec2::splat(SIDE / 2.0));
+        let origin = *self
+            .window_origin
+            .get_or_insert_with(|| point - egui::Vec2::splat(SIDE / 2.0));
         let generation = &mut self.generation;
-        let (id, live) = self.live.get_or_insert_with(|| {
-            *generation = generation.wrapping_add(1);
-            (egui::ViewportId::from_hash_of(("linko-cursor-overlay", *generation)), Arc::new(AtomicBool::new(true)))
-        }).clone();
+        let (id, live) = self
+            .live
+            .get_or_insert_with(|| {
+                *generation = generation.wrapping_add(1);
+                (
+                    egui::ViewportId::from_hash_of(("linko-cursor-overlay", *generation)),
+                    Arc::new(AtomicBool::new(true)),
+                )
+            })
+            .clone();
         let rejected_focus = self.rejected_focus.clone();
         let locate = self.locate_until;
         let trail = self.trail.clone();
@@ -144,32 +163,57 @@ impl Overlay {
             if info.focused == Some(true) || info.close_requested() {
                 rejected_focus.store(true, Ordering::Release);
                 live.store(false, Ordering::Release);
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Visible(false));
                 ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
                 return;
             }
-            let Some(inner) = info.inner_rect else { return; };
-            let convert = |desktop| points(desktop, cfg!(windows), ui.ctx().pixels_per_point(), ui.ctx().zoom_factor());
-            let Some(point) = convert(sample.desktop) else { return; };
+            let Some(inner) = info.inner_rect else {
+                return;
+            };
+            let convert = |desktop| {
+                points(
+                    desktop,
+                    cfg!(windows),
+                    ui.ctx().pixels_per_point(),
+                    ui.ctx().zoom_factor(),
+                )
+            };
+            let Some(point) = convert(sample.desktop) else {
+                return;
+            };
             if !inner.shrink(38.0).contains(point) {
                 let outer = info.outer_rect.unwrap_or(inner);
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::OuterPosition(outer.min + (point - inner.center())));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::OuterPosition(
+                        outer.min + (point - inner.center()),
+                    ));
             }
             let painter = ui.painter().with_clip_rect(ui.max_rect());
             let to_local = |point: egui::Pos2| ui.max_rect().min + (point - inner.min);
             let now = Instant::now();
             for dot in &trail {
                 let age = now.saturating_duration_since(dot.at);
-                if age < TRAIL {
-                    if let Some(point) = convert(dot.desktop) {
-                        let alpha = ((1.0 - age.as_secs_f32() / TRAIL.as_secs_f32()) * 210.0) as u8;
-                        painter.circle_filled(to_local(point), 5.0, egui::Color32::from_rgba_unmultiplied(56, 189, 248, alpha));
-                    }
+                if age >= TRAIL {
+                    continue;
                 }
+                let Some(point) = convert(dot.desktop) else {
+                    continue;
+                };
+                let alpha = ((1.0 - age.as_secs_f32() / TRAIL.as_secs_f32()) * 210.0) as u8;
+                painter.circle_filled(
+                    to_local(point),
+                    5.0,
+                    egui::Color32::from_rgba_unmultiplied(56, 189, 248, alpha),
+                );
             }
             if locate.is_some_and(|end| now < end) {
                 let center = to_local(point);
-                painter.circle_stroke(center, 24.0, egui::Stroke::new(6.0, egui::Color32::from_black_alpha(220)));
+                painter.circle_stroke(
+                    center,
+                    24.0,
+                    egui::Stroke::new(6.0, egui::Color32::from_black_alpha(220)),
+                );
                 painter.circle_stroke(center, 24.0, egui::Stroke::new(3.0, egui::Color32::WHITE));
             }
         });
@@ -191,10 +235,16 @@ fn viewport(origin: egui::Pos2) -> egui::ViewportBuilder {
         .with_always_on_top()
 }
 
-fn points([x, y]: [f64; 2], physical: bool, pixels_per_point: f32, zoom: f32) -> Option<egui::Pos2> {
+fn points(
+    [x, y]: [f64; 2],
+    physical: bool,
+    pixels_per_point: f32,
+    zoom: f32,
+) -> Option<egui::Pos2> {
     let scale = if physical { pixels_per_point } else { zoom };
     let position = egui::pos2(x as f32 / scale, y as f32 / scale);
-    (scale.is_finite() && scale > 0.0 && position.x.is_finite() && position.y.is_finite()).then_some(position)
+    (scale.is_finite() && scale > 0.0 && position.x.is_finite() && position.y.is_finite())
+        .then_some(position)
 }
 
 #[cfg(test)]
@@ -203,8 +253,14 @@ mod tests {
 
     #[test]
     fn windows_physical_and_macos_logical_coordinates_follow_the_viewport_scale() {
-        assert_eq!(points([-300.0, 150.0], true, 1.5, 1.0), Some(egui::pos2(-200.0, 100.0)));
-        assert_eq!(points([-300.0, 150.0], false, 3.0, 1.5), Some(egui::pos2(-200.0, 100.0)));
+        assert_eq!(
+            points([-300.0, 150.0], true, 1.5, 1.0),
+            Some(egui::pos2(-200.0, 100.0))
+        );
+        assert_eq!(
+            points([-300.0, 150.0], false, 3.0, 1.5),
+            Some(egui::pos2(-200.0, 100.0))
+        );
         assert!(points([0.0, 0.0], true, 0.0, 1.0).is_none());
     }
 
@@ -237,8 +293,10 @@ mod tests {
     #[test]
     fn clearing_invalidates_the_previous_viewport_paint() {
         let live = Arc::new(AtomicBool::new(true));
-        let mut overlay = Overlay::default();
-        overlay.live = Some((egui::ViewportId::from_hash_of("old-overlay"), live.clone()));
+        let mut overlay = Overlay {
+            live: Some((egui::ViewportId::from_hash_of("old-overlay"), live.clone())),
+            ..Overlay::default()
+        };
         overlay.locate(Instant::now());
         overlay.clear(&egui::Context::default());
         assert!(!live.load(Ordering::Acquire));

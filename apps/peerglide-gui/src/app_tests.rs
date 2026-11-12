@@ -413,6 +413,7 @@ fn workspace_pointer_drag_and_direction_buttons_commit_only_editable_layout() ->
 fn desktop_preferences_preserve_input_schema_and_future_desktop_file() -> Result<()> {
     let fixture = Fixture::new()?;
     let mut app = App::load(fixture.path.clone());
+    assert!(!app.desktop_preferences.cursor_trail);
     app.save_config()?;
     let original = std::fs::read(app.dir.join("settings.json"))?;
     let preferences = DesktopPreferences {
