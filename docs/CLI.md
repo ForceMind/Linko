@@ -60,6 +60,10 @@ app/terminal running the prototype, followed by restart. Secure Input remains
 outside its control. Windows input cannot cross privilege boundaries or control
 UAC/secure desktop. Keep OS security protections enabled.
 
+原生发送端可以用 `--remote-entry-edge top` 指定进入另一台的上沿，同时用 `--edge right`
+保留本机从右沿出去。回程从另一台的进入边触发，本机光标回到本机的出边。两端仍分别
+控制接收许可。若同时请求副屏预留，接收端的布局方向要与该进入边一致。
+
 
 ## 多台可信电脑的监听
 
