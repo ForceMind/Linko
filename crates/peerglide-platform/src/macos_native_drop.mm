@@ -7,14 +7,25 @@
 #include <cstdint>
 
 using Clock = std::chrono::steady_clock;
+using CanWritePromise = bool (*)(void*);
+using WritePromise = bool (*)(void*, const char*, void*, CanWritePromise);
+using DropPromise = void (*)(void*);
 
-@interface LinkoNativeCopySource : NSObject <NSDraggingSource, NSPasteboardItemDataProvider> {
+@interface LinkoNativeCopySource
+    : NSObject <NSDraggingSource, NSPasteboardItemDataProvider, NSFilePromiseProviderDelegate> {
 @public
     std::atomic<int32_t> outcome;
     std::atomic<bool> allowed;
+    std::atomic<bool> promise_requested;
+    std::atomic<int32_t> promise_outcome;
     Clock::time_point deadline;
     NSString* text;
     NSData* png;
+    NSString* promise_name;
+    NSOperationQueue* promise_queue;
+    void* promise_context;
+    WritePromise write_promise;
+    DropPromise drop_promise;
 }
 - (BOOL)offerAvailable;
 @end
@@ -23,14 +34,27 @@ using Clock = std::chrono::steady_clock;
 // the terminal callback, even if the Rust UI releases its observation handle.
 static LinkoNativeCopySource* active_drag = nil;
 
+static bool can_write_promise(void* owner) {
+    auto* source = (__bridge LinkoNativeCopySource*)owner;
+    return [source offerAvailable] && source->outcome.load(std::memory_order_acquire) <= 1;
+}
+
 @implementation LinkoNativeCopySource
 - (instancetype)init {
     self = [super init];
     if (self) {
         outcome.store(0, std::memory_order_relaxed);
         allowed.store(false, std::memory_order_relaxed);
+        promise_requested.store(false, std::memory_order_relaxed);
+        promise_outcome.store(0, std::memory_order_relaxed);
     }
     return self;
+}
+
+- (void)dealloc {
+    if (promise_context) {
+        drop_promise(promise_context);
+    }
 }
 
 - (BOOL)offerAvailable {
@@ -69,9 +93,49 @@ static LinkoNativeCopySource* active_drag = nil;
         active_drag = nil;
     }
 }
+
+- (NSString*)filePromiseProvider:(NSFilePromiseProvider*)provider fileNameForType:(NSString*)type {
+    (void)provider;
+    (void)type;
+    return promise_name;
+}
+
+- (NSOperationQueue*)operationQueueForFilePromiseProvider:(NSFilePromiseProvider*)provider {
+    (void)provider;
+    return promise_queue;
+}
+
+- (void)filePromiseProvider:(NSFilePromiseProvider*)provider writePromiseToURL:(NSURL*)url
+          completionHandler:(void (^)(NSError* error))completionHandler {
+    (void)provider;
+    if (promise_requested.exchange(true, std::memory_order_acq_rel)) {
+        completionHandler([NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteUnknownError
+                                         userInfo:nil]);
+        return;
+    }
+    void* owner = (__bridge void*)self;
+    NSError* error = nil;
+    __block bool copied = false;
+    if (url.isFileURL && can_write_promise(owner)) {
+        NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
+        [coordinator coordinateWritingItemAtURL:url options:0 error:&error
+                                      byAccessor:^(NSURL* destination) {
+            const char* path = destination.fileSystemRepresentation;
+            if (path && can_write_promise(owner)) {
+                copied = write_promise(promise_context, path, owner, can_write_promise);
+            }
+        }];
+    }
+    promise_outcome.store(copied && !error ? 1 : 3, std::memory_order_release);
+    if (!copied && !error) {
+        error = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteUnknownError
+                                userInfo:nil];
+    }
+    completionHandler(error);
+}
 @end
 
-static int32_t start_drag(NSPasteboardItem* data, LinkoNativeCopySource* source, void** owner) {
+static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* source, void** owner) {
     if (!owner || !data || !source || ![NSThread isMainThread]) {
         return -1;
     }
@@ -120,6 +184,35 @@ extern "C" int32_t linko_macos_copy_drag_start(const uint8_t* path, size_t bytes
     return start_drag(data, source, owner);
 }
 
+extern "C" int32_t linko_macos_file_promise_start(
+    const uint8_t* name, size_t bytes, uint32_t millis, void* context, WritePromise write,
+    DropPromise destroy, void** owner) {
+    if (!name || bytes == 0 || bytes > 200 || millis == 0 || millis > 60'000 || !context || !write
+        || !destroy || ![NSThread isMainThread]) {
+        if (context && destroy) {
+            destroy(context);
+        }
+        return -1;
+    }
+    LinkoNativeCopySource* source = [LinkoNativeCopySource new];
+    source->promise_context = context;
+    source->write_promise = write;
+    source->drop_promise = destroy;
+    source->promise_name = [[NSString alloc] initWithBytes:name length:bytes encoding:NSUTF8StringEncoding];
+    if (!source->promise_name) {
+        return -1;
+    }
+    source->deadline = Clock::now() + std::chrono::milliseconds(millis);
+    source->promise_queue = [NSOperationQueue new];
+    source->promise_queue.maxConcurrentOperationCount = 1;
+    source->promise_queue.qualityOfService = NSQualityOfServiceUtility;
+    NSFilePromiseProvider* data = [[NSFilePromiseProvider alloc] initWithFileType:@"public.data"
+                                                                       delegate:source];
+    // The provider keeps its delegate alive through the post-drop write request.
+    data.userInfo = source;
+    return start_drag(data, source, owner);
+}
+
 static int32_t start_content_drag(
     LinkoNativeCopySource* source, NSPasteboardType type, uint32_t millis, void** owner) {
     if (millis == 0 || millis > 60'000) {
@@ -161,7 +254,11 @@ extern "C" int32_t linko_macos_copy_drag_outcome(void* owner) {
         return -1;
     }
     auto* source = (__bridge LinkoNativeCopySource*)owner;
-    return source->outcome.load(std::memory_order_acquire);
+    const int32_t operation = source->outcome.load(std::memory_order_acquire);
+    if (operation == 1 && source->promise_context) {
+        return source->promise_outcome.load(std::memory_order_acquire);
+    }
+    return operation;
 }
 
 extern "C" void linko_macos_copy_drag_cancel(void* owner) {

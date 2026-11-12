@@ -1,10 +1,31 @@
 //! Copy-only AppKit drag from a real local mouse-down event on the UI thread.
 use crate::copy_drag::{drag_millis, validate_png, validate_text};
 use anyhow::{ensure, Context, Result};
-use std::{ffi::c_void, path::Path, ptr::null_mut, time::Duration};
+use std::{
+    ffi::{c_char, c_void, CStr, OsStr},
+    os::unix::ffi::OsStrExt,
+    panic::{catch_unwind, AssertUnwindSafe},
+    path::Path,
+    ptr::null_mut,
+    time::Duration,
+};
+
+type PromiseWriter = Box<dyn FnOnce(&Path, &dyn Fn() -> bool) -> Result<()> + Send>;
+type PromiseAdmission = unsafe extern "C" fn(*mut c_void) -> bool;
+type NativePromiseWriter =
+    extern "C" fn(*mut c_void, *const c_char, *mut c_void, PromiseAdmission) -> bool;
 
 extern "C" {
     fn linko_macos_copy_drag_start(path: *const u8, bytes: usize, owner: *mut *mut c_void) -> i32;
+    fn linko_macos_file_promise_start(
+        name: *const u8,
+        bytes: usize,
+        millis: u32,
+        context: *mut c_void,
+        write: NativePromiseWriter,
+        destroy: extern "C" fn(*mut c_void),
+        owner: *mut *mut c_void,
+    ) -> i32;
     fn linko_macos_copy_drag_text(
         text: *const u8,
         bytes: usize,
@@ -52,6 +73,37 @@ impl Drag {
         })
     }
 
+    /// AppKit invokes `write` once on a background file-promise queue. It owns
+    /// the closure and the prepared content until the provider is released.
+    pub fn start_file_promise(
+        name: &str,
+        remaining: Duration,
+        write: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<()> + Send + 'static,
+    ) -> Result<Self> {
+        ensure!(
+            peerglide_transfer::valid_name(name),
+            "invalid native drop name"
+        );
+        let millis = drag_millis(remaining)?;
+        let writer: Box<Option<PromiseWriter>> = Box::new(Some(Box::new(write)));
+        let context = Box::into_raw(writer).cast();
+        Self::start(|owner| {
+            // SAFETY: the native call copies the name and takes ownership of
+            // the boxed context on every path, including failure to start.
+            unsafe {
+                linko_macos_file_promise_start(
+                    name.as_ptr(),
+                    name.len(),
+                    millis,
+                    context,
+                    write_promise,
+                    drop_promise,
+                    owner,
+                )
+            }
+        })
+    }
+
     pub fn start_text(text: &str, remaining: Duration) -> Result<Self> {
         validate_text(text)?;
         let millis = drag_millis(remaining)?;
@@ -91,6 +143,31 @@ impl Drag {
         // SAFETY: the owner stays alive through this call.
         unsafe { linko_macos_copy_drag_cancel(self.owner) };
     }
+}
+
+extern "C" fn write_promise(
+    context: *mut c_void,
+    destination: *const c_char,
+    owner: *mut c_void,
+    can_write: PromiseAdmission,
+) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: AppKit's provider owns this box, calls this bridge only once,
+        // and keeps the destination C string and admission owner live during it.
+        let writer = unsafe { &mut *context.cast::<Option<PromiseWriter>>() }.take();
+        let destination = unsafe { CStr::from_ptr(destination) };
+        let path = Path::new(OsStr::from_bytes(destination.to_bytes()));
+        let allowed = || unsafe { can_write(owner) };
+        writer.is_some_and(|write| write(path, &allowed).is_ok())
+    }))
+    .unwrap_or(false)
+}
+
+extern "C" fn drop_promise(context: *mut c_void) {
+    // SAFETY: the native provider destroys its one boxed writer exactly once.
+    let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+        drop(Box::from_raw(context.cast::<Option<PromiseWriter>>()));
+    }));
 }
 
 impl Drop for Drag {

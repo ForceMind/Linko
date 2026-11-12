@@ -2932,9 +2932,28 @@ RSS 为 110.609 MiB。对照同类基线 0.764% 和 119.078 MiB，本次 CPU 高
 在手势实验页显式开启检测并将指针留在画布内，可观察窗口收到的缩放、旋转和横纵向
 触控表面滚动。只保留事件类型，失焦、离开实验页、停止检测或开始设备会话即清除。
 Windows 和 Ubuntu CI 已通过事件分类回归，macOS 已通过发布构建和资源作业。关闭
-条件由集成提交的 macOS 专项回归检查。真实触控板、阶段及跨机注入留待进一步验证。
+条件在集成提交 `674001c` 的 macOS 专项回归通过。真实触控板、阶段及跨机注入留待
+进一步验证。
 [窗口内检测 CI](https://github.com/ForceMind/Linko/actions/runs/43254784908) ·
-[macOS 资源作业](https://github.com/ForceMind/Linko/actions/runs/43254785421/job/131320184141)
+[macOS 集成回归](https://github.com/ForceMind/Linko/actions/runs/43260951906/job/131331773043)
+
+版本 `2026.11.13-0038` 的三平台包来自同一检出树 `aef2590`，来源和 SHA-256 已核对。
+macOS 和 Ubuntu 的 180 秒空闲峰值 RSS 分别为 108.891 和 142.441 MiB，最大暖机后
+增长 0.281 MiB。门槛为 512 MiB 和 64 MiB。macOS 普通窗口 NoNative 仅通信 30.03 秒
+测得平均单核 CPU 1.532%、峰值 RSS 110.750 MiB。同口径基线为 0.764%、119.078 MiB。
+[三平台打包](https://github.com/ForceMind/Linko/actions/runs/43260951906) ·
+[资源作业](https://github.com/ForceMind/Linko/actions/runs/43260952631)
+
+### macOS 接收文件的本机文件承诺
+
+从文件页选择拖出已校验文件副本后，AppKit 在放置结束后调用操作队列写入目标 URL。
+复制工作器从保留的接收句柄逐块核对内容，写入临时文件，再原子添加目标文件。成功
+回执要求原生放置和写入均完成。已有目标文件和接收原件均保留。文件引用入口可用于
+兼容只接收文件 URL 的目标应用。
+
+macOS 和 Ubuntu 工作区回归覆盖目标发布、同名竞争、取消清理和源文件变化。Finder、
+其他目标应用、慢写入、目标文件系统支持及放置结果留到集中验收。
+[文件承诺 CI](https://github.com/ForceMind/Linko/actions/runs/43262386201)
 
 ## 集中验收清单
 
