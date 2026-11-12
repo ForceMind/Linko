@@ -244,7 +244,7 @@ impl Editor {
         let drag = ui
             .interact(
                 egui::Rect::from_center_size(middle, egui::Vec2::splat(28.0)),
-                ui.id().with("projected-segment-handle"),
+                ui.scope_id().with("projected-segment-handle"),
                 egui::Sense::drag(),
             )
             .on_hover_and_drag_cursor(egui::CursorIcon::Grab);
