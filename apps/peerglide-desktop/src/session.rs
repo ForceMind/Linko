@@ -1125,9 +1125,11 @@ fn primary_edge_entry(
         Edge::Left | Edge::Right => ny,
         Edge::Top | Edge::Bottom => nx,
     };
-    let exposed = distance(edge, nx, ny) <= 0.001
-        && exposed_primary_edge(layout, edge, (x, y), (width, height));
-    gate.update(exposed, now).then_some(along)
+    let at_edge = distance(edge, nx, ny) <= 0.001;
+    if at_edge && !exposed_primary_edge(layout, edge, (x, y), (width, height)) {
+        return None;
+    }
+    gate.update(at_edge, now).then_some(along)
 }
 
 fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
@@ -1760,6 +1762,19 @@ mod tests {
             Some(&layout)
         )
         .is_some());
+        let mut rebuilding = session_edge_gate(true);
+        for (at, now, crossed) in [
+            ((1919.0, 200.0), 600, false),
+            ((1919.0, 700.0), 601, false),
+            ((1800.0, 700.0), 602, false),
+            ((1919.0, 700.0), 603, true),
+        ] {
+            assert_eq!(
+                primary_edge_entry(&mut rebuilding, Edge::Right, at, size, now, Some(&layout))
+                    .is_some(),
+                crossed
+            );
+        }
         let mut gate = EdgeGate::default();
         assert!(primary_edge_entry(
             &mut gate,
