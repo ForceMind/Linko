@@ -460,7 +460,7 @@ impl Checker {
                     Readiness::Ready => icons::paint_check_progress(painter, rect, ink, drawn),
                     // Steps only on the existing permission poll beat; it never schedules one.
                     Readiness::Checking => {
-                        let head = motion::spinner_head_at(now);
+                        let head = motion::spinner_head(ui.ctx(), now);
                         icons::paint_spinner(painter, rect, ink, head);
                     }
                     _ if neutral => Icon::Lock.paint(painter, rect, ink),

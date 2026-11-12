@@ -179,6 +179,7 @@ impl Default for Config {
 struct DesktopPreferences {
     tray_enabled: bool,
     close_to_tray: bool,
+    reduce_motion: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionMode {
@@ -685,6 +686,7 @@ impl App {
     fn theme(&self, ctx: &egui::Context) {
         ensure_fonts(ctx);
         desktop_style::install(ctx, self.config.dark);
+        motion::set_reduced(ctx, self.desktop_preferences.reduce_motion);
     }
     fn save(&mut self) {
         if let Err(e) = self.save_config() {
@@ -1575,8 +1577,16 @@ impl App {
             .as_mut()
             .context("桌面选项只读，原文件已保留")?
             .save(&preferences)?;
+        let previous = self.desktop_preferences;
         self.desktop_preferences = preferences;
-        self.sync_tray(ctx);
+        if previous.reduce_motion != preferences.reduce_motion {
+            motion::set_reduced(ctx, preferences.reduce_motion);
+        }
+        if previous.tray_enabled != preferences.tray_enabled
+            || previous.close_to_tray != preferences.close_to_tray
+        {
+            self.sync_tray(ctx);
+        }
         Ok(())
     }
     fn process_tray_commands(&mut self, ctx: &egui::Context) {

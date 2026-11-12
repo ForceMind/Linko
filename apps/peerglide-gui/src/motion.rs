@@ -5,7 +5,7 @@
 //! One-shot records store a start time and a fixed duration; their `tick` asks for a repaint
 //! only while progress is below 1. The discrete spinner never asks for a repaint: it follows
 //! beats that already exist. A duration of 0 jumps straight to the end state, which is the hook
-//! for a later reduce-motion switch. No timers, threads, I/O or native queries live here.
+//! for the user’s reduced-motion preference. No timers, threads, I/O or native queries live here.
 //!
 //! Callers: the shell uses hover, selection, sidebar, view switch, capsule and spinner motion;
 //! the canvas adds the rebound (M7) and badge pops (M6); the context column the drawer; the
@@ -64,6 +64,27 @@ pub(super) fn scaled_secs(base: f32, scale: f32) -> f32 {
     secs.max(0.0)
 }
 
+pub(super) fn set_reduced(ctx: &egui::Context, reduced: bool) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("linko-reduced-motion"), reduced));
+    let seconds = if reduced { 0.0 } else { egui::Style::default().animation_time };
+    for theme in [egui::Theme::Light, egui::Theme::Dark] {
+        ctx.style_mut_of(theme, |style| style.animation_time = seconds);
+    }
+}
+
+fn reduced(ctx: &egui::Context) -> bool {
+    ctx.data(|data| data.get_temp::<bool>(egui::Id::unique("linko-reduced-motion")))
+        .unwrap_or(false)
+}
+
+pub(super) fn duration(ctx: &egui::Context, seconds: f32) -> f32 {
+    scaled_secs(seconds, if reduced(ctx) { 0.0 } else { 1.0 })
+}
+
+pub(super) fn spinner_head(ctx: &egui::Context, now: f64) -> usize {
+    if reduced(ctx) { 0 } else { spinner_head_at(now) }
+}
+
 fn flag_value(on: bool) -> f32 {
     f32::from(u8::from(on))
 }
@@ -111,6 +132,9 @@ impl OneShot {
 
     /// Progress at the current egui time. Requests a repaint only while unfinished.
     pub(super) fn tick(&self, ctx: &egui::Context) -> f32 {
+        if reduced(ctx) {
+            return 1.0;
+        }
         let now = ctx.input(|input| input.time);
         let progress = self.progress(now);
         if progress < 1.0 {
@@ -231,7 +255,7 @@ impl Glide {
 /// `id` must be a fixed id for the control, never text that changes. egui repaints only while
 /// the value is strictly between 0 and 1. With `secs` of 0 the result is the end value at once.
 pub(super) fn animate_flag(ctx: &egui::Context, id: egui::Id, on: bool, secs: f32) -> f32 {
-    let secs = scaled_secs(secs, 1.0);
+    let secs = duration(ctx, secs);
     let eased = ctx.animate_bool_with_time_and_easing(id, on, secs, cubic_out);
     if secs > 0.0 {
         return eased;
@@ -247,7 +271,7 @@ pub(super) fn animate_scalar(ctx: &egui::Context, id: egui::Id, target: f32, sec
     if !target.is_finite() {
         return target;
     }
-    let secs = scaled_secs(secs, 1.0);
+    let secs = duration(ctx, secs);
     let value = ctx.animate_value_with_time(id, target, secs);
     if secs > 0.0 {
         return value;
@@ -1064,10 +1088,11 @@ mod shell_budget_tests {
         identity_created: bool,
     }
 
-    fn main_paths(animation_time: Option<f32>) -> Result<Outcome> {
+    fn main_paths(animation_time: Option<f32>, reduced_motion: bool) -> Result<Outcome> {
         // Add: the empty canvas slot opens the real pairing window.
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
+        app.desktop_preferences.reduce_motion = reduced_motion;
         let mut window = Window::new(&app, wide(), animation_time);
         window.frames(&mut app, 3);
         let add = window.find(&mut app, "＋\n添加另一台电脑")?;
@@ -1082,6 +1107,7 @@ mod shell_budget_tests {
         // no fresh permission check exists.
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
+        app.desktop_preferences.reduce_motion = reduced_motion;
         registered(&mut app);
         app.dialog = Some(Dialog::NativeStart);
         app.native_confirmation = true;
@@ -1098,6 +1124,7 @@ mod shell_budget_tests {
         // Stop: the title bar stop control asks the running worker to stop.
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
+        app.desktop_preferences.reduce_motion = reduced_motion;
         registered(&mut app);
         app.child = Some(crate::lifecycle_tests::managed_child()?);
         app.active_mode = Some(SessionMode::Communication);
@@ -1120,6 +1147,7 @@ mod shell_budget_tests {
         // Drag: releasing the other screen left of this one saves the new direction.
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
+        app.desktop_preferences.reduce_motion = reduced_motion;
         registered(&mut app);
         let mut window = Window::new(&app, compact(), animation_time);
         window.frames(&mut app, 20);
@@ -1158,9 +1186,11 @@ mod shell_budget_tests {
 
     #[test]
     fn animation_time_zero_is_functionally_identical() -> Result<()> {
-        let animated = main_paths(None)?;
-        let instant = main_paths(Some(0.0))?;
+        let animated = main_paths(None, false)?;
+        let instant = main_paths(Some(0.0), false)?;
+        let reduced = main_paths(None, true)?;
         assert_eq!(animated, instant);
+        assert_eq!(animated, reduced);
         // The paths really ran; equality alone would also hold if both did nothing.
         let expected = Outcome {
             add_opened_pairing: true,

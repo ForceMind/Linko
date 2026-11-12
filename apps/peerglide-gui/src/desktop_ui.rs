@@ -559,6 +559,13 @@ impl App {
                             ui.weak("简体中文");
                         });
                     });
+                    ui.add_enabled_ui(self.writable() && self.desktop_store.is_some(), |ui| {
+                        let mut preferences = self.desktop_preferences;
+                        if ui.checkbox(&mut preferences.reduce_motion, "减少界面动效").changed() {
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            self.feedback(result, "已保存界面动效偏好。");
+                        }
+                    });
                     ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                         if ui
                             .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
