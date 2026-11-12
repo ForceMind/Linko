@@ -118,6 +118,17 @@ pub struct PlacementTarget {
     desktop: Bounds,
 }
 
+#[cfg(any(windows, target_os = "macos"))]
+impl PlacementTarget {
+    pub(crate) fn display(self) -> Display {
+        self.display
+    }
+
+    pub(crate) fn desktop(self) -> Bounds {
+        self.desktop
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Placement {
     pub desktop_x: f64,
@@ -171,6 +182,20 @@ impl Layout {
 
     pub fn primary(&self) -> DisplayId {
         self.primary
+    }
+
+    /// A local CLI may select the currently visible geometry without exposing
+    /// or persisting a native monitor handle. Mirrored origins are ambiguous.
+    #[cfg(any(windows, target_os = "macos", test))]
+    pub(crate) fn placement_at_origin(&self, x: f64, y: f64) -> Option<PlacementTarget> {
+        let mut displays = self.displays.iter().filter(|display| {
+            display.bounds.left == x && display.bounds.top == y
+        });
+        let first = displays.next()?;
+        if displays.next().is_some() {
+            return None;
+        }
+        self.placement_target(first.id)
     }
 
     pub fn placement_target(&self, id: DisplayId) -> Option<PlacementTarget> {
@@ -325,6 +350,18 @@ mod tests {
             scale,
             rotation: Rotation::Upright,
         }
+    }
+
+    #[test]
+    fn native_origin_requires_one_current_display() {
+        let primary = display(1, [0.0, 0.0, 1920.0, 1080.0], 1.0);
+        let left = display(2, [-1080.0, 0.0, 0.0, 1920.0], 1.5);
+        let mirror = display(3, [-1080.0, 0.0, 0.0, 1920.0], 1.0);
+        let mut layout = Layout::new(primary.id, vec![primary, left]).unwrap();
+        assert!(layout.placement_at_origin(-1080.0, 0.0).is_some());
+        assert!(layout.placement_at_origin(10.0, 10.0).is_none());
+        layout.replace(primary.id, vec![primary, left, mirror]).unwrap();
+        assert!(layout.placement_at_origin(-1080.0, 0.0).is_none());
     }
 
     #[test]

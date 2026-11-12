@@ -222,6 +222,9 @@ struct Options {
     /// Enable real OS capture/injection; without this flag the endpoint provides connection diagnostics only.
     #[arg(long)]
     native: bool,
+    /// Choose the local receive screen by its current desktop origin, X,Y.
+    #[arg(long, requires_all = ["native", "allow_control"], value_parser = parse_display_origin)]
+    receive_display: Option<(f64, f64)>,
     /// Emit bounded input pipeline counts for the first 120 seconds.
     #[arg(long, requires_all = ["native", "managed"], conflicts_with = "reconnect")]
     input_diagnostics: bool,
@@ -234,6 +237,15 @@ struct Options {
     #[arg(long, value_enum, default_value = "right")]
     edge: Side,
 }
+fn parse_display_origin(text: &str) -> std::result::Result<(f64, f64), &'static str> {
+    let parse = |value: &str| {
+        value.parse::<f64>().ok().filter(|number| number.is_finite())
+            .ok_or("display origin must be two finite numbers: X,Y")
+    };
+    let (x, y) = text.split_once(',').ok_or("display origin must be X,Y")?;
+    Ok((parse(x)?, parse(y)?))
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
     match Cli::parse().command {
@@ -524,6 +536,10 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
 
 async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     anyhow::ensure!(
+        o.receive_display.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
+        "local receive display requires a native Windows or macOS session"
+    );
+    anyhow::ensure!(
         !probe || !o.input_diagnostics,
         "input diagnostics require a native session"
     );
@@ -811,6 +827,7 @@ async fn run_inner(
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
+            receive_origin: o.receive_display,
         },
     )
     .await;
@@ -857,6 +874,19 @@ async fn exchange_hello(
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+
+    #[test]
+    fn alternate_receive_display_requires_native_and_local_consent() {
+        let without_consent = ["peerglide", "listen", "--peer-cert", "peer.der", "--native", "--receive-display=-1920,0"];
+        assert!(Cli::try_parse_from(without_consent).is_err());
+        let enabled = without_consent.into_iter().chain(["--allow-control"]);
+        let Command::Listen(options) = Cli::try_parse_from(enabled).unwrap().command else {
+            panic!("expected listen");
+        };
+        assert_eq!(options.receive_display, Some((-1920.0, 0.0)));
+        assert!(parse_display_origin("NaN,0").is_err());
+        assert!(parse_display_origin("1,2,3").is_err());
+    }
     #[tokio::test]
     async fn initial_wait_invalid_modes_reject_before_identity_io() {
         for args in [

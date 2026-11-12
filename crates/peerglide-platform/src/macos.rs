@@ -34,6 +34,7 @@ extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> Rect;
+    fn CGDisplayIsActive(display: u32) -> i32;
     fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayRotation(display: u32) -> f64;
     fn CGDisplayCopyDisplayMode(display: u32) -> Ref;
@@ -680,8 +681,49 @@ pub(super) fn receive_pointer(
     if !(ReceivePoint { x, y }).valid() {
         return Err(NativeFailure::BeforeSubmission);
     }
+    let b = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+    receive_global_pointer(Point {
+        x: b.origin.x + x * (b.size.width - 1.0),
+        y: b.origin.y + y * (b.size.height - 1.0),
+    })
+}
+
+pub(super) fn receive_on_display(
+    expected: display_layout::Display,
+    _desktop: display_layout::Bounds,
+    placement: display_layout::Placement,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    let id = u32::try_from(expected.id.0).map_err(|_| NativeFailure::TargetLost)?;
+    // SAFETY: CoreGraphics checks the scalar ID, and the pointer coordinates
+    // are only sent if the selected monitor still occupies that region.
+    let (rect, rotation) = unsafe {
+        if CGDisplayIsActive(id) == 0 {
+            return Err(NativeFailure::TargetLost);
+        }
+        (CGDisplayBounds(id), CGDisplayRotation(id))
+    };
+    let actual = display_layout::Bounds {
+        left: rect.origin.x,
+        top: rect.origin.y,
+        right: rect.origin.x + rect.size.width,
+        bottom: rect.origin.y + rect.size.height,
+    };
+    let angle = match expected.rotation {
+        display_layout::Rotation::Upright => 0.0,
+        display_layout::Rotation::Clockwise90 => 90.0,
+        display_layout::Rotation::Clockwise180 => 180.0,
+        display_layout::Rotation::Clockwise270 => 270.0,
+    };
+    if actual != expected.bounds || rotation.rem_euclid(360.0) != angle {
+        return Err(NativeFailure::TargetLost);
+    }
+    receive_global_pointer(Point { x: placement.desktop_x, y: placement.desktop_y })
+}
+
+fn receive_global_pointer(point: Point) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
     unsafe {
-        let b = CGDisplayBounds(CGMainDisplayID());
         let buttons = BUTTONS.load(Ordering::Acquire);
         let (kind, button) = if buttons & 1 != 0 {
             (6, 0)
@@ -695,10 +737,7 @@ pub(super) fn receive_pointer(
         let event = OwnedEvent::created(CGEventCreateMouseEvent(
             null_mut(),
             kind,
-            Point {
-                x: b.origin.x + x * (b.size.width - 1.0),
-                y: b.origin.y + y * (b.size.height - 1.0),
-            },
+            point,
             button,
         ))?;
         let modifiers = MODIFIERS

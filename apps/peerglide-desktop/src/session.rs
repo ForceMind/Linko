@@ -325,6 +325,7 @@ async fn run_with_status(
 pub(super) struct SessionControls<'a> {
     pub diagnostics: Option<&'a std::sync::Arc<InputDiagnostics>>,
     pub layout: Option<&'a super::layout_control::Controller>,
+    pub receive_origin: Option<(f64, f64)>,
 }
 
 pub(super) async fn run_with_diagnostics(
@@ -339,6 +340,7 @@ pub(super) async fn run_with_diagnostics(
     let SessionControls {
         diagnostics,
         layout,
+        receive_origin,
     } = controls;
     let Policy {
         allow,
@@ -381,7 +383,12 @@ pub(super) async fn run_with_diagnostics(
     // worker. A failed OS query keeps the compatible primary-screen behavior.
     let topology = monitor_layout(native);
     let mut capture = if native {
-        match platform::capture_with_diagnostics(itx, peer.clone(), diagnostics.cloned()) {
+        match platform::capture_with_receive_display(
+            itx,
+            peer.clone(),
+            diagnostics.cloned(),
+            receive_origin,
+        ) {
             Ok(capture) => Some(capture),
             Err(error) => {
                 input_status.reporter.set(WorkerInputState::Disabled);
