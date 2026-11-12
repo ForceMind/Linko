@@ -15,7 +15,11 @@ pub struct Plan {
 
 impl Default for Plan {
     fn default() -> Self {
-        Self { version: VERSION, peers: Vec::new(), routes: Vec::new() }
+        Self {
+            version: VERSION,
+            peers: Vec::new(),
+            routes: Vec::new(),
+        }
     }
 }
 

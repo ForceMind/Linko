@@ -7,18 +7,15 @@ use peerglide_platform::{
     display_layout::{EdgeAnchor, Layout},
     display_routes::{Link, Route, Span, Table, Target},
 };
-use peerglide_protocol::{route_plan::{Plan, VERSION as PLAN_VERSION}, Edge};
 #[cfg(any(windows, target_os = "macos", test))]
 use peerglide_protocol::InputCapabilities;
+use peerglide_protocol::{
+    route_plan::{Plan, VERSION as PLAN_VERSION},
+    Edge,
+};
 #[cfg(any(windows, target_os = "macos", test))]
 use std::time::Duration;
-use std::{
-    collections::BTreeMap,
-    fs::File,
-    io::Read,
-    net::SocketAddr,
-    path::Path,
-};
+use std::{collections::BTreeMap, fs::File, io::Read, net::SocketAddr, path::Path};
 
 const MAX_PLAN_BYTES: u64 = 128 * 1024;
 #[cfg(any(windows, target_os = "macos", test))]
@@ -65,7 +62,10 @@ impl Routes {
     }
 
     fn bind(plan: Plan, directory: &Path, local: &[u8], layout: &Layout) -> Result<Self> {
-        ensure!(plan.version == PLAN_VERSION, "unsupported display route plan version");
+        ensure!(
+            plan.version == PLAN_VERSION,
+            "unsupported display route plan version"
+        );
         ensure!(
             (1..=transport::trusted_listener::MAX_TRUSTED_PEERS).contains(&plan.peers.len()),
             "display route peer count outside listener limits"
@@ -88,7 +88,10 @@ impl Routes {
             );
             let certificate = transport::read_certificate(&directory.join(spec.certificate))?;
             ensure!(
-                spec.fingerprint.as_ref().is_none_or(|expected| expected.eq_ignore_ascii_case(&transport::fingerprint(&certificate))),
+                spec.fingerprint
+                    .as_ref()
+                    .is_none_or(|expected| expected
+                        .eq_ignore_ascii_case(&transport::fingerprint(&certificate))),
                 "display route peer certificate differs from its configured fingerprint"
             );
             ensure!(
@@ -217,7 +220,10 @@ mod tests {
     use super::*;
     use peerglide_platform::display_layout::{Bounds, Display, DisplayId, Rotation};
     use peerglide_protocol::Message;
-    use std::{path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     struct Fixture(PathBuf);
 

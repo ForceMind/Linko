@@ -14,8 +14,6 @@ mod device_hardware;
 mod discovery_panel;
 #[cfg(any(windows, target_os = "macos"))]
 mod display_inventory;
-#[cfg(any(windows, target_os = "macos"))]
-mod route_plan;
 mod enrollment_store;
 mod file_panel;
 mod gesture_lab;
@@ -32,6 +30,8 @@ mod pairing_receipt;
 pub mod pairing_supervisor;
 mod quit_check;
 mod resource_check;
+#[cfg(any(windows, target_os = "macos"))]
+mod route_plan;
 mod shell_ui;
 mod visual_assets;
 mod worker_output;
