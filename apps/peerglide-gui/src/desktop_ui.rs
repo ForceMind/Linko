@@ -1283,6 +1283,18 @@ impl App {
         }) {
             self.stop();
             self.gesture_lab.cancel();
+        } else if (self.dialog.is_some() || self.wizard.is_some())
+            && ctx.input_mut(|input| {
+                input.modifiers == egui::Modifiers::NONE
+                    && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            })
+        {
+            if self.dialog.take().is_some() {
+                self.native_confirmation = false;
+            } else {
+                self.wizard = None;
+            }
+            self.screen_drag = None;
         }
         let window_width = ctx.viewport_rect().width();
         // The title bar spans the window, so the safety controls never move with the sidebar.
@@ -2114,6 +2126,74 @@ pub(super) mod safety_dialog_tests {
             ..Default::default()
         };
         ctx.run_ui(input, run)
+    }
+
+    fn press_escape(app: &mut App, ctx: &egui::Context, modifiers: egui::Modifiers) {
+        let input = egui::RawInput {
+            modifiers,
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |root| app.desktop(root))
+            .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn escape_dismisses_safety_dialog_without_closing_pairing_or_releasing_recovery() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.pairing_panel.open("测试电脑", "");
+        app.dialog = Some(Dialog::NativeStart);
+        app.native_confirmation = true;
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.dialog.is_none() && !app.native_confirmation && app.pairing_open);
+        assert!(app.child.is_none() && app.pending_start.is_none());
+
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(!app.pairing_open);
+        app.recovery_blocked = true;
+        app.dialog = Some(Dialog::Recovery);
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.dialog.is_none() && app.recovery_blocked && !app.exit_confirmed);
+
+        app.wizard = Some(SetupStep::Identity);
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.wizard.is_none());
+        assert!(app.config == before && !app.dir.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn emergency_escape_stops_pending_input_instead_of_dismissing_dialog() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.dialog = Some(Dialog::Recovery);
+        app.recovery_blocked = true;
+        app.pending_start = Some(SessionMode::Native);
+        let emergency = egui::Modifiers {
+            ctrl: true,
+            alt: true,
+            ..egui::Modifiers::NONE
+        };
+        press_escape(&mut app, &ctx, emergency);
+        assert!(app.pending_start.is_none() && app.recovery_blocked);
+        assert_eq!(app.dialog, Some(Dialog::Recovery));
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
 
     #[test]
