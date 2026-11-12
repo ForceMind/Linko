@@ -49,7 +49,8 @@ impl Panel {
     pub(super) fn stop(&mut self) {
         if let Some(job) = self.job.as_mut() {
             job.child.stdin.take();
-            job.stop_deadline.get_or_insert_with(|| Instant::now() + STOP_TIMEOUT);
+            job.stop_deadline
+                .get_or_insert_with(|| Instant::now() + STOP_TIMEOUT);
             self.status = "正在停止音频并释放系统资源";
         }
     }
@@ -73,7 +74,9 @@ impl Panel {
                 self.job = None;
             }
             Ok(None) => {
-                if job.stop_deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                if job
+                    .stop_deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline)
                     && !job.forced
                 {
                     job.forced = job.child.kill().is_ok();
@@ -114,7 +117,10 @@ impl Panel {
             .arg(app.dir.join("trusted-peer.crt.der"))
             .arg("--managed")
             .args(["--expected-local-fingerprint", &identity.fingerprint()])
-            .args(["--expected-peer-fingerprint", &super::transport::fingerprint(&peer)])
+            .args([
+                "--expected-peer-fingerprint",
+                &super::transport::fingerprint(&peer),
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -147,7 +153,11 @@ impl Panel {
             ui.label("完成配对后可开启音频共享。");
             return;
         }
-        ui.add(egui::Slider::new(&mut self.volume, 0..=100).suffix("%").text("播放音量"));
+        ui.add(
+            egui::Slider::new(&mut self.volume, 0..=100)
+                .suffix("%")
+                .text("播放音量"),
+        );
         ui.label("接收使用本机默认输出和 UDP 端口 24874。");
         if ui.button("在本机接收并播放").clicked() {
             let result = self.start(app, Mode::Playback);
@@ -155,9 +165,11 @@ impl Panel {
         }
         ui.separator();
         ui.label("接收端 IP 地址和端口");
-        ui.add(egui::TextEdit::singleline(&mut self.address)
-            .char_limit(128)
-            .hint_text("留空使用已保存的地址与端口 24874"));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.address)
+                .char_limit(128)
+                .hint_text("留空使用已保存的地址与端口 24874"),
+        );
         if ui.button("发送本机系统音频").clicked() {
             let result = self.start(app, Mode::ShareSystem);
             app.feedback(result, "已请求启动系统音频发送。");
