@@ -116,7 +116,9 @@ mod tests {
     #[ignore = "requires the dedicated GitHub Actions Xvfb server"]
     fn isolated_xvfb_pointer_moves_only_after_local_admission() -> Result<()> {
         use crate::{x11_inject::Injector, ReceivePoint};
-        use x11rb::protocol::xproto::{ChangeWindowAttributesAux, ConnectionExt as _, EventMask as CoreEventMask};
+        use x11rb::protocol::xproto::{
+            ChangeWindowAttributesAux, ConnectionExt as _, EventMask as CoreEventMask,
+        };
 
         ensure!(
             std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
@@ -178,8 +180,14 @@ mod tests {
         );
         assert!(!activity.local_activity()?);
 
-        activity.connection.change_window_attributes(root, &ChangeWindowAttributesAux::new()
-            .event_mask(CoreEventMask::BUTTON_PRESS | CoreEventMask::BUTTON_RELEASE))?.check()?;
+        activity
+            .connection
+            .change_window_attributes(
+                root,
+                &ChangeWindowAttributesAux::new()
+                    .event_mask(CoreEventMask::BUTTON_PRESS | CoreEventMask::BUTTON_RELEASE),
+            )?
+            .check()?;
         assert!(injector.scroll(1, -1, || Ok(true))?);
         let mut pairs = Vec::new();
         for _ in 0..16 {

@@ -180,16 +180,28 @@ impl Injector {
 
     /// A v5 wheel step becomes one balanced X11 click. Large bursts are
     /// capped independently on each axis and local takeover wins between pairs.
-    pub fn scroll(&mut self, x: i16, y: i16, mut admit: impl FnMut() -> Result<bool>) -> Result<bool> {
-        ensure!(self.scroll_available()?, "X11 wheel button mapping changed or is unavailable");
+    pub fn scroll(
+        &mut self,
+        x: i16,
+        y: i16,
+        mut admit: impl FnMut() -> Result<bool>,
+    ) -> Result<bool> {
+        ensure!(
+            self.scroll_available()?,
+            "X11 wheel button mapping changed or is unavailable"
+        );
         for (button, steps) in wheel_clicks(x, y) {
             let slot = &mut self.wheel_down[usize::from(button - 4)];
             for _ in 0..steps {
                 if !admit()? {
                     return Ok(false);
                 }
-                submit_owned(slot, true, || post_button(&self.connection, self.root, button, true))?;
-                submit_owned(slot, false, || post_button(&self.connection, self.root, button, false))?;
+                submit_owned(slot, true, || {
+                    post_button(&self.connection, self.root, button, true)
+                })?;
+                submit_owned(slot, false, || {
+                    post_button(&self.connection, self.root, button, false)
+                })?;
             }
         }
         Ok(true)
@@ -198,7 +210,9 @@ impl Injector {
     pub fn release_owned(&mut self) -> Result<()> {
         let mut result = self.release_buttons();
         for (button, slot) in WHEEL_BUTTONS.into_iter().zip(&mut self.wheel_down) {
-            let release = submit_owned(slot, false, || post_button(&self.connection, self.root, button, false));
+            let release = submit_owned(slot, false, || {
+                post_button(&self.connection, self.root, button, false)
+            });
             result = result.and(release.map(|_| ()));
         }
         for (code, slot) in self.owned_keys.iter_mut().enumerate() {
@@ -230,8 +244,14 @@ impl Drop for Injector {
 
 fn wheel_clicks(x: i16, y: i16) -> [(u8, u16); 2] {
     [
-        (if y < 0 { 5 } else { 4 }, y.clamp(-MAX_WHEEL_AXIS, MAX_WHEEL_AXIS).unsigned_abs()),
-        (if x < 0 { 6 } else { 7 }, x.clamp(-MAX_WHEEL_AXIS, MAX_WHEEL_AXIS).unsigned_abs()),
+        (
+            if y < 0 { 5 } else { 4 },
+            y.clamp(-MAX_WHEEL_AXIS, MAX_WHEEL_AXIS).unsigned_abs(),
+        ),
+        (
+            if x < 0 { 6 } else { 7 },
+            x.clamp(-MAX_WHEEL_AXIS, MAX_WHEEL_AXIS).unsigned_abs(),
+        ),
     ]
 }
 

@@ -231,10 +231,22 @@ async fn capabilities(allow_discrete: bool, allow_scroll: bool) -> Result<InputC
         .name("linko-x11-keymap".into())
         .spawn(move || {
             let caps = Injector::open_after_explicit_consent().and_then(|injector| {
-                ensure!(!allow_scroll || injector.scroll_available()?, "standard X11 wheel mapping unavailable");
-                let keys = if allow_discrete { injector.key_usages().collect::<Vec<_>>() } else { Vec::new() };
-                InputCapabilities::new(&keys, true, if allow_discrete { 7 } else { 0 }, allow_scroll)
-                    .map_err(anyhow::Error::msg)
+                ensure!(
+                    !allow_scroll || injector.scroll_available()?,
+                    "standard X11 wheel mapping unavailable"
+                );
+                let keys = if allow_discrete {
+                    injector.key_usages().collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                InputCapabilities::new(
+                    &keys,
+                    true,
+                    if allow_discrete { 7 } else { 0 },
+                    allow_scroll,
+                )
+                .map_err(anyhow::Error::msg)
             });
             let _ = ready.send(caps);
         })?;
@@ -279,7 +291,12 @@ pub(super) async fn run(
     result
 }
 
-async fn drive<F>(connection: &quinn::Connection, stop: F, allow_discrete: bool, allow_scroll: bool) -> Result<()>
+async fn drive<F>(
+    connection: &quinn::Connection,
+    stop: F,
+    allow_discrete: bool,
+    allow_scroll: bool,
+) -> Result<()>
 where
     F: Future<Output = std::io::Result<()>>,
 {
