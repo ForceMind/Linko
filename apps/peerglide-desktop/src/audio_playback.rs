@@ -44,7 +44,38 @@ fn print_device(id: &str, name: &str) {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
+enum Source {
+    System,
+    Microphone,
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 pub(super) async fn run(
+    identity: &Path,
+    peer_certificate: &Path,
+    bind: SocketAddr,
+    device: Option<&str>,
+    volume: u8,
+    duration: Duration,
+) -> Result<()> {
+    play(Source::System, identity, peer_certificate, bind, device, volume, duration).await
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+pub(super) async fn play_microphone(
+    identity: &Path,
+    peer_certificate: &Path,
+    bind: SocketAddr,
+    device: Option<&str>,
+    volume: u8,
+    duration: Duration,
+) -> Result<()> {
+    play(Source::Microphone, identity, peer_certificate, bind, device, volume, duration).await
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+async fn play(
+    source: Source,
     identity: &Path,
     peer_certificate: &Path,
     bind: SocketAddr,
@@ -54,7 +85,10 @@ pub(super) async fn run(
 ) -> Result<()> {
     let identity = transport::Identity::load(identity)?;
     let pin = transport::read_certificate(peer_certificate)?;
-    let endpoint = audio::endpoint(bind, &identity, &pin)?;
+    let endpoint = match source {
+        Source::System => audio::endpoint(bind, &identity, &pin)?,
+        Source::Microphone => audio::microphone::endpoint(bind, &identity, &pin)?,
+    };
     println!(
         "Waiting for the authenticated audio source on {}.",
         endpoint.local_addr()?
@@ -79,7 +113,12 @@ pub(super) async fn run(
             connection.close(0u8.into(), b"playback cancelled");
             return Ok(());
         }
-        result = audio::accept(&connection, &pin, audio::Direction::Playback, duration) => result?,
+        result = async {
+            match source {
+                Source::System => audio::accept(&connection, &pin, audio::Direction::Playback, duration).await,
+                Source::Microphone => audio::microphone::accept(&connection, &pin, duration).await,
+            }
+        } => result?,
     };
     #[cfg(windows)]
     let device = device

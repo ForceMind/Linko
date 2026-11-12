@@ -94,3 +94,14 @@ peerglide share-system-audio RECEIVER_IP:24874 --identity PATH --peer-cert RECEI
 macOS 13 或更新版本的同一发送命令使用 ScreenCaptureKit 的音频输出。
 系统可能要求录制权限。这个入口不打开麦克风或注册屏幕画面输出。
 真实权限提示、不同设备格式和结束后静音留到集中验收。
+
+## 麦克风音频候选
+
+播放端在 Windows 或 macOS 明确指定麦克风来源，默认使用 UDP 24875。
+Windows 发送端明确指定已核验的播放端，使用本机默认通信麦克风。
+设备会在本次会话认证成功后打开，Ctrl+C、断线和许可到期结束会话。
+
+```text
+peerglide play-microphone --identity PATH --peer-cert SOURCE.der
+peerglide share-microphone RECEIVER_IP:24875 --identity PATH --peer-cert RECEIVER.der
+```
