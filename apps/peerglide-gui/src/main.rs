@@ -30,6 +30,8 @@ mod pairing_receipt;
 pub mod pairing_supervisor;
 mod quit_check;
 mod resource_check;
+#[cfg(any(windows, target_os = "macos"))]
+mod route_plan;
 mod shell_ui;
 mod visual_assets;
 mod worker_output;
@@ -451,6 +453,8 @@ struct App {
     workspace_zoom: f32,
     #[cfg(any(windows, target_os = "macos"))]
     display_inventory: display_inventory::Panel,
+    #[cfg(any(windows, target_os = "macos"))]
+    route_plan: route_plan::Panel,
     /// Explicit sidebar choice; None follows the window width.
     sidebar_pref: Option<bool>,
     page_motion: motion::Retrigger<u8>,
@@ -598,6 +602,8 @@ impl App {
             workspace_zoom: 1.0,
             #[cfg(any(windows, target_os = "macos"))]
             display_inventory: display_inventory::Panel::default(),
+            #[cfg(any(windows, target_os = "macos"))]
+            route_plan: route_plan::Panel::default(),
             sidebar_pref: None,
             page_motion: motion::Retrigger::default(),
             capsule_motion: motion::Retrigger::default(),

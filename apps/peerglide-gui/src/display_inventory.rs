@@ -19,6 +19,14 @@ pub(super) struct Panel {
 }
 
 impl Panel {
+    pub(super) fn snapshot(&self) -> Option<Arc<Layout>> {
+        let state = self.state.lock().ok()?;
+        match &*state {
+            State::Ready(layout) => Some(layout.clone()),
+            _ => None,
+        }
+    }
+
     fn refresh(&self, wake: Arc<dyn Fn() + Send + Sync>) {
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -128,7 +136,7 @@ impl App {
     }
 }
 
-fn description(display: &Display, primary: bool) -> String {
+pub(super) fn description(display: &Display, primary: bool) -> String {
     let bounds = display.bounds;
     let name = if primary { "主屏" } else { "副屏" };
     let angle = match display.rotation {
