@@ -124,7 +124,7 @@ mod tests {
             "this test requires the dedicated CI display"
         );
         let activity = Activity::open_for_local_takeover()?;
-        let injector = Injector::open_after_explicit_consent()?;
+        let mut injector = Injector::open_after_explicit_consent()?;
         let roots = &activity.connection.setup().roots;
         ensure!(roots.len() == 1, "CI display must have one screen");
         let root = roots[0].root;
@@ -148,6 +148,34 @@ mod tests {
         assert!(injector.pointer_if(point, || Ok(true))?);
         let after = activity.connection.query_pointer(root)?.reply()?;
         assert_eq!((after.root_x, after.root_y), expected);
+        assert!(!activity.local_activity()?);
+
+        let keys_before = activity.connection.query_keymap()?.reply()?.keys;
+        let buttons_before = after.mask;
+        let usage = injector
+            .key_usages()
+            .next()
+            .context("CI XKB key mapping unavailable")?;
+        assert!(injector.key(usage, true)?);
+        assert!(injector.button(1, true)?);
+        assert_ne!(
+            activity.connection.query_keymap()?.reply()?.keys,
+            keys_before
+        );
+        assert_ne!(
+            activity.connection.query_pointer(root)?.reply()?.mask,
+            buttons_before
+        );
+        assert!(!activity.local_activity()?);
+        injector.release_owned()?;
+        assert_eq!(
+            activity.connection.query_keymap()?.reply()?.keys,
+            keys_before
+        );
+        assert_eq!(
+            activity.connection.query_pointer(root)?.reply()?.mask,
+            buttons_before
+        );
         assert!(!activity.local_activity()?);
         Ok(())
     }

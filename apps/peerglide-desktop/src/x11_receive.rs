@@ -1,8 +1,8 @@
-//! Explicit single-peer, pointer-only v5 receive session on local Xorg.
+//! Explicit single-peer v5 receive session on local Xorg.
 use anyhow::{ensure, Context, Result};
 use peerglide_core::Receiver;
 use peerglide_platform::{now_ms, x11_activity::Activity, x11_inject::Injector, ReceivePoint};
-use peerglide_protocol::{decode, InputCapabilities, Message, Motion, LEASE_MS};
+use peerglide_protocol::{decode, Input, InputCapabilities, Message, Motion, LEASE_MS};
 use peerglide_transport as transport;
 use std::{
     future::{pending, Future},
@@ -19,17 +19,26 @@ use tokio::sync::{mpsc, oneshot};
 
 const NATIVE_POLL: Duration = Duration::from_millis(5);
 const ADMISSION: Duration = Duration::from_millis(250);
+const CLEANUP: Duration = Duration::from_secs(1);
 
 struct Mailbox {
     stop: AtomicBool,
     deadline: AtomicU64,
     latest: Mutex<Option<ReceivePoint>>,
+    input: Mutex<Option<PendingInput>>,
 }
 
 impl Mailbox {
     fn live(&self, now: u64) -> bool {
         !self.stop.load(Ordering::Acquire) && now < self.deadline.load(Ordering::Acquire)
     }
+}
+
+struct PendingInput {
+    point: ReceivePoint,
+    effect: Input,
+    expires: u64,
+    completed: oneshot::Sender<()>,
 }
 
 struct Worker {
@@ -44,13 +53,14 @@ impl Worker {
             stop: AtomicBool::new(false),
             deadline: AtomicU64::new(now.saturating_add(LEASE_MS)),
             latest: Mutex::new(Some(point)),
+            input: Mutex::new(None),
         });
         let request = mailbox.clone();
         let admit_before = now.saturating_add(ADMISSION.as_millis() as u64);
         let (ready, admitted) = oneshot::channel();
         let (done, finished) = oneshot::channel();
         let owner = thread::Builder::new()
-            .name("linko-x11-pointer".into())
+            .name("linko-x11-input".into())
             .spawn(move || {
                 let result = serve_native(&request, ready, admit_before);
                 request.stop.store(true, Ordering::Release);
@@ -77,6 +87,35 @@ impl Worker {
         Ok(())
     }
 
+    fn submit_input(&self, point: ReceivePoint, effect: Input) -> Result<oneshot::Receiver<()>> {
+        let mut queued = self
+            .mailbox
+            .input
+            .lock()
+            .map_err(|_| anyhow::anyhow!("X11 input queue unavailable"))?;
+        let now = now_ms();
+        ensure!(
+            self.mailbox.live(now) && queued.is_none(),
+            "X11 input lease is no longer active"
+        );
+        // The reliable cursor anchors the effect. A previously queued motion
+        // may not move the pointer after this anchor.
+        self.mailbox
+            .latest
+            .lock()
+            .map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?
+            .take();
+        let (completed, result) = oneshot::channel();
+        *queued = Some(PendingInput {
+            point,
+            effect,
+            expires: now.saturating_add(ADMISSION.as_millis() as u64),
+            completed,
+        });
+        self.thread.unpark();
+        Ok(result)
+    }
+
     fn renew(&self, now: u64) {
         self.mailbox
             .deadline
@@ -94,7 +133,7 @@ impl Worker {
         };
         let result = finished.await;
         self.finished = None;
-        result.context("X11 pointer owner ended unexpectedly")?
+        result.context("X11 input owner ended unexpectedly")?
     }
 }
 
@@ -106,35 +145,96 @@ impl Drop for Worker {
 
 fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64) -> Result<()> {
     let activity = Activity::open_for_local_takeover()?;
-    let injector = Injector::open_after_explicit_consent()?;
+    let mut injector = Injector::open_after_explicit_consent()?;
     let mut ready = Some(ready);
-    while mailbox.live(now_ms()) {
-        if activity.local_activity()? {
-            break;
-        }
-        let point = mailbox
-            .latest
-            .lock()
-            .map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?
-            .take();
-        if let Some(point) = point {
-            let placed = injector.pointer_if(point, || {
-                let local = activity.local_activity()?;
-                let now = now_ms();
-                Ok(!local && mailbox.live(now) && (ready.is_none() || now < admit_before))
-            })?;
-            if !placed {
-                break;
+    let result = (|| -> Result<()> {
+        while mailbox.live(now_ms()) {
+            if activity.local_activity()? {
+                return Ok(());
             }
-            if let Some(ready) = ready.take() {
-                if ready.send(()).is_err() {
-                    break;
+            let input = mailbox
+                .input
+                .lock()
+                .map_err(|_| anyhow::anyhow!("X11 input queue unavailable"))?
+                .take();
+            if let Some(input) = input {
+                let admitted = || -> Result<bool> {
+                    let local = activity.local_activity()?;
+                    let now = now_ms();
+                    Ok(!local
+                        && mailbox.live(now)
+                        && now < input.expires
+                        && !input.completed.is_closed())
+                };
+                if !injector.pointer_if(input.point, admitted)? || !admitted()? {
+                    return Ok(());
+                }
+                match input.effect {
+                    Input::Key { usage, down } => {
+                        ensure!(injector.key(usage, down)?, "X11 key ownership changed")
+                    }
+                    Input::Button { button, down } => ensure!(
+                        injector.button(button, down)?,
+                        "X11 button ownership changed"
+                    ),
+                    Input::Scroll { .. } => anyhow::bail!("X11 scrolling is not enabled"),
+                }
+                if input.completed.send(()).is_err() {
+                    return Ok(());
+                }
+                continue;
+            }
+            let point = mailbox
+                .latest
+                .lock()
+                .map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?
+                .take();
+            if let Some(point) = point {
+                let placed = injector.pointer_if(point, || {
+                    let local = activity.local_activity()?;
+                    let now = now_ms();
+                    Ok(!local
+                        && mailbox.live(now)
+                        && ready
+                            .as_ref()
+                            .is_none_or(|ready| now < admit_before && !ready.is_closed()))
+                })?;
+                if !placed {
+                    return Ok(());
+                }
+                if let Some(ready) = ready.take() {
+                    if ready.send(()).is_err() {
+                        return Ok(());
+                    }
                 }
             }
+            thread::park_timeout(NATIVE_POLL);
         }
-        thread::park_timeout(NATIVE_POLL);
+        Ok(())
+    })();
+    injector
+        .release_owned()
+        .context("X11 owned inputs could not be released")?;
+    result
+}
+
+async fn capabilities(allow_discrete: bool) -> Result<InputCapabilities> {
+    if !allow_discrete {
+        return InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg);
     }
-    Ok(())
+    let (ready, result) = oneshot::channel();
+    thread::Builder::new()
+        .name("linko-x11-keymap".into())
+        .spawn(move || {
+            let caps = Injector::open_after_explicit_consent().and_then(|injector| {
+                let keys = injector.key_usages().collect::<Vec<_>>();
+                InputCapabilities::new(&keys, true, 7, false).map_err(anyhow::Error::msg)
+            });
+            let _ = ready.send(caps);
+        })?;
+    tokio::time::timeout(ADMISSION, result)
+        .await
+        .context("X11 capability query timed out")??
 }
 
 pub(super) async fn run(
@@ -142,6 +242,7 @@ pub(super) async fn run(
     certificate: &Path,
     bind: SocketAddr,
     allow: bool,
+    allow_discrete: bool,
 ) -> Result<()> {
     ensure!(allow, "X11 pointer control requires explicit local consent");
     let identity = transport::Identity::load(identity)?;
@@ -154,7 +255,7 @@ pub(super) async fn run(
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
     println!(
-        "Waiting for one verified computer on {}. Ctrl+C stops pointer control.",
+        "Waiting for one verified computer on {}. Ctrl+C stops input control.",
         endpoint.local_addr()?
     );
     let connection = tokio::select! {
@@ -166,26 +267,25 @@ pub(super) async fn run(
         } => result?,
     };
     transport::verify_peer(&connection, &peer)?;
-    let result = drive(&connection, &mut stop).await;
-    endpoint.close(0u8.into(), b"X11 pointer session ended");
+    let result = drive(&connection, &mut stop, allow_discrete).await;
+    endpoint.close(0u8.into(), b"X11 input session ended");
     result
 }
 
-async fn drive<F>(connection: &quinn::Connection, stop: F) -> Result<()>
+async fn drive<F>(connection: &quinn::Connection, stop: F, allow_discrete: bool) -> Result<()>
 where
     F: Future<Output = std::io::Result<()>>,
 {
     tokio::pin!(stop);
-    let (mut send, mut receive, peer) = tokio::select! {
+    let (mut send, mut receive, peer, local) = tokio::select! {
         biased;
         result = &mut stop => return result.map_err(Into::into),
         result = async {
             let (mut send, mut receive) =
                 tokio::time::timeout(Duration::from_secs(5), connection.accept_bi()).await??;
-            let local = InputCapabilities::new(&[], true, 0, false)
-                .map_err(anyhow::Error::msg)?;
-            let peer = super::exchange_hello(&mut send, &mut receive, local).await?;
-            Ok::<_, anyhow::Error>((send, receive, peer))
+            let local = capabilities(allow_discrete).await?;
+            let peer = super::exchange_hello(&mut send, &mut receive, local.clone()).await?;
+            Ok::<_, anyhow::Error>((send, receive, peer, local))
         } => result?,
     };
     let (send_messages, mut messages) = mpsc::channel(16);
@@ -232,7 +332,24 @@ where
                             reply(&mut send, &Message::Pong { lease }).await?;
                         }
                         Message::Release { lease, .. } if receiver.active() == Some(lease) => return Ok(()),
-                        Message::Input { lease, .. } if receiver.active() == Some(lease) => anyhow::bail!("X11 pointer receiver does not admit discrete input"),
+                        Message::Input { lease, event, cursor } if receiver.active() == Some(lease) => {
+                            ensure!(local.supports(event), "X11 receive capability is not enabled");
+                            if cursor.lease != lease || !receiver.accepts_input(lease, event, now)
+                                || !receiver.anchor(cursor, now) {
+                                continue;
+                            }
+                            let owner = worker.as_ref().context("X11 input owner unavailable")?;
+                            let submitted = owner.submit_input(ReceivePoint { x: cursor.x, y: cursor.y }, event)?;
+                            tokio::select! {
+                                biased;
+                                result = &mut stop => return result.map_err(Into::into),
+                                result = tokio::time::timeout(ADMISSION, submitted) => {
+                                    result.context("X11 input submission timed out")?
+                                        .context("X11 input submission ended")?;
+                                }
+                            }
+                            ensure!(receiver.input(lease, event, now_ms()), "X11 input lease ended during submission");
+                        },
                         Message::Hello { .. } => anyhow::bail!("unexpected repeated input handshake"),
                         _ => (),
                     }
@@ -251,9 +368,9 @@ where
     reader.abort();
     if let Some(owner) = &mut worker {
         owner.stop();
-        let cleanup = tokio::time::timeout(ADMISSION, owner.finish())
+        let cleanup = tokio::time::timeout(CLEANUP, owner.finish())
             .await
-            .context("X11 pointer stop could not be confirmed")?;
+            .context("X11 input cleanup could not be confirmed")?;
         if let Some(lease) = receiver.active() {
             let _ = reply(
                 &mut send,
@@ -295,10 +412,19 @@ mod tests {
             "peer.der"
         ])
         .is_err());
+        assert!(super::super::Cli::try_parse_from([
+            "peerglide",
+            "listen-x11",
+            "--peer-cert",
+            "peer.der",
+            "--allow-discrete-input",
+        ])
+        .is_err());
         let mailbox = Mailbox {
             stop: AtomicBool::new(false),
             deadline: AtomicU64::new(20),
             latest: Mutex::new(None),
+            input: Mutex::new(None),
         };
         assert!(mailbox.live(19));
         assert!(!mailbox.live(20));
