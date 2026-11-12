@@ -29,7 +29,10 @@ struct Selection {
     edge: Edge,
 }
 
-fn take_selected(selection: &mut Option<Selection>, connection: &quinn::Connection) -> Option<Selection> {
+fn take_selected(
+    selection: &mut Option<Selection>,
+    connection: &quinn::Connection,
+) -> Option<Selection> {
     let route = selection.as_ref()?;
     transport::verify_peer(connection, &route.certificate).ok()?;
     selection.take()
@@ -51,9 +54,15 @@ pub(super) async fn run(
         .map(|path| transport::read_certificate(path))
         .collect::<Result<Vec<_>>>()?;
     let selection = if let Some(path) = &options.native_peer_cert {
-        anyhow::ensure!(cfg!(any(windows, target_os = "macos")), "selected native input requires Windows or macOS");
+        anyhow::ensure!(
+            cfg!(any(windows, target_os = "macos")),
+            "selected native input requires Windows or macOS"
+        );
         let certificate = transport::read_certificate(path)?;
-        anyhow::ensure!(peers.contains(&certificate), "selected native certificate must be in the enrolled set");
+        anyhow::ensure!(
+            peers.contains(&certificate),
+            "selected native certificate must be in the enrolled set"
+        );
         Some(Selection {
             certificate,
             allow: options.allow_control,
@@ -63,7 +72,10 @@ pub(super) async fn run(
         None
     };
     let listener = Listener::bind(bind, &identity, peers)?;
-    println!("Listening for authenticated peers on {}.", listener.local_addr()?);
+    println!(
+        "Listening for authenticated peers on {}.",
+        listener.local_addr()?
+    );
     listen(&listener, tokio::signal::ctrl_c(), selection).await
 }
 
