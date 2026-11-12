@@ -238,7 +238,7 @@ mod tests {
         assert!(injector.button(2, true)?);
         assert!(matches!(source.poll()?, PointerSample::LocalInput));
         assert!(observer.poll_for_event()?.is_none());
-        source.release()?;
+        source.release(|| {})?;
         assert!(injector.button(2, false)?);
         let mut local_pair = Vec::new();
         for _ in 0..16 {
