@@ -183,7 +183,7 @@ enum Command {
         duration_secs: u64,
     },
     /// Share the local microphone with one explicitly verified computer.
-    #[cfg(all(windows, target_env = "msvc"))]
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     ShareMicrophone {
         address: SocketAddr,
         #[arg(long, default_value = "identity")]
@@ -327,7 +327,7 @@ async fn main() -> Result<()> {
         Command::PlayMicrophone { identity, peer_cert, bind, device, volume, duration_secs } => {
             audio_playback::play_microphone(&identity, &peer_cert, bind, device.as_deref(), volume, Duration::from_secs(duration_secs)).await
         }
-        #[cfg(all(windows, target_env = "msvc"))]
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareMicrophone { address, identity, peer_cert, duration_secs } => {
             audio_source::share_microphone(&identity, &peer_cert, address, Duration::from_secs(duration_secs)).await
         }

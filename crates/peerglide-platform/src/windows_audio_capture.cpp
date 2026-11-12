@@ -137,11 +137,17 @@ HRESULT read_packet(Capture* capture) {
     return result;
 }
 
-HRESULT open_capture(void** output, bool microphone) {
+using AllowMicrophone = uint8_t (*)(const void*);
+
+HRESULT open_capture(void** output, AllowMicrophone allow, const void* token) {
+    const bool microphone = allow != nullptr;
     if (!output) {
         return E_POINTER;
     }
     *output = nullptr;
+    if (microphone && (!token || !allow(token))) {
+        return E_ABORT;
+    }
     std::unique_ptr<Capture> capture(new (std::nothrow) Capture());
     if (!capture) {
         return E_OUTOFMEMORY;
@@ -209,6 +215,9 @@ HRESULT open_capture(void** output, bool microphone) {
     if (FAILED(result)) {
         return result;
     }
+    if (microphone && !allow(token)) {
+        return E_ABORT;
+    }
     result = capture->client->Start();
     if (FAILED(result)) {
         return result;
@@ -221,11 +230,11 @@ HRESULT open_capture(void** output, bool microphone) {
 } // namespace
 
 extern "C" int32_t linko_wasapi_open(void** output) {
-    return open_capture(output, false);
+    return open_capture(output, nullptr, nullptr);
 }
 
-extern "C" int32_t linko_wasapi_mic_open(void** output) {
-    return open_capture(output, true);
+extern "C" int32_t linko_wasapi_mic_open(void** output, AllowMicrophone allow, const void* token) {
+    return allow ? open_capture(output, allow, token) : E_POINTER;
 }
 
 extern "C" int32_t linko_wasapi_read(void* owner, int16_t* output, uint32_t capacity,

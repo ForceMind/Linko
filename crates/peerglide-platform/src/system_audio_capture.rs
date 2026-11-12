@@ -1,14 +1,24 @@
 //! Explicit audio capture owned by its creating worker thread.
 use anyhow::{ensure, Result};
 use peerglide_protocol::audio::{CHANNELS, SAMPLES};
-use std::{ffi::c_void, ptr::null_mut};
+use std::{
+    ffi::c_void,
+    ptr::null_mut,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+type AllowMicrophone = unsafe extern "C" fn(*const c_void) -> u8;
 
 #[cfg(all(windows, target_env = "msvc"))]
 extern "C" {
     #[link_name = "linko_wasapi_open"]
     fn native_open(output: *mut *mut c_void) -> i32;
     #[link_name = "linko_wasapi_mic_open"]
-    fn native_microphone(output: *mut *mut c_void) -> i32;
+    fn native_microphone(
+        output: *mut *mut c_void,
+        allow: AllowMicrophone,
+        token: *const c_void,
+    ) -> i32;
     #[link_name = "linko_wasapi_read"]
     fn native_read(owner: *mut c_void, output: *mut i16, capacity: u32, written: *mut u32) -> i32;
     #[link_name = "linko_wasapi_stop"]
@@ -21,6 +31,12 @@ extern "C" {
 extern "C" {
     #[link_name = "linko_mac_audio_open"]
     fn native_open(output: *mut *mut c_void) -> i32;
+    #[link_name = "linko_mac_mic_open"]
+    fn native_microphone(
+        output: *mut *mut c_void,
+        allow: AllowMicrophone,
+        token: *const c_void,
+    ) -> i32;
     #[link_name = "linko_mac_audio_read"]
     fn native_read(owner: *mut c_void, output: *mut i16, capacity: u32, written: *mut u32) -> i32;
     #[link_name = "linko_mac_audio_stop"]
@@ -43,15 +59,24 @@ impl AudioCapture {
         Self::open(native_open, "system audio")
     }
 
-    #[cfg(all(windows, target_env = "msvc"))]
-    pub fn open_microphone_after_explicit_consent() -> Result<Self> {
-        Self::open(native_microphone, "microphone")
+    pub fn open_microphone_after_explicit_consent(cancelled: &AtomicBool) -> Result<Self> {
+        let mut owner = null_mut();
+        // SAFETY: the native open calls `allow_microphone` synchronously, never
+        // retaining its token. Both referenced slots live through this call.
+        let result = unsafe {
+            native_microphone(&mut owner, allow_microphone, std::ptr::from_ref(cancelled).cast())
+        };
+        Self::from_open(result, owner, "microphone")
     }
 
     fn open(open: Open, source: &'static str) -> Result<Self> {
         let mut owner = null_mut();
         // SAFETY: the writable slot receives an owned, thread-bound capture.
         let result = unsafe { open(&mut owner) };
+        Self::from_open(result, owner, source)
+    }
+
+    fn from_open(result: i32, owner: *mut c_void, source: &'static str) -> Result<Self> {
         check(result, source, "open")?;
         ensure!(!owner.is_null(), "{source} capture owner unavailable");
         Ok(Self { owner, source })
@@ -82,6 +107,13 @@ impl AudioCapture {
         // SAFETY: this owner is live and stays on the creating capture thread.
         check(unsafe { native_stop(self.owner) }, self.source, "stop")
     }
+}
+
+unsafe extern "C" fn allow_microphone(token: *const c_void) -> u8 {
+    // SAFETY: only the synchronous open call uses this callback with a pointer
+    // to its live cancellation flag.
+    let cancelled = unsafe { &*token.cast::<AtomicBool>() };
+    u8::from(!cancelled.load(Ordering::Acquire))
 }
 
 impl Drop for AudioCapture {
