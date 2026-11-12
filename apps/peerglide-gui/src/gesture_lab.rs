@@ -43,8 +43,52 @@ struct Active {
     time: f64,
     rect: Rect,
 }
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Default)]
+struct TrackpadEvents {
+    pinch: bool,
+    rotation: bool,
+    horizontal: bool,
+    vertical: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl TrackpadEvents {
+    fn observe(&mut self, events: &[Event]) -> bool {
+        let mut scrolled = false;
+        for event in events {
+            match event {
+                Event::Zoom(scale) if scale.is_finite() && *scale > 0.0 && *scale != 1.0 => {
+                    self.pinch = true;
+                }
+                Event::Rotate(angle) if angle.is_finite() && *angle != 0.0 => {
+                    self.rotation = true;
+                }
+                Event::MouseWheel {
+                    delta,
+                    source: egui::MouseWheelSource::Trackpad,
+                    ..
+                } => {
+                    self.horizontal |= delta.x.is_finite() && delta.x != 0.0;
+                    self.vertical |= delta.y.is_finite() && delta.y != 0.0;
+                    scrolled = true;
+                }
+                Event::MouseWheel {
+                    source: egui::MouseWheelSource::Momentum,
+                    ..
+                } => scrolled = true,
+                _ => (),
+            }
+        }
+        scrolled
+    }
+}
+
 pub struct GestureLab {
     active: Option<Active>,
+    #[cfg(target_os = "macos")]
+    trackpad: Option<TrackpadEvents>,
     samples: Vec<Sample>,
     result: Option<std::result::Result<Match, Rejection>>,
     completed: bool,
@@ -60,6 +104,8 @@ impl GestureLab {
     pub fn new(dir: &Path) -> Self {
         Self {
             active: None,
+            #[cfg(target_os = "macos")]
+            trackpad: None,
             samples: Vec::new(),
             result: None,
             completed: false,
@@ -90,6 +136,10 @@ impl GestureLab {
             .map(|m| m.id.0)
     }
     pub fn cancel(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            self.trackpad = None;
+        }
         if self.active.take().is_some() {
             self.result = Some(Err(Rejection::Cancelled));
             self.completed = false;
@@ -190,6 +240,21 @@ impl GestureLab {
             ui.label("设备会话运行期间暂停画布录制。请先停止设备会话，再进行窗口内测试。");
             return None;
         }
+        #[cfg(target_os = "macos")]
+        {
+            let label = if self.trackpad.is_some() {
+                "结束触控板检测"
+            } else {
+                "开始触控板检测"
+            };
+            if ui.button(label).clicked() {
+                let start = self.trackpad.is_none();
+                self.cancel();
+                if start {
+                    self.trackpad = Some(TrackpadEvents::default());
+                }
+            }
+        }
         let (rect, response) = ui.allocate_exact_size(
             egui::vec2(ui.available_width().max(1.), 260.),
             Sense::click_and_drag(),
@@ -199,7 +264,11 @@ impl GestureLab {
         let (time, focused, escape, events) = ui.ctx().input(|i| {
             (
                 i.time,
-                i.focused,
+                i.focused
+                    && !i
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, Event::WindowFocused(false))),
                 i.key_pressed(egui::Key::Escape),
                 i.events.clone(),
             )
@@ -207,7 +276,11 @@ impl GestureLab {
         if !focused || escape || self.active.as_ref().is_some_and(|a| a.rect != rect) {
             self.cancel();
         }
-        if focused && !escape {
+        #[cfg(target_os = "macos")]
+        let probing = self.probe_trackpad(ui, &response);
+        #[cfg(not(target_os = "macos"))]
+        let probing = false;
+        if focused && !escape && !probing {
             for event in events {
                 match event {
                     Event::PointerButton {
@@ -327,6 +400,31 @@ impl GestureLab {
         }
         Some(rect)
     }
+
+    #[cfg(target_os = "macos")]
+    fn probe_trackpad(&mut self, ui: &mut egui::Ui, canvas: &egui::Response) -> bool {
+        let Some(observed) = self.trackpad.as_mut() else {
+            return false;
+        };
+        ui.ctx().input_mut(|input| {
+            if canvas.hovered() && observed.observe(&input.raw.events) {
+                input.smooth_scroll_delta = egui::Vec2::ZERO;
+            }
+        });
+        ui.label("将指针留在画布内，试做缩放、旋转和双轴滚动。");
+        ui.horizontal_wrapped(|ui| {
+            for (label, seen) in [
+                ("缩放", observed.pinch),
+                ("旋转", observed.rotation),
+                ("横向滚动", observed.horizontal),
+                ("纵向滚动", observed.vertical),
+            ] {
+                let status = if seen { "已收到" } else { "等待输入" };
+                ui.label(format!("{label} {status}"));
+            }
+        });
+        true
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +472,64 @@ mod tests {
             pressed,
             modifiers: Default::default(),
         }
+    }
+
+    fn scroll(source: egui::MouseWheelSource, x: f32, y: f32) -> Event {
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(x, y),
+            phase: egui::TouchPhase::Move,
+            source,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn trackpad_evidence_excludes_wheel_momentum_and_empty_gesture_updates() {
+        use egui::MouseWheelSource;
+        let mut observed = TrackpadEvents::default();
+        assert!(!observed.observe(&[
+            scroll(MouseWheelSource::Wheel, 5.0, 5.0),
+            scroll(MouseWheelSource::Unknown, 5.0, 5.0),
+            Event::Zoom(1.0),
+            Event::Rotate(0.0),
+            Event::Rotate(f32::NAN),
+        ]));
+        assert!(observed.observe(&[scroll(MouseWheelSource::Momentum, 5.0, 5.0)]));
+        assert!(!observed.pinch && !observed.rotation);
+        assert!(!observed.horizontal && !observed.vertical);
+        assert!(observed.observe(&[
+            Event::Zoom(0.9),
+            Event::Rotate(-0.1),
+            scroll(MouseWheelSource::Trackpad, 5.0, 0.0),
+        ]));
+        assert!(observed.pinch && observed.rotation);
+        assert!(observed.horizontal && !observed.vertical);
+        assert!(observed.observe(&[scroll(MouseWheelSource::Trackpad, 0.0, 5.0)]));
+        assert!(observed.vertical);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn trackpad_probe_ends_on_focus_loss_or_worker_start() {
+        let mut lab = GestureLab::new(Path::new("unused"));
+        let ctx = crate::tests::ui_context();
+        lab.trackpad = Some(TrackpadEvents::default());
+        frame(&mut lab, &ctx, 0.0, vec![], false, false);
+        assert!(lab.trackpad.is_none());
+        lab.trackpad = Some(TrackpadEvents::default());
+        frame(&mut lab, &ctx, 0.1, vec![], true, true);
+        assert!(lab.trackpad.is_none());
+        lab.trackpad = Some(TrackpadEvents::default());
+        frame(
+            &mut lab,
+            &ctx,
+            0.2,
+            vec![Event::WindowFocused(false), Event::WindowFocused(true)],
+            true,
+            false,
+        );
+        assert!(lab.trackpad.is_none());
     }
     #[test]
     fn post_ui_stroke_starts_its_clock_and_occlusion_cancels_without_execution() -> Result<()> {
