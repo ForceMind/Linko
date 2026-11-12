@@ -1,9 +1,11 @@
 //! A portal-authorized EIS sender for one local Wayland input lease.
 mod ffi;
+mod keyboard;
 
 use crate::{capture_thread::Reservation, ReceivePoint};
 use anyhow::{ensure, Context as _, Result};
 use ffi::{Device, Ei, EiApi, Oeffis, Ping, PortalApi};
+use keyboard::Keys;
 use peerglide_protocol::{Input, InputCapabilities};
 use std::{
     ffi::{c_char, c_int, c_void},
@@ -25,6 +27,7 @@ const BUTTONS: [u32; 3] = [0x110, 0x111, 0x112]; // Linux BTN_LEFT, BTN_RIGHT, B
 pub struct Options {
     pub buttons: bool,
     pub scroll: bool,
+    pub keyboard: bool,
     pub region: Option<(u32, u32)>,
 }
 
@@ -34,14 +37,15 @@ struct Portal {
 }
 
 impl Portal {
-    async fn open() -> Result<(Self, OwnedFd)> {
+    async fn open(keyboard: bool) -> Result<(Self, OwnedFd)> {
         let api = PortalApi::load()?;
         // SAFETY: the ABI creates an independent context with no caller data.
         let ptr = NonNull::new(unsafe { (api.oeffis_new)(null_mut()) })
             .context("could not create the RemoteDesktop portal owner")?;
         let portal = Self { ptr, api };
-        // SAFETY: request only the explicit pointer device on this live context.
-        unsafe { (portal.api.oeffis_create_session)(portal.ptr.as_ptr(), ffi::PORTAL_POINTER) };
+        let devices = ffi::PORTAL_POINTER | if keyboard { ffi::PORTAL_KEYBOARD } else { 0 };
+        // SAFETY: request only explicitly selected devices on this live context.
+        unsafe { (portal.api.oeffis_create_session)(portal.ptr.as_ptr(), devices) };
         let fd = tokio::time::timeout(PORTAL_WAIT, async {
             loop {
                 if portal.event()? == ffi::PORTAL_CONNECTED {
@@ -168,6 +172,7 @@ struct Selection {
     region: Region,
     buttons: Option<usize>,
     scroll: Option<usize>,
+    keyboard: Option<usize>,
 }
 
 impl Selection {
@@ -176,7 +181,12 @@ impl Selection {
         let scroll = self
             .scroll
             .filter(|&device| device != self.pointer && Some(device) != buttons);
-        [Some(self.pointer), buttons, scroll].into_iter().flatten()
+        let keyboard = self.keyboard.filter(|&device| {
+            device != self.pointer && Some(device) != buttons && Some(device) != scroll
+        });
+        [Some(self.pointer), buttons, scroll, keyboard]
+            .into_iter()
+            .flatten()
     }
 }
 
@@ -185,6 +195,7 @@ struct ReadyDevice {
     regions: Vec<Region>,
     buttons: bool,
     scroll: bool,
+    keyboard: bool,
 }
 
 fn select(devices: &[ReadyDevice], options: Options) -> Result<Option<Selection>> {
@@ -224,13 +235,17 @@ fn select(devices: &[ReadyDevice], options: Options) -> Result<Option<Selection>
         let first = matches.next().map(|(index, _)| index);
         ensure!(
             matches.next().is_none(),
-            "Wayland pointer capability is ambiguous"
+            "Wayland input device capability is ambiguous"
         );
         Ok(first)
     };
     let buttons = unique(options.buttons, |device| device.buttons)?;
     let scroll = unique(options.scroll, |device| device.scroll)?;
-    if (options.buttons && buttons.is_none()) || (options.scroll && scroll.is_none()) {
+    let keyboard = unique(options.keyboard, |device| device.keyboard)?;
+    if (options.buttons && buttons.is_none())
+        || (options.scroll && scroll.is_none())
+        || (options.keyboard && keyboard.is_none())
+    {
         return Ok(None);
     }
     Ok(Some(Selection {
@@ -238,6 +253,7 @@ fn select(devices: &[ReadyDevice], options: Options) -> Result<Option<Selection>
         region,
         buttons,
         scroll,
+        keyboard,
     }))
 }
 
@@ -253,7 +269,7 @@ impl Drop for Fence {
     }
 }
 
-pub struct WaylandPointer {
+pub struct WaylandInput {
     ei: Context,
     portal: Portal,
     _reservation: Reservation,
@@ -261,13 +277,15 @@ pub struct WaylandPointer {
     seat_seen: bool,
     devices: Vec<ReadyDevice>,
     selected: Option<Selection>,
+    offered: InputCapabilities,
     failed: bool,
     active: bool,
     owned: [bool; 3],
+    keys: Keys,
     scrolling: [bool; 2],
 }
 
-impl WaylandPointer {
+impl WaylandInput {
     pub async fn open(options: Options) -> Result<Self> {
         ensure!(
             std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -276,7 +294,7 @@ impl WaylandPointer {
         );
         let reservation = Reservation::acquire()?;
         let api = EiApi::load()?;
-        let (portal, fd) = Portal::open().await?;
+        let (portal, fd) = Portal::open(options.keyboard).await?;
         let mut owner = Self {
             ei: Context::open(api, fd)?,
             portal,
@@ -285,15 +303,29 @@ impl WaylandPointer {
             seat_seen: false,
             devices: Vec::new(),
             selected: None,
+            offered: InputCapabilities::default(),
             failed: false,
             active: false,
             owned: [false; 3],
+            keys: Keys::default(),
             scrolling: [false; 2],
         };
         tokio::time::timeout(DEVICE_WAIT, async {
             loop {
                 owner.check()?;
                 if let Some(selection) = select(&owner.devices, options)? {
+                    let keys = if selection.keyboard.is_some() {
+                        keyboard::usages().collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
+                    owner.offered = InputCapabilities::new(
+                        &keys,
+                        true,
+                        if selection.buttons.is_some() { 7 } else { 0 },
+                        selection.scroll.is_some(),
+                    )
+                    .map_err(anyhow::Error::msg)?;
                     owner.selected = Some(selection);
                     return Ok::<_, anyhow::Error>(());
                 }
@@ -302,21 +334,14 @@ impl WaylandPointer {
         })
         .await
         .context(
-            "the compositor did not grant the requested Wayland pointer devices or region",
+            "the compositor did not grant the requested Wayland input devices or region",
         )??;
         owner.confirm().await?;
         Ok(owner)
     }
 
-    pub fn capabilities(&self) -> Result<InputCapabilities> {
-        let devices = self.selection()?;
-        InputCapabilities::new(
-            &[],
-            true,
-            if devices.buttons.is_some() { 7 } else { 0 },
-            devices.scroll.is_some(),
-        )
-        .map_err(anyhow::Error::msg)
+    pub fn capabilities(&self) -> InputCapabilities {
+        self.offered.clone()
     }
 
     fn selection(&self) -> Result<Selection> {
@@ -426,34 +451,26 @@ impl WaylandPointer {
     fn bind(&self, seat: NonNull<ffi::Seat>) -> Result<()> {
         let api = &self.ei.api;
         let seat = seat.as_ptr();
+        let requested = [
+            Some(ffi::CAP_ABSOLUTE),
+            self.options.buttons.then_some(ffi::CAP_BUTTON),
+            self.options.scroll.then_some(ffi::CAP_SCROLL),
+            self.options.keyboard.then_some(ffi::CAP_KEYBOARD),
+        ];
         // SAFETY: seat is borrowed from the current add event. Capabilities
-        // are ABI enum values followed by the documented null sentinel.
+        // are ABI enum values terminated by zero.
         unsafe {
-            ensure!(
-                (api.ei_seat_has_capability)(seat, ffi::CAP_ABSOLUTE)
-                    && (!self.options.buttons
-                        || (api.ei_seat_has_capability)(seat, ffi::CAP_BUTTON))
-                    && (!self.options.scroll
-                        || (api.ei_seat_has_capability)(seat, ffi::CAP_SCROLL)),
-                "the Wayland seat did not grant the requested pointer capabilities"
-            );
-            let end = null::<c_void>();
-            match (self.options.buttons, self.options.scroll) {
-                (true, true) => (api.ei_seat_bind_capabilities)(
-                    seat,
-                    ffi::CAP_ABSOLUTE,
-                    ffi::CAP_BUTTON,
-                    ffi::CAP_SCROLL,
-                    end,
-                ),
-                (true, false) => {
-                    (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, ffi::CAP_BUTTON, end)
-                }
-                (false, true) => {
-                    (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, ffi::CAP_SCROLL, end)
-                }
-                (false, false) => (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, end),
+            let mut caps = [0; 4];
+            for (slot, capability) in caps.iter_mut().zip(requested.into_iter().flatten()) {
+                ensure!(
+                    (api.ei_seat_has_capability)(seat, capability),
+                    "the Wayland seat did not grant the requested input capabilities"
+                );
+                *slot = capability;
             }
+            (api.ei_seat_bind_capabilities)(
+                seat, caps[0], caps[1], caps[2], caps[3], null::<c_void>(),
+            );
         }
         Ok(())
     }
@@ -490,6 +507,7 @@ impl WaylandPointer {
                 regions,
                 buttons: (api.ei_device_has_capability)(device, ffi::CAP_BUTTON),
                 scroll: (api.ei_device_has_capability)(device, ffi::CAP_SCROLL),
+                keyboard: (api.ei_device_has_capability)(device, ffi::CAP_KEYBOARD),
             });
         }
         Ok(())
@@ -545,7 +563,7 @@ impl WaylandPointer {
 
     pub fn input(&mut self, point: ReceivePoint, event: Input) -> Result<()> {
         ensure!(
-            self.capabilities()?.supports(event),
+            self.offered.supports(event),
             "Wayland input capability was not granted"
         );
         self.motion(point)?;
@@ -571,7 +589,14 @@ impl WaylandPointer {
                 self.frame(device);
             }
             Input::Scroll { .. } => (),
-            Input::Key { .. } => anyhow::bail!("this Wayland receiver only accepts pointer input"),
+            Input::Key { usage, down } => {
+                if let Some(code) = self.keys.transition(usage, down) {
+                    let device = self.device(selection.keyboard.context("no Wayland keyboard")?);
+                    // SAFETY: this live resumed device has keyboard capability.
+                    unsafe { (self.ei.api.ei_device_keyboard_key)(device, code, down) };
+                    self.frame(device);
+                }
+            }
         }
         Ok(())
     }
@@ -598,6 +623,14 @@ impl WaylandPointer {
             };
             self.frame(device);
         }
+        if let Some(index) = selection.keyboard.filter(|_| self.keys.has_held()) {
+            let device = self.device(index);
+            for code in self.keys.release() {
+                // SAFETY: release only keys submitted to this live keyboard.
+                unsafe { (self.ei.api.ei_device_keyboard_key)(device, code, false) };
+            }
+            self.frame(device);
+        }
         for index in selection.devices() {
             // SAFETY: finish the same resumed devices started by begin.
             unsafe { (self.ei.api.ei_device_stop_emulating)(self.device(index)) };
@@ -618,7 +651,7 @@ impl WaylandPointer {
     }
 }
 
-impl Drop for WaylandPointer {
+impl Drop for WaylandInput {
     fn drop(&mut self) {
         for device in self.devices.drain(..) {
             // SAFETY: drop all retained device refs before dropping the context.
@@ -665,17 +698,20 @@ mod tests {
                 regions: vec![primary, secondary],
                 buttons: false,
                 scroll: false,
+                keyboard: false,
             },
             ReadyDevice {
                 ptr: NonNull::dangling(),
                 regions: Vec::new(),
                 buttons: true,
                 scroll: false,
+                keyboard: false,
             },
         ];
         let mut options = Options {
             buttons: true,
             scroll: false,
+            keyboard: false,
             region: None,
         };
         assert!(select(&devices, options).is_err());
@@ -697,6 +733,13 @@ mod tests {
         assert!(select(&devices, options)?.is_none());
         devices[1].scroll = true;
         let chosen = select(&devices, options)?.context("scroll device missing")?;
+        assert_eq!(chosen.devices().collect::<Vec<_>>(), [0, 1]);
+        assert!(chosen.keyboard.is_none());
+        options.keyboard = true;
+        assert!(select(&devices, options)?.is_none());
+        devices[1].keyboard = true;
+        let chosen = select(&devices, options)?.context("keyboard device missing")?;
+        assert_eq!(chosen.keyboard, Some(1));
         assert_eq!(chosen.devices().collect::<Vec<_>>(), [0, 1]);
         Ok(())
     }
