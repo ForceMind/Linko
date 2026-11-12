@@ -1,7 +1,7 @@
 //! File offer and disk orchestration on the authenticated data connection.
 use crate::{
     data,
-    file_drop_link::{Receipt, SentReceipt},
+    file_drop_link::{Receipt, ReceivedReceipt, SentReceipt},
 };
 use anyhow::{ensure, Context, Result};
 pub use peerglide_transfer::drop_admission;
@@ -141,7 +141,7 @@ pub struct ReceivedFile {
     path: PathBuf,
     manifest: Manifest,
     origin: DropOrigin,
-    receipt: Option<Arc<Receipt>>,
+    receipt: Option<Arc<ReceivedReceipt>>,
 }
 
 /// Locally retained provenance of one committed transfer. Never put the
@@ -181,8 +181,7 @@ impl DropOrigin {
 pub struct PreparedDropPath {
     path: PathBuf,
     _source: File,
-    pub(crate) origin: DropOrigin,
-    pub(crate) receipt: Option<Arc<Receipt>>,
+    pub(crate) receipt: Option<Arc<ReceivedReceipt>>,
     #[cfg(any(target_os = "macos", all(windows, target_env = "msvc"), test))]
     manifest: Manifest,
 }
@@ -206,7 +205,6 @@ impl ReceivedFile {
         Ok(PreparedDropPath {
             path: self.path.clone(),
             _source: source,
-            origin: self.origin,
             receipt: self.receipt.clone(),
             #[cfg(any(target_os = "macos", all(windows, target_env = "msvc"), test))]
             manifest: actual,
@@ -546,7 +544,12 @@ where
         path,
         manifest: verified_manifest,
         origin,
-        receipt: receipt.map(Arc::new),
+        receipt: receipt.map(|binding| {
+            Arc::new(ReceivedReceipt {
+                binding,
+                connection: origin.connection(),
+            })
+        }),
     });
     Ok(result)
 }

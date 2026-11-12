@@ -78,6 +78,11 @@ impl Receipt {
 /// gives up this handle on one reservation attempt, including on failure.
 pub struct SentReceipt(pub(crate) Receipt);
 
+pub(crate) struct ReceivedReceipt {
+    pub(crate) binding: Receipt,
+    pub(crate) connection: [u8; 32],
+}
+
 /// One locally armed file and at most one claim for it.
 pub struct Slot(Mutex<Option<Prepared>>);
 
@@ -86,7 +91,7 @@ struct Prepared {
     ticket: Ticket,
     expires: Instant,
     file: PreparedDropPath,
-    receipt: Arc<Receipt>,
+    receipt: Arc<ReceivedReceipt>,
     reservation: Option<Reservation>,
 }
 
@@ -114,16 +119,16 @@ impl Slot {
         now: u64,
         authorized: bool,
     ) -> Result<Self> {
-        ensure!(
-            file.origin.connection() == context.connection,
-            "prepared file connection differs"
-        );
         let receipt = file
             .receipt
             .take()
             .context("prepared file has no transfer proof")?;
+        ensure!(
+            receipt.connection == context.connection,
+            "prepared file connection differs"
+        );
         let remaining = admission
-            .file_ready(ticket, context, receipt.transfer, now, authorized)
+            .file_ready(ticket, context, receipt.binding.transfer, now, authorized)
             .map_err(|error| anyhow::anyhow!("file preparation unavailable ({error:?})"))?;
         Ok(Self(Mutex::new(Some(Prepared {
             context,
@@ -164,8 +169,9 @@ impl Slot {
         let Some(reservation) = &prepared.reservation else {
             return Ok(None);
         };
+        let receipt = &prepared.receipt.binding;
         if reservation.lease != granted_lease
-            || prepared.receipt.peer != blake3::hash(pin)
+            || receipt.peer != blake3::hash(pin)
             || !reservation
                 .input
                 .matches(input, pin, &reservation.input.proof())?
@@ -176,7 +182,7 @@ impl Slot {
             .file_ready(
                 prepared.ticket,
                 prepared.context,
-                prepared.receipt.transfer,
+                receipt.transfer,
                 now,
                 true,
             )
@@ -202,14 +208,15 @@ impl Slot {
         let Some(prepared) = live(&mut state, current) else {
             return Ok(None);
         };
+        let receipt = &prepared.receipt.binding;
         if prepared.reservation.is_some()
-            || prepared.receipt.peer != blake3::hash(pin)
-            || prepared.receipt.transfer != request.transfer
-            || prepared.receipt.tag(REQUEST, request.lease, &input) != request.tag
+            || receipt.peer != blake3::hash(pin)
+            || receipt.transfer != request.transfer
+            || receipt.tag(REQUEST, request.lease, &input) != request.tag
         {
             return Ok(None);
         }
-        let tag = prepared.receipt.tag(READY, request.lease, &input);
+        let tag = receipt.tag(READY, request.lease, &input);
         prepared.reservation = Some(Reservation {
             lease: request.lease,
             input,
