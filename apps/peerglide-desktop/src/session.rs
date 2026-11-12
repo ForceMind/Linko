@@ -16,7 +16,15 @@ use std::{future::Future, pin::Pin, time::Duration};
 use tokio::sync::mpsc;
 
 mod recovery;
+pub(super) mod routed_source;
 use recovery::Recovery;
+
+struct Abort(tokio::task::JoinHandle<()>);
+impl Drop for Abort {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
     tokio::time::timeout(Duration::from_millis(250), transport::send(tx, m)).await??;
@@ -488,12 +496,6 @@ pub(super) async fn run_with_diagnostics(
             }
         }
     });
-    struct Abort(tokio::task::JoinHandle<()>);
-    impl Drop for Abort {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
     let _reader = Abort(reader);
     let mut recovery = Recovery {
         receiver: Receiver::default(),
@@ -1153,6 +1155,7 @@ fn primary_edge_entry(
     gate.update(at_edge, now).then_some(along)
 }
 
+#[derive(Clone, Copy)]
 struct OutgoingEdges {
     local: Edge,
     remote: Edge,
