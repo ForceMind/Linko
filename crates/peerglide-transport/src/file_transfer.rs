@@ -618,7 +618,10 @@ mod tests {
         assert_eq!(piece, [17, 19, 21, 23]);
         assert!(reader.read_at(reader.size() - 1, &mut piece).is_err());
         assert!(reader.read_at(u64::MAX, &mut piece).is_err());
-        fs::OpenOptions::new().write(true).open(path)?.write_all(&[25])?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .write_all(&[25])?;
         assert!(reader.read_at(0, &mut piece).is_err());
         Ok(())
     }

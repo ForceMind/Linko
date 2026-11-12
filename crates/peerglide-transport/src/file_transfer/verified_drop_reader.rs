@@ -36,7 +36,11 @@ impl VerifiedDropReader {
         while !output.is_empty() {
             let index = (offset / CHUNK_BYTES as u64) as usize;
             let start = (offset % CHUNK_BYTES as u64) as usize;
-            if self.cached.as_ref().is_none_or(|(chunk, _)| *chunk != index) {
+            if self
+                .cached
+                .as_ref()
+                .is_none_or(|(chunk, _)| *chunk != index)
+            {
                 let bytes = self
                     .prepared
                     .manifest

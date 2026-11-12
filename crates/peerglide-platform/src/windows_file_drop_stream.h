@@ -41,6 +41,11 @@ public:
         released_ = owner_ && !expired(deadline_);
     }
 
+    bool offering() {
+        Lock lock(lock_);
+        return owner_ && !failed_ && !expired(deadline_);
+    }
+
     bool open_stream() {
         Lock lock(lock_);
         if (!readable()) {

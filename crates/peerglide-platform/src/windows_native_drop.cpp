@@ -89,7 +89,8 @@ public:
             return E_POINTER;
         }
         const bool stream = stream_request(request);
-        if (expired(deadline_) || (!stream && request->cfFormat != format_)) {
+        if (expired(deadline_) || (file_ && !file_->offering()) ||
+            (!stream && request->cfFormat != format_)) {
             return DV_E_FORMATETC;
         }
         if (request->dwAspect != DVASPECT_CONTENT) {
@@ -395,7 +396,7 @@ extern "C" int32_t linko_windows_file_stream_regression() {
     LARGE_INTEGER offset{};
     if (!file->close() || fixture.closes != 1 || FAILED(stream->Seek(offset, STREAM_SEEK_SET, nullptr)) ||
         stream->Read(output, 1, &copied) != STG_E_ACCESSDENIED || copied != 0 || fixture.reads != 1 ||
-        data->GetData(&content, &medium) != STG_E_ACCESSDENIED) {
+        SUCCEEDED(data->GetData(&content, &medium)) || SUCCEEDED(data->GetData(&metadata, &medium))) {
         return 11;
     }
     return 0;
