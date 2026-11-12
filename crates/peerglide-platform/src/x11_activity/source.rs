@@ -21,8 +21,16 @@ use x11rb::{
 
 pub enum PointerSample {
     Idle,
-    Motion { dx: f64, dy: f64 },
-    Button { dx: f64, dy: f64, number: u8, down: bool },
+    Motion {
+        dx: f64,
+        dy: f64,
+    },
+    Button {
+        dx: f64,
+        dy: f64,
+        number: u8,
+        down: bool,
+    },
     LocalInput,
 }
 
@@ -239,12 +247,13 @@ impl PointerSource {
     }
 
     fn consume_button(&mut self) -> Result<()> {
-        let (number, down, _) = self.frozen_button.take().context("Xorg button is not frozen")?;
-        self.suppressed[usize::from(number)] = down;
+        let (number, down, _) = self.frozen_button.context("Xorg button is not frozen")?;
         self.activity
             .connection
             .allow_events(Allow::SYNC_POINTER, CURRENT_TIME)?
             .check()?;
+        self.frozen_button = None;
+        self.suppressed[usize::from(number)] = down;
         Ok(())
     }
 
@@ -394,7 +403,9 @@ impl PointerSource {
         // reprocess that same event locally, with its original button pair.
         // ReplayPointer is a no-op when a button did not freeze the grab.
         let restore = if drained.is_ok() {
-            connection.allow_events(Allow::REPLAY_POINTER, CURRENT_TIME)?.check()
+            connection
+                .allow_events(Allow::REPLAY_POINTER, CURRENT_TIME)?
+                .check()
         } else {
             // An ambiguous release must never be replayed into a local app.
             Ok(())
@@ -402,7 +413,10 @@ impl PointerSource {
         connection.ungrab_pointer(CURRENT_TIME)?.check()?;
         connection.destroy_window(window)?.check()?;
         restore?;
-        drained
+        drained?;
+        self.frozen_button = None;
+        self.raw_button = None;
+        Ok(())
     }
 }
 
@@ -473,19 +487,34 @@ mod tests {
             time: 99,
             ..ButtonPressEvent::default()
         };
-        let raw = RawButton { detail: 3, time: 99, down: true, physical: true };
+        let raw = RawButton {
+            detail: 3,
+            time: 99,
+            down: true,
+            physical: true,
+        };
         assert!(raw.matches(&core, true));
         assert!(!raw.matches(&core, false));
         assert!(!RawButton { time: 98, ..raw }.matches(&core, true));
-        assert!(!RawButton { physical: false, ..raw }.matches(&core, true));
-        let synthetic = ButtonPressEvent { response_type: core.response_type | 0x80, ..core };
+        assert!(!RawButton {
+            physical: false,
+            ..raw
+        }
+        .matches(&core, true));
+        let synthetic = ButtonPressEvent {
+            response_type: core.response_type | 0x80,
+            ..core
+        };
         assert!(!raw.matches(&synthetic, true));
     }
 
     #[test]
     #[ignore = "requires the dedicated GitHub Actions Xvfb server"]
     fn xorg_drains_a_consumed_pair_without_replaying_its_release() -> Result<()> {
-        use crate::{x11_inject::{local_connection, Injector}, ReceivePoint};
+        use crate::{
+            x11_inject::{local_connection, Injector},
+            ReceivePoint,
+        };
         use std::sync::mpsc;
 
         ensure!(
@@ -496,12 +525,17 @@ mod tests {
         let mut source = PointerSource::open()?;
         let mut injector = Injector::open_after_explicit_consent()?;
         let observer = local_connection()?.0;
-        observer.change_window_attributes(
-            source.activity.root,
-            &ChangeWindowAttributesAux::new().event_mask(EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE),
-        )?.check()?;
+        observer
+            .change_window_attributes(
+                source.activity.root,
+                &ChangeWindowAttributesAux::new()
+                    .event_mask(EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE),
+            )?
+            .check()?;
         injector.pointer(ReceivePoint { x: 1.0, y: 0.5 })?;
-        let along = source.edge_fraction(Edge::Right)?.context("right edge not reached")?;
+        let along = source
+            .edge_fraction(Edge::Right)?
+            .context("right edge not reached")?;
         assert!(source.claim(Edge::Right, along)?);
         assert!(injector.button(2, true)?);
         assert!(matches!(source.poll()?, PointerSample::LocalInput));

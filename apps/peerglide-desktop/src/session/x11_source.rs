@@ -223,8 +223,17 @@ fn forward_native(
         let event = match source.poll()? {
             PointerSample::Idle => None,
             PointerSample::LocalInput => break,
-            PointerSample::Motion { dx, dy } => Some(PointerEvent { dx, dy, input: None }),
-            PointerSample::Button { dx, dy, number, down } => {
+            PointerSample::Motion { dx, dy } => Some(PointerEvent {
+                dx,
+                dy,
+                input: None,
+            }),
+            PointerSample::Button {
+                dx,
+                dy,
+                number,
+                down,
+            } => {
                 let Some(input) = pointer_input(number, down) else {
                     break;
                 };
@@ -233,8 +242,11 @@ fn forward_native(
                 }
                 source.accept_button(number, down)?;
                 let input = (number < 4 || down).then_some(input);
-                (input.is_some() || dx != 0.0 || dy != 0.0)
-                    .then_some(PointerEvent { dx, dy, input })
+                (input.is_some() || dx != 0.0 || dy != 0.0).then_some(PointerEvent {
+                    dx,
+                    dy,
+                    input,
+                })
             }
         };
         if event.is_some_and(|event| !flags.lease_live() || publish.try_send(event).is_err()) {
@@ -293,8 +305,8 @@ pub(crate) async fn run(
         secondary_layout: None,
     };
     let mut native = Native::start(edge)?;
-    let offered =
-        InputCapabilities::new(&[], true, if buttons { 7 } else { 0 }, scroll).map_err(anyhow::Error::msg)?;
+    let offered = InputCapabilities::new(&[], true, if buttons { 7 } else { 0 }, scroll)
+        .map_err(anyhow::Error::msg)?;
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
     println!("Move the local pointer to the selected edge. Ctrl+C stops pointer sending.");
@@ -393,7 +405,13 @@ async fn send_pointer(
     }
     native.flags.refresh();
     let claim = native.claim.take().context("Xorg claim already used")?;
-    if claim.send(PointerPermissions { local: offered, peer: link.capabilities.clone() }).is_err() {
+    if claim
+        .send(PointerPermissions {
+            local: offered,
+            peer: link.capabilities.clone(),
+        })
+        .is_err()
+    {
         return Ok(None);
     }
     native.thread.unpark();
@@ -509,15 +527,33 @@ mod tests {
         let local = InputCapabilities::new(&[], true, 7, true).map_err(anyhow::Error::msg)?;
         let peer = InputCapabilities::new(&[], true, 2, false).map_err(anyhow::Error::msg)?;
         let permissions = PointerPermissions { local, peer };
-        assert_eq!(pointer_input(3, true), Some(Input::Button { button: 2, down: true }));
+        assert!(matches!(
+            pointer_input(3, true),
+            Some(Input::Button {
+                button: 2,
+                down: true
+            })
+        ));
         assert!(permissions.supports(pointer_input(3, true).unwrap()));
         assert!(permissions.supports(pointer_input(3, false).unwrap()));
         assert!(!permissions.supports(pointer_input(1, true).unwrap()));
         assert!(!permissions.supports(pointer_input(4, true).unwrap()));
-        assert_eq!(pointer_input(4, true), Some(Input::Scroll { x: 0, y: 1 }));
-        assert_eq!(pointer_input(5, true), Some(Input::Scroll { x: 0, y: -1 }));
-        assert_eq!(pointer_input(6, true), Some(Input::Scroll { x: -1, y: 0 }));
-        assert_eq!(pointer_input(7, true), Some(Input::Scroll { x: 1, y: 0 }));
+        assert!(matches!(
+            pointer_input(4, true),
+            Some(Input::Scroll { x: 0, y: 1 })
+        ));
+        assert!(matches!(
+            pointer_input(5, true),
+            Some(Input::Scroll { x: 0, y: -1 })
+        ));
+        assert!(matches!(
+            pointer_input(6, true),
+            Some(Input::Scroll { x: -1, y: 0 })
+        ));
+        assert!(matches!(
+            pointer_input(7, true),
+            Some(Input::Scroll { x: 1, y: 0 })
+        ));
         assert!(pointer_input(8, true).is_none());
         Ok(())
     }
@@ -571,9 +607,15 @@ mod tests {
             assert!(cursor.x > 0.19 && cursor.x < 0.21 && cursor.y == 0.5);
             arrived.send(()).expect("native motion observer");
             let mut expected = [
-                Input::Button { button: 2, down: true },
+                Input::Button {
+                    button: 2,
+                    down: true,
+                },
                 Input::Scroll { x: -1, y: 0 },
-                Input::Button { button: 2, down: false },
+                Input::Button {
+                    button: 2,
+                    down: false,
+                },
             ]
             .into_iter();
             let mut sequence = cursor.sequence;
@@ -582,8 +624,12 @@ mod tests {
                     Message::Ping { lease: LEASE } => {
                         transport::send(&mut send, &Message::Pong { lease: LEASE }).await?;
                     }
-                    Message::Input { lease: LEASE, event, cursor } => {
-                        assert_eq!(Some(event), expected.next());
+                    Message::Input {
+                        lease: LEASE,
+                        event,
+                        cursor,
+                    } => {
+                        assert!(Some(event) == expected.next());
                         assert!(cursor.sequence > sequence && cursor.y == 0.5);
                         sequence = cursor.sequence;
                     }
@@ -612,7 +658,13 @@ mod tests {
             let permissions = permit.await?;
             assert!(permissions.supports(Input::Scroll { x: -1, y: 0 }));
             admitted.send(()).expect("native admission observer");
-            publish.send(PointerEvent { dx: 0.2, dy: 0.0, input: None }).await?;
+            publish
+                .send(PointerEvent {
+                    dx: 0.2,
+                    dy: 0.0,
+                    input: None,
+                })
+                .await?;
             motion_received.await?;
             for (dx, input) in [
                 (0.0, pointer_input(3, true)),
@@ -629,9 +681,16 @@ mod tests {
         let client = async {
             let mut link = Link::connect(&source, &peer, capabilities.clone()).await?;
             let mut attempted = false;
-            let cursor = send_pointer(&mut link, &mut native, Edge::Right, 0.5, capabilities.clone(), &mut attempted)
-                .await?
-                .context("missing return cursor")?;
+            let cursor = send_pointer(
+                &mut link,
+                &mut native,
+                Edge::Right,
+                0.5,
+                capabilities.clone(),
+                &mut attempted,
+            )
+            .await?
+            .context("missing return cursor")?;
             assert!(attempted);
             native.stop();
             native.events.close();
