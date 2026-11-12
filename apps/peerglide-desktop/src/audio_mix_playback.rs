@@ -147,14 +147,35 @@ mod tests {
         let mut mix = Mix::default();
         let (left_send, left_frames) = mpsc::channel(SOURCE_QUEUE);
         let (right_send, right_frames) = mpsc::channel(SOURCE_QUEUE);
-        let mut left = BufferedSource { source: mix.start(0).unwrap(), frames: left_frames };
-        let mut right = BufferedSource { source: mix.start(1).unwrap(), frames: right_frames };
+        let mut left = BufferedSource {
+            source: mix.start(0).unwrap(),
+            frames: left_frames,
+        };
+        let mut right = BufferedSource {
+            source: mix.start(1).unwrap(),
+            frames: right_frames,
+        };
         for sequence in 1..=SOURCE_QUEUE as u64 {
-            assert!(left_send.try_send(Frame { sequence, samples: [7; SAMPLES] }).is_ok());
+            assert!(left_send
+                .try_send(Frame {
+                    sequence,
+                    samples: [7; SAMPLES]
+                })
+                .is_ok());
         }
-        assert!(left_send.try_send(Frame { sequence: 5, samples: [9; SAMPLES] }).is_err());
+        assert!(left_send
+            .try_send(Frame {
+                sequence: 5,
+                samples: [9; SAMPLES]
+            })
+            .is_err());
         for sequence in 1..=3 {
-            assert!(right_send.try_send(Frame { sequence, samples: [5; SAMPLES] }).is_ok());
+            assert!(right_send
+                .try_send(Frame {
+                    sequence,
+                    samples: [5; SAMPLES]
+                })
+                .is_ok());
         }
         left.drain(&mut mix);
         right.drain(&mut mix);
