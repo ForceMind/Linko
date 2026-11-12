@@ -9,6 +9,8 @@ use std::{
 };
 
 pub(super) const ALPN: &[u8] = b"peerglide-layout/1";
+pub mod inventory;
+
 const MAGIC: &[u8; 4] = b"PGL1";
 const REQUEST_BYTES: usize = 64;
 const REPLY_BYTES: usize = 24;
