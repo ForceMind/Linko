@@ -862,6 +862,7 @@ async fn supervise(
     );
     let mut backoff = reconnect::Backoff::default();
     let mut initial = reconnect::InitialWait::new(o.wait_for_peer_secs);
+    let mut rebuilding_display_layout = false;
     loop {
         if *stop.borrow() {
             return Ok(());
@@ -876,6 +877,7 @@ async fn supervise(
                 id: &id,
                 peer: &peer,
                 initial: &mut initial,
+                rebuilding_display_layout,
             },
             stop.clone(),
             input_status,
@@ -895,6 +897,21 @@ async fn supervise(
         }
         match result {
             Ok(()) => (),
+            Err(error)
+                if error
+                    .downcast_ref::<session::DisplayLayoutEnd>()
+                    .is_some_and(|reason| {
+                        reason.may_rebuild(
+                            o.reconnect,
+                            o.receive_selection.is_some() || o.request_secondary_layout.is_some(),
+                        )
+                    }) =>
+            {
+                rebuilding_display_layout = true;
+                eprintln!(
+                    "Local input was released. Rechecking the display layout before resuming input."
+                );
+            }
             Err(error) if reconnect::retryable(&error) => (),
             Err(error) => return Err(error),
         }
@@ -923,6 +940,7 @@ struct Attempt<'a> {
     id: &'a transport::Identity,
     peer: &'a [u8],
     initial: &'a mut reconnect::InitialWait,
+    rebuilding_display_layout: bool,
 }
 async fn initial_wait_deadline(deadline: Option<tokio::time::Instant>) {
     if let Some(deadline) = deadline {
@@ -943,6 +961,7 @@ async fn run_inner(
         id,
         peer,
         initial,
+        rebuilding_display_layout,
     } = attempt;
     input_status.clear_switch();
     println!(
@@ -1061,6 +1080,7 @@ async fn run_inner(
             layout: Some(&o.layout),
             receive_display: o.receive_selection.clone(),
             secondary: secondary.as_ref(),
+            rebuilding_display_layout,
         },
     )
     .await;

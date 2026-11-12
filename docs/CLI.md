@@ -139,6 +139,8 @@ Windows 和 macOS 的原生接收会话可用 `--receive-display=X,Y` 选定一�
 设备详情中的显示器列表提供当前位置。使用屏幕左上角坐标，镜像或重复坐标会拒绝。
 选项需要显式 `--native --allow-control`，可与现有 v5 电脑通信。源端的边缘方向仍按
 两端已有的配置。自动重连仍使用本次启动时的本机目标快照。更换目标需要停止并重新启动。
+工作器定期核对本机布局。检测到变化或无法重新核对已有布局时，会结束原生会话并执行
+键鼠释放和本机恢复。重启会话前重新确认接收屏幕，避免沿用热插拔前的目标。
 
 ```text
 peerglide listen --identity PATH --peer-cert SOURCE.der --native --allow-control --receive-display=-1920,0
@@ -157,7 +159,12 @@ peerglide listen --peer-cert SOURCE.der --native --allow-control --edge left --r
 peerglide connect HOST:24870 --peer-cert HOST.der --native --edge right --request-secondary-layout=HOST:24878
 ```
 
-这条路径一次确认接收端明确配置的屏幕。多目标自动路由与热插拔重建仍待开发及真机验证。
+这条路径一次确认接收端明确配置的屏幕。多目标自动路由仍待开发。
+
+主屏模式显式启用 `--reconnect` 时，检测到新的有效布局后可在本机释放完成后重连原电脑。
+开始新的键鼠捕获前重新核对证书与本机布局，光标先回到屏内才能再次从边缘切换。布局
+读不到、恢复未确认或指定了任意一端的接收屏幕时，需要先检查本机状态。真实热插拔和
+两端恢复仍待验收。
 
 ## 查询已核验电脑的屏幕表
 

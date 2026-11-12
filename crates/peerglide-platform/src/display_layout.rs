@@ -184,6 +184,11 @@ impl Layout {
         self.primary
     }
 
+    /// Compare native snapshots independently of their local anchor owners.
+    pub fn same_configuration(&self, other: &Self) -> bool {
+        self.primary == other.primary && self.displays == other.displays
+    }
+
     /// A local CLI may select the currently visible geometry without exposing
     /// or persisting a native monitor handle. Mirrored origins are ambiguous.
     #[cfg(any(windows, target_os = "macos", test))]

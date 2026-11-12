@@ -202,13 +202,23 @@ impl ReceiveDisplay {
     pub fn matches_current(&self) -> Result<bool> {
         #[cfg(any(windows, target_os = "macos"))]
         {
-            let current = read_display_layout()?;
-            Ok(current.primary() == self.layout.primary()
-                && current.displays() == self.layout.displays())
+            Ok(self.matches_snapshot(&read_display_layout()?))
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             Ok(false)
+        }
+    }
+
+    pub fn matches_snapshot(&self, snapshot: &display_layout::Layout) -> bool {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            self.layout.same_configuration(snapshot)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = snapshot;
+            false
         }
     }
 }
