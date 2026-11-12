@@ -17,6 +17,8 @@ mod data_frames;
 mod data_session;
 pub mod file_transfer;
 pub mod file_worker;
+pub mod layout_binding;
+pub mod layout_reservation;
 pub mod pairing;
 pub mod trusted_listener;
 
@@ -244,7 +246,7 @@ fn transport(alpn: &[u8]) -> Arc<quinn::TransportConfig> {
         let frame = peerglide_protocol::audio::FRAME_BYTES;
         t.datagram_receive_buffer_size(Some(16 * frame));
         t.datagram_send_buffer_size(4 * frame);
-    } else if alpn == data::ALPN {
+    } else if alpn == data::ALPN || alpn == layout_reservation::ALPN {
         t.datagram_receive_buffer_size(None);
         t.datagram_send_buffer_size(0);
     } else {

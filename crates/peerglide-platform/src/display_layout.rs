@@ -103,6 +103,12 @@ pub struct EdgeAnchor {
     pub fraction: f64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Revision {
+    instance: u64,
+    generation: u64,
+}
+
 /// A validated native snapshot owned by one local layout controller. An update
 /// only invalidates anchors when the effective layout or display metrics change.
 pub struct Layout {
@@ -181,6 +187,13 @@ impl Layout {
             edge,
             fraction: display.bounds.along(edge, x, y).clamp(0.0, 1.0),
         })
+    }
+
+    pub(super) fn revision(&self) -> Revision {
+        Revision {
+            instance: self.instance,
+            generation: self.generation,
+        }
     }
 
     pub fn anchor_is_current(&self, anchor: EdgeAnchor) -> bool {
