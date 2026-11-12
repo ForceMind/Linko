@@ -166,6 +166,33 @@ enum Command {
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
     },
+    /// Play the microphone of one explicitly verified computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayMicrophone {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24875")]
+        bind: SocketAddr,
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
+    /// Share the local microphone with one explicitly verified computer.
+    #[cfg(all(windows, target_env = "msvc"))]
+    ShareMicrophone {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -289,6 +316,40 @@ async fn main() -> Result<()> {
             duration_secs,
         } => {
             audio_source::share_system(
+                &identity,
+                &peer_cert,
+                address,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayMicrophone {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => {
+            audio_playback::play_microphone(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+            .await
+        }
+        #[cfg(all(windows, target_env = "msvc"))]
+        Command::ShareMicrophone {
+            address,
+            identity,
+            peer_cert,
+            duration_secs,
+        } => {
+            audio_source::share_microphone(
                 &identity,
                 &peer_cert,
                 address,

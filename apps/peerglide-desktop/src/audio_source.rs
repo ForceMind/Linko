@@ -44,7 +44,50 @@ impl Packet {
 }
 
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+#[derive(Clone, Copy)]
+enum Source {
+    System,
+    #[cfg(all(windows, target_env = "msvc"))]
+    Microphone,
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 pub(super) async fn share_system(
+    identity: &std::path::Path,
+    peer_certificate: &std::path::Path,
+    address: std::net::SocketAddr,
+    duration: std::time::Duration,
+) -> Result<()> {
+    share(
+        Source::System,
+        identity,
+        peer_certificate,
+        address,
+        duration,
+    )
+    .await
+}
+
+#[cfg(all(windows, target_env = "msvc"))]
+pub(super) async fn share_microphone(
+    identity: &std::path::Path,
+    peer_certificate: &std::path::Path,
+    address: std::net::SocketAddr,
+    duration: std::time::Duration,
+) -> Result<()> {
+    share(
+        Source::Microphone,
+        identity,
+        peer_certificate,
+        address,
+        duration,
+    )
+    .await
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+async fn share(
+    source: Source,
     identity: &std::path::Path,
     peer_certificate: &std::path::Path,
     address: std::net::SocketAddr,
@@ -69,7 +112,11 @@ pub(super) async fn share_system(
     } else {
         SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0))
     };
-    let endpoint = audio::endpoint(bind, &identity, &pin)?;
+    let endpoint = match source {
+        Source::System => audio::endpoint(bind, &identity, &pin)?,
+        #[cfg(all(windows, target_env = "msvc"))]
+        Source::Microphone => audio::microphone::endpoint(bind, &identity, &pin)?,
+    };
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
     let connection = tokio::select! {
@@ -90,14 +137,20 @@ pub(super) async fn share_system(
             connection.close(0u8.into(), b"audio cancelled");
             return Ok(());
         }
-        result = audio::open(&connection, &pin, audio::Direction::Send, duration) => result?,
+        result = async {
+            match source {
+                Source::System => audio::open(&connection, &pin, audio::Direction::Send, duration).await,
+                #[cfg(all(windows, target_env = "msvc"))]
+                Source::Microphone => audio::microphone::open(&connection, &pin, duration).await,
+            }
+        } => result?,
     };
     let stopped = Arc::new(AtomicBool::new(false));
     let stop_capture = stopped.clone();
     let (samples, mut received) = tokio::sync::mpsc::channel(2);
     let worker = std::thread::Builder::new()
-        .name("linko-system-audio".into())
-        .spawn(move || capture_samples(&stop_capture, samples))?;
+        .name("linko-audio-source".into())
+        .spawn(move || capture_samples(source, &stop_capture, samples))?;
     let mut sequence = 0u64;
     let result = async {
         loop {
@@ -120,7 +173,7 @@ pub(super) async fn share_system(
     tokio::task::spawn_blocking(move || {
         worker
             .join()
-            .map_err(|_| anyhow::anyhow!("local system audio worker ended unexpectedly"))?
+            .map_err(|_| anyhow::anyhow!("local audio worker ended unexpectedly"))?
     })
     .await??;
     result
@@ -128,11 +181,12 @@ pub(super) async fn share_system(
 
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 fn capture_samples(
+    source: Source,
     stopped: &std::sync::atomic::AtomicBool,
     samples: tokio::sync::mpsc::Sender<[i16; SAMPLES]>,
 ) -> Result<()> {
     use anyhow::Context;
-    use peerglide_platform::system_audio_capture::SystemAudio;
+    use peerglide_platform::system_audio_capture::AudioCapture;
     use std::{
         sync::atomic::Ordering,
         time::{Duration, Instant},
@@ -142,7 +196,11 @@ fn capture_samples(
     if stopped.load(Ordering::Acquire) {
         return Ok(());
     }
-    let mut capture = SystemAudio::open_after_explicit_consent()?;
+    let mut capture = match source {
+        Source::System => AudioCapture::open_after_explicit_consent()?,
+        #[cfg(all(windows, target_env = "msvc"))]
+        Source::Microphone => AudioCapture::open_microphone_after_explicit_consent()?,
+    };
     let mut packet = Packet::new();
     let period = Duration::from_millis(5);
     let result = (|| -> Result<()> {
@@ -163,7 +221,7 @@ fn capture_samples(
     })();
     capture
         .stop()
-        .context("local system audio cleanup failed")?;
+        .context("local audio capture cleanup failed")?;
     result
 }
 
