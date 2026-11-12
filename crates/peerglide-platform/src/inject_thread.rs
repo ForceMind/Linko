@@ -265,7 +265,7 @@ impl Drop for InjectThread {
 mod tests {
     use super::*;
     use std::sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc,
     };
     use std::time::Instant;
@@ -341,13 +341,12 @@ mod tests {
         thread: InjectThread,
         controls: Arc<Controls>,
         entered: mpsc::Receiver<()>,
-        wakes: Arc<AtomicUsize>,
+        wakes: mpsc::Receiver<()>,
     }
     fn rig(capacity: usize) -> Rig {
         let controls = Arc::new(Controls::default());
         let (entered_tx, entered) = mpsc::channel();
-        let wakes = Arc::new(AtomicUsize::new(0));
-        let count = wakes.clone();
+        let (wake_tx, wakes) = mpsc::channel();
         let thread = spawn(
             FakeSink {
                 controls: controls.clone(),
@@ -355,7 +354,7 @@ mod tests {
             },
             capacity,
             Arc::new(move || {
-                count.fetch_add(1, Ordering::AcqRel);
+                let _ = wake_tx.send(());
             }),
         )
         .unwrap();
@@ -468,10 +467,15 @@ mod tests {
             !rig.thread.discard(),
             "discard cannot cancel an in-flight call"
         );
-        let before = rig.wakes.load(Ordering::Acquire);
+        assert!(
+            rig.wakes.try_recv().is_err(),
+            "in-flight effect woke the loop early"
+        );
         rig.hold(false);
         rig.settle();
-        assert!(rig.wakes.load(Ordering::Acquire) > before);
+        rig.wakes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the completed effect wakes the loop");
         assert!(rig.thread.discard());
         assert_eq!(rig.log(), [Seen::Key(4, false)]);
     }

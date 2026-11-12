@@ -313,7 +313,7 @@ impl Export {
         Ok(())
     }
 
-    fn prepare_handoff(&mut self, app: &App) -> Result<()> {
+    fn prepare_handoff(&mut self, app: &mut App) -> Result<()> {
         ensure!(can_prepare_handoff(app), "须由本机先批准文件接棒");
         let source = self.source.as_ref().context("没有已接收文件")?;
         source.pin.recheck(app)?;
@@ -325,7 +325,7 @@ impl Export {
         let ticket = attempt.ticket;
         let result = (|| -> Result<Handoff> {
             attempt.scope.verify_layout()?;
-            let request = u32::try_from(attempt.scope.context.gesture_generation)?;
+            let request = super::file_drop_reservation::next_request(app)?;
             let slot = file_drop_link::Slot::arm(
                 path,
                 &mut self.admission,
@@ -576,6 +576,12 @@ impl Export {
                 }
                 Status::Matched => {
                     ui.label("文件预约已确认当前输入租约。");
+                }
+                Status::Press
+                | Status::SourceArmed
+                | Status::SourceCommitted
+                | Status::SourceReleased => {
+                    unreachable!("source reservation in the receive panel");
                 }
             }
             if ui.button("撤回文件预约").clicked() {
