@@ -37,10 +37,7 @@ impl Scope {
     }
 
     fn verify_snapshot(&self, current: &Layout) -> Result<()> {
-        ensure!(
-            self.layout.same_configuration(current),
-            "显示器布局已变化"
-        );
+        ensure!(self.layout.same_configuration(current), "显示器布局已变化");
         Ok(())
     }
 }
@@ -512,7 +509,9 @@ mod tests {
         };
         scope.verify_snapshot(&Layout::new(screen.id, vec![screen])?)?;
         screen.scale = 2.0;
-        assert!(scope.verify_snapshot(&Layout::new(screen.id, vec![screen])?).is_err());
+        assert!(scope
+            .verify_snapshot(&Layout::new(screen.id, vec![screen])?)
+            .is_err());
         Ok(())
     }
 

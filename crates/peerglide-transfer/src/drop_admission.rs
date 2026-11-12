@@ -314,7 +314,9 @@ mod tests {
         );
         assert_eq!(owner.state(), Some(State::Unknown));
         owner.acknowledge_unknown(first).unwrap();
-        let second = owner.begin(moved, transfer, Content::File, 4, true).unwrap();
+        let second = owner
+            .begin(moved, transfer, Content::File, 4, true)
+            .unwrap();
         owner.verified(second, moved, 5, true).unwrap();
         assert_eq!(
             owner.complete(first, moved, 6, true, NativeOutcome::Copied),
