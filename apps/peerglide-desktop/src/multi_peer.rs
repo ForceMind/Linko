@@ -183,7 +183,10 @@ async fn serve_diagnostic(connection: &quinn::Connection) -> Result<()> {
     diagnostic_stream(send, receive).await
 }
 
-async fn diagnostic_stream(mut send: quinn::SendStream, mut receive: quinn::RecvStream) -> Result<()> {
+async fn diagnostic_stream(
+    mut send: quinn::SendStream,
+    mut receive: quinn::RecvStream,
+) -> Result<()> {
     loop {
         let reply = match transport::receive(&mut receive).await? {
             Message::Ping { lease } => Message::Pong { lease },
