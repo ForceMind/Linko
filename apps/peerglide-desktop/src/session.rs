@@ -327,6 +327,7 @@ pub(super) struct SessionControls<'a> {
     pub layout: Option<&'a super::layout_control::Controller>,
     pub receive_display: Option<std::sync::Arc<platform::ReceiveDisplay>>,
     pub secondary: Option<&'a super::secondary_layout::Routes>,
+    pub rebuilding_display_layout: bool,
 }
 
 // Store the optional network negotiation outside the inline session future.
@@ -369,6 +370,7 @@ pub(super) async fn run_with_diagnostics(
         layout,
         receive_display,
         secondary,
+        rebuilding_display_layout,
     } = controls;
     let Policy {
         allow,
@@ -410,6 +412,10 @@ pub(super) async fn run_with_diagnostics(
     // Native display enumeration runs before installing capture, on the
     // worker. A failed OS query keeps the compatible primary-screen behavior.
     let topology = monitor_layout(native);
+    if rebuilding_display_layout && topology.is_none() {
+        input_status.reporter.set(WorkerInputState::Disabled);
+        return Err(DisplayLayoutEnd::Unavailable.into());
+    }
     if receive_display.as_ref().is_some_and(|selection| {
         topology
             .as_ref()
@@ -488,7 +494,7 @@ pub(super) async fn run_with_diagnostics(
     let mut local_return = (0.5, 0.5);
     let mut size = (1920.0, 1080.0);
     let mut last_pong = 0u64;
-    let mut edge_gate = EdgeGate::default();
+    let mut edge_gate = session_edge_gate(rebuilding_display_layout);
     let mut hint_reported: Option<(Edge, Edge)> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(200));
     let result: Result<()> = async {
@@ -873,6 +879,11 @@ pub(super) async fn run_with_diagnostics(
     input_status.finish(clean);
     cleanup?;
     shutdown?;
+    // A failed remote notification must not turn an unavailable local
+    // snapshot into a generic network retry or bypass a fresh-layout check.
+    if result.as_ref().is_err_and(|error| error.is::<DisplayLayoutEnd>()) {
+        return result;
+    }
     notification?;
     result
 }
@@ -1000,12 +1011,46 @@ fn monitor_layout(_: bool) -> Option<Layout> {
     None
 }
 
-fn layout_unchanged(original: Option<&Layout>, current: Option<&Layout>) -> bool {
-    match (original, current) {
-        (Some(original), Some(current)) => original.same_configuration(current),
-        (None, None) => true,
-        _ => false,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DisplayLayoutEnd {
+    Changed,
+    Unavailable,
+}
+
+impl DisplayLayoutEnd {
+    pub fn may_rebuild(self, reconnect: bool, selected_display: bool) -> bool {
+        self == Self::Changed && reconnect && !selected_display
     }
+}
+
+impl std::fmt::Display for DisplayLayoutEnd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Changed => {
+                "Display layout changed. Check the display selection before restarting."
+            }
+            Self::Unavailable => "Display layout could not be checked. Restart the session.",
+        })
+    }
+}
+
+impl std::error::Error for DisplayLayoutEnd {}
+
+fn layout_change(original: Option<&Layout>, current: Option<&Layout>) -> Option<DisplayLayoutEnd> {
+    match (original, current) {
+        (Some(original), Some(current)) if original.same_configuration(current) => None,
+        (None, None) => None,
+        (Some(_), None) => Some(DisplayLayoutEnd::Unavailable),
+        (_, Some(_)) => Some(DisplayLayoutEnd::Changed),
+    }
+}
+
+fn session_edge_gate(rebuilding: bool) -> EdgeGate {
+    let mut gate = EdgeGate::default();
+    if rebuilding {
+        gate.require_interior();
+    }
+    gate
 }
 
 async fn watch_display_layout(original: Option<&Layout>) -> Result<()> {
@@ -1019,13 +1064,9 @@ async fn watch_display_layout(original: Option<&Layout>) -> Result<()> {
                 .await
                 .ok()
                 .and_then(Result::ok)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Display layout could not be checked. Restart the session.")
-                })?;
-        if !layout_unchanged(original, current.as_ref()) {
-            bail!(
-                "Display layout changed or became unavailable. Check the display selection before restarting."
-            );
+                .ok_or(DisplayLayoutEnd::Unavailable)?;
+        if let Some(change) = layout_change(original, current.as_ref()) {
+            return Err(change.into());
         }
     }
 }
@@ -1155,17 +1196,35 @@ mod tests {
             },
             ..secondary
         };
-        assert!(layout_unchanged(Some(&original), Some(&same)));
-        assert!(layout_unchanged(None, None));
-        assert!(!layout_unchanged(None, Some(&same)));
-        assert!(!layout_unchanged(Some(&original), None));
+        let changed_layout = Some(DisplayLayoutEnd::Changed);
+        assert_eq!(layout_change(Some(&original), Some(&same)), None);
+        assert_eq!(layout_change(None, None), None);
+        assert_eq!(layout_change(None, Some(&same)), changed_layout);
+        assert_eq!(
+            layout_change(Some(&original), None),
+            Some(DisplayLayoutEnd::Unavailable)
+        );
         for changed in [removed, other_primary] {
-            assert!(!layout_unchanged(Some(&original), Some(&changed)));
+            assert_eq!(layout_change(Some(&original), Some(&changed)), changed_layout);
         }
         for display in [scaled, rotated, moved] {
             let changed = Layout::new(primary.id, vec![primary, display]).unwrap();
-            assert!(!layout_unchanged(Some(&original), Some(&changed)));
+            assert_eq!(layout_change(Some(&original), Some(&changed)), changed_layout);
         }
+    }
+
+    #[test]
+    fn display_rebuild_requires_opt_in_current_geometry_and_a_fresh_edge() {
+        let changed = DisplayLayoutEnd::Changed;
+        assert!(changed.may_rebuild(true, false));
+        assert!(!changed.may_rebuild(false, false));
+        assert!(!changed.may_rebuild(true, true));
+        assert!(!DisplayLayoutEnd::Unavailable.may_rebuild(true, false));
+        let mut rebuilt = session_edge_gate(true);
+        assert!(!rebuilt.update(true, 1000));
+        assert!(!rebuilt.update(false, 1001));
+        assert!(rebuilt.update(true, 1002));
+        assert!(session_edge_gate(false).update(true, 1000));
     }
 
     fn pending_request(lease: u64, started: u64) -> (PendingAcquire, CaptureEpoch) {
