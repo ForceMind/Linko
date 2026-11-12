@@ -73,7 +73,10 @@ impl PlaybackListener {
             (1..=crate::trusted_listener::MAX_TRUSTED_PEERS).contains(&peers.len()),
             "playback source count outside listener limits"
         );
-        let sources = peers.iter().map(|peer| *blake3::hash(peer).as_bytes()).collect();
+        let sources = peers
+            .iter()
+            .map(|peer| *blake3::hash(peer).as_bytes())
+            .collect();
         let trusted = Listener::bind_alpn(address, local, peers, ALPN)?;
         Ok(Self { trusted, sources })
     }
@@ -83,13 +86,21 @@ impl PlaybackListener {
     }
 
     pub async fn accept(&self, remaining: Duration) -> Result<(usize, Session)> {
-        ensure!(!remaining.is_zero() && remaining <= MAX_CONSENT, "invalid audio consent duration");
+        ensure!(
+            !remaining.is_zero() && remaining <= MAX_CONSENT,
+            "invalid audio consent duration"
+        );
         let deadline = Instant::now() + remaining;
         tokio::time::timeout(remaining, async {
             let (connection, fingerprint) = self.trusted.accept().await?.into_parts();
-            let slot = self.sources.iter().position(|source| *source == fingerprint)
+            let slot = self
+                .sources
+                .iter()
+                .position(|source| *source == fingerprint)
                 .context("authenticated audio source has no local slot")?;
-            let certificate = self.trusted.certificate(fingerprint)
+            let certificate = self
+                .trusted
+                .certificate(fingerprint)
                 .context("authenticated audio source is unavailable")?;
             let session = accept(
                 &connection,
@@ -314,7 +325,8 @@ mod tests {
             bind,
             &output,
             vec![left.certificate.clone(), left.certificate.clone()],
-        ).is_err());
+        )
+        .is_err());
         let listener = PlaybackListener::bind(
             bind,
             &output,
@@ -343,10 +355,16 @@ mod tests {
             })
             .await??;
         for (source, value) in [(&mut left, 5), (&mut right, 7)] {
-            assert!(source.send(&Frame { sequence: 1, samples: [value; SAMPLES] })?);
+            assert!(source.send(&Frame {
+                sequence: 1,
+                samples: [value; SAMPLES]
+            })?);
         }
         for (slot, session) in [first, second] {
-            assert_eq!(session.receive().await?.samples, [[5; SAMPLES], [7; SAMPLES]][slot]);
+            assert_eq!(
+                session.receive().await?.samples,
+                [[5; SAMPLES], [7; SAMPLES]][slot]
+            );
         }
         listener.close();
         drop((left_endpoint, right_endpoint));
