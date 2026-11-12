@@ -57,10 +57,16 @@ pub(super) async fn run(
     allowed: bool,
     options: Options,
 ) -> Result<()> {
-    ensure!(allowed, "Wayland pointer control requires explicit local consent");
+    ensure!(
+        allowed,
+        "Wayland pointer control requires explicit local consent"
+    );
     let identity = transport::Identity::load(identity)?;
     let peer = transport::read_certificate(certificate)?;
-    ensure!(peer != identity.certificate, "the Wayland pointer source must be another computer");
+    ensure!(
+        peer != identity.certificate,
+        "the Wayland pointer source must be another computer"
+    );
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
     println!("Approve pointer access in the Wayland RemoteDesktop dialog. Ctrl+C cancels.");
@@ -70,7 +76,10 @@ pub(super) async fn run(
         pointer = WaylandPointer::open(options) => pointer?,
     };
     let endpoint = transport::endpoint(bind, &identity, &peer)?;
-    println!("Waiting for one verified computer on {}. Ctrl+C stops input control.", endpoint.local_addr()?);
+    println!(
+        "Waiting for one verified computer on {}. Ctrl+C stops input control.",
+        endpoint.local_addr()?
+    );
     let connection = tokio::select! {
         biased;
         result = &mut stop => return result.map_err(Into::into),
@@ -211,14 +220,22 @@ mod tests {
     use super::*;
     use clap::Parser;
     use peerglide_protocol::Edge;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     #[test]
     fn wayland_receiver_requires_local_consent_and_exact_region() -> Result<()> {
         let args = ["peerglide", "listen-wayland", "--peer-cert", "peer.der"];
         assert!(crate::Cli::try_parse_from(args).is_err());
         assert!(crate::Cli::try_parse_from(args.into_iter().chain([
-            "--allow-pointer-control", "--allow-buttons", "--region", "1920,24",
-        ])).is_ok());
+            "--allow-pointer-control",
+            "--allow-buttons",
+            "--region",
+            "1920,24",
+        ]))
+        .is_ok());
         assert_eq!(parse_region("1920,24")?, (1920, 24));
         assert!(parse_region("-1,24").is_err());
         assert!(parse_region("0,0,1").is_err());
@@ -229,6 +246,7 @@ mod tests {
     struct Model {
         starts: usize,
         effects: Vec<(ReceivePoint, Input)>,
+        revoked: Arc<AtomicBool>,
     }
 
     impl Pointer for Model {
@@ -237,21 +255,25 @@ mod tests {
         }
 
         fn check(&mut self) -> Result<()> {
+            ensure!(!self.revoked.load(Ordering::Acquire), "test portal revoked");
             Ok(())
         }
 
         async fn begin(&mut self, point: ReceivePoint) -> Result<()> {
-            assert!(point.valid());
+            assert_eq!((point.x, point.y), (0.002, 0.5));
             self.starts += 1;
             Ok(())
         }
 
         fn motion(&mut self, point: ReceivePoint) -> Result<()> {
-            assert!(point.valid());
+            assert!([point.x, point.y]
+                .into_iter()
+                .all(|coordinate| (0.0..=1.0).contains(&coordinate)));
             Ok(())
         }
 
         fn input(&mut self, point: ReceivePoint, event: Input) -> Result<()> {
+            self.check()?;
             assert_eq!(self.starts, 1);
             self.effects.push((point, event));
             Ok(())
@@ -260,49 +282,119 @@ mod tests {
 
     #[tokio::test]
     async fn authenticated_wayland_loopback_filters_ungranted_and_unowned_events() -> Result<()> {
+        loopback(false).await
+    }
+
+    #[tokio::test]
+    async fn wayland_loopback_stops_forwarding_after_portal_revocation() -> Result<()> {
+        loopback(true).await
+    }
+
+    async fn loopback(revoke: bool) -> Result<()> {
         let source = transport::Identity::generate()?;
         let destination = transport::Identity::generate()?;
         let address = "127.0.0.1:0".parse()?;
         let sender = transport::endpoint(address, &source, &destination.certificate)?;
         let receiver = transport::endpoint(address, &destination, &source.certificate)?;
         let mut model = Model::default();
+        let revoked = model.revoked.clone();
         let server = async {
             let connection = receiver.accept().await.context("listener closed")?.await?;
             transport::verify_peer(&connection, &source.certificate)?;
-            drive(&connection, std::future::pending(), &mut model).await?;
+            let result = drive(&connection, std::future::pending(), &mut model).await;
+            if revoke {
+                assert_eq!(
+                    result.expect_err("portal revocation was missed").to_string(),
+                    "test portal revoked"
+                );
+            } else {
+                result?;
+            }
             connection.close(0u8.into(), b"loopback done");
             receiver.wait_idle().await;
             Ok::<_, anyhow::Error>(())
         };
         let client = async {
-            let connection = sender.connect(receiver.local_addr()?, "peerglide.local")?.await?;
+            let connection = sender
+                .connect(receiver.local_addr()?, "peerglide.local")?
+                .await?;
             transport::verify_peer(&connection, &destination.certificate)?;
             let (mut tx, mut rx) = connection.open_bi().await?;
             let caps = InputCapabilities::new(&[], true, 1, false).map_err(anyhow::Error::msg)?;
-            assert!(super::super::exchange_hello(&mut tx, &mut rx, caps).await?.motion());
+            assert!(super::super::exchange_hello(&mut tx, &mut rx, caps)
+                .await?
+                .motion());
             let input = |sequence, cursor_lease, down| Message::Input {
                 lease: 7,
                 event: Input::Button { button: 1, down },
-                cursor: Motion { lease: cursor_lease, sequence, x: 0.25, y: 0.5 },
+                cursor: Motion {
+                    lease: cursor_lease,
+                    sequence,
+                    x: 0.25,
+                    y: 0.5,
+                },
             };
             send(&mut tx, &input(1, 7, true)).await?;
-            send(&mut tx, &Message::Acquire { lease: 7, edge: Edge::Right, along: 0.5 }).await?;
-            assert!(matches!(transport::receive(&mut rx).await?, Message::Granted { lease: 7 }));
+            send(
+                &mut tx,
+                &Message::Acquire {
+                    lease: 7,
+                    edge: Edge::Right,
+                    along: 0.5,
+                },
+            )
+            .await?;
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Granted { lease: 7 }
+            ));
             send(&mut tx, &input(2, 7, false)).await?;
             send(&mut tx, &input(3, 8, true)).await?;
             send(&mut tx, &input(4, 7, true)).await?;
-            send(&mut tx, &input(5, 7, false)).await?;
-            send(&mut tx, &Message::Release { lease: 7, cursor: None }).await?;
+            if revoke {
+                send(&mut tx, &Message::Ping { lease: 7 }).await?;
+                assert!(matches!(
+                    transport::receive(&mut rx).await?,
+                    Message::Pong { lease: 7 }
+                ));
+                revoked.store(true, Ordering::Release);
+                let _ = send(&mut tx, &input(5, 7, false)).await;
+            } else {
+                send(&mut tx, &input(5, 7, false)).await?;
+                send(
+                    &mut tx,
+                    &Message::Release {
+                        lease: 7,
+                        cursor: None,
+                    },
+                )
+                .await?;
+            }
             connection.closed().await;
             Ok::<_, anyhow::Error>(())
         };
         tokio::time::timeout(Duration::from_secs(5), async {
             tokio::try_join!(server, client)
-        }).await??;
+        })
+        .await??;
         assert_eq!(model.starts, 1);
-        assert_eq!(model.effects.len(), 2);
-        assert!(model.effects[0].1 == (Input::Button { button: 1, down: true }));
-        assert!(model.effects[1].1 == (Input::Button { button: 1, down: false }));
+        assert_eq!(model.effects.len(), if revoke { 1 } else { 2 });
+        assert!(
+            model.effects[0].1
+                == (Input::Button {
+                    button: 1,
+                    down: true
+                })
+        );
+        if !revoke {
+            assert!(
+                model.effects[1].1
+                    == (Input::Button {
+                        button: 1,
+                        down: false
+                    })
+            );
+        }
         assert_eq!(model.effects[0].0.x, 0.25);
         Ok(())
     }

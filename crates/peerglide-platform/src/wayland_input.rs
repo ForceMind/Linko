@@ -188,15 +188,27 @@ struct ReadyDevice {
 }
 
 fn select(devices: &[ReadyDevice], options: Options) -> Result<Option<Selection>> {
-    let mut regions = devices.iter().enumerate().flat_map(|(device, info)| {
-        info.regions.iter().copied().map(move |region| (device, region))
-    }).filter(|(_, region)| {
-        options.region.is_none_or(|origin| origin == (region.x, region.y))
-    });
+    let mut regions = devices
+        .iter()
+        .enumerate()
+        .flat_map(|(device, info)| {
+            info.regions
+                .iter()
+                .copied()
+                .map(move |region| (device, region))
+        })
+        .filter(|(_, region)| {
+            options
+                .region
+                .is_none_or(|origin| origin == (region.x, region.y))
+        });
     let Some((pointer, region)) = regions.next() else {
         return Ok(None);
     };
-    ensure!(regions.next().is_none(), "choose a unique Wayland region with --region X,Y");
+    ensure!(
+        regions.next().is_none(),
+        "choose a unique Wayland region with --region X,Y"
+    );
     region.position(ReceivePoint { x: 0.0, y: 0.0 })?;
     let unique = |preferred: bool, supports: fn(&ReadyDevice) -> bool| -> Result<Option<usize>> {
         if !preferred {
@@ -205,9 +217,15 @@ fn select(devices: &[ReadyDevice], options: Options) -> Result<Option<Selection>
         if supports(&devices[pointer]) {
             return Ok(Some(pointer));
         }
-        let mut matches = devices.iter().enumerate().filter(|(_, info)| supports(info));
+        let mut matches = devices
+            .iter()
+            .enumerate()
+            .filter(|(_, info)| supports(info));
         let first = matches.next().map(|(index, _)| index);
-        ensure!(matches.next().is_none(), "Wayland pointer capability is ambiguous");
+        ensure!(
+            matches.next().is_none(),
+            "Wayland pointer capability is ambiguous"
+        );
         Ok(first)
     };
     let buttons = unique(options.buttons, |device| device.buttons)?;
@@ -215,7 +233,12 @@ fn select(devices: &[ReadyDevice], options: Options) -> Result<Option<Selection>
     if (options.buttons && buttons.is_none()) || (options.scroll && scroll.is_none()) {
         return Ok(None);
     }
-    Ok(Some(Selection { pointer, region, buttons, scroll }))
+    Ok(Some(Selection {
+        pointer,
+        region,
+        buttons,
+        scroll,
+    }))
 }
 
 struct Fence {
@@ -278,7 +301,9 @@ impl WaylandPointer {
             }
         })
         .await
-        .context("the compositor did not grant the requested Wayland pointer devices or region")??;
+        .context(
+            "the compositor did not grant the requested Wayland pointer devices or region",
+        )??;
         owner.confirm().await?;
         Ok(owner)
     }
@@ -295,7 +320,8 @@ impl WaylandPointer {
     }
 
     fn selection(&self) -> Result<Selection> {
-        self.selected.context("the compositor has not selected a pointer")
+        self.selected
+            .context("the compositor has not selected a pointer")
     }
 
     pub fn check(&mut self) -> Result<()> {
@@ -303,7 +329,10 @@ impl WaylandPointer {
     }
 
     fn pump(&mut self, fence: Option<NonNull<Ping>>) -> Result<bool> {
-        ensure!(!self.failed, "the Wayland input owner is no longer available");
+        ensure!(
+            !self.failed,
+            "the Wayland input owner is no longer available"
+        );
         let result = self.pump_events(fence);
         self.failed = result.is_err();
         result
@@ -340,29 +369,47 @@ impl WaylandPointer {
         // SAFETY: event is referenced for the duration of this call; a seat or
         // device is queried only for its documented event type.
         match unsafe { (api.ei_event_get_type)(event.as_ptr()) } {
-            ffi::DISCONNECT | ffi::SEAT_REMOVED => anyhow::bail!("the compositor ended Wayland input"),
+            ffi::DISCONNECT | ffi::SEAT_REMOVED => {
+                anyhow::bail!("the compositor ended Wayland input")
+            }
             ffi::SEAT_ADDED => {
-                ensure!(!self.seat_seen, "more than one Wayland input seat is available");
+                ensure!(
+                    !self.seat_seen,
+                    "more than one Wayland input seat is available"
+                );
                 self.seat_seen = true;
                 let seat = NonNull::new(unsafe { (api.ei_event_get_seat)(event.as_ptr()) })
                     .context("the compositor did not provide an input seat")?;
                 self.bind(seat)?;
             }
             ffi::DEVICE_ADDED => {
-                ensure!(self.selected.is_none(), "Wayland input device topology changed");
+                ensure!(
+                    self.selected.is_none(),
+                    "Wayland input device topology changed"
+                );
             }
             ffi::DEVICE_RESUMED => {
                 let device = NonNull::new(unsafe { (api.ei_event_get_device)(event.as_ptr()) })
                     .context("the compositor did not provide an input device")?;
-                ensure!(self.selected.is_none(), "a Wayland input device resumed after selection");
+                ensure!(
+                    self.selected.is_none(),
+                    "a Wayland input device resumed after selection"
+                );
                 if !self.devices.iter().any(|known| known.ptr == device) {
                     self.add_device(device)?;
                 }
             }
             ffi::DEVICE_REMOVED | ffi::DEVICE_PAUSED => {
                 let device = unsafe { (api.ei_event_get_device)(event.as_ptr()) };
-                if let Some(index) = self.devices.iter().position(|known| known.ptr.as_ptr() == device) {
-                    ensure!(self.selected.is_none(), "a Wayland input device was revoked or paused");
+                if let Some(index) = self
+                    .devices
+                    .iter()
+                    .position(|known| known.ptr.as_ptr() == device)
+                {
+                    ensure!(
+                        self.selected.is_none(),
+                        "a Wayland input device was revoked or paused"
+                    );
                     let removed = self.devices.remove(index);
                     unsafe { (api.ei_device_unref)(removed.ptr.as_ptr()) };
                 }
@@ -384,15 +431,27 @@ impl WaylandPointer {
         unsafe {
             ensure!(
                 (api.ei_seat_has_capability)(seat, ffi::CAP_ABSOLUTE)
-                    && (!self.options.buttons || (api.ei_seat_has_capability)(seat, ffi::CAP_BUTTON))
-                    && (!self.options.scroll || (api.ei_seat_has_capability)(seat, ffi::CAP_SCROLL)),
+                    && (!self.options.buttons
+                        || (api.ei_seat_has_capability)(seat, ffi::CAP_BUTTON))
+                    && (!self.options.scroll
+                        || (api.ei_seat_has_capability)(seat, ffi::CAP_SCROLL)),
                 "the Wayland seat did not grant the requested pointer capabilities"
             );
             let end = null::<c_void>();
             match (self.options.buttons, self.options.scroll) {
-                (true, true) => (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, ffi::CAP_BUTTON, ffi::CAP_SCROLL, end),
-                (true, false) => (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, ffi::CAP_BUTTON, end),
-                (false, true) => (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, ffi::CAP_SCROLL, end),
+                (true, true) => (api.ei_seat_bind_capabilities)(
+                    seat,
+                    ffi::CAP_ABSOLUTE,
+                    ffi::CAP_BUTTON,
+                    ffi::CAP_SCROLL,
+                    end,
+                ),
+                (true, false) => {
+                    (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, ffi::CAP_BUTTON, end)
+                }
+                (false, true) => {
+                    (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, ffi::CAP_SCROLL, end)
+                }
                 (false, false) => (api.ei_seat_bind_capabilities)(seat, ffi::CAP_ABSOLUTE, end),
             }
         }
@@ -400,7 +459,10 @@ impl WaylandPointer {
     }
 
     fn add_device(&mut self, device: NonNull<Device>) -> Result<()> {
-        ensure!(self.devices.len() < MAX_DEVICES, "too many Wayland input devices");
+        ensure!(
+            self.devices.len() < MAX_DEVICES,
+            "too many Wayland input devices"
+        );
         let api = &self.ei.api;
         let device = device.as_ptr();
         let mut regions = Vec::new();
@@ -423,7 +485,8 @@ impl WaylandPointer {
                 }
             }
             self.devices.push(ReadyDevice {
-                ptr: NonNull::new((api.ei_device_ref)(device)).context("could not retain the Wayland pointer")?,
+                ptr: NonNull::new((api.ei_device_ref)(device))
+                    .context("could not retain the Wayland pointer")?,
                 regions,
                 buttons: (api.ei_device_has_capability)(device, ffi::CAP_BUTTON),
                 scroll: (api.ei_device_has_capability)(device, ffi::CAP_SCROLL),
@@ -436,7 +499,10 @@ impl WaylandPointer {
         // SAFETY: retain the ping until matching PONG or cancellation.
         let ptr = NonNull::new(unsafe { (self.ei.api.ei_new_ping)(self.ei.ptr.as_ptr()) })
             .context("could not allocate the compositor round trip")?;
-        let fence = Fence { ptr, unref: self.ei.api.ei_ping_unref };
+        let fence = Fence {
+            ptr,
+            unref: self.ei.api.ei_ping_unref,
+        };
         // SAFETY: this ping is used only once on the live EIS context.
         unsafe { (self.ei.api.ei_ping)(fence.ptr.as_ptr()) };
         tokio::time::timeout(FENCE_WAIT, async {
@@ -478,7 +544,10 @@ impl WaylandPointer {
     }
 
     pub fn input(&mut self, point: ReceivePoint, event: Input) -> Result<()> {
-        ensure!(self.capabilities()?.supports(event), "Wayland input capability was not granted");
+        ensure!(
+            self.capabilities()?.supports(event),
+            "Wayland input capability was not granted"
+        );
         self.motion(point)?;
         let selection = self.selection()?;
         match event {
@@ -524,7 +593,9 @@ impl WaylandPointer {
         if let Some(index) = selection.scroll.filter(|_| self.scrolling.contains(&true)) {
             let device = self.device(index);
             // SAFETY: cancel only the axes used by this scroll lease.
-            unsafe { (self.ei.api.ei_device_scroll_cancel)(device, self.scrolling[0], self.scrolling[1]) };
+            unsafe {
+                (self.ei.api.ei_device_scroll_cancel)(device, self.scrolling[0], self.scrolling[1])
+            };
             self.frame(device);
         }
         for index in selection.devices() {
@@ -541,7 +612,9 @@ impl WaylandPointer {
 
     fn frame(&self, device: *mut Device) {
         // SAFETY: device is live and belongs to this EIS context.
-        unsafe { (self.ei.api.ei_device_frame)(device, (self.ei.api.ei_now)(self.ei.ptr.as_ptr())) };
+        unsafe {
+            (self.ei.api.ei_device_frame)(device, (self.ei.api.ei_now)(self.ei.ptr.as_ptr()))
+        };
     }
 }
 
@@ -555,13 +628,17 @@ impl Drop for WaylandPointer {
 }
 
 fn scroll_units(x: i16, y: i16) -> (i32, i32) {
-    (i32::from(x.clamp(-12, 12)) * 120, -i32::from(y.clamp(-12, 12)) * 120)
+    (
+        i32::from(x.clamp(-12, 12)) * 120,
+        -i32::from(y.clamp(-12, 12)) * 120,
+    )
 }
 
 fn owned_releases(owned: &mut [bool; 3]) -> impl Iterator<Item = u32> + '_ {
-    BUTTONS.into_iter().zip(owned).filter_map(|(button, down)| {
-        std::mem::take(down).then_some(button)
-    })
+    BUTTONS
+        .into_iter()
+        .zip(owned)
+        .filter_map(|(button, down)| std::mem::take(down).then_some(button))
 }
 
 #[cfg(test)]
@@ -570,8 +647,18 @@ mod tests {
 
     #[test]
     fn requires_a_unique_region_and_the_explicitly_requested_devices() -> Result<()> {
-        let primary = Region { x: 0, y: 0, width: 1920, height: 1080 };
-        let secondary = Region { x: 1920, y: 24, width: 800, height: 600 };
+        let primary = Region {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let secondary = Region {
+            x: 1920,
+            y: 24,
+            width: 800,
+            height: 600,
+        };
         let mut devices = vec![
             ReadyDevice {
                 ptr: NonNull::dangling(),
@@ -586,13 +673,26 @@ mod tests {
                 scroll: false,
             },
         ];
-        let mut options = Options { buttons: true, scroll: false, region: None };
+        let mut options = Options {
+            buttons: true,
+            scroll: false,
+            region: None,
+        };
         assert!(select(&devices, options).is_err());
         options.region = Some((1920, 24));
         let chosen = select(&devices, options)?.context("region missing")?;
         assert_eq!(chosen.devices().collect::<Vec<_>>(), [0, 1]);
-        assert_eq!(chosen.region.position(ReceivePoint { x: 1.0, y: 1.0 })?, (2719.0, 623.0));
-        assert!(chosen.region.position(ReceivePoint { x: f64::NAN, y: 0.0 }).is_err());
+        assert_eq!(
+            chosen.region.position(ReceivePoint { x: 1.0, y: 1.0 })?,
+            (2719.0, 623.0)
+        );
+        assert!(chosen
+            .region
+            .position(ReceivePoint {
+                x: f64::NAN,
+                y: 0.0
+            })
+            .is_err());
         options.scroll = true;
         assert!(select(&devices, options)?.is_none());
         devices[1].scroll = true;
@@ -604,7 +704,10 @@ mod tests {
     #[test]
     fn release_plan_owns_only_submitted_buttons_and_scroll_is_bounded() {
         let mut held = [true, false, true];
-        assert_eq!(owned_releases(&mut held).collect::<Vec<_>>(), [0x110, 0x112]);
+        assert_eq!(
+            owned_releases(&mut held).collect::<Vec<_>>(),
+            [0x110, 0x112]
+        );
         assert!(owned_releases(&mut held).next().is_none());
         assert_eq!(scroll_units(1, -1), (120, 120));
         assert_eq!(scroll_units(-1200, 1200), (-1440, -1440));
