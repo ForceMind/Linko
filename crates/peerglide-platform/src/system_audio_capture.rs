@@ -64,7 +64,11 @@ impl AudioCapture {
         // SAFETY: the native open calls `allow_microphone` synchronously, never
         // retaining its token. Both referenced slots live through this call.
         let result = unsafe {
-            native_microphone(&mut owner, allow_microphone, std::ptr::from_ref(cancelled).cast())
+            native_microphone(
+                &mut owner,
+                allow_microphone,
+                std::ptr::from_ref(cancelled).cast(),
+            )
         };
         Self::from_open(result, owner, "microphone")
     }

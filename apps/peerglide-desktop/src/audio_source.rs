@@ -199,7 +199,9 @@ fn capture_samples(
     };
     if stopped.load(Ordering::Acquire) {
         if let Ok(mut capture) = opened {
-            capture.stop().context("local audio capture cleanup failed")?;
+            capture
+                .stop()
+                .context("local audio capture cleanup failed")?;
         }
         return Ok(());
     }
