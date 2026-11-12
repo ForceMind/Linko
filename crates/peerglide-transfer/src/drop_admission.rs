@@ -155,6 +155,26 @@ impl Admission {
         Ok(())
     }
 
+    /// Borrow the remaining lifetime of a locally prepared file for a
+    /// transport reservation. The local adapter still owns submission.
+    pub fn file_ready(
+        &mut self,
+        ticket: Ticket,
+        context: Context,
+        transfer: [u8; 16],
+        now: u64,
+        authorized: bool,
+    ) -> Result<u64, Error> {
+        let pending = self.live(ticket, context, now, authorized)?;
+        if pending.state != State::Ready
+            || ticket.transfer != transfer
+            || ticket.content != Content::File
+        {
+            return Err(Error::WrongState);
+        }
+        Ok(pending.expires - now)
+    }
+
     /// An OS callback may report success only for the current submitted copy.
     pub fn complete(
         &mut self,

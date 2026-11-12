@@ -323,7 +323,7 @@ async fn accept_request(
     .context("display offer timed out")?
 }
 
-fn verify_sidecar(connection: &Connection, pinned_peer: &[u8]) -> Result<()> {
+pub(crate) fn verify_sidecar(connection: &Connection, pinned_peer: &[u8]) -> Result<()> {
     let handshake = connection
         .handshake_data()
         .context("display handshake unavailable")?
@@ -336,7 +336,7 @@ fn verify_sidecar(connection: &Connection, pinned_peer: &[u8]) -> Result<()> {
     verify_peer(connection, pinned_peer)
 }
 
-fn require_first(send: &SendStream, receive: &RecvStream) -> Result<()> {
+pub(crate) fn require_first(send: &SendStream, receive: &RecvStream) -> Result<()> {
     ensure!(
         send.id().index() == 0 && receive.id().index() == 0,
         "display stream already used"
@@ -344,7 +344,7 @@ fn require_first(send: &SendStream, receive: &RecvStream) -> Result<()> {
     Ok(())
 }
 
-async fn require_end(receive: &mut RecvStream) -> Result<()> {
+pub(crate) async fn require_end(receive: &mut RecvStream) -> Result<()> {
     let mut extra = [0];
     ensure!(
         receive.read(&mut extra).await?.is_none(),
