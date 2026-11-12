@@ -2,7 +2,11 @@
 use super::{
     data_access::Pin,
     egui,
-    transport::file_transfer::{drop_admission, PreparedDropPath, ReceivedFile},
+    file_drop_reservation::{Reservation, Status},
+    transport::{
+        file_drop_link,
+        file_transfer::{drop_admission, PreparedDropPath, ReceivedFile},
+    },
     App, Page, SessionMode,
 };
 use anyhow::{ensure, Context, Result};
@@ -10,6 +14,7 @@ use drop_admission::{Admission, Content, Effect, NativeOutcome, Ticket};
 use peerglide_platform::{display_layout::Layout, now_ms, read_display_layout};
 use std::{
     io,
+    net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -23,6 +28,7 @@ const LAYOUT_POLL: Duration = Duration::from_millis(500);
 struct Source {
     pin: Pin,
     file: Arc<ReceivedFile>,
+    bind: Option<SocketAddr>,
 }
 
 struct Scope {
@@ -68,6 +74,13 @@ struct Attempt {
     next_layout_check: Instant,
 }
 
+struct Handoff {
+    _file: PreparedDropPath,
+    attempt: Attempt,
+    reservation: Reservation,
+    edge: String,
+}
+
 impl Attempt {
     fn current(&mut self, now: Instant) -> bool {
         if now >= self.expires {
@@ -87,6 +100,7 @@ enum State {
     Idle,
     Preparing(Preparation),
     Ready(Prepared),
+    Handoff(Box<Handoff>),
     #[cfg(target_os = "macos")]
     Dragging {
         drag: peerglide_platform::macos_native_drop::Drag,
@@ -117,25 +131,44 @@ pub(super) fn eligible(app: &App) -> bool {
         && app.pending_start != Some(SessionMode::Native)
 }
 
+fn can_prepare_handoff(app: &App) -> bool {
+    eligible(app) && app.page == Page::Transfers && app.child.is_none() && app.config.allow
+}
+
 impl Export {
     pub(super) fn active(&self) -> bool {
         !matches!(self.state, State::Idle)
     }
 
-    pub(super) fn received(&mut self, pin: Pin, file: ReceivedFile) {
-        self.stop();
+    pub(super) fn received(
+        &mut self,
+        app: &mut App,
+        pin: Pin,
+        file: ReceivedFile,
+        bind: Option<SocketAddr>,
+    ) {
+        self.stop(app);
         self.notice = None;
         self.source = pin.authenticates(file.drop_origin()).then(|| Source {
             pin,
             file: Arc::new(file),
+            bind,
         });
     }
 
-    pub(super) fn stop(&mut self) {
+    pub(super) fn handoff_active(&self) -> bool {
+        matches!(self.state, State::Handoff(_))
+    }
+
+    pub(super) fn stop(&mut self, app: &mut App) {
         let ticket = match std::mem::take(&mut self.state) {
             State::Idle => return,
             State::Preparing(_) => None,
             State::Ready(prepared) => Some(prepared.attempt.ticket),
+            State::Handoff(handoff) => {
+                handoff.reservation.cancel(app);
+                Some(handoff.attempt.ticket)
+            }
             #[cfg(target_os = "macos")]
             State::Dragging { attempt, .. } => Some(attempt.ticket),
         };
@@ -154,27 +187,35 @@ impl Export {
         unknown
     }
 
-    pub(super) fn tick(&mut self, app: &App, ctx: &egui::Context) {
+    pub(super) fn tick(&mut self, app: &mut App, ctx: &egui::Context) {
         if self
             .source
             .as_ref()
             .is_some_and(|source| !source.pin.matches(app))
         {
-            self.stop();
+            self.stop(app);
             self.source = None;
         }
+        if self.handoff_active() {
+            if self.tick_handoff(app, ctx).is_err() {
+                self.stop(app);
+                self.notice = Some("本次接棒预约已结束，请重新准备。");
+            }
+            return;
+        }
         if !eligible(app) || app.page != Page::Transfers {
-            self.stop();
+            self.stop(app);
             return;
         }
         if matches!(self.state, State::Preparing(_) | State::Ready(_))
             && !ctx.input(|input| input.focused)
         {
-            self.stop();
+            self.stop(app);
             return;
         }
         self.state = match std::mem::take(&mut self.state) {
             State::Idle => State::Idle,
+            State::Handoff(_) => unreachable!("handoff already polled"),
             State::Ready(mut prepared) => {
                 if prepared.attempt.current(Instant::now()) {
                     State::Ready(prepared)
@@ -230,6 +271,90 @@ impl Export {
                 }
             }
         };
+    }
+
+    fn tick_handoff(&mut self, app: &mut App, ctx: &egui::Context) -> Result<()> {
+        let State::Handoff(handoff) = &mut self.state else {
+            return Ok(());
+        };
+        ensure!(
+            super::data_access::ready(app)
+                && app.page == Page::Transfers
+                && app.config.allow
+                && !app.recovery_blocked
+                && !app.window_hidden
+                && app.stopping.is_none()
+                && (app.child.is_none() || !app.input_terminal)
+                && app.displayed_edge() == handoff.edge.as_str()
+                && ctx.input(|input| input.focused
+                    && !input.viewport().close_requested()
+                    && !input.viewport().minimized.unwrap_or(false)),
+            "文件接棒本机许可已失效"
+        );
+        let now = Instant::now();
+        ensure!(handoff.attempt.current(now), "接棒布局或时限已变化");
+        let source = self.source.as_ref().context("没有已接收文件")?;
+        let already_matched = handoff.reservation.matched().is_some();
+        handoff.reservation.tick(app, &source.pin, now)?;
+        if !already_matched && handoff.reservation.matched().is_some() {
+            source.pin.recheck(app)?;
+            handoff.attempt.scope.verify_layout()?;
+            self.admission
+                .file_ready(
+                    handoff.attempt.ticket,
+                    handoff.attempt.scope.context,
+                    source.file.drop_origin().transfer(),
+                    now_ms(),
+                    true,
+                )
+                .map_err(admission_error)?;
+        }
+        Ok(())
+    }
+
+    fn prepare_handoff(&mut self, app: &App) -> Result<()> {
+        ensure!(can_prepare_handoff(app), "须由本机先批准文件接棒");
+        let source = self.source.as_ref().context("没有已接收文件")?;
+        source.pin.recheck(app)?;
+        let bind = source.bind.context("没有已确认的本机文件接收地址")?;
+        let State::Ready(prepared) = std::mem::take(&mut self.state) else {
+            return Ok(());
+        };
+        let Prepared { path, attempt } = prepared;
+        let ticket = attempt.ticket;
+        let result = (|| -> Result<Handoff> {
+            attempt.scope.verify_layout()?;
+            let request = u32::try_from(attempt.scope.context.gesture_generation)?;
+            let slot = file_drop_link::Slot::arm(
+                path,
+                &mut self.admission,
+                ticket,
+                attempt.scope.context,
+                now_ms(),
+                true,
+            )?;
+            let (claim, proof, lifetime_ms) = slot.into_worker()?;
+            let expires = attempt
+                .expires
+                .min(Instant::now() + Duration::from_millis(u64::from(lifetime_ms)));
+            Ok(Handoff {
+                _file: claim.file,
+                attempt,
+                reservation: Reservation::new(proof, request, bind, expires),
+                edge: app.displayed_edge().to_owned(),
+            })
+        })();
+        match result {
+            Ok(handoff) => {
+                self.state = State::Handoff(Box::new(handoff));
+                self.notice = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.cancel(ticket);
+                Err(error)
+            }
+        }
     }
 
     fn prepare(&mut self, app: &App) -> Result<()> {
@@ -422,12 +547,41 @@ impl Export {
         });
     }
 
-    pub(super) fn ui(&mut self, app: &App, ui: &mut egui::Ui) {
+    pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
         let Some(source) = &self.source else {
             return;
         };
         ui.separator();
         ui.label(format!("已接收 {}", source.file.name()));
+        if let State::Handoff(handoff) = &self.state {
+            match handoff.reservation.status() {
+                Status::WaitingForWorker => {
+                    ui.label("在本机开启键鼠协同后，将登记本次文件接棒。");
+                    if ui
+                        .add_enabled(
+                            app.native_start_available(),
+                            egui::Button::new("开启键鼠协同"),
+                        )
+                        .clicked()
+                    {
+                        app.workspace_action(super::desktop_state::Action::StartInput);
+                    }
+                }
+                Status::Confirming => {
+                    ui.label("正在等待工作进程确认文件接棒。");
+                }
+                Status::Listening(port) => {
+                    ui.label(format!("本机 UDP {port} 已预约，等待已配对电脑。"));
+                }
+                Status::Matched => {
+                    ui.label("文件预约已匹配输入租约。");
+                }
+            }
+            if ui.button("撤回文件预约").clicked() {
+                self.stop(app);
+            }
+            return;
+        }
         if !eligible(app) {
             ui.label("停止键鼠会话后可以将已接收文件拖出复制。");
             return;
@@ -446,7 +600,7 @@ impl Export {
             State::Preparing(_) => {
                 ui.label("正在重新校验本机文件。");
                 if ui.button("取消准备").clicked() {
-                    self.stop();
+                    self.stop(app);
                 }
             }
             State::Ready(_) => {
@@ -454,8 +608,15 @@ impl Export {
                 let reference = drag_pressed(ui, "按住并拖出文件引用");
                 if copy || reference {
                     self.start_drag(app, copy);
+                } else if can_prepare_handoff(app)
+                    && source.bind.is_some()
+                    && ui.button("准备一次跨机接收").clicked()
+                    && self.prepare_handoff(app).is_err()
+                {
+                    self.notice = Some("无法准备跨机接收，请重新校验文件和配对。");
                 }
             }
+            State::Handoff(_) => unreachable!("handoff shown above"),
             #[cfg(target_os = "macos")]
             State::Dragging { .. } => {
                 ui.label("正在复制拖放。");
@@ -531,6 +692,24 @@ mod tests {
         app.recovery_blocked = false;
         app.close_requested = true;
         assert!(!eligible(&app));
+        drop(app);
+        fixture.close()
+    }
+
+    #[test]
+    fn cross_machine_file_approval_requires_the_local_owner_before_native_start() -> Result<()> {
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let peer = super::super::Identity::generate()?;
+        app.config.fingerprint = Some(peer.fingerprint());
+        app.page = Page::Transfers;
+        assert!(!can_prepare_handoff(&app));
+        app.config.allow = true;
+        assert!(can_prepare_handoff(&app));
+        app.child = Some(crate::lifecycle_tests::managed_child()?);
+        app.active_mode = Some(SessionMode::Native);
+        assert!(!can_prepare_handoff(&app));
+        app.child.take().unwrap().wait_with_output()?;
         drop(app);
         fixture.close()
     }
