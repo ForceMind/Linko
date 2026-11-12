@@ -23,6 +23,10 @@ use std::{
 
 #[cfg(any(target_os = "macos", test))]
 mod promised_copy;
+#[cfg(any(all(windows, target_env = "msvc"), test))]
+mod verified_drop_reader;
+#[cfg(any(all(windows, target_env = "msvc"), test))]
+pub use verified_drop_reader::VerifiedDropReader;
 
 const FILES: data::Capabilities = data::Capabilities {
     text: false,
@@ -140,7 +144,7 @@ pub struct ReceivedFile {
 pub struct PreparedDropPath {
     path: PathBuf,
     _source: File,
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(any(target_os = "macos", all(windows, target_env = "msvc"), test))]
     manifest: Manifest,
 }
 
@@ -159,7 +163,7 @@ impl ReceivedFile {
         Ok(PreparedDropPath {
             path: self.path.clone(),
             _source: source,
-            #[cfg(any(target_os = "macos", test))]
+            #[cfg(any(target_os = "macos", all(windows, target_env = "msvc"), test))]
             manifest: actual,
         })
     }
@@ -591,6 +595,31 @@ mod tests {
             .copy_to_drop_destination(&target, || Ok(()))
             .is_err());
         assert_eq!(fs::read_dir(&directory.0)?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn verified_drop_reader_checks_chunk_boundaries_and_rejects_changed_content() -> Result<()> {
+        use std::io::Write;
+
+        let directory = TestDirectory::new()?;
+        let path = directory.0.join("received.bin");
+        let mut content = vec![17; CHUNK_BYTES];
+        content.extend_from_slice(&[19, 21, 23]);
+        fs::write(&path, &content)?;
+        let file = ReceivedFile {
+            manifest: Manifest::from_file(&path)?,
+            path: path.clone(),
+        };
+        let mut reader = file.prepare_drop(|| Ok(()))?.into_verified_reader();
+        assert_eq!(reader.size(), content.len() as u64);
+        let mut piece = [0; 4];
+        reader.read_at(CHUNK_BYTES as u64 - 1, &mut piece)?;
+        assert_eq!(piece, [17, 19, 21, 23]);
+        assert!(reader.read_at(reader.size() - 1, &mut piece).is_err());
+        assert!(reader.read_at(u64::MAX, &mut piece).is_err());
+        fs::OpenOptions::new().write(true).open(path)?.write_all(&[25])?;
+        assert!(reader.read_at(0, &mut piece).is_err());
         Ok(())
     }
 

@@ -2,6 +2,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/windows_audio_capture.cpp");
     println!("cargo:rerun-if-changed=src/macos_system_audio.mm");
     println!("cargo:rerun-if-changed=src/windows_native_drop.cpp");
+    println!("cargo:rerun-if-changed=src/windows_file_drop_stream.h");
     println!("cargo:rerun-if-changed=src/macos_native_drop.mm");
     if std::env::var_os("CARGO_CFG_TARGET_OS").is_some_and(|os| os == "windows")
         && std::env::var_os("CARGO_CFG_TARGET_ENV").is_some_and(|env| env == "msvc")
