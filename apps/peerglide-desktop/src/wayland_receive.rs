@@ -304,7 +304,9 @@ mod tests {
             let result = drive(&connection, std::future::pending(), &mut model).await;
             if revoke {
                 assert_eq!(
-                    result.expect_err("portal revocation was missed").to_string(),
+                    result
+                        .expect_err("portal revocation was missed")
+                        .to_string(),
                     "test portal revoked"
                 );
             } else {
