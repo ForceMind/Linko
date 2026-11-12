@@ -28,7 +28,10 @@ impl Default for Mix {
         let owner = NEXT_MIX
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
             .unwrap_or(0);
-        Self { owner, inputs: Default::default() }
+        Self {
+            owner,
+            inputs: Default::default(),
+        }
     }
 }
 
@@ -41,7 +44,11 @@ impl Mix {
         }
         let epoch = input.buffer.start()?;
         input.active = Some(epoch);
-        Some(Source { owner: self.owner, slot, epoch })
+        Some(Source {
+            owner: self.owner,
+            slot,
+            epoch,
+        })
     }
 
     pub fn push(&mut self, source: Source, frame: Frame) -> Admission {
@@ -92,7 +99,13 @@ mod tests {
     fn prefill(mix: &mut Mix, source: Source, value: i16) {
         for sequence in 1..=3 {
             assert_eq!(
-                mix.push(source, Frame { sequence, samples: [value; SAMPLES] }),
+                mix.push(
+                    source,
+                    Frame {
+                        sequence,
+                        samples: [value; SAMPLES]
+                    }
+                ),
                 Admission::Queued
             );
         }
@@ -106,7 +119,13 @@ mod tests {
         assert!(another_owner.start(0).is_some());
         assert!(!another_owner.stop(left));
         assert_eq!(
-            another_owner.push(left, Frame { sequence: 1, samples: [9; SAMPLES] }),
+            another_owner.push(
+                left,
+                Frame {
+                    sequence: 1,
+                    samples: [9; SAMPLES]
+                }
+            ),
             Admission::Inactive
         );
         let right = mix.start(1).unwrap();
@@ -128,7 +147,13 @@ mod tests {
         let independent = mix.start(1).unwrap();
         assert!(!mix.stop(left));
         assert_eq!(
-            mix.push(left, Frame { sequence: 1, samples: [9; SAMPLES] }),
+            mix.push(
+                left,
+                Frame {
+                    sequence: 1,
+                    samples: [9; SAMPLES]
+                }
+            ),
             Admission::Inactive
         );
         prefill(&mut mix, replacement, -18_000);
