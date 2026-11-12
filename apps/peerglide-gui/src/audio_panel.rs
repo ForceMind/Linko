@@ -34,7 +34,10 @@ struct OutputDevice {
 fn output_devices() -> Result<Vec<OutputDevice>> {
     Ok(peerglide_platform::windows_audio::output_devices()
         .into_iter()
-        .map(|device| OutputDevice { id: device.id.to_string(), name: device.name })
+        .map(|device| OutputDevice {
+            id: device.id.to_string(),
+            name: device.name,
+        })
         .collect())
 }
 
@@ -42,7 +45,10 @@ fn output_devices() -> Result<Vec<OutputDevice>> {
 fn output_devices() -> Result<Vec<OutputDevice>> {
     Ok(peerglide_platform::macos_audio::output_devices()?
         .into_iter()
-        .map(|device| OutputDevice { id: device.uid, name: device.name })
+        .map(|device| OutputDevice {
+            id: device.uid,
+            name: device.name,
+        })
         .collect())
 }
 
@@ -125,10 +131,12 @@ impl Panel {
         ensure!(self.device_result.is_none(), "正在读取播放设备");
         let (send, receive) = mpsc::sync_channel(1);
         let wake = app.wake_ui.clone();
-        std::thread::Builder::new().name("linko-audio-devices".into()).spawn(move || {
-            let _ = send.send(output_devices());
-            wake();
-        })?;
+        std::thread::Builder::new()
+            .name("linko-audio-devices".into())
+            .spawn(move || {
+                let _ = send.send(output_devices());
+                wake();
+            })?;
         self.device_result = Some(receive);
         self.device_status = Some("正在读取播放设备");
         Ok(())
@@ -157,18 +165,25 @@ impl Panel {
         let Some(output) = self.output.as_ref() else {
             return Ok(None);
         };
-        ensure!(self.device_result.is_none() && self.devices.contains(output), "选中的播放设备已不可用或正在刷新，请重新选择");
+        ensure!(
+            self.device_result.is_none() && self.devices.contains(output),
+            "选中的播放设备已不可用或正在刷新，请重新选择"
+        );
         Ok(Some(&output.id))
     }
 
     fn output_controls(&mut self, app: &mut App, ui: &mut egui::Ui) {
-        let selection = self.output.as_ref().map_or("系统默认", |device| {
-            if self.devices.contains(device) {
-                device.name.as_str()
-            } else {
-                "已选设备不可用"
-            }
-        }).to_owned();
+        let selection = self
+            .output
+            .as_ref()
+            .map_or("系统默认", |device| {
+                if self.devices.contains(device) {
+                    device.name.as_str()
+                } else {
+                    "已选设备不可用"
+                }
+            })
+            .to_owned();
         ui.horizontal_wrapped(|ui| {
             ui.label("播放设备");
             egui::ComboBox::from_id_salt("audio-output-device")
@@ -179,7 +194,13 @@ impl Panel {
                         ui.selectable_value(&mut self.output, Some(device.clone()), &device.name);
                     }
                 });
-            if ui.add_enabled(self.device_result.is_none(), egui::Button::new("刷新播放设备")).clicked() {
+            if ui
+                .add_enabled(
+                    self.device_result.is_none(),
+                    egui::Button::new("刷新播放设备"),
+                )
+                .clicked()
+            {
                 if let Err(error) = self.query_devices(app) {
                     app.feedback(Err(error), "");
                 }
@@ -290,7 +311,10 @@ mod tests {
     fn losing_the_selected_device_does_not_select_the_system_default() -> Result<()> {
         let mut panel = Panel::default();
         assert_eq!(panel.selected_output()?, None);
-        panel.devices = vec![OutputDevice { id: "7".into(), name: "Headphones".into() }];
+        panel.devices = vec![OutputDevice {
+            id: "7".into(),
+            name: "Headphones".into(),
+        }];
         panel.output = panel.devices.first().cloned();
         assert_eq!(panel.selected_output()?, Some("7"));
         panel.devices[0].name = "Speakers".into();
