@@ -184,6 +184,11 @@ impl Layout {
         self.primary
     }
 
+    /// Process-local identity of this layout owner and its current geometry.
+    pub fn local_epoch(&self) -> (u64, u64) {
+        (self.instance, self.generation)
+    }
+
     /// Compare native snapshots independently of their local anchor owners.
     pub fn same_configuration(&self, other: &Self) -> bool {
         self.primary == other.primary && self.displays == other.displays

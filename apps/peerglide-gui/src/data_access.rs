@@ -30,6 +30,11 @@ impl Pin {
         Ok(())
     }
 
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    pub(super) fn authenticates(&self, origin: transport::file_transfer::DropOrigin) -> bool {
+        origin.matches_peer(&self.peer)
+    }
+
     pub(super) fn load(app: &App) -> Result<(Self, Identity, Vec<u8>)> {
         anyhow::ensure!(ready(app), "请先完成设备配对并打开可写窗口");
         app.ensure_pairing_ready().context("请先完成设备配对核验")?;

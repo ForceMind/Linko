@@ -16,7 +16,12 @@ type NativePromiseWriter =
     extern "C" fn(*mut c_void, *const c_char, *mut c_void, PromiseAdmission) -> bool;
 
 extern "C" {
-    fn linko_macos_copy_drag_start(path: *const u8, bytes: usize, owner: *mut *mut c_void) -> i32;
+    fn linko_macos_copy_drag_start(
+        path: *const u8,
+        bytes: usize,
+        millis: u32,
+        owner: *mut *mut c_void,
+    ) -> i32;
     fn linko_macos_file_promise_start(
         name: *const u8,
         bytes: usize,
@@ -57,7 +62,7 @@ pub struct Drag {
 impl Drag {
     /// The caller already verified the file and obtained local drop consent.
     /// AppKit requires the originating window's current mouse-down event.
-    pub fn start_prepared_file(path: &Path) -> Result<Self> {
+    pub fn start_prepared_file(path: &Path, remaining: Duration) -> Result<Self> {
         ensure!(path.is_absolute(), "native drop requires an absolute path");
         ensure!(
             path.symlink_metadata()
@@ -67,9 +72,10 @@ impl Drag {
             "native drop requires a regular file"
         );
         let path = bounded_path(path)?;
+        let millis = drag_millis(remaining)?;
         Self::start(|owner| {
             // SAFETY: path is bounded UTF-8 and AppKit copies it before returning.
-            unsafe { linko_macos_copy_drag_start(path.as_ptr(), path.len(), owner) }
+            unsafe { linko_macos_copy_drag_start(path.as_ptr(), path.len(), millis, owner) }
         })
     }
 
