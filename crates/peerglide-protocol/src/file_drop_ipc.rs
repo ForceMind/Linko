@@ -16,6 +16,13 @@ pub enum Command {
         lifetime_ms: u32,
         proof: String,
     },
+    Send {
+        session: u32,
+        request: u32,
+        target: SocketAddr,
+        lifetime_ms: u32,
+        proof: String,
+    },
     Cancel {
         session: u32,
         request: u32,
@@ -33,11 +40,11 @@ impl Command {
         }
         let command = match fields.next()? {
             "inspect" => Self::Inspect,
-            "arm" => {
+            direction @ ("arm" | "send") => {
                 let session = identifier(fields.next()?)?;
                 let request = identifier(fields.next()?)?;
                 let lifetime_ms = fields.next()?.parse().ok()?;
-                let bind = fields.next()?.parse().ok()?;
+                let address = fields.next()?.parse().ok()?;
                 let proof = fields.next()?;
                 if !(1..=MAX_LIFETIME_MS).contains(&lifetime_ms)
                     || proof.len() != PROOF_HEX
@@ -47,12 +54,22 @@ impl Command {
                 {
                     return None;
                 }
-                Self::Arm {
-                    session,
-                    request,
-                    bind,
-                    lifetime_ms,
-                    proof: proof.to_owned(),
+                if direction == "arm" {
+                    Self::Arm {
+                        session,
+                        request,
+                        bind: address,
+                        lifetime_ms,
+                        proof: proof.to_owned(),
+                    }
+                } else {
+                    Self::Send {
+                        session,
+                        request,
+                        target: address,
+                        lifetime_ms,
+                        proof: proof.to_owned(),
+                    }
                 }
             }
             "cancel" => Self::Cancel {
@@ -76,6 +93,13 @@ impl Command {
             } => {
                 format!("fd arm {session:x} {request:x} {lifetime_ms} {bind} {proof}")
             }
+            Self::Send {
+                session,
+                request,
+                target,
+                lifetime_ms,
+                proof,
+            } => format!("fd send {session:x} {request:x} {lifetime_ms} {target} {proof}"),
             Self::Cancel { session, request } => format!("fd cancel {session:x} {request:x}"),
         }
     }
@@ -101,6 +125,8 @@ pub enum State {
     Rejected,
     Cancelled,
     Claimed,
+    SourceArmed,
+    SourceCommitted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,7 +178,7 @@ impl Event {
                 && event.session != 0
                 && (event.request == 0) == (event.state == State::Session)
                 && match event.state {
-                    State::Claimed => {
+                    State::Claimed | State::SourceCommitted => {
                         event.lease.is_some_and(|lease| lease != 0) && event.port.is_none()
                     }
                     State::Armed => {
@@ -186,6 +212,10 @@ mod tests {
         let line = arm.line();
         assert!(line.len() < 256);
         assert!(matches!(Command::parse(&line), Some(Command::Arm { .. })));
+        assert!(matches!(
+            Command::parse(&line.replacen("fd arm ", "fd send ", 1)),
+            Some(Command::Send { .. })
+        ));
         assert!(Command::parse(&format!("{line} extra")).is_none());
         assert!(Command::parse(&line.replace("60000", "60001")).is_none());
         assert!(Command::parse(&line.replace("ab", "AB")).is_none());
@@ -193,10 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn only_claim_events_carry_a_lease_and_never_a_proof() {
+    fn only_lease_events_carry_a_lease_and_never_a_proof() {
         let event = Event::new(1, 2, State::Claimed, Some(7));
         assert_eq!(Event::parse(&event.line()), Some(event));
         assert!(!event.line().contains("proof"));
+        let committed = Event::new(1, 2, State::SourceCommitted, Some(7));
+        assert_eq!(Event::parse(&committed.line()), Some(committed));
+        assert!(Event::parse(&Event::new(1, 2, State::SourceArmed, Some(7)).line()).is_none());
         assert!(Event::parse(&Event::new(1, 2, State::Claimed, None).line()).is_none());
         assert!(Event::parse(&Event::new(1, 2, State::Armed, Some(7)).line()).is_none());
     }

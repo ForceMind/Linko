@@ -124,7 +124,16 @@ pub enum CaptureCommit {
 pub struct CaptureCommitToken {
     epoch: CaptureEpoch,
     request: u64,
+    primary: Option<HeldPrimary>,
 }
+
+/// One uninterrupted local primary-button hold from the existing capture owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldPrimary {
+    epoch: CaptureEpoch,
+    stamp: u64,
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 impl CaptureRoute {
     fn epoch(self) -> CaptureEpoch {
@@ -144,6 +153,7 @@ pub enum Captured {
         width: f64,
         height: f64,
         route: CaptureRoute,
+        primary: Option<HeldPrimary>,
     },
     Motion {
         dx: f64,
@@ -168,6 +178,9 @@ const ADMISSIONS_CLOSED: u64 = 1 << 59;
 const COMMIT_ARMED: u64 = 1 << 58;
 const COUNT_BITS: u32 = 17;
 const COUNT: u64 = (1 << COUNT_BITS) - 1;
+// The all-ones count exceeds the total number of physical input identities.
+// In Local it marks an eligible hold, and in Remote it marks its bridge.
+const PRIMARY: u64 = COUNT;
 // Keep route epochs/pair ownership separate from pending-request admission.
 // Both bounded generations share the callback/mode CAS; neither ever wraps.
 const GENERATION_BITS: u32 = 21;
@@ -232,6 +245,7 @@ impl ReceiveDisplay {
 struct GateState {
     instance: u64,
     deadline: AtomicU64,
+    primary_stamp: AtomicU64,
     control: Arc<AtomicU64>,
     healthy: std::sync::atomic::AtomicBool,
     receive: OnceLock<ReceiveControl>,
@@ -309,6 +323,7 @@ impl Default for CaptureGate {
         Self(Arc::new(GateState {
             instance,
             deadline: AtomicU64::new(0),
+            primary_stamp: AtomicU64::new(0),
             control: Arc::new(AtomicU64::new(if instance == 0 { STOPPED } else { 0 })),
             healthy: std::sync::atomic::AtomicBool::new(instance != 0),
             receive: OnceLock::new(),
@@ -375,11 +390,63 @@ impl CaptureGate {
         self.publish(true).is_some()
     }
     pub fn prepare_commit(&self, expected: CaptureEpoch) -> Option<CaptureCommitToken> {
+        self.prepare(expected, None)
+    }
+
+    pub fn held_primary(&self) -> Option<HeldPrimary> {
+        let stamp = self.0.primary_stamp.load(Ordering::Acquire);
+        let word = self.0.control.load(Ordering::Acquire);
+        (stamp != 0
+            && word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED | COUNT) == PRIMARY
+            && self.0.primary_stamp.load(Ordering::Acquire) == stamp)
+            .then(|| HeldPrimary {
+                epoch: self.epoch_from(word),
+                stamp,
+            })
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn primary_for_position(&self, route: CaptureRoute) -> Option<HeldPrimary> {
+        let word = self.0.control.load(Ordering::Acquire);
+        (matches!(route, CaptureRoute::Local(_))
+            && self.route_from(word) == route
+            && word & (STOPPED | COUNT) == PRIMARY)
+            .then(|| HeldPrimary {
+                epoch: self.epoch_from(word),
+                stamp: self.0.primary_stamp.load(Ordering::Acquire),
+            })
+    }
+
+    pub fn prepare_file_drop(
+        &self,
+        expected: CaptureEpoch,
+        hold: HeldPrimary,
+    ) -> Option<CaptureCommitToken> {
+        self.prepare(expected, Some(hold))
+    }
+
+    fn primary_matches(&self, primary: Option<HeldPrimary>, word: u64) -> bool {
+        match primary {
+            Some(hold) => {
+                word & COUNT == PRIMARY
+                    && hold.epoch == self.epoch_from(word)
+                    && self.0.primary_stamp.load(Ordering::Acquire) == hold.stamp
+            }
+            None => word & COUNT == 0,
+        }
+    }
+
+    fn prepare(
+        &self,
+        expected: CaptureEpoch,
+        primary: Option<HeldPrimary>,
+    ) -> Option<CaptureCommitToken> {
         let word = self.0.control.load(Ordering::Acquire);
         if !self.0.healthy.load(Ordering::Acquire)
             || self.0.return_pending.load(Ordering::Acquire)
             || self.epoch_from(word) != expected
-            || word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED | COUNT) != 0
+            || word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED) != 0
+            || !self.primary_matches(primary, word)
         {
             return None;
         }
@@ -401,6 +468,7 @@ impl CaptureGate {
             .map(|_| CaptureCommitToken {
                 epoch: expected,
                 request,
+                primary,
             })
     }
     pub fn commit_pending(&self, token: CaptureCommitToken) -> bool {
@@ -423,7 +491,8 @@ impl CaptureGate {
             || self.epoch_from(word) != token.epoch
             || (word & REQUEST) >> REQUEST_SHIFT != token.request
             || word & COMMIT_ARMED == 0
-            || word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED | COUNT) != 0
+            || word & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED) != 0
+            || !self.primary_matches(token.primary, word)
         {
             Some(CaptureCommit::Cancelled)
         } else if word & IN_CALLBACK != 0 {
@@ -478,7 +547,7 @@ impl CaptureGate {
         self.0
             .deadline
             .store(now.saturating_add(1000).min(deadline), Ordering::Release);
-        let committed = (word & REQUEST) | (next << COUNT_BITS) | ACTIVE;
+        let committed = (word & (REQUEST | COUNT)) | (next << COUNT_BITS) | ACTIVE;
         before_cas();
         match self
             .0
@@ -533,12 +602,15 @@ impl CaptureGate {
                 return; // Only Native-owned cleanup may remove receiver protection.
             }
             let generation = (old & GENERATION) >> COUNT_BITS;
-            let new = if old & STOPPED != 0 || generation == GENERATION_MAX {
+            let mut new = if old & STOPPED != 0 || generation == GENERATION_MAX {
                 (old & !(ACTIVE | RECEIVING | COMMIT_ARMED)) | STOPPED
             } else {
                 (old & !(ACTIVE | RECEIVING | GENERATION | COMMIT_ARMED))
                     | ((generation + 1) << COUNT_BITS)
             };
+            if old & COUNT == PRIMARY {
+                new = (new & !COUNT) | 1;
+            }
             match self.0.control.compare_exchange_weak(
                 old,
                 new,
@@ -667,14 +739,27 @@ impl CaptureGate {
             route,
         }
     }
-    #[cfg(any(windows, target_os = "macos", test))]
+    #[cfg(test)]
     fn set_held(&self, count: u64) {
-        // u16 key identities plus u8 button identities total at most 65792.
-        debug_assert!(count <= COUNT);
+        self.update_held(count, false);
+    }
+    #[cfg(any(windows, target_os = "macos", test))]
+    fn update_held(&self, count: u64, fresh_primary: bool) {
+        // Only the serialized capture callback publishes physical holds.
+        let fresh_primary = fresh_primary && count == 1;
+        if fresh_primary && self.0.primary_stamp.fetch_add(1, Ordering::AcqRel) == u64::MAX {
+            self.source_lost();
+            return;
+        }
         let mut old = self.0.control.load(Ordering::Acquire);
         loop {
-            let mut new = (old & !COUNT) | (count & COUNT);
-            if count != 0 && old & (ACTIVE | RECEIVING) == 0 {
+            let primary = count == 1
+                && (old & COUNT == PRIMARY
+                    || (fresh_primary
+                        && old & (ACTIVE | RECEIVING | STOPPED | ADMISSIONS_CLOSED) == 0));
+            let held = if primary { PRIMARY } else { count };
+            let mut new = (old & !COUNT) | held;
+            if old & COUNT != held && old & (ACTIVE | RECEIVING) == 0 {
                 new &= !COMMIT_ARMED;
             }
             match self.0.control.compare_exchange_weak(
@@ -687,6 +772,11 @@ impl CaptureGate {
                 Err(actual) => old = actual,
             }
         }
+    }
+    #[cfg(any(windows, target_os = "macos"))]
+    fn primary_bridge(&self, route: CaptureRoute) -> bool {
+        let word = self.0.control.load(Ordering::Acquire);
+        word & (ACTIVE | STOPPED | COUNT) == ACTIVE | PRIMARY && self.route_from(word) == route
     }
     #[cfg(any(windows, all(test, target_os = "macos")))]
     fn snapshot(&self) -> CaptureRoute {
@@ -2088,6 +2178,63 @@ mod hook_tests {
         epoch
     }
     #[test]
+    fn file_handoff_is_bound_to_one_physical_primary_pair() {
+        let (mut hook, mut input) = state(16);
+        let gate = hook.gate.clone();
+        let physical = |hook: &mut HookState, down| {
+            let callback = gate.begin_event();
+            hook.button_routed(1, down, callback.route)
+        };
+        let CaptureRoute::Local(epoch) = gate.route().unwrap() else {
+            panic!("expected local capture");
+        };
+
+        assert!(!physical(&mut hook, true));
+        let original = gate.held_primary().unwrap();
+        assert!(gate.prepare_commit(epoch).is_none());
+        let abandoned = gate.prepare_file_drop(epoch, original).unwrap();
+        assert!(!physical(&mut hook, false));
+        assert!(!physical(&mut hook, true));
+        assert!(!gate.commit_pending(abandoned));
+        assert!(gate.prepare_file_drop(epoch, original).is_none());
+
+        let hold = gate.held_primary().unwrap();
+        let token = gate.prepare_file_drop(epoch, hold).unwrap();
+        let CaptureCommit::Committed(remote) = gate.commit_from(token, u64::MAX, now_ms()) else {
+            panic!("expected the current hold to commit");
+        };
+        assert!(!gate.finish_outgoing_if_idle(remote));
+        assert!(!physical(&mut hook, false));
+        assert!(!physical(&mut hook, false));
+        let mut bridged_ups = 0;
+        while let Ok(event) = input.try_recv() {
+            if matches!(
+                event,
+                Captured::Input {
+                    event: Input::Button { button: 1, down: false },
+                    route: CaptureRoute::Remote(route),
+                } if route == remote
+            ) {
+                bridged_ups += 1;
+            }
+        }
+        assert_eq!(bridged_ups, 1);
+        assert!(gate.finish_outgoing_if_idle(remote));
+    }
+
+    #[test]
+    fn extra_input_invalidates_the_file_hold_even_after_release() {
+        let (mut hook, _input) = state(16);
+        let gate = hook.gate.clone();
+        assert!(!hook.button(1, true));
+        let hold = gate.held_primary().unwrap();
+        assert!(!hook.key(4, true));
+        assert!(!hook.key(4, false));
+        assert!(gate.held_primary().is_none());
+        assert!(gate.prepare_file_drop(hold.epoch, hold).is_none());
+    }
+
+    #[test]
     fn boundary_return_keeps_remote_down_up_pairs_and_then_passes_local_input() {
         for input in [
             Input::Key {
@@ -2527,7 +2674,8 @@ mod hook_tests {
                 y: 2.0,
                 width: 100.0,
                 height: 100.0,
-                route: local
+                route: local,
+                primary: None,
             },
             local
         ));

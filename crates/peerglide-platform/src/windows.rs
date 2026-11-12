@@ -502,6 +502,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                                 width: GetSystemMetrics(SM_CXSCREEN) as f64,
                                 height: GetSystemMetrics(SM_CYSCREEN) as f64,
                                 route,
+                                primary: s.gate.primary_for_position(route),
                             }
                         };
                         s.movement(event, route)

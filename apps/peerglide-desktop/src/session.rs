@@ -6,6 +6,7 @@ use peerglide_platform::{
     self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute,
     Captured,
 };
+use peerglide_protocol::file_drop_ipc::{Event as FileDropEvent, State as FileDropState};
 use peerglide_protocol::{
     decode, encode, layout_ipc::LayoutHint, worker::WorkerInputState, Edge, Input,
     InputCapabilities, Message, Motion,
@@ -435,6 +436,8 @@ pub(super) async fn run_with_diagnostics(
         (None, mailbox)
     };
     let mut drop_route = None;
+    let mut file_lease: Option<(u64, u32)> = None;
+    let mut file_confirmation: Option<super::file_drop_control::SourceReservation> = None;
     // Publish connection readiness only after its private configuration queue
     // exists, so an immediate GUI edit cannot disappear during session startup.
     super::worker_event(
@@ -553,7 +556,27 @@ pub(super) async fn run_with_diagnostics(
         }
         if recovery.snapshot()==ReceiveSnapshot::Draining || (native && recovery.receiver.active().is_none() && recovery.outcome()==ReceiveAck::Submitted) {input_status.recovering();}
         else{input_status.routing(outgoing.is_some(), recovery.receiver.active().is_some());}
-        let current=pending.is_none_or(|request|capture.as_ref().is_some_and(|cap|cap.gate.commit_pending(request.token)) && !recovery.protection_pending());
+        if let (Some((lease, request)), Some(scope)) = (file_lease, &drop_scope) {
+            let acquiring = pending.is_some_and(|pending| pending.lease == lease);
+            let sending = outgoing.is_some_and(|outgoing| outgoing.lease == lease);
+            if sending && !scope.current(request) {
+                input_status.restore(capture.as_ref())?;
+                outgoing = None;
+                edge_gate.require_interior();
+                motion_outbox.latest = None;
+                send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+            }
+            if !acquiring && outgoing.is_none_or(|outgoing| outgoing.lease != lease) {
+                if scope.current(request) {
+                    input_status.reporter.file_drop(scope.event(request, FileDropState::Rejected));
+                }
+                scope.retire(request);
+                file_lease = None;
+                file_confirmation = None;
+            }
+        }
+        let file_current = file_lease.is_none_or(|(_, request)| drop_scope.as_ref().is_some_and(|scope| scope.current(request)));
+        let current=file_current && pending.is_none_or(|request|capture.as_ref().is_some_and(|cap|cap.gate.commit_pending(request.token)) && !recovery.protection_pending());
         let now=now_ms();
         // Process already-received reliable Release/Denied/stream errors before
         // retrying. Keep the other select branches fair; only retries yield.
@@ -572,6 +595,25 @@ pub(super) async fn run_with_diagnostics(
                 motion_outbox.latest=None;
                 input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now_ms();
                 if let Some(cap)=&capture{cap.gate.refresh();}
+                if let (Some((file, request)), Some(scope)) = (file_lease, &drop_scope) {
+                    if file == lease {
+                        if *stop.borrow() || !scope.current(request)
+                            || !capture.as_ref().is_some_and(|cap| cap.gate.is_current(CaptureRoute::Remote(epoch)))
+                        {
+                            input_status.restore(capture.as_ref())?;
+                            outgoing = None;
+                            send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                            continue;
+                        }
+                        sequence = 1;
+                        let cursor = Motion { lease, sequence, x: position.0, y: position.1 };
+                        let event = Input::Button { button: 1, down: true };
+                        send(&mut tx, &Message::Input { lease, event, cursor }).await?;
+                        input_status.reporter.file_drop(FileDropEvent::new(
+                            scope.session, request, FileDropState::SourceCommitted, Some(lease),
+                        ));
+                    }
+                }
                 continue;
             },
             PendingStep::Cancelled{lease,timed_out}=>{
@@ -631,7 +673,10 @@ pub(super) async fn run_with_diagnostics(
                 drop(drop_route.take());
                 if changed.is_ok() && !*stop.borrow() {
                     if let (Some(scope), Some(config)) = (&drop_scope, file_drop) {
-                        let (route, event) = super::file_drop_control::Route::update(scope, &mut drop_requests, config, &c);
+                        let (route, event) = super::file_drop_control::Route::update(
+                            scope, &mut drop_requests, config, &c,
+                            capture.as_ref().map(|cap| &cap.gate), allow,
+                        );
                         drop_route = route;
                         if let Some(event) = event { input_status.reporter.file_drop(event); }
                     }
@@ -643,13 +688,21 @@ pub(super) async fn run_with_diagnostics(
             _=pending_wake(acquire_wake),if !network_ready=>{},
             _=tick.tick()=>{
                 let now=now_ms();
+                if let (Some(super::file_drop_control::Route::Source(source)), Some(scope)) =
+                    (&drop_route, &drop_scope)
+                {
+                    if !scope.current(source.request) {
+                        scope.retire(source.request);
+                        drop_route = None;
+                    }
+                }
                 if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
                 if let Some(Outgoing {lease,epoch})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
                         count(Count::PongTimeout);
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
-                    }else if input.is_empty() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
+                    }else if file_lease.is_none() && input.is_empty() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
                         count(Count::EdgeReturn);
                         // A motion can wake this task before its callback drops.
                         // Retry on the existing tick after older captured input
@@ -716,7 +769,33 @@ pub(super) async fn run_with_diagnostics(
                     },
                     Message::Granted{lease}=>{
                         let first_grant=pending.is_some_and(|request|request.lease==lease && request.commit.is_none() && now<request.deadline);
-                        if !pending.as_mut().is_some_and(|request|request.grant(lease,now)) {
+                        if let (Some(request), Some((file, number)), Some(scope)) =
+                            (pending, file_lease, &drop_scope)
+                        {
+                            if first_grant && file == lease {
+                                let budget = Duration::from_millis(request.deadline.saturating_sub(now));
+                                let confirmed = if let Some(proof) = file_confirmation.take() {
+                                    let mut updates = drop_requests.clone();
+                                    tokio::select! {
+                                        biased;
+                                        _ = super::stop_requested(&mut stop) => false,
+                                        _ = updates.changed() => false,
+                                        result = tokio::time::timeout(budget, Box::pin(proof.confirm())) =>
+                                            matches!(result, Ok(Ok(()))),
+                                    }
+                                } else {
+                                    false
+                                };
+                                if !confirmed || !scope.current(number) {
+                                    pending = None;
+                                    edge_gate.require_interior();
+                                    input_status.reporter.switch(super::WorkerSwitchState::Denied);
+                                    send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                                    continue;
+                                }
+                            }
+                        }
+                        if !pending.as_mut().is_some_and(|request|request.grant(lease,now_ms())) {
                             if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::TimedOut);}
                             // A duplicate Grant for the already active lease is
                             // inert; a late/foreign Grant is explicitly released.
@@ -799,7 +878,7 @@ pub(super) async fn run_with_diagnostics(
                         input_status.reporter.switch(super::WorkerSwitchState::Idle); if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                         if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery).await?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
                     },
-                    Captured::Position{x,y,width,height,route}=>{
+                    Captured::Position{x,y,width,height,route,primary}=>{
                         if !matches!(route,CaptureRoute::Local(_)){continue;}
                         if !width.is_finite() || !height.is_finite() || width<1.0 || height<1.0 {continue;}
                         size=(width,height);
@@ -808,9 +887,17 @@ pub(super) async fn run_with_diagnostics(
                         if cross {count(Count::EdgeHit);}
                         // Same order as the original condition chain; only the first blocker is tallied.
                         let gate_idle=capture.as_ref().is_some_and(|cap|cap.gate.idle());
+                        let source_hold = match &drop_route {
+                            Some(super::file_drop_control::Route::Source(source))
+                                if primary == Some(source.hold) && peer.supports(Input::Button { button: 1, down: true }) =>
+                            {
+                                Some(source.hold)
+                            }
+                            _ => None,
+                        };
                         let blocker=if !cross {None}
                             else if !peer.motion() {Some(Count::BlockPeer)}
-                            else if !gate_idle {Some(Count::BlockGate)}
+                            else if !gate_idle && source_hold.is_none() {Some(Count::BlockGate)}
                             else if outgoing.is_some() || pending.is_some() {Some(Count::BlockBusy)}
                             else if recovery.receiver.active().is_some() {Some(Count::BlockReceiving)}
                             else if recovery.protection_pending() {Some(Count::BlockProtection)}
@@ -819,7 +906,11 @@ pub(super) async fn run_with_diagnostics(
                         if let Some(along)=entry.filter(|_|blocker.is_none()){
                             let CaptureRoute::Local(epoch)=route else{continue;};
                             let Some(cap)=&capture else{continue;};
-                            let Some(token)=cap.gate.prepare_commit(epoch) else{continue;};
+                            let token = match source_hold {
+                                Some(hold) => cap.gate.prepare_file_drop(epoch, hold),
+                                None => cap.gate.prepare_commit(epoch),
+                            };
+                            let Some(token) = token else { continue; };
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let acquire=PendingAcquire::new(next_lease,token,now_ms());
                             let wire_edge=departure.wire_edge();
@@ -829,6 +920,32 @@ pub(super) async fn run_with_diagnostics(
                                     input_status.reporter.switch(super::WorkerSwitchState::Denied);
                                     continue;
                                 }
+                            }
+                            if source_hold.is_some() {
+                                let (Some(scope), Some(config), Some(super::file_drop_control::Route::Source(source))) =
+                                    (&drop_scope, file_drop, drop_route.take()) else { continue; };
+                                let request = source.request;
+                                let budget = Duration::from_millis(acquire.deadline.saturating_sub(now_ms()).min(450));
+                                let mut updates = drop_requests.clone();
+                                if scope.current(request) && cap.gate.commit_pending(token) {
+                                    file_confirmation = tokio::select! {
+                                        biased;
+                                        _ = super::stop_requested(&mut stop) => None,
+                                        _ = updates.changed() => None,
+                                        result = tokio::time::timeout(budget, Box::pin(source.reserve(config, &c, next_lease))) =>
+                                            result.ok().and_then(Result::ok).flatten(),
+                                    };
+                                }
+                                if file_confirmation.is_none() || !scope.current(request) || !cap.gate.commit_pending(token) || now_ms() >= acquire.deadline {
+                                    file_confirmation = None;
+                                    if scope.current(request) {
+                                        input_status.reporter.file_drop(scope.event(request, FileDropState::Rejected));
+                                    }
+                                    scope.retire(request);
+                                    edge_gate.require_interior();
+                                    continue;
+                                }
+                                file_lease = Some((next_lease, request));
                             }
                             (position,local_return)=departure.positions(along);
                             pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge:wire_edge,along}).await?;
@@ -859,7 +976,7 @@ pub(super) async fn run_with_diagnostics(
                         let (dx,dy)=departure.motion(dx/size.0,dy/size.1);
                         position.0=(position.0+dx).clamp(0.0,1.0);position.1=(position.1+dy).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
-                        if departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),route)? {
+                        if file_lease.is_none() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),route)? {
                             count(Count::EdgeReturn);
                             // Same reliable stream as earlier discrete input: motion cannot
                             // overtake those events and revoke their lease at the receiver.
@@ -880,6 +997,14 @@ pub(super) async fn run_with_diagnostics(
                         count(if result.is_ok(){Count::ReliableSent}else{Count::ReliableFailed});
                         if let (Ok(()),Input::Scroll{..})=(&result,event){count(Count::ScrollSent);}
                         result?;
+                        if matches!(event, Input::Button { button: 1, down: false }) {
+                            if let (Some((file, request)), Some(scope)) = (file_lease, &drop_scope) {
+                                if file == lease {
+                                    scope.retire(request);
+                                    file_lease = None;
+                                }
+                            }
+                        }
                     }},
                 }
             }
@@ -2000,6 +2125,7 @@ mod tests {
                 width: 1920.0,
                 height: 1080.0,
                 route: CaptureRoute::Local(epoch),
+                primary: None,
             };
             assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
             assert!(!gate.update(distance(edge, nx, ny) <= 0.001, 1000));
@@ -2475,8 +2601,17 @@ mod tests {
             let sidecar = layout_reservation::endpoint(bind, &a, &b.certificate)?;
             let side = sidecar.connect(address, "peerglide.local")?.await?;
             let lease = 7;
-            assert!(file_drop_link::reserve(&side, &c, &b.certificate, receipt, lease).await?);
-            side.close(0u8.into(), b"reservation accepted");
+            let source_proof = receipt.into_local_worker();
+            assert!(
+                file_drop_link::SentReceipt::from_local_worker(&source_proof, &a.certificate)
+                    .is_err()
+            );
+            let receipt =
+                file_drop_link::SentReceipt::from_local_worker(&source_proof, &b.certificate)?;
+            let confirmation =
+                file_drop_link::reserve_for_worker(&side, &c, &b.certificate, receipt, lease)
+                    .await?
+                    .context("receiver declined initial reservation")?;
             if cancelled {
                 let event = controller
                     .submit(Command::Cancel { session, request })
@@ -2495,6 +2630,10 @@ mod tests {
             assert!(
                 matches!(transport::receive(&mut rx).await?, Message::Granted { lease: granted } if granted == lease)
             );
+            let proof =
+                tokio::time::timeout(Duration::from_secs(2), confirmation.confirm()).await?;
+            assert_eq!(proof.is_ok(), !cancelled);
+            side.close(0u8.into(), b"reservation resolved");
             if !cancelled {
                 let claimed = observed.recv().await.context("missing claim")?;
                 assert_eq!(
