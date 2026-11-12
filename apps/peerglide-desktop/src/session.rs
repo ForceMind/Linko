@@ -12,7 +12,7 @@ use peerglide_protocol::{
 };
 use peerglide_transport as transport;
 use platform::{ReceiveAck, ReceiveSnapshot};
-use std::time::Duration;
+use std::{future::Future, pin::Pin, time::Duration};
 use tokio::sync::mpsc;
 
 mod recovery;
@@ -329,28 +329,30 @@ pub(super) struct SessionControls<'a> {
     pub secondary: Option<&'a super::secondary_layout::Routes>,
 }
 
-async fn confirmed_secondary(
-    routes: Option<&super::secondary_layout::Routes>,
-    connection: &quinn::Connection,
-    stop: &mut tokio::sync::watch::Receiver<bool>,
-    gate: &platform::CaptureGate,
+// Store the optional network negotiation outside the inline session future.
+// Unused CLI branches still contribute to the Windows debug startup stack.
+fn secondary_confirmation<'a>(
+    routes: Option<&'a super::secondary_layout::Routes>,
+    connection: &'a quinn::Connection,
+    stop: &'a mut tokio::sync::watch::Receiver<bool>,
+    gate: &'a platform::CaptureGate,
     request: PendingAcquire,
     edge: Edge,
     fraction: f64,
-) -> bool {
-    let Some(routes) = routes.filter(|routes| routes.has_outbound()) else {
-        return true;
-    };
-    let confirmed = routes
-        .confirm_outbound(connection, stop, request.lease, edge, fraction)
-        .await;
-    if !confirmed {
-        eprintln!("Secondary layout reservation was not confirmed.");
-    }
-    confirmed
-        && now_ms() < request.deadline
-        && !*stop.borrow()
-        && gate.commit_pending(request.token)
+) -> Option<Pin<Box<dyn Future<Output = bool> + 'a>>> {
+    let routes = routes.filter(|routes| routes.has_outbound())?;
+    Some(Box::pin(async move {
+        let confirmed = routes
+            .confirm_outbound(connection, stop, request.lease, edge, fraction)
+            .await;
+        if !confirmed {
+            eprintln!("Secondary layout reservation was not confirmed.");
+        }
+        confirmed
+            && now_ms() < request.deadline
+            && !*stop.borrow()
+            && gate.commit_pending(request.token)
+    }))
 }
 
 pub(super) async fn run_with_diagnostics(
@@ -747,10 +749,12 @@ pub(super) async fn run_with_diagnostics(
                             let Some(token)=cap.gate.prepare_commit(epoch) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let acquire=PendingAcquire::new(next_lease,token,now_ms());
-                            if !confirmed_secondary(secondary, &c, &mut stop, &cap.gate, acquire, edge, along).await {
-                                edge_gate.require_interior();
-                                input_status.reporter.switch(super::WorkerSwitchState::Denied);
-                                continue;
+                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, edge, along) {
+                                if !confirmation.await {
+                                    edge_gate.require_interior();
+                                    input_status.reporter.switch(super::WorkerSwitchState::Denied);
+                                    continue;
+                                }
                             }
                             position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
                             pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
@@ -764,10 +768,12 @@ pub(super) async fn run_with_diagnostics(
                             let Some(token)=cap.gate.prepare_commit(epoch) else{continue;};
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
                             let acquire=PendingAcquire::new(next_lease,token,now_ms());
-                            if !confirmed_secondary(secondary, &c, &mut stop, &cap.gate, acquire, edge, 0.5).await {
-                                edge_gate.require_interior();
-                                input_status.reporter.switch(super::WorkerSwitchState::Denied);
-                                continue;
+                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, edge, 0.5) {
+                                if !confirmation.await {
+                                    edge_gate.require_interior();
+                                    input_status.reporter.switch(super::WorkerSwitchState::Denied);
+                                    continue;
+                                }
                             }
                             position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
                         }}

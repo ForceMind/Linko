@@ -28,6 +28,7 @@ use peerglide_protocol::{
 };
 use peerglide_transport as transport;
 use std::{
+    future::Future,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -355,19 +356,22 @@ fn parse_display_origin(text: &str) -> std::result::Result<(f64, f64), &'static 
     Ok((parse(x)?, parse(y)?))
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     match Cli::parse().command {
         Command::PairOffer {
             identity,
             bind,
             managed,
-        } => pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed).await,
+        } => run_cli_future(|| {
+            pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed)
+        }),
         Command::PairConnect {
             address,
             identity,
             managed,
-        } => pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed).await,
+        } => run_cli_future(|| {
+            pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed)
+        }),
         Command::DiagnoseContext {
             include_application_id,
             observe_ms,
@@ -381,13 +385,13 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Listen(o) => run(o, None, false).await,
+        Command::Listen(o) => run_cli_future(|| run(o, None, false)),
         Command::ListenPeers {
             identity,
             peer_cert,
             bind,
             native_route,
-        } => multi_peer::run(&identity, &peer_cert, bind, native_route).await,
+        } => run_cli_future(|| multi_peer::run(&identity, &peer_cert, bind, native_route)),
         #[cfg(any(windows, target_os = "macos"))]
         Command::AudioOutputDevices => audio_playback::list_outputs(),
         #[cfg(any(windows, target_os = "macos"))]
@@ -399,7 +403,7 @@ async fn main() -> Result<()> {
             volume,
             duration_secs,
             supervisor,
-        } => {
+        } => run_cli_future(|| {
             audio_playback::run(
                 &identity,
                 &peer_cert,
@@ -409,8 +413,7 @@ async fn main() -> Result<()> {
                 Duration::from_secs(duration_secs),
                 &supervisor,
             )
-            .await
-        }
+        }),
         #[cfg(any(windows, target_os = "macos"))]
         Command::PlayAudioMix {
             identity,
@@ -419,7 +422,7 @@ async fn main() -> Result<()> {
             device,
             volume,
             duration_secs,
-        } => {
+        } => run_cli_future(|| {
             audio_mix_playback::run(
                 &identity,
                 &peer_cert,
@@ -428,8 +431,7 @@ async fn main() -> Result<()> {
                 volume,
                 Duration::from_secs(duration_secs),
             )
-            .await
-        }
+        }),
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareSystemAudio {
             address,
@@ -437,7 +439,7 @@ async fn main() -> Result<()> {
             peer_cert,
             duration_secs,
             supervisor,
-        } => {
+        } => run_cli_future(|| {
             audio_source::share_system(
                 &identity,
                 &peer_cert,
@@ -445,8 +447,7 @@ async fn main() -> Result<()> {
                 Duration::from_secs(duration_secs),
                 &supervisor,
             )
-            .await
-        }
+        }),
         #[cfg(target_os = "linux")]
         Command::ListenX11 {
             identity,
@@ -455,7 +456,7 @@ async fn main() -> Result<()> {
             allow_pointer_control,
             allow_discrete_input,
             allow_scroll,
-        } => {
+        } => run_cli_future(|| {
             x11_receive::run(
                 &identity,
                 &peer_cert,
@@ -464,8 +465,7 @@ async fn main() -> Result<()> {
                 allow_discrete_input,
                 allow_scroll,
             )
-            .await
-        }
+        }),
         #[cfg(any(windows, target_os = "macos"))]
         Command::PlayMicrophone {
             identity,
@@ -475,7 +475,7 @@ async fn main() -> Result<()> {
             volume,
             duration_secs,
             supervisor,
-        } => {
+        } => run_cli_future(|| {
             audio_playback::play_microphone(
                 &identity,
                 &peer_cert,
@@ -485,8 +485,7 @@ async fn main() -> Result<()> {
                 Duration::from_secs(duration_secs),
                 &supervisor,
             )
-            .await
-        }
+        }),
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         Command::ShareMicrophone {
             address,
@@ -494,7 +493,7 @@ async fn main() -> Result<()> {
             peer_cert,
             duration_secs,
             supervisor,
-        } => {
+        } => run_cli_future(|| {
             audio_source::share_microphone(
                 &identity,
                 &peer_cert,
@@ -502,14 +501,13 @@ async fn main() -> Result<()> {
                 Duration::from_secs(duration_secs),
                 &supervisor,
             )
-            .await
-        }
+        }),
         Command::ProbeDisplays {
             address,
             layout_address,
             identity,
             peer_cert,
-        } => layout_probe::probe(&identity, &peer_cert, address, layout_address).await,
+        } => run_cli_future(|| layout_probe::probe(&identity, &peer_cert, address, layout_address)),
         #[cfg(any(windows, target_os = "macos"))]
         Command::ListenDisplays {
             identity,
@@ -522,14 +520,25 @@ async fn main() -> Result<()> {
                 share_display_layout,
                 "local display sharing requires explicit consent"
             );
-            layout_probe::listen(&identity, &peer_cert, bind, layout_bind).await
+            run_cli_future(|| layout_probe::listen(&identity, &peer_cert, bind, layout_bind))
         }
         Command::Connect {
             address,
             options,
             probe,
-        } => run(options, Some(address), probe).await,
+        } => run_cli_future(|| run(options, Some(address), probe)),
     }
+}
+
+// Parse without constructing a large async dispatch frame. Only the selected
+// operation constructs a future, and the runtime holds a pinned heap value.
+#[inline(never)]
+fn run_cli_future<F: Future<Output = Result<()>>>(start: impl FnOnce() -> F) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    runtime.block_on(Box::pin(start()))
 }
 
 fn diagnose_context(include_application_id: bool, observe_ms: Option<u64>) -> Result<()> {
@@ -770,8 +779,7 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
     input_status.set(WorkerInputState::Disabled);
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let result = {
-        let work = supervise(&o, address, probe, stopped, &mut input_status);
-        tokio::pin!(work);
+        let mut work = Box::pin(supervise(&o, address, probe, stopped, &mut input_status));
         if managed {
             let (request, requested) = tokio::sync::oneshot::channel();
             let direct_stop = stop.clone();
