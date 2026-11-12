@@ -88,12 +88,23 @@ impl Worker {
     }
 
     fn submit_input(&self, point: ReceivePoint, effect: Input) -> Result<oneshot::Receiver<()>> {
-        let mut queued = self.mailbox.input.lock().map_err(|_| anyhow::anyhow!("X11 input queue unavailable"))?;
+        let mut queued = self
+            .mailbox
+            .input
+            .lock()
+            .map_err(|_| anyhow::anyhow!("X11 input queue unavailable"))?;
         let now = now_ms();
-        ensure!(self.mailbox.live(now) && queued.is_none(), "X11 input lease is no longer active");
+        ensure!(
+            self.mailbox.live(now) && queued.is_none(),
+            "X11 input lease is no longer active"
+        );
         // The reliable cursor anchors the effect. A previously queued motion
         // may not move the pointer after this anchor.
-        self.mailbox.latest.lock().map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?.take();
+        self.mailbox
+            .latest
+            .lock()
+            .map_err(|_| anyhow::anyhow!("X11 position queue unavailable"))?
+            .take();
         let (completed, result) = oneshot::channel();
         *queued = Some(PendingInput {
             point,
@@ -141,19 +152,31 @@ fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64
             if activity.local_activity()? {
                 return Ok(());
             }
-            let input = mailbox.input.lock().map_err(|_| anyhow::anyhow!("X11 input queue unavailable"))?.take();
+            let input = mailbox
+                .input
+                .lock()
+                .map_err(|_| anyhow::anyhow!("X11 input queue unavailable"))?
+                .take();
             if let Some(input) = input {
                 let admitted = || -> Result<bool> {
                     let local = activity.local_activity()?;
                     let now = now_ms();
-                    Ok(!local && mailbox.live(now) && now < input.expires && !input.completed.is_closed())
+                    Ok(!local
+                        && mailbox.live(now)
+                        && now < input.expires
+                        && !input.completed.is_closed())
                 };
                 if !injector.pointer_if(input.point, admitted)? || !admitted()? {
                     return Ok(());
                 }
                 match input.effect {
-                    Input::Key { usage, down } => ensure!(injector.key(usage, down)?, "X11 key ownership changed"),
-                    Input::Button { button, down } => ensure!(injector.button(button, down)?, "X11 button ownership changed"),
+                    Input::Key { usage, down } => {
+                        ensure!(injector.key(usage, down)?, "X11 key ownership changed")
+                    }
+                    Input::Button { button, down } => ensure!(
+                        injector.button(button, down)?,
+                        "X11 button ownership changed"
+                    ),
                     Input::Scroll { .. } => anyhow::bail!("X11 scrolling is not enabled"),
                 }
                 if input.completed.send(()).is_err() {
@@ -170,9 +193,11 @@ fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64
                 let placed = injector.pointer_if(point, || {
                     let local = activity.local_activity()?;
                     let now = now_ms();
-                    Ok(!local && mailbox.live(now) && ready.as_ref().is_none_or(|ready| {
-                        now < admit_before && !ready.is_closed()
-                    }))
+                    Ok(!local
+                        && mailbox.live(now)
+                        && ready
+                            .as_ref()
+                            .is_none_or(|ready| now < admit_before && !ready.is_closed()))
                 })?;
                 if !placed {
                     return Ok(());
@@ -187,7 +212,9 @@ fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64
         }
         Ok(())
     })();
-    injector.release_owned().context("X11 owned inputs could not be released")?;
+    injector
+        .release_owned()
+        .context("X11 owned inputs could not be released")?;
     result
 }
 
@@ -196,14 +223,18 @@ async fn capabilities(allow_discrete: bool) -> Result<InputCapabilities> {
         return InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg);
     }
     let (ready, result) = oneshot::channel();
-    thread::Builder::new().name("linko-x11-keymap".into()).spawn(move || {
-        let caps = Injector::open_after_explicit_consent().and_then(|injector| {
-            let keys = injector.key_usages().collect::<Vec<_>>();
-            InputCapabilities::new(&keys, true, 7, false).map_err(anyhow::Error::msg)
-        });
-        let _ = ready.send(caps);
-    })?;
-    tokio::time::timeout(ADMISSION, result).await.context("X11 capability query timed out")??
+    thread::Builder::new()
+        .name("linko-x11-keymap".into())
+        .spawn(move || {
+            let caps = Injector::open_after_explicit_consent().and_then(|injector| {
+                let keys = injector.key_usages().collect::<Vec<_>>();
+                InputCapabilities::new(&keys, true, 7, false).map_err(anyhow::Error::msg)
+            });
+            let _ = ready.send(caps);
+        })?;
+    tokio::time::timeout(ADMISSION, result)
+        .await
+        .context("X11 capability query timed out")??
 }
 
 pub(super) async fn run(
@@ -382,8 +413,13 @@ mod tests {
         ])
         .is_err());
         assert!(super::super::Cli::try_parse_from([
-            "peerglide", "listen-x11", "--peer-cert", "peer.der", "--allow-discrete-input",
-        ]).is_err());
+            "peerglide",
+            "listen-x11",
+            "--peer-cert",
+            "peer.der",
+            "--allow-discrete-input",
+        ])
+        .is_err());
         let mailbox = Mailbox {
             stop: AtomicBool::new(false),
             deadline: AtomicU64::new(20),

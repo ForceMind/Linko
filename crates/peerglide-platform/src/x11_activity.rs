@@ -152,15 +152,30 @@ mod tests {
 
         let keys_before = activity.connection.query_keymap()?.reply()?.keys;
         let buttons_before = after.mask;
-        let usage = injector.key_usages().next().context("CI XKB key mapping unavailable")?;
+        let usage = injector
+            .key_usages()
+            .next()
+            .context("CI XKB key mapping unavailable")?;
         assert!(injector.key(usage, true)?);
         assert!(injector.button(1, true)?);
-        assert_ne!(activity.connection.query_keymap()?.reply()?.keys, keys_before);
-        assert_ne!(activity.connection.query_pointer(root)?.reply()?.mask, buttons_before);
+        assert_ne!(
+            activity.connection.query_keymap()?.reply()?.keys,
+            keys_before
+        );
+        assert_ne!(
+            activity.connection.query_pointer(root)?.reply()?.mask,
+            buttons_before
+        );
         assert!(!activity.local_activity()?);
         injector.release_owned()?;
-        assert_eq!(activity.connection.query_keymap()?.reply()?.keys, keys_before);
-        assert_eq!(activity.connection.query_pointer(root)?.reply()?.mask, buttons_before);
+        assert_eq!(
+            activity.connection.query_keymap()?.reply()?.keys,
+            keys_before
+        );
+        assert_eq!(
+            activity.connection.query_pointer(root)?.reply()?.mask,
+            buttons_before
+        );
         assert!(!activity.local_activity()?);
         Ok(())
     }

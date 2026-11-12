@@ -235,7 +235,14 @@ async fn main() -> Result<()> {
             allow_pointer_control,
             allow_discrete_input,
         } => {
-            x11_receive::run(&identity, &peer_cert, bind, allow_pointer_control, allow_discrete_input).await
+            x11_receive::run(
+                &identity,
+                &peer_cert,
+                bind,
+                allow_pointer_control,
+                allow_discrete_input,
+            )
+            .await
         }
         Command::Connect {
             address,
