@@ -40,6 +40,15 @@ macOS 的第一条候选路径使用 AppKit 拖动会话和 NSFilePromiseProvide
 各有目标应用兼容性。与共享容器、File Provider 扩展或签名有关的附加
 方案需要独立记录并获授权后才能启用。
 
+## 连续跨机拖放的验证前提
+
+AppKit 的目标窗口在拖入时可以判断格式和允许的操作，释放鼠标后才进入
+`performDragOperation` 交付。文件承诺的写入也在拖动结束后启动。Windows OLE
+的 `DragEnter` 可检查格式，Microsoft 建议在实际放置前避免用 `GetData` 渲染内容。
+因此边沿接收条以放下文件作为发送意图，连续交接先从 Linko 自有且已授权的源内容
+验证。任意源应用的连续交接还需要一条保留复制语义、在松开前交换最少元数据的机制。
+慢传输、放手或取消应结束该次接棒并清理归属，目标应用的内容只能在完整校验后交付。
+
 ## 验证
 
 GitHub Actions 先覆盖本地拖动票据、拒绝、断线、代次变化、复制效果、
@@ -51,5 +60,7 @@ GitHub Actions 先覆盖本地拖动票据、拒绝、断线、代次变化、�
 
 - [Microsoft Shell 剪贴板与拖放格式](https://learn.microsoft.com/en-us/windows/win32/shell/clipboard)
 - [Microsoft OLE DoDragDrop](https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-dodragdrop)
+- [Microsoft Shell 拖放数据对象](https://learn.microsoft.com/en-us/windows/win32/shell/dataobject)
+- [Apple AppKit 目标窗口放置回调](https://developer.apple.com/documentation/AppKit/NSDraggingDestination/performDragOperation%28_%3A%29)
 - [Apple NSFilePromiseProvider](https://developer.apple.com/documentation/appkit/nsfilepromiseprovider)
 - [Apple NSFilePromiseProviderDelegate](https://developer.apple.com/documentation/appkit/nsfilepromiseproviderdelegate)
