@@ -21,14 +21,14 @@ pub(super) mod routed_source;
 pub(super) mod x11_source;
 use recovery::Recovery;
 
-struct Abort(tokio::task::JoinHandle<()>);
+pub(super) struct Abort(pub(super) tokio::task::JoinHandle<()>);
 impl Drop for Abort {
     fn drop(&mut self) {
         self.0.abort();
     }
 }
 
-async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
+pub(super) async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
     tokio::time::timeout(Duration::from_millis(250), transport::send(tx, m)).await??;
     Ok(())
 }
