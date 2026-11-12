@@ -191,6 +191,54 @@ enum SessionMode {
     Native,
     Probe,
 }
+
+struct RoutedLaunch {
+    path: PathBuf,
+    layout_fingerprint: String,
+    local_fingerprint: String,
+}
+
+impl RoutedLaunch {
+    fn recheck(&self, app: &App) -> Result<()> {
+        let bytes = config_store::read(&self.path)?.context("分段布局草稿已移除")?;
+        anyhow::ensure!(
+            blake3::hash(&bytes).to_hex().as_str() == self.layout_fingerprint,
+            "分段布局已变化，请重新打开确认窗口"
+        );
+        anyhow::ensure!(
+            app.local_fingerprint().as_deref() == Some(self.local_fingerprint.as_str()),
+            "本机身份已变化，请重新确认"
+        );
+        Ok(())
+    }
+
+    fn command(&self, executable: PathBuf, identity: PathBuf) -> Command {
+        let mut command = Command::new(executable);
+        command
+            .args(["connect-routes", "--native", "--managed", "--identity"])
+            .arg(identity)
+            .arg("--layout")
+            .arg(&self.path)
+            .arg("--expected-layout-fingerprint")
+            .arg(&self.layout_fingerprint)
+            .arg("--expected-local-fingerprint")
+            .arg(&self.local_fingerprint);
+        command
+    }
+}
+
+fn worker_executable() -> Result<PathBuf> {
+    let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+        "peerglide.exe"
+    } else {
+        "peerglide"
+    });
+    anyhow::ensure!(
+        executable.is_file(),
+        "缺少同目录的 peerglide 通信程序，请使用完整开发包"
+    );
+    Ok(executable)
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DeviceTab {
     Device,
@@ -482,6 +530,8 @@ struct App {
     wizard_allow: bool,
     dialog: Option<Dialog>,
     native_confirmation: bool,
+    pending_routed: Option<RoutedLaunch>,
+    routed_active: bool,
     active_mode: Option<SessionMode>,
     pending_start: Option<SessionMode>,
     layout_request: Option<layout_updates::Pending>,
@@ -627,6 +677,8 @@ impl App {
             wizard_allow: false,
             dialog: None,
             native_confirmation: false,
+            pending_routed: None,
+            routed_active: false,
             active_mode: None,
             pending_start: None,
             layout_request: None,
@@ -992,21 +1044,13 @@ impl App {
         if !self.resource_check_mode {
             self.save_config()?;
         }
-        let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
-            "peerglide.exe"
-        } else {
-            "peerglide"
-        });
-        anyhow::ensure!(
-            executable.is_file(),
-            "缺少同目录的 peerglide 通信程序，请使用完整开发包"
-        );
+        let executable = worker_executable()?;
         let peer_fingerprint = self
             .config
             .fingerprint
             .as_deref()
             .context("缺少已登记证书指纹")?;
-        let mut cmd = self.worker_command(
+        let cmd = self.worker_command(
             executable,
             cert,
             mode,
@@ -1014,7 +1058,15 @@ impl App {
             (&local.fingerprint(), peer_fingerprint),
         );
         #[cfg(any(windows, target_os = "macos"))]
-        self.configure_receive_display(&mut cmd, mode)?;
+        let cmd = {
+            let mut cmd = cmd;
+            self.configure_receive_display(&mut cmd, mode)?;
+            cmd
+        };
+        self.spawn_session(cmd, mode, false)
+    }
+
+    fn spawn_session(&mut self, mut cmd: Command, mode: SessionMode, routed: bool) -> Result<()> {
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -1043,6 +1095,7 @@ impl App {
         self.layout_request = None;
         self.layout_sequence = 0;
         self.active_mode = Some(mode);
+        self.routed_active = routed;
         self.waiting_for_peer = false;
         self.peer_wait_expired = false;
         self.switch_state = None;
@@ -1140,6 +1193,9 @@ impl App {
         self.waiting_for_peer = false;
         self.pending_start = None;
         self.native_confirmation = false;
+        if self.pending_routed.take().is_some() && self.dialog == Some(Dialog::NativeStart) {
+            self.dialog = None;
+        }
         self.screen_drag = None;
         if let Some(child) = &mut self.child {
             if self.input_terminal {
@@ -1210,6 +1266,19 @@ impl App {
             !diagnostics || self.child.is_none(),
             "请先停止当前会话，再开启短时输入诊断"
         );
+        if let Some(launch) = self.pending_routed.as_ref() {
+            anyhow::ensure!(
+                !diagnostics
+                    && self.dialog == Some(Dialog::NativeStart)
+                    && self.routed_start_available(),
+                "请先结束当前操作，再重新确认分段发送"
+            );
+            launch.recheck(self)?;
+            let command = launch.command(worker_executable()?, self.identity_dir());
+            self.spawn_session(command, SessionMode::Native, true)?;
+            self.pending_routed = None;
+            return Ok(());
+        }
         self.config.native = true;
         self.save_config()?;
         if self.child.is_some() {
@@ -1264,10 +1333,17 @@ impl App {
         Ok(())
     }
     fn poll(&mut self) {
+        if self.dialog != Some(Dialog::NativeStart) {
+            self.pending_routed = None;
+        }
         self.poll_layout();
         self.worker_permissions.poll();
-        self.discovery
-            .poll(self.child.is_some() && self.stopping.is_none() && self.config.listen);
+        self.discovery.poll(
+            !self.routed_active
+                && self.child.is_some()
+                && self.stopping.is_none()
+                && self.config.listen,
+        );
         let diagnostics_complete = if let Some(rx) = &self.events {
             loop {
                 match rx.try_recv() {
@@ -1331,7 +1407,12 @@ impl App {
                     }
                     Some(WorkerState::Listening) => {
                         self.connected = false;
-                        self.status = "等待另一台连接".into();
+                        self.status = if self.routed_active {
+                            "分段发送就绪"
+                        } else {
+                            "等待另一台连接"
+                        }
+                        .into();
                     }
                     Some(WorkerState::ProbePassed) => {
                         self.connected = false;
@@ -1435,6 +1516,7 @@ impl App {
                     self.layout_request = None;
                     self.layout_active = None;
                     self.active_mode = None;
+                    self.routed_active = false;
                     self.stopping = None;
                     if clean && !self.recovery_blocked {
                         if let Some(mode) = self.pending_start.take() {
