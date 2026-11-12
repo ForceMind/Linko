@@ -47,7 +47,6 @@ impl Packet {
 #[derive(Clone, Copy)]
 enum Source {
     System,
-    #[cfg(all(windows, target_env = "msvc"))]
     Microphone,
 }
 
@@ -68,7 +67,7 @@ pub(super) async fn share_system(
     .await
 }
 
-#[cfg(all(windows, target_env = "msvc"))]
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 pub(super) async fn share_microphone(
     identity: &std::path::Path,
     peer_certificate: &std::path::Path,
@@ -114,7 +113,6 @@ async fn share(
     };
     let endpoint = match source {
         Source::System => audio::endpoint(bind, &identity, &pin)?,
-        #[cfg(all(windows, target_env = "msvc"))]
         Source::Microphone => audio::microphone::endpoint(bind, &identity, &pin)?,
     };
     let stop = tokio::signal::ctrl_c();
@@ -140,7 +138,6 @@ async fn share(
         result = async {
             match source {
                 Source::System => audio::open(&connection, &pin, audio::Direction::Send, duration).await,
-                #[cfg(all(windows, target_env = "msvc"))]
                 Source::Microphone => audio::microphone::open(&connection, &pin, duration).await,
             }
         } => result?,
@@ -196,11 +193,19 @@ fn capture_samples(
     if stopped.load(Ordering::Acquire) {
         return Ok(());
     }
-    let mut capture = match source {
-        Source::System => AudioCapture::open_after_explicit_consent()?,
-        #[cfg(all(windows, target_env = "msvc"))]
-        Source::Microphone => AudioCapture::open_microphone_after_explicit_consent()?,
+    let opened = match source {
+        Source::System => AudioCapture::open_after_explicit_consent(),
+        Source::Microphone => AudioCapture::open_microphone_after_explicit_consent(stopped),
     };
+    if stopped.load(Ordering::Acquire) {
+        if let Ok(mut capture) = opened {
+            capture
+                .stop()
+                .context("local audio capture cleanup failed")?;
+        }
+        return Ok(());
+    }
+    let mut capture = opened?;
     let mut packet = Packet::new();
     let period = Duration::from_millis(5);
     let result = (|| -> Result<()> {

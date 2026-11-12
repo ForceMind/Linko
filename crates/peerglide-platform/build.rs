@@ -19,7 +19,12 @@ fn main() {
             .flag("-mmacosx-version-min=13.0")
             .file("src/macos_system_audio.mm")
             .compile("linko_macos_system_audio");
-        for framework in ["Foundation", "CoreMedia", "ScreenCaptureKit"] {
+        for framework in [
+            "AVFoundation",
+            "Foundation",
+            "CoreMedia",
+            "ScreenCaptureKit",
+        ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
     }
