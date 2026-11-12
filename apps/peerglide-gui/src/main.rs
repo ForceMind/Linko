@@ -18,11 +18,11 @@ mod discovery_panel;
 #[cfg(any(windows, target_os = "macos"))]
 mod display_inventory;
 mod enrollment_store;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+mod file_drop_reservation;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 mod file_edge_drop;
 mod file_panel;
-#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
-mod file_drop_reservation;
 mod gesture_lab;
 mod gesture_rules;
 mod icons;

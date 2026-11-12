@@ -3,7 +3,10 @@ use super::{
     data_access::Pin,
     egui,
     file_drop_reservation::{Reservation, Status},
-    transport::{file_drop_link, file_transfer::{drop_admission, PreparedDropPath, ReceivedFile}},
+    transport::{
+        file_drop_link,
+        file_transfer::{drop_admission, PreparedDropPath, ReceivedFile},
+    },
     App, Page, SessionMode,
 };
 use anyhow::{ensure, Context, Result};
@@ -137,7 +140,13 @@ impl Export {
         !matches!(self.state, State::Idle)
     }
 
-    pub(super) fn received(&mut self, app: &mut App, pin: Pin, file: ReceivedFile, bind: Option<SocketAddr>) {
+    pub(super) fn received(
+        &mut self,
+        app: &mut App,
+        pin: Pin,
+        file: ReceivedFile,
+        bind: Option<SocketAddr>,
+    ) {
         self.stop(app);
         self.notice = None;
         self.source = pin.authenticates(file.drop_origin()).then(|| Source {
@@ -265,7 +274,9 @@ impl Export {
     }
 
     fn tick_handoff(&mut self, app: &mut App, ctx: &egui::Context) -> Result<()> {
-        let State::Handoff(handoff) = &mut self.state else { return Ok(()); };
+        let State::Handoff(handoff) = &mut self.state else {
+            return Ok(());
+        };
         ensure!(
             super::data_access::ready(app)
                 && app.page == Page::Transfers
@@ -288,13 +299,15 @@ impl Export {
         if !already_matched && handoff.reservation.matched().is_some() {
             source.pin.recheck(app)?;
             handoff.attempt.scope.verify_layout()?;
-            self.admission.file_ready(
-                handoff.attempt.ticket,
-                handoff.attempt.scope.context,
-                source.file.drop_origin().transfer(),
-                now_ms(),
-                true,
-            ).map_err(admission_error)?;
+            self.admission
+                .file_ready(
+                    handoff.attempt.ticket,
+                    handoff.attempt.scope.context,
+                    source.file.drop_origin().transfer(),
+                    now_ms(),
+                    true,
+                )
+                .map_err(admission_error)?;
         }
         Ok(())
     }
@@ -304,15 +317,26 @@ impl Export {
         let source = self.source.as_ref().context("没有已接收文件")?;
         source.pin.recheck(app)?;
         let bind = source.bind.context("没有已确认的本机文件接收地址")?;
-        let State::Ready(prepared) = std::mem::take(&mut self.state) else { return Ok(()); };
+        let State::Ready(prepared) = std::mem::take(&mut self.state) else {
+            return Ok(());
+        };
         let Prepared { path, attempt } = prepared;
         let ticket = attempt.ticket;
         let result = (|| -> Result<Handoff> {
             attempt.scope.verify_layout()?;
             let request = u32::try_from(attempt.scope.context.gesture_generation)?;
-            let slot = file_drop_link::Slot::arm(path, &mut self.admission, ticket, attempt.scope.context, now_ms(), true)?;
+            let slot = file_drop_link::Slot::arm(
+                path,
+                &mut self.admission,
+                ticket,
+                attempt.scope.context,
+                now_ms(),
+                true,
+            )?;
             let (claim, proof, lifetime_ms) = slot.into_worker()?;
-            let expires = attempt.expires.min(Instant::now() + Duration::from_millis(u64::from(lifetime_ms)));
+            let expires = attempt
+                .expires
+                .min(Instant::now() + Duration::from_millis(u64::from(lifetime_ms)));
             Ok(Handoff {
                 _file: claim.file,
                 attempt,
@@ -533,13 +557,25 @@ impl Export {
             match handoff.reservation.status() {
                 Status::WaitingForWorker => {
                     ui.label("在本机开启键鼠协同后，将登记本次文件接棒。");
-                    if ui.add_enabled(app.native_start_available(), egui::Button::new("开启键鼠协同")).clicked() {
+                    if ui
+                        .add_enabled(
+                            app.native_start_available(),
+                            egui::Button::new("开启键鼠协同"),
+                        )
+                        .clicked()
+                    {
                         app.workspace_action(super::desktop_state::Action::StartInput);
                     }
                 }
-                Status::Confirming => { ui.label("正在等待工作进程确认文件接棒。"); }
-                Status::Listening(port) => { ui.label(format!("本机 UDP {port} 已预约，等待已配对电脑。")); }
-                Status::Matched => { ui.label("文件预约已匹配输入租约。"); }
+                Status::Confirming => {
+                    ui.label("正在等待工作进程确认文件接棒。");
+                }
+                Status::Listening(port) => {
+                    ui.label(format!("本机 UDP {port} 已预约，等待已配对电脑。"));
+                }
+                Status::Matched => {
+                    ui.label("文件预约已匹配输入租约。");
+                }
             }
             if ui.button("撤回文件预约").clicked() {
                 self.stop(app);
@@ -572,8 +608,10 @@ impl Export {
                 let reference = drag_pressed(ui, "按住并拖出文件引用");
                 if copy || reference {
                     self.start_drag(app, copy);
-                } else if can_prepare_handoff(app) && source.bind.is_some()
-                    && ui.button("准备一次跨机接收").clicked() && self.prepare_handoff(app).is_err()
+                } else if can_prepare_handoff(app)
+                    && source.bind.is_some()
+                    && ui.button("准备一次跨机接收").clicked()
+                    && self.prepare_handoff(app).is_err()
                 {
                     self.notice = Some("无法准备跨机接收，请重新校验文件和配对。");
                 }

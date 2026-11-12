@@ -142,7 +142,8 @@ impl Panel {
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if !active.stopping && active.pin.matches(app) {
                         if let Some(file) = result.file {
-                            self.export.received(app, active.pin.clone(), file, active.listened);
+                            self.export
+                                .received(app, active.pin.clone(), file, active.listened);
                         }
                     }
                     let local = outcome_label(result.outcome, true);
@@ -160,8 +161,13 @@ impl Panel {
                 }
                 Event::Listening(address) => {
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-                    { active.listened = Some(address); }
-                    format!("正在等待已配对电脑。发送端需填写本机 IP 和 UDP 端口 {}。", address.port())
+                    {
+                        active.listened = Some(address);
+                    }
+                    format!(
+                        "正在等待已配对电脑。发送端需填写本机 IP 和 UDP 端口 {}。",
+                        address.port()
+                    )
                 }
                 Event::Offer(offer) => {
                     active.offer = Some(offer);
