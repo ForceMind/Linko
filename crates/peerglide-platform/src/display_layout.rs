@@ -1,4 +1,5 @@
 //! Local display geometry in the platform's oriented desktop coordinates.
+use crate::ReceivePoint;
 use peerglide_protocol::Edge;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -109,6 +110,22 @@ pub(super) struct Revision {
     generation: u64,
 }
 
+/// One receiver-selected display in an exact local topology revision.
+#[derive(Clone, Copy)]
+pub struct PlacementTarget {
+    revision: Revision,
+    display: Display,
+    desktop: Bounds,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    pub desktop_x: f64,
+    pub desktop_y: f64,
+    /// Win32 absolute coordinates when the virtual desktop flag is used.
+    pub virtual_absolute: [i32; 2],
+}
+
 /// A validated native snapshot owned by one local layout controller. An update
 /// only invalidates anchors when the effective layout or display metrics change.
 pub struct Layout {
@@ -156,6 +173,39 @@ impl Layout {
         self.primary
     }
 
+    pub fn placement_target(&self, id: DisplayId) -> Option<PlacementTarget> {
+        let display = *self.displays.iter().find(|display| display.id == id)?;
+        let bounds = display.bounds;
+        let desktop = self.displays.iter().fold(bounds, |outer, display| Bounds {
+            left: outer.left.min(display.bounds.left),
+            top: outer.top.min(display.bounds.top),
+            right: outer.right.max(display.bounds.right),
+            bottom: outer.bottom.max(display.bounds.bottom),
+        });
+        (desktop.valid() && bounds.right - bounds.left >= 1.0 && bounds.bottom - bounds.top >= 1.0)
+            .then_some(PlacementTarget { revision: self.revision(), display, desktop })
+    }
+
+    /// Translate a v5 position within the selected display. The previous
+    /// snapshot cannot be used after topology changes or with another owner.
+    pub fn place(&self, target: PlacementTarget, point: ReceivePoint) -> Option<Placement> {
+        if target.revision != self.revision() || !point.valid() {
+            return None;
+        }
+        let bounds = target.display.bounds;
+        let x = bounds.left + point.x * (bounds.right - bounds.left - 1.0);
+        let y = bounds.top + point.y * (bounds.bottom - bounds.top - 1.0);
+        let desktop = target.desktop;
+        bounds.contains(x, y).then(|| Placement {
+            desktop_x: x,
+            desktop_y: y,
+            virtual_absolute: [
+                absolute(x, desktop.left, desktop.right),
+                absolute(y, desktop.top, desktop.bottom),
+            ],
+        })
+    }
+
     /// Prefer the primary when regions overlap, then the lowest display ID.
     pub fn display_at(&self, x: f64, y: f64) -> Option<DisplayId> {
         self.displays
@@ -199,6 +249,14 @@ impl Layout {
     pub fn anchor_is_current(&self, anchor: EdgeAnchor) -> bool {
         anchor.instance == self.instance && anchor.generation == self.generation
     }
+}
+
+fn absolute(value: f64, start: f64, end: f64) -> i32 {
+    let range = end - start - 1.0;
+    if range <= 0.0 {
+        return 0;
+    }
+    (((value - start) / range).clamp(0.0, 1.0) * 65535.0).round() as i32
 }
 
 fn next_instance() -> Result<u64, LayoutError> {
@@ -263,6 +321,31 @@ mod tests {
             scale,
             rotation: Rotation::Upright,
         }
+    }
+
+    #[test]
+    fn place_on_a_negative_display_rejects_a_stale_revision() {
+        let primary = display(1, [0.0, 0.0, 1920.0, 1080.0], 1.0);
+        let mut left = display(2, [-1080.0, -200.0, 0.0, 1720.0], 1.5);
+        left.rotation = Rotation::Clockwise90;
+        let mut layout = Layout::new(primary.id, vec![primary, left]).unwrap();
+        let target = layout.placement_target(left.id).unwrap();
+        let start = ReceivePoint { x: 0.0, y: 0.0 };
+        let end = ReceivePoint { x: 1.0, y: 1.0 };
+        let first = layout.place(target, start).unwrap();
+        assert_eq!((first.desktop_x, first.desktop_y), (-1080.0, -200.0));
+        assert_eq!(first.virtual_absolute, [0, 0]);
+        let last = layout.place(target, end).unwrap();
+        assert_eq!((last.desktop_x, last.desktop_y), (-1.0, 1719.0));
+        assert_eq!(last.virtual_absolute[1], 65535);
+        assert!(last.virtual_absolute[0] < 32768);
+        assert!(layout.place(target, ReceivePoint { x: f64::NAN, y: 0.0 }).is_none());
+        let other = Layout::new(primary.id, vec![primary, left]).unwrap();
+        assert!(other.place(target, start).is_none());
+        left.scale = 2.0;
+        assert!(layout.replace(primary.id, vec![primary, left]).unwrap());
+        assert!(layout.place(target, start).is_none());
+        assert!(layout.placement_target(DisplayId(3)).is_none());
     }
 
     #[test]
