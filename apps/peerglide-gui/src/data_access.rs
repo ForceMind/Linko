@@ -23,6 +23,13 @@ impl Pin {
         ready(app) && app.config.fingerprint.as_deref() == Some(self.peer.as_str())
     }
 
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+    pub(super) fn recheck(&self, app: &App) -> Result<()> {
+        let (current, _, _) = Self::load(app)?;
+        anyhow::ensure!(&current == self, "本机或已登记的身份发生变化");
+        Ok(())
+    }
+
     pub(super) fn load(app: &App) -> Result<(Self, Identity, Vec<u8>)> {
         anyhow::ensure!(ready(app), "请先完成设备配对并打开可写窗口");
         app.ensure_pairing_ready().context("请先完成设备配对核验")?;
@@ -97,8 +104,16 @@ mod tests {
         assert_eq!(pin.peer, peer.fingerprint());
         assert!(!app.config.allow && !app.config.native);
 
-        std::fs::write(peer_path, Identity::generate()?.certificate)?;
+        std::fs::write(&peer_path, Identity::generate()?.certificate)?;
         assert!(Pin::load(&app).is_err());
+        assert!(pin.recheck(&app).is_err());
+
+        std::fs::write(peer_path, &peer.certificate)?;
+        pin.recheck(&app)?;
+        std::fs::rename(app.identity_dir(), fixture.path.join("retired-identity"))?;
+        Identity::create(&app.identity_dir())?;
+        assert!(pin.matches(&app));
+        assert!(pin.recheck(&app).is_err());
         drop(app);
         fixture.close()
     }
