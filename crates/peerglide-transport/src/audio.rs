@@ -1,5 +1,9 @@
 //! One explicitly selected direction on a pinned audio-only QUIC connection.
-use crate::{endpoint_alpn, verify_peer, Identity};
+use crate::{
+    endpoint_alpn,
+    trusted_listener::{Fingerprint, Listener},
+    verify_peer, Identity,
+};
 use anyhow::{ensure, Context, Result};
 use peerglide_protocol::audio::{Frame, FRAME_BYTES};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint};
@@ -54,6 +58,55 @@ pub fn endpoint(address: SocketAddr, local: &Identity, pinned_peer: &[u8]) -> Re
         "audio peer must have a distinct identity"
     );
     endpoint_alpn(address, local, pinned_peer, ALPN)
+}
+
+/// A local set of individually authorized playback sources on one audio port.
+/// The slot is derived from the configured certificate order, never from a frame.
+pub struct PlaybackListener {
+    trusted: Listener,
+    sources: Vec<Fingerprint>,
+}
+
+impl PlaybackListener {
+    pub fn bind(address: SocketAddr, local: &Identity, peers: Vec<Vec<u8>>) -> Result<Self> {
+        ensure!(
+            (1..=crate::trusted_listener::MAX_TRUSTED_PEERS).contains(&peers.len()),
+            "playback source count outside listener limits"
+        );
+        let sources = peers.iter().map(|peer| *blake3::hash(peer).as_bytes()).collect();
+        let trusted = Listener::bind_alpn(address, local, peers, ALPN)?;
+        Ok(Self { trusted, sources })
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.trusted.local_addr()
+    }
+
+    pub async fn accept(&self, remaining: Duration) -> Result<(usize, Session)> {
+        ensure!(!remaining.is_zero() && remaining <= MAX_CONSENT, "invalid audio consent duration");
+        let deadline = Instant::now() + remaining;
+        tokio::time::timeout(remaining, async {
+            let (connection, fingerprint) = self.trusted.accept().await?.into_parts();
+            let slot = self.sources.iter().position(|source| *source == fingerprint)
+                .context("authenticated audio source has no local slot")?;
+            let certificate = self.trusted.certificate(fingerprint)
+                .context("authenticated audio source is unavailable")?;
+            let session = accept(
+                &connection,
+                certificate,
+                Direction::Playback,
+                deadline.saturating_duration_since(Instant::now()),
+            )
+            .await?;
+            Ok((slot, session))
+        })
+        .await
+        .context("audio listener consent expired")?
+    }
+
+    pub fn close(&self) {
+        self.trusted.close();
+    }
 }
 
 /// The UI or local worker supplies the direction and consent duration.
@@ -248,6 +301,55 @@ mod tests {
         assert_eq!(received.samples, frame.samples);
         incoming.stop();
         assert!(incoming.receive().await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn one_audio_port_binds_each_pinned_source_to_its_local_slot() -> Result<()> {
+        let output = Identity::generate()?;
+        let left = Identity::generate()?;
+        let right = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        assert!(PlaybackListener::bind(
+            bind,
+            &output,
+            vec![left.certificate.clone(), left.certificate.clone()],
+        ).is_err());
+        let listener = PlaybackListener::bind(
+            bind,
+            &output,
+            vec![left.certificate.clone(), right.certificate.clone()],
+        )?;
+        let address = listener.local_addr()?;
+        let consent = Duration::from_secs(10);
+        let receive = async {
+            let first = listener.accept(consent).await?;
+            let second = listener.accept(consent).await?;
+            let mut slots = [first.0, second.0];
+            slots.sort_unstable();
+            assert_eq!(slots, [0, 1]);
+            Ok::<_, anyhow::Error>((first, second))
+        };
+        let sink_pin = &output.certificate;
+        let connect = |identity: Identity| async move {
+            let endpoint = endpoint(bind, &identity, sink_pin)?;
+            let connection = endpoint.connect(address, "peerglide.local")?.await?;
+            let session = open(&connection, sink_pin, Direction::Send, consent).await?;
+            Ok::<_, anyhow::Error>((endpoint, session))
+        };
+        let ((first, second), (left_endpoint, mut left), (right_endpoint, mut right)) =
+            tokio::time::timeout(consent, async {
+                tokio::try_join!(receive, connect(left), connect(right))
+            })
+            .await??;
+        for (source, value) in [(&mut left, 5), (&mut right, 7)] {
+            assert!(source.send(&Frame { sequence: 1, samples: [value; SAMPLES] })?);
+        }
+        for (slot, session) in [first, second] {
+            assert_eq!(session.receive().await?.samples, [[5; SAMPLES], [7; SAMPLES]][slot]);
+        }
+        listener.close();
+        drop((left_endpoint, right_endpoint));
         Ok(())
     }
 
