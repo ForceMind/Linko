@@ -199,7 +199,12 @@ impl HookState {
             .replace(key, index, if down { owner } else { PairOwner::Empty });
         owner.suppressed()
     }
-    pub(super) fn unsupported_button(&mut self, button: u8, down: bool, route: CaptureRoute) -> bool {
+    pub(super) fn unsupported_button(
+        &mut self,
+        button: u8,
+        down: bool,
+        route: CaptureRoute,
+    ) -> bool {
         if let Some(block) = self.protect_pair(false, usize::from(button), down, route) {
             return block;
         }
