@@ -472,8 +472,9 @@ mod tests {
         let worker_slot = slot.clone();
         let worker_target = target.clone();
         let worker_pin = a.certificate.clone();
+        let replying = receiver.clone();
         let worker = tokio::spawn(async move {
-            accept_for_slot(&receiver, &worker_target, &worker_pin, &worker_slot, |_| {
+            accept_for_slot(&replying, &worker_target, &worker_pin, &worker_slot, |_| {
                 Some(2)
             })
             .await
@@ -498,6 +499,7 @@ mod tests {
             .consume(&target, &a.certificate, request.lease, 2)?
             .is_none());
         assert!(worker.await??);
+        receiver.close(0u8.into(), b"reservation fixture complete");
 
         let binding = Binding::from_v5(&target, &a.certificate)?;
         let proof = binding.proof();
