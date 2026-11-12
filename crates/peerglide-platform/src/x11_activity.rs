@@ -129,7 +129,10 @@ mod tests {
         ensure!(roots.len() == 1, "CI display must have one screen");
         let root = roots[0].root;
         let bounds = activity.connection.get_geometry(root)?.reply()?;
-        ensure!(bounds.width == 1024 && bounds.height == 768, "unexpected CI display geometry");
+        ensure!(
+            bounds.width == 1024 && bounds.height == 768,
+            "unexpected CI display geometry"
+        );
         let before = activity.connection.query_pointer(root)?.reply()?;
         let (point, expected) = if before.root_x == 0 && before.root_y == 0 {
             (ReceivePoint { x: 1.0, y: 1.0 }, (1023, 767))
@@ -138,7 +141,10 @@ mod tests {
         };
         assert!(!injector.pointer_if(point, || Ok(false))?);
         let blocked = activity.connection.query_pointer(root)?.reply()?;
-        assert_eq!((blocked.root_x, blocked.root_y), (before.root_x, before.root_y));
+        assert_eq!(
+            (blocked.root_x, blocked.root_y),
+            (before.root_x, before.root_y)
+        );
         assert!(injector.pointer_if(point, || Ok(true))?);
         let after = activity.connection.query_pointer(root)?.reply()?;
         assert_eq!((after.root_x, after.root_y), expected);
