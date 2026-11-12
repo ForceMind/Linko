@@ -158,11 +158,21 @@ impl HookState {
         if let Some(block) = self.protect_pair(false, usize::from(button), down, route) {
             return block;
         }
-        if down {
-            self.buttons.insert(button);
+        let bridge_up = button == 1
+            && !down
+            && matches!(self.pairs.buttons[1], PairOwner::Local(_))
+            && self.gate.primary_bridge(route);
+        let route = if button != 1 {
+            self.stop_primary_bridge(route)
+        } else {
+            route
+        };
+        let fresh = if down {
+            self.buttons.insert(button)
         } else {
             self.buttons.remove(&button);
-        }
+            false
+        };
         self.update_held();
         if usize::from(button) >= self.pairs.buttons.len() {
             self.gate.disable();
@@ -172,13 +182,34 @@ impl HookState {
         if self.reject_target(Input::Button { button, down }) {
             return self.rejected_pair(false, usize::from(button), down, route);
         }
-        self.pair_input(
+        let suppress = self.pair_input(
             Input::Button { button, down },
             false,
             usize::from(button),
             down,
             route,
-        )
+        );
+        if fresh && button == 1 && matches!(self.pairs.buttons[1], PairOwner::Local(_)) {
+            self.gate.update_held(self.held_count(), true);
+        }
+        if bridge_up {
+            // The original physical Down belonged to the local OS. Its Up
+            // must reach that OS as well as the lease that got a bridged Down.
+            self.emit(Captured::Input {
+                event: Input::Button { button, down },
+                route,
+            });
+        }
+        suppress
+    }
+    fn stop_primary_bridge(&mut self, route: CaptureRoute) -> CaptureRoute {
+        if !self.gate.primary_bridge(route) {
+            return route;
+        }
+        self.gate.disable();
+        self.emit(Captured::Emergency);
+        self.gate
+            .route_from(self.gate.0.control.load(Ordering::Acquire))
     }
     fn rejected_pair(&mut self, key: bool, index: usize, down: bool, route: CaptureRoute) -> bool {
         let old = if key {
@@ -297,9 +328,11 @@ impl HookState {
         }
         route.remote() && (sent || debt)
     }
+    fn held_count(&self) -> u64 {
+        (self.keys.len() + self.buttons.len() + self.pairs.extra_held) as u64
+    }
     pub(super) fn update_held(&self) {
-        self.gate
-            .set_held((self.keys.len() + self.buttons.len() + self.pairs.extra_held) as u64);
+        self.gate.update_held(self.held_count(), false);
     }
     pub(super) fn emit(&mut self, event: Captured) -> bool {
         if self.tx.try_push(event).is_err() {
@@ -369,6 +402,7 @@ impl HookState {
         if usize::from(usage) >= self.pairs.keys.len() {
             return self.unsupported_key(usage, down);
         }
+        let route = self.stop_primary_bridge(route);
         if let Some(block) = self.protect_pair(true, usize::from(usage), down, route) {
             return block;
         }
