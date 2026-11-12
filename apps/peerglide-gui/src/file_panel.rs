@@ -22,6 +22,8 @@ struct Active {
     job: Job,
     offer: Option<Offer>,
     stopping: bool,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    listened: Option<std::net::SocketAddr>,
 }
 
 enum HistoryQuery {
@@ -83,10 +85,10 @@ impl Panel {
         self.active.is_some() || self.edge_active()
     }
 
-    pub(super) fn stop(&mut self) {
+    pub(super) fn stop(&mut self, _app: &mut App) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         {
-            self.export.stop();
+            self.export.stop(_app);
             self.edge = None;
         }
         if let Some(active) = self.active.as_mut().filter(|active| !active.stopping) {
@@ -97,7 +99,21 @@ impl Panel {
         }
     }
 
-    pub(super) fn tick(&mut self, app: &App, _ctx: &egui::Context) {
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    pub(super) fn cancel_handoff(&mut self, app: &mut App) {
+        if self.export.handoff_active() {
+            self.export.stop(app);
+        }
+    }
+
+    fn handoff_active(&self) -> bool {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        return self.export.handoff_active();
+        #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
+        false
+    }
+
+    pub(super) fn tick(&mut self, app: &mut App, _ctx: &egui::Context) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if _ctx.viewport_id() == egui::ViewportId::ROOT {
             self.tick_edge(app, _ctx);
@@ -112,7 +128,7 @@ impl Panel {
             .as_ref()
             .is_some_and(|active| !active.stopping && !active.pin.matches(app))
         {
-            self.stop();
+            self.stop(app);
         }
         let Some(active) = self.active.as_mut() else {
             return;
@@ -126,7 +142,8 @@ impl Panel {
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if !active.stopping && active.pin.matches(app) {
                         if let Some(file) = result.file {
-                            self.export.received(active.pin.clone(), file);
+                            self.export
+                                .received(app, active.pin.clone(), file, active.listened);
                         }
                     }
                     let local = outcome_label(result.outcome, true);
@@ -142,10 +159,16 @@ impl Panel {
                     self.prepared_id = Some(id);
                     "文件准备完毕，正在连接接收端。".into()
                 }
-                Event::Listening(address) => format!(
-                    "正在等待已配对电脑。发送端需填写本机 IP 和 UDP 端口 {}。",
-                    address.port()
-                ),
+                Event::Listening(address) => {
+                    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                    {
+                        active.listened = Some(address);
+                    }
+                    format!(
+                        "正在等待已配对电脑。发送端需填写本机 IP 和 UDP 端口 {}。",
+                        address.port()
+                    )
+                }
                 Event::Offer(offer) => {
                     active.offer = Some(offer);
                     "收到文件请求，请选择接收、恢复或拒绝。".into()
@@ -164,7 +187,7 @@ impl Panel {
         }
     }
 
-    fn start(&mut self, app: &App, sending: bool) -> Result<()> {
+    fn start(&mut self, app: &mut App, sending: bool) -> Result<()> {
         anyhow::ensure!(self.active.is_none(), "请先结束当前文件任务");
         anyhow::ensure!(!self.edge_active(), "请先关闭边沿发送");
         let request = if sending {
@@ -183,8 +206,9 @@ impl Panel {
         self.start_job(app, request, None)
     }
 
-    fn start_job(&mut self, app: &App, request: Request, expected: Option<&Pin>) -> Result<()> {
+    fn start_job(&mut self, app: &mut App, request: Request, expected: Option<&Pin>) -> Result<()> {
         anyhow::ensure!(self.active.is_none(), "请先结束当前文件任务");
+        anyhow::ensure!(!self.handoff_active(), "请先撤回本次文件预约");
         let (pin, identity, peer) = Pin::load(app)?;
         anyhow::ensure!(
             expected.is_none_or(|expected| *expected == pin),
@@ -194,12 +218,14 @@ impl Panel {
         let job = file_worker::start(request, identity, peer, app.wake_ui.clone())
             .context("无法启动文件后台任务")?;
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        self.export.stop();
+        self.export.stop(app);
         self.active = Some(Active {
             pin,
             job,
             offer: None,
             stopping: false,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            listened: None,
         });
         self.progress = None;
         if sending {
@@ -235,7 +261,7 @@ impl Panel {
     }
 
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-    fn tick_edge(&mut self, app: &App, ctx: &egui::Context) {
+    fn tick_edge(&mut self, app: &mut App, ctx: &egui::Context) {
         use super::file_edge_drop::Event;
         let Some(offer) = self.edge.as_mut() else {
             return;
@@ -300,9 +326,10 @@ impl Panel {
         Ok(())
     }
 
-    pub(super) fn ui(&mut self, app: &App, ui: &mut egui::Ui) {
-        let ready = data_access::ready(app);
-        if !ready {
+    pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        let paired = data_access::ready(app);
+        let ready = paired && !self.handoff_active();
+        if !paired {
             ui.weak("请先完成设备配对并打开可写窗口。");
         }
         if ready && self.active.is_none() && !self.edge_active() {
@@ -461,7 +488,7 @@ impl Panel {
         Ok(())
     }
 
-    fn active_ui(&mut self, app: &App, ui: &mut egui::Ui) {
+    fn active_ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
         let Some(active) = self.active.as_ref() else {
             return;
         };
@@ -494,7 +521,7 @@ impl Panel {
             .add_enabled(!stopping, egui::Button::new("停止文件任务"))
             .clicked()
         {
-            self.stop();
+            self.stop(app);
         }
     }
 }
