@@ -1,6 +1,9 @@
 //! One local playback owner for an explicitly authorized set of audio sources.
 use anyhow::{Context, Result};
-use peerglide_core::{audio_mix::{Mix, Source, MAX_SOURCES}, audio_playout::SAMPLES};
+use peerglide_core::{
+    audio_mix::{Mix, Source, MAX_SOURCES},
+    audio_playout::SAMPLES,
+};
 use peerglide_transport::audio::PlaybackListener;
 use std::{future::Future, time::Duration};
 use tokio::{sync::mpsc, task::JoinSet, time::Instant};
@@ -17,12 +20,20 @@ pub(super) async fn run(
     duration: Duration,
 ) -> Result<()> {
     use peerglide_transport::{self as transport, Identity};
-    anyhow::ensure!((1..=MAX_SOURCES).contains(&certificates.len()), "expected one to four audio sources");
+    anyhow::ensure!(
+        (1..=MAX_SOURCES).contains(&certificates.len()),
+        "expected one to four audio sources"
+    );
     let identity = Identity::load(identity)?;
-    let peers = certificates.iter().map(|path| transport::read_certificate(path))
+    let peers = certificates
+        .iter()
+        .map(|path| transport::read_certificate(path))
         .collect::<Result<Vec<_>>>()?;
     let listener = PlaybackListener::bind(bind, &identity, peers)?;
-    println!("Waiting for authenticated audio sources on {}.", listener.local_addr()?);
+    println!(
+        "Waiting for authenticated audio sources on {}.",
+        listener.local_addr()?
+    );
     let mut player = None;
     let result = drive(&listener, duration, tokio::signal::ctrl_c(), |samples| {
         if let Some(samples) = samples {
@@ -126,25 +137,40 @@ mod tests {
         let (stopped, stop) = oneshot::channel();
         let mut played = Some(played);
         let mut stopped = Some(stopped);
-        let receiver = drive(&listener, duration, async {
-            stop.await.map_err(|_| std::io::Error::other("audio fixture ended"))
-        }, |samples| {
-            if let Some(samples) = samples {
-                if *samples == [33; SAMPLES] {
-                    if let Some(played) = played.take() {
-                        let _ = played.send(());
+        let receiver = drive(
+            &listener,
+            duration,
+            async {
+                stop.await
+                    .map_err(|_| std::io::Error::other("audio fixture ended"))
+            },
+            |samples| {
+                if let Some(samples) = samples {
+                    if *samples == [33; SAMPLES] {
+                        if let Some(played) = played.take() {
+                            let _ = played.send(());
+                        }
                     }
+                } else if let Some(stopped) = stopped.take() {
+                    let _ = stopped.send(());
                 }
-            } else if let Some(stopped) = stopped.take() {
-                let _ = stopped.send(());
-            }
-            Ok(())
-        });
+                Ok(())
+            },
+        );
         let sender = async {
             let endpoint = audio::endpoint(bind, &source, &sink.certificate)?;
             let connection = endpoint.connect(address, "peerglide.local")?.await?;
-            let mut session = audio::open(&connection, &sink.certificate, audio::Direction::Send, duration).await?;
-            assert!(session.send(&Frame { sequence: 1, samples: [33; SAMPLES] })?);
+            let mut session = audio::open(
+                &connection,
+                &sink.certificate,
+                audio::Direction::Send,
+                duration,
+            )
+            .await?;
+            assert!(session.send(&Frame {
+                sequence: 1,
+                samples: [33; SAMPLES]
+            })?);
             heard.await?;
             session.stop();
             Ok::<_, anyhow::Error>(())
