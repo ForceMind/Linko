@@ -5,14 +5,24 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
+#[derive(PartialEq, Eq)]
 pub(super) struct KeyMap {
     codes: [Option<u8>; 256],
 }
 
 impl KeyMap {
     pub(super) fn load(connection: &RustConnection) -> Result<Self> {
+        Self::enable(connection)?;
+        Self::load_names(connection)
+    }
+
+    pub(super) fn enable(connection: &RustConnection) -> Result<()> {
         let extension = connection.xkb_use_extension(1, 0)?.reply()?;
         ensure!(extension.supported, "X11 XKB extension unavailable");
+        Ok(())
+    }
+
+    pub(super) fn load_names(connection: &RustConnection) -> Result<Self> {
         let reply = connection
             .xkb_get_names(u16::from(ID::USE_CORE_KBD), NameDetail::KEY_NAMES)?
             .reply()?;
@@ -57,6 +67,13 @@ impl KeyMap {
 
     pub(super) fn code(&self, usage: u16) -> Option<u8> {
         self.codes.get(usize::from(usage)).copied().flatten()
+    }
+
+    pub(super) fn usage(&self, code: u8) -> Option<u16> {
+        self.codes
+            .iter()
+            .position(|mapped| *mapped == Some(code))
+            .map(|usage| usage as u16)
     }
 
     pub(super) fn usages(&self) -> impl Iterator<Item = u16> + '_ {

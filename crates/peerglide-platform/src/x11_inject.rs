@@ -1,5 +1,5 @@
 //! Worker-owned X11 pointer and keyboard injection. No product caller or capture hook yet.
-use crate::ReceivePoint;
+use crate::{x11_keymap::KeyMap, ReceivePoint};
 use anyhow::{ensure, Context, Result};
 use x11rb::{
     connection::Connection as _,
@@ -12,10 +12,6 @@ use x11rb::{
     },
     rust_connection::RustConnection,
 };
-
-#[path = "x11_keymap.rs"]
-mod keymap;
-use keymap::KeyMap;
 
 const MAX_WHEEL_AXIS: i16 = 12;
 const WHEEL_BUTTONS: [u8; 4] = [4, 5, 6, 7];

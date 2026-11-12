@@ -227,14 +227,14 @@ mod tests {
                     .event_mask(CoreEventMask::BUTTON_PRESS | CoreEventMask::BUTTON_RELEASE),
             )?
             .check()?;
-        let mut source = PointerSource::open()?;
+        let mut source = PointerSource::open(false)?;
         injector.pointer(ReceivePoint { x: 1.0, y: 0.5 })?;
         assert!(matches!(source.poll()?, PointerSample::Idle));
         let edge = peerglide_protocol::Edge::Right;
         let along = source
             .edge_fraction(edge)?
             .context("right edge not reached")?;
-        assert!(source.claim(edge, along)?);
+        assert!(source.claim(edge, along, false)?);
         assert!(injector.button(2, true)?);
         assert!(matches!(source.poll()?, PointerSample::LocalInput));
         assert!(observer.poll_for_event()?.is_none());
