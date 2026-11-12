@@ -2754,6 +2754,31 @@ GUI 平均 CPU 1.626%、峰值 RSS 109.531 MiB。原始对照为 0.764%、119.07
 关闭恢复详情保留恢复阻止状态，`Ctrl+Alt+Esc` 继续执行紧急停止。
 配对面板继续使用原有取消流程。[键盘取消 CI](https://github.com/ForceMind/Linko/actions/runs/43153704868)
 
+### 集成 `8a3d32c` 的两端包与资源复核
+
+`2026.11.12-1226` 的 Windows amd64 和 macOS arm64 产物均已下载核验。两包的
+来源清单对应审阅提交 `8a3d32c` 和检出树 `cf312014ba831f7a667b9c55c6e16a6f81fb9789`，
+内层 ZIP SHA-256 与各自校验文件一致。[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43154782953)
+
+180 秒空身份／已有身份峰值 RSS 分别为 macOS 107.891／107.750 MiB、
+Ubuntu 141.801／141.832 MiB。最大暖机后增长 272 KiB，门槛仍为 512 MiB 和 64 MiB。
+macOS 约 30 秒的可见窗口 NoNative 测量为平均 CPU 1.398%、峰值 RSS 109.406 MiB，
+原始对照为 0.764%、119.078 MiB。[两平台资源检查](https://github.com/ForceMind/Linko/actions/runs/43154782934)
+
+### 自动多目标路由的发送与接收准备
+
+`probe-route` 按当前屏幕快照和版本化分段布局选择唯一证书，使用 v5 可靠流核对该电脑。
+三身份回环覆盖相邻分段、共用边屏蔽、旧快照、错误证书、离线目标和重叠配置。
+[分段认证探测 CI](https://github.com/ForceMind/Linko/actions/runs/43158320271)
+
+原生双机与串行监听在正常结束且确认本机输入已恢复时，使用同一 QUIC 连接发出正常
+关闭回执。隔离回环检查恢复成功、恢复未确认、异常和仅诊断状态对应的关闭说明。
+[原生清理确认 CI](https://github.com/ForceMind/Linko/actions/runs/43159083704)
+
+原生 `--remote-entry-edge` 独立选择另一台的进入边，支持正交出入边。自动回程沿进入边，
+本机恢复仍沿本机出边。默认四边保持既有位移。完整自动多目标发送和实际跨机操作仍待
+接入与验收。[独立进出边 CI](https://github.com/ForceMind/Linko/actions/runs/43159714722)
+
 ## 集中验收清单
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。

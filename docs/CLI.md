@@ -197,7 +197,7 @@ Windows 和 macOS 可以用当前显示器布局核对一个指定外沿点。�
 peerglide probe-route --identity PATH --layout routes.json --point=-1,450 --edge right
 ```
 
-目标可使用现有 `listen` 或 `listen-peers` 提供通信检查。探测只连接这个分段指定的
+目标使用 `listen` 或 `listen-peers` 的默认通信模式。探测只连接这个分段指定的
 电脑，并核对精确证书、v5 协商和可靠流回执。共用边、屏内点和失效布局无路由，
 目标离线时直接报错。这个入口只做诊断，自动跨屏切换仍在开发。
 
