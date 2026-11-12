@@ -285,9 +285,42 @@ pub(super) async fn run(
             Ok::<_, anyhow::Error>(tokio::time::timeout(Duration::from_secs(5), incoming).await??)
         } => result?,
     };
-    transport::verify_peer(&connection, &peer)?;
-    let result = drive(&connection, &mut stop, allow_discrete, allow_scroll).await;
-    endpoint.close(0u8.into(), b"X11 input session ended");
+    serve(
+        &endpoint,
+        &connection,
+        &peer,
+        &mut stop,
+        allow_discrete,
+        allow_scroll,
+    )
+    .await
+}
+
+async fn serve<F>(
+    endpoint: &quinn::Endpoint,
+    connection: &quinn::Connection,
+    peer: &[u8],
+    stop: F,
+    allow_discrete: bool,
+    allow_scroll: bool,
+) -> Result<()>
+where
+    F: Future<Output = std::io::Result<()>>,
+{
+    let result = async {
+        transport::verify_peer(connection, peer)?;
+        drive(connection, stop, allow_discrete, allow_scroll).await
+    }
+    .await;
+    // A successful drive returns only after the local input worker has retired.
+    // Reuse the authenticated v5 close fence used by the Windows/macOS sender.
+    let reason = if result.is_ok() {
+        super::session::NATIVE_INPUT_RECOVERED
+    } else {
+        b"X11 input session ended"
+    };
+    endpoint.close(0u8.into(), reason);
+    endpoint.wait_idle().await;
     result
 }
 
@@ -426,6 +459,7 @@ async fn reply(send: &mut quinn::SendStream, message: &Message) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use peerglide_protocol::Edge;
 
     #[test]
     fn receiver_requires_local_opt_in_and_limits_native_admission_to_the_lease() {
@@ -454,5 +488,113 @@ mod tests {
         assert!(!mailbox.live(20));
         mailbox.stop.store(true, Ordering::Release);
         assert!(!mailbox.live(19));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the dedicated GitHub Actions Xvfb server"]
+    async fn authenticated_release_confirms_x11_recovery_only_after_cleanup() -> Result<()> {
+        ensure!(
+            std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
+                && std::env::var("LINKO_TEST_ISOLATED_X11").ok().as_deref() == Some("1"),
+            "this test requires the dedicated CI display"
+        );
+        let source = transport::Identity::generate()?;
+        let destination = transport::Identity::generate()?;
+        let address = "127.0.0.1:0".parse()?;
+        let sender = transport::endpoint(address, &source, &destination.certificate)?;
+        for fail in [false, true] {
+            let receiver = transport::endpoint(address, &destination, &source.certificate)?;
+            let server = async {
+                let connection = receiver.accept().await.context("listener closed")?.await?;
+                let result = serve(
+                    &receiver,
+                    &connection,
+                    &source.certificate,
+                    pending(),
+                    true,
+                    false,
+                )
+                .await;
+                assert_eq!(result.is_err(), fail);
+                Ok::<_, anyhow::Error>(())
+            };
+            let client = async {
+                let connection = sender
+                    .connect(receiver.local_addr()?, "peerglide.local")?
+                    .await?;
+                transport::verify_peer(&connection, &destination.certificate)?;
+                let (mut send, mut recv) = connection.open_bi().await?;
+                let capabilities =
+                    InputCapabilities::new(&[], true, 1, false).map_err(anyhow::Error::msg)?;
+                let peer = super::super::exchange_hello(&mut send, &mut recv, capabilities).await?;
+                let event = Input::Button {
+                    button: 1,
+                    down: true,
+                };
+                assert!(peer.motion() && peer.supports(event));
+                let lease = 17;
+                reply(
+                    &mut send,
+                    &Message::Acquire {
+                        lease,
+                        edge: Edge::Right,
+                        along: 0.5,
+                    },
+                )
+                .await?;
+                assert!(matches!(
+                    transport::receive(&mut recv).await?,
+                    Message::Granted { lease: 17 }
+                ));
+                reply(
+                    &mut send,
+                    &Message::Input {
+                        lease,
+                        event,
+                        cursor: Motion {
+                            lease,
+                            sequence: 1,
+                            x: 0.3,
+                            y: 0.5,
+                        },
+                    },
+                )
+                .await?;
+                reply(&mut send, &Message::Ping { lease }).await?;
+                assert!(matches!(
+                    transport::receive(&mut recv).await?,
+                    Message::Pong { lease: 17 }
+                ));
+                let terminal = if fail {
+                    Message::Hello {
+                        version: peerglide_protocol::VERSION,
+                        capabilities: InputCapabilities::default(),
+                    }
+                } else {
+                    Message::Release {
+                        lease,
+                        cursor: None,
+                    }
+                };
+                reply(&mut send, &terminal).await?;
+                let quinn::ConnectionError::ApplicationClosed(close) = connection.closed().await
+                else {
+                    anyhow::bail!("expected the authenticated close fence");
+                };
+                assert_eq!(close.error_code, 0u8.into());
+                let expected = if fail {
+                    b"X11 input session ended".as_slice()
+                } else {
+                    super::super::session::NATIVE_INPUT_RECOVERED
+                };
+                assert_eq!(close.reason.as_ref(), expected);
+                Ok::<_, anyhow::Error>(())
+            };
+            tokio::time::timeout(Duration::from_secs(8), async {
+                tokio::try_join!(server, client)
+            })
+            .await??;
+        }
+        Ok(())
     }
 }
