@@ -126,7 +126,10 @@ impl Routes {
             sidecar.close(0u8.into(), b"display reservation finished");
             result
         };
-        matches!(tokio::time::timeout(OUTBOUND_BUDGET, result).await, Ok(Ok(Some(_))))
+        matches!(
+            tokio::time::timeout(OUTBOUND_BUDGET, result).await,
+            Ok(Ok(Some(_)))
+        )
     }
 
     pub(super) fn accepts_incoming(

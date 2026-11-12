@@ -110,7 +110,8 @@ impl Routes {
                 "display route peer needs a destination address and port"
             );
             ensure!(
-                spec.secondary_layout.is_none_or(|address| address.port() != 0 && !address.ip().is_unspecified()),
+                spec.secondary_layout
+                    .is_none_or(|address| address.port() != 0 && !address.ip().is_unspecified()),
                 "secondary layout needs a destination address and port"
             );
             let certificate = transport::read_certificate(&directory.join(spec.certificate))?;
@@ -344,7 +345,10 @@ mod tests {
         assert_eq!(first_peer.certificate, first.certificate);
         assert_eq!(second_peer.certificate, second.certificate);
         assert_eq!(first_peer.secondary_layout, None);
-        assert_eq!(second_peer.secondary_layout, Some("127.0.0.1:24877".parse()?));
+        assert_eq!(
+            second_peer.secondary_layout,
+            Some("127.0.0.1:24877".parse()?)
+        );
         assert_eq!(first_route.target.edge, Edge::Left);
         assert_eq!(second_route.target.edge, Edge::Top);
         assert_eq!(second_route.fraction, 0.25);

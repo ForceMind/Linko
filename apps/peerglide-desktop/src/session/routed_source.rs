@@ -282,7 +282,11 @@ impl<'a> Source<'a> {
         }
     }
 
-    async fn check_choice(&mut self, chosen: &mut Choice<'a>, request: PendingAcquire) -> Result<Option<Exit>> {
+    async fn check_choice(
+        &mut self,
+        chosen: &mut Choice<'a>,
+        request: PendingAcquire,
+    ) -> Result<Option<Exit>> {
         loop {
             if now_ms() >= request.deadline || !self.capture.gate.commit_pending(request.token) {
                 return Ok(Some(Exit::Local(None)));
@@ -435,7 +439,12 @@ impl Link {
         let (mut tx, mut rx) = connection.open_bi().await?;
         let capabilities = exchange_hello(&mut tx, &mut rx, platform::input_capabilities()).await?;
         let secondary = crate::secondary_layout::Routes::start(
-            identity, &peer.certificate, &connection, peer.secondary_layout, None, None,
+            identity,
+            &peer.certificate,
+            &connection,
+            peer.secondary_layout,
+            None,
+            None,
         )?;
         let (sender, messages) = mpsc::channel(64);
         let reader = tokio::spawn(async move {
@@ -460,10 +469,18 @@ impl Link {
 
     async fn acquire_proposal(&self, edge: Edge, along: f64) -> Option<Message> {
         let confirmed = match &self.secondary {
-            Some(layout) => layout.reserve_outbound(&self.connection, LEASE, edge, along).await,
+            Some(layout) => {
+                layout
+                    .reserve_outbound(&self.connection, LEASE, edge, along)
+                    .await
+            }
             None => true,
         };
-        confirmed.then_some(Message::Acquire { lease: LEASE, edge, along })
+        confirmed.then_some(Message::Acquire {
+            lease: LEASE,
+            edge,
+            along,
+        })
     }
 
     async fn reply(&mut self, message: Message) -> Result<()> {
@@ -546,25 +563,44 @@ mod tests {
                 secondary_layout: Some(layout.local_addr()?),
             };
             let receiver = async {
-                let c = input.accept().await.context("input endpoint closed")?.await?;
+                let c = input
+                    .accept()
+                    .await
+                    .context("input endpoint closed")?
+                    .await?;
                 let (mut tx, mut rx) = c.accept_bi().await?;
                 exchange_hello(&mut tx, &mut rx, InputCapabilities::default()).await?;
-                let sidecar = layout.accept().await.context("layout endpoint closed")?.await?;
+                let sidecar = layout
+                    .accept()
+                    .await
+                    .context("layout endpoint closed")?
+                    .await?;
                 let slot = wire::ReservationSlot::default();
-                let published = wire::accept_for_slot(&sidecar, &c, &source.certificate, &slot, |proposal| {
-                    assert_eq!(proposal.lease, LEASE);
-                    assert_eq!(proposal.edge, Edge::Right);
-                    assert_eq!(proposal.fraction, 0.25);
-                    allowed.then_some(1)
-                }).await?;
+                let published =
+                    wire::accept_for_slot(&sidecar, &c, &source.certificate, &slot, |proposal| {
+                        assert_eq!(proposal.lease, LEASE);
+                        assert_eq!(proposal.edge, Edge::Right);
+                        assert_eq!(proposal.fraction, 0.25);
+                        allowed.then_some(1)
+                    })
+                    .await?;
                 assert_eq!(published, allowed);
                 if allowed {
                     let msg = transport::receive(&mut rx).await?;
-                    let Message::Acquire { lease, edge, along } = msg else { bail!("expected reserved acquire") };
-                    let grant = slot.consume(&c, &source.certificate, lease, 1)?.context("reservation missing")?;
-                    assert_eq!((grant.lease, grant.edge, grant.fraction), (lease, edge, along));
+                    let Message::Acquire { lease, edge, along } = msg else {
+                        bail!("expected reserved acquire")
+                    };
+                    let grant = slot
+                        .consume(&c, &source.certificate, lease, 1)?
+                        .context("reservation missing")?;
+                    assert_eq!(
+                        (grant.lease, grant.edge, grant.fraction),
+                        (lease, edge, along)
+                    );
                 } else {
-                    assert!(matches!(transport::receive(&mut rx).await, Err(error) if error.is::<transport::MessageStreamEnded>()));
+                    assert!(
+                        matches!(transport::receive(&mut rx).await, Err(error) if error.is::<transport::MessageStreamEnded>())
+                    );
                 }
                 c.close(0u8.into(), b"test ended");
                 Ok::<_, anyhow::Error>(())
@@ -580,7 +616,10 @@ mod tests {
                 let _ = link.connection.closed().await;
                 Ok::<_, anyhow::Error>(())
             };
-            tokio::time::timeout(Duration::from_secs(5), async { tokio::try_join!(receiver, sender) }).await??;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(receiver, sender)
+            })
+            .await??;
         }
         Ok(())
     }
