@@ -19,6 +19,8 @@ mod gesture_rules;
 mod icons;
 mod layout_updates;
 mod motion;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+mod native_drop_panel;
 mod pairing_discovery;
 mod pairing_panel;
 mod pairing_receipt;

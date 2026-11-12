@@ -36,6 +36,8 @@ struct HistorySearch {
 
 pub(super) struct Panel {
     active: Option<Active>,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    export: super::native_drop_panel::Export,
     source: String,
     destination: String,
     target: String,
@@ -52,6 +54,8 @@ impl Default for Panel {
     fn default() -> Self {
         Self {
             active: None,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            export: super::native_drop_panel::Export::default(),
             source: String::new(),
             destination: String::new(),
             target: String::new(),
@@ -68,10 +72,16 @@ impl Default for Panel {
 
 impl Panel {
     pub(super) fn is_active(&self) -> bool {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.export.active() {
+            return true;
+        }
         self.active.is_some()
     }
 
     pub(super) fn stop(&mut self) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        self.export.stop();
         if let Some(active) = self.active.as_mut().filter(|active| !active.stopping) {
             active.job.stop();
             active.offer = None;
@@ -81,6 +91,8 @@ impl Panel {
     }
 
     pub(super) fn tick(&mut self, app: &App) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        self.export.tick(app);
         if let Some(search) = self.history.as_mut() {
             search.poll();
         }
@@ -100,6 +112,12 @@ impl Panel {
             self.notice = match event {
                 Event::Sent(outcome) => outcome_label(outcome, false).into(),
                 Event::Received(result) => {
+                    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                    if !active.stopping && active.pin.matches(app) {
+                        if let Some(file) = result.file {
+                            self.export.received(active.pin.clone(), file);
+                        }
+                    }
                     let local = outcome_label(result.outcome, true);
                     if result.report_queued {
                         local.into()
@@ -153,6 +171,8 @@ impl Panel {
         };
         let job = file_worker::start(request, identity, peer, app.wake_ui.clone())
             .context("无法启动文件后台任务")?;
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        self.export.stop();
         self.active = Some(Active {
             pin,
             job,
@@ -262,6 +282,10 @@ impl Panel {
         }
         if !self.notice.is_empty() {
             ui.label(&self.notice);
+        }
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.active.is_none() {
+            self.export.ui(app, ui);
         }
         ui.collapsing("接收历史与配额", |ui| {
             self.history_ui(app, ui);
