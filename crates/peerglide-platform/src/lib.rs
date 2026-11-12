@@ -15,6 +15,8 @@ mod capture_thread;
 #[cfg(any(windows, target_os = "macos"))]
 pub mod clipboard;
 pub mod context;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+mod copy_drag;
 pub mod display_layout;
 pub mod display_routes;
 #[cfg(any(windows, target_os = "macos", test))]

@@ -2,6 +2,8 @@
 mod app_icon;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 mod audio_panel;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+mod clipboard_drop;
 #[cfg(any(windows, target_os = "macos"))]
 mod clipboard_panel;
 mod config_store;
@@ -1789,7 +1791,7 @@ impl App {
         #[cfg(any(windows, target_os = "macos"))]
         {
             let mut clipboard = std::mem::take(&mut self.clipboard_panel);
-            clipboard.tick(self);
+            clipboard.tick(self, ctx);
             self.clipboard_panel = clipboard;
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
