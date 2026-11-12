@@ -497,7 +497,7 @@ mod tests {
             scale: 1.0,
             rotation: Rotation::Upright,
         };
-        let layout = Layout::new(screen.id, vec![screen])?;
+        let layout = Layout::new(screen.id, vec![screen]).unwrap();
         let scope = Scope {
             context: drop_admission::Context {
                 connection: [1; 32],
@@ -507,10 +507,10 @@ mod tests {
             },
             layout,
         };
-        scope.verify_snapshot(&Layout::new(screen.id, vec![screen])?)?;
+        scope.verify_snapshot(&Layout::new(screen.id, vec![screen]).unwrap())?;
         screen.scale = 2.0;
         assert!(scope
-            .verify_snapshot(&Layout::new(screen.id, vec![screen])?)
+            .verify_snapshot(&Layout::new(screen.id, vec![screen]).unwrap())
             .is_err());
         Ok(())
     }
