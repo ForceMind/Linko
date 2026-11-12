@@ -158,6 +158,8 @@ mod native {
         Registering(Link, u32, Instant),
         Armed(Link, u32),
         Matched(Link, u32, u64, u64),
+        AwaitingClaim(Link, u32, u64, u64, Instant),
+        Claimed(Link, u32, u64),
     }
 
     pub(crate) enum Status {
@@ -189,17 +191,52 @@ mod native {
         pub(crate) fn status(&self) -> Status {
             match self.phase {
                 Phase::AwaitingWorker(_) => Status::WaitingForWorker,
-                Phase::Inspecting(..) | Phase::Registering(..) => Status::Confirming,
+                Phase::Inspecting(..)
+                | Phase::Registering(..)
+                | Phase::Matched(..)
+                | Phase::AwaitingClaim(..) => Status::Confirming,
                 Phase::Armed(..) => Status::Listening(self.bind.port()),
-                Phase::Matched(..) => Status::Matched,
+                Phase::Claimed(..) => Status::Matched,
             }
         }
 
-        pub(crate) fn matched(&self) -> Option<u64> {
+        pub(crate) fn pending_lease(&self) -> Option<u64> {
             match self.phase {
                 Phase::Matched(_, _, lease, _) => Some(lease),
                 _ => None,
             }
+        }
+
+        pub(crate) fn confirm_ready(
+            &mut self,
+            app: &mut App,
+            pin: &Pin,
+            lease: u64,
+            now: Instant,
+        ) -> Result<()> {
+            let Phase::Matched(link, session, matched, fence) = &self.phase else {
+                anyhow::bail!("文件预约尚未匹配");
+            };
+            ensure!(lease == *matched && now < self.expires, "文件预约已变化");
+            ensure!(
+                link.worker
+                    .7
+                    .lock()
+                    .is_ok_and(|inbox| inbox.lease_fence == *fence),
+                "输入租约已结束"
+            );
+            pin.recheck(app)?;
+            link.send(
+                app,
+                Command::Ready {
+                    session: *session,
+                    request: self.request,
+                    lease,
+                },
+            )?;
+            self.phase =
+                Phase::AwaitingClaim(link.clone(), *session, lease, *fence, now + REPLY_TIMEOUT);
+            Ok(())
         }
 
         pub(crate) fn tick(&mut self, app: &mut App, pin: &Pin, now: Instant) -> Result<()> {
@@ -239,7 +276,9 @@ mod native {
                 Phase::Inspecting(link, _)
                 | Phase::Registering(link, ..)
                 | Phase::Armed(link, _)
-                | Phase::Matched(link, ..) => link.clone(),
+                | Phase::Matched(link, ..)
+                | Phase::AwaitingClaim(link, ..)
+                | Phase::Claimed(link, ..) => link.clone(),
             };
             ensure!(link.current(app), "文件接棒会话已变化");
             let (lease_fence, events) = link
@@ -249,7 +288,10 @@ mod native {
                 .ok()
                 .and_then(|mut inbox| inbox.take(link.epoch))
                 .context("文件接棒回执已失效")?;
-            if let Phase::Matched(_, _, _, original_fence) = self.phase {
+            if let Phase::Matched(_, _, _, original_fence)
+            | Phase::AwaitingClaim(_, _, _, original_fence, _)
+            | Phase::Claimed(_, _, original_fence) = self.phase
+            {
                 ensure!(lease_fence == original_fence, "已匹配的输入租约已结束");
             }
             for Reply {
@@ -292,15 +334,28 @@ mod native {
                     Phase::Armed(_, session)
                         if event.session == *session && event.request == self.request =>
                     {
-                        ensure!(event.state == State::Claimed, "文件接棒已撤销或被拒绝");
+                        ensure!(event.state == State::Matched, "文件接棒已撤销或被拒绝");
                         ensure!(event_fence == lease_fence, "接棒回执的输入租约已结束");
                         let lease = event.lease.context("接棒回执缺少输入租约")?;
                         self.phase = Phase::Matched(link.clone(), *session, lease, lease_fence);
                     }
+                    Phase::AwaitingClaim(_, session, lease, _, _)
+                        if event.session == *session && event.request == self.request =>
+                    {
+                        ensure!(
+                            event.state == State::Claimed
+                                && event.lease == Some(*lease)
+                                && event_fence == lease_fence,
+                            "文件接棒就绪确认已失效"
+                        );
+                        self.phase = Phase::Claimed(link.clone(), *session, lease_fence);
+                    }
                     _ => (),
                 }
             }
-            if let Phase::Inspecting(_, deadline) | Phase::Registering(_, _, deadline) = self.phase
+            if let Phase::Inspecting(_, deadline)
+            | Phase::Registering(_, _, deadline)
+            | Phase::AwaitingClaim(_, _, _, _, deadline) = self.phase
             {
                 ensure!(now < deadline, "未收到工作进程的接棒确认");
             }
@@ -310,7 +365,9 @@ mod native {
         pub(crate) fn cancel(self, app: &mut App) {
             if let Phase::Registering(link, session, _)
             | Phase::Armed(link, session)
-            | Phase::Matched(link, session, _, _) = self.phase
+            | Phase::Matched(link, session, _, _)
+            | Phase::AwaitingClaim(link, session, _, _, _)
+            | Phase::Claimed(link, session, _) = self.phase
             {
                 let _ = link.send(
                     app,
@@ -325,7 +382,7 @@ mod native {
 
     #[cfg(test)]
     mod tests {
-        use super::super::{Event, WorkerState};
+        use super::super::{Event, WorkerInputState, WorkerState};
         use super::*;
         use crate::Identity;
         use std::{
@@ -398,9 +455,21 @@ mod native {
                 .7
                 .lock()
                 .unwrap()
+                .publish(Event::new(3, 5, State::Matched, Some(9)));
+            reservation.tick(&mut app, &pin, now)?;
+            assert_eq!(reservation.pending_lease(), Some(9));
+            assert!(reservation.confirm_ready(&mut app, &pin, 8, now).is_err());
+            reservation.confirm_ready(&mut app, &pin, 9, now)?;
+            assert!(reservation.confirm_ready(&mut app, &pin, 9, now).is_err());
+            worker
+                .7
+                .lock()
+                .unwrap()
                 .publish(Event::new(3, 5, State::Claimed, Some(9)));
             reservation.tick(&mut app, &pin, now)?;
-            assert_eq!(reservation.matched(), Some(9));
+            assert!(matches!(reservation.status(), Status::Matched));
+            worker.7.lock().unwrap().input(WorkerInputState::Local);
+            assert!(reservation.tick(&mut app, &pin, now).is_err());
             reservation.cancel(&mut app);
 
             let child = app.child.take().unwrap();
@@ -409,6 +478,8 @@ mod native {
             let commands = String::from_utf8(output.stdout)?;
             assert_eq!(commands.matches("fixture fd inspect").count(), 1);
             assert_eq!(commands.matches("fixture fd arm 3 5 ").count(), 1);
+            assert_eq!(commands.matches("fixture fd ready 3 5 9").count(), 1);
+            assert_eq!(commands.matches("fixture fd ready 3 5 8").count(), 0);
             assert_eq!(commands.matches("fixture fd cancel 3 5").count(), 1);
             drop(app);
             fixture.close()
