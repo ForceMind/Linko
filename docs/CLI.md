@@ -125,8 +125,20 @@ peerglide listen-x11 --peer-cert SOURCE.der --allow-pointer-control
 本机 XKB 支持的键位和三键鼠标按钮。本机活动、断线、租约过期或 Ctrl+C 会结束会话
 并尝试释放工作器提交的按下事件。接收端确认本机清理成功后，以现有 v5 恢复回执结束连接。
 标准 X11 按钮映射可用时，`--allow-scroll` 独立
-允许双轴滚轮，每帧每轴最多 12 步。Linux 主动发起控制和 Wayland 仍待接入。
+允许双轴滚轮，每帧每轴最多 12 步。
 实际 Xorg 键鼠、滚轮方向、接管和注入来源由集中验收确认。
+
+在单一 Xorg 根屏幕上，可以显式启动一次相对指针发送：
+
+```text
+peerglide send-x11 RECEIVER_IP:24870 --peer-cert RECEIVER.der --edge right --allow-pointer-capture
+```
+
+从屏幕内部用相对指针移到指定外沿并继续向外推。接收端须核验本机证书并授予
+v5 指针租约。回到接收端的进入边、按本机键、点击、断线或 Ctrl+C 都会结束这次发送。
+本机键盘仍由 Xorg 本机处理。点击结束发送时，Xorg 将原始按钮事件交还给本机应用，
+由本机处理同一按下和抬起。
+此入口仅转发相对移动，Linux 发送键、按钮、滚轮与 Wayland 仍待接入。
 
 ## 麦克风音频候选
 
