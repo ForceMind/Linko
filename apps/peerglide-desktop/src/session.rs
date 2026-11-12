@@ -1014,14 +1014,14 @@ async fn watch_display_layout(original: Option<&Layout>) -> Result<()> {
         tokio::time::sleep(period).await;
         // Display enumeration can block in the OS. Keep it off the async
         // session and the native input owner, with at most one query in flight.
-        let current = tokio::time::timeout(
-            period,
-            tokio::task::spawn_blocking(|| monitor_layout(true)),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .ok_or_else(|| anyhow::anyhow!("Display layout could not be checked. Restart the session."))?;
+        let current =
+            tokio::time::timeout(period, tokio::task::spawn_blocking(|| monitor_layout(true)))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Display layout could not be checked. Restart the session.")
+                })?;
         if !layout_unchanged(original, current.as_ref()) {
             bail!(
                 "Display layout changed or became unavailable. Check the display selection before restarting."
