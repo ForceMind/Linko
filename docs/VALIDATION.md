@@ -2692,6 +2692,14 @@ PR180 审阅提交 `7916b5e4eada6fe8580eb164fd4943ba0cb83b12` 的
 [试验资源](https://github.com/ForceMind/Linko/actions/runs/43123965980) ·
 [试验截图及 CI](https://github.com/ForceMind/Linko/actions/runs/43123965950)
 
+### 原生捕获模块拆分
+
+F14 将配对账本和 `HookState` 先后移入独立模块。两次分别通过
+[账本 CI](https://github.com/ForceMind/Linko/actions/runs/43112553592)和
+[`HookState` CI](https://github.com/ForceMind/Linko/actions/runs/43138743507)。
+原生逻辑通过现有配对、恢复和平台回归。F19 的系统显示与光标查询成本及 F20 的
+macOS 循环唤醒成本仍需真实输入测量。
+
 ### 集成 `244fad7` 资源复核
 
 [两平台资源检查](https://github.com/ForceMind/Linko/actions/runs/43139144851)通过。
@@ -2713,7 +2721,7 @@ macOS 可见窗口的 NoNative 仅通信约 30 秒，GUI 平均 CPU 1.232%、峰
 | 配对、发现、权限和后台 | [IPv6 短码配对发现](https://github.com/ForceMind/Linko/actions/runs/43121334625)；[隔离 X11 窗口与流程](https://github.com/ForceMind/Linko/actions/runs/43123212190/artifacts/13901353937) | Windows/macOS 实际配对提示、IPv6 多网卡与作用域、关闭到托盘、从托盘停止、输入权限变化和键盘可访问性待验。 |
 | 本机手势 | [Windows 受控库工作器](https://github.com/ForceMind/Linko/actions/runs/43091867388)；隔离窗口录制、预览与规则回归 | G1 全局捕获和动作保持关闭。G2 保留设计，远程动作和脚本执行不在本次候选能力内。 |
 | 剪贴板与文件 | [双工作器文本及文件回归](https://github.com/ForceMind/Linko/actions/runs/43102482924)；[显式 PNG 导入和系统后端](https://github.com/ForceMind/Linko/actions/runs/43107244245) | 双向测试文本、PNG、同意／拒绝、撤权和外部剪贴板变化；文件测试续传、取消、历史、同名文件及文件负载下的键鼠。 |
-| 多台电脑、多屏与 Linux | [多证书串行原生监听](https://github.com/ForceMind/Linko/actions/runs/43136235340)、[副屏预留](https://github.com/ForceMind/Linko/actions/runs/43125086927)、[Xorg 指针、键位和按钮接收](https://github.com/ForceMind/Linko/actions/runs/43135407817)通过三平台 CI；[Xvfb 指针与按下释放](https://github.com/ForceMind/Linko/actions/runs/43135407817/job/130909437398)已验隔离合成。 | [主屏方向档案](https://github.com/ForceMind/Linko/actions/runs/43131249465)通过三平台 CI，[本机副屏选择](https://github.com/ForceMind/Linko/actions/runs/43137143430)也通过三平台 CI。多机动态切换、热插拔、跨机副屏协商、Linux 主动捕获、Wayland 和完整触摸板手势仍需开发与验证。 |
+| 多台电脑、多屏与 Linux | [多证书串行原生监听](https://github.com/ForceMind/Linko/actions/runs/43136235340)、[副屏预留](https://github.com/ForceMind/Linko/actions/runs/43125086927)、[Xorg 指针、键钮和双轴滚轮接收](https://github.com/ForceMind/Linko/actions/runs/43138051348)通过三平台 CI；[Xvfb 指针、键钮释放及滚轮按钮对](https://github.com/ForceMind/Linko/actions/runs/43138051348/job/130918045948)已验隔离合成。 | [主屏方向档案](https://github.com/ForceMind/Linko/actions/runs/43131249465)通过三平台 CI，[本机副屏选择](https://github.com/ForceMind/Linko/actions/runs/43137143430)也通过三平台 CI。多机动态切换、热插拔、跨机副屏协商、Linux 主动捕获、Wayland 和完整触摸板手势仍需开发与验证。 |
 | 原生拖放 | [Windows 适配器](https://github.com/ForceMind/Linko/actions/runs/43121324256)、[macOS 适配器](https://github.com/ForceMind/Linko/actions/runs/43121330845)与[文件页本机复制拖放](https://github.com/ForceMind/Linko/actions/runs/43131249334)通过 CI | Finder、Explorer 和其他目标应用的跨机文字、PNG、文件拖放仍待接线；验证保留复制、取消、失焦和原文件安全。 |
 | 系统音频 | [Windows WASAPI 与 macOS ScreenCaptureKit](https://github.com/ForceMind/Linko/actions/runs/43119118577)完成编译和会话回归；`d4c872b` 的集成已复验 | [桌面独立授权](https://github.com/ForceMind/Linko/actions/runs/43125086706)和[本机输出选择](https://github.com/ForceMind/Linko/actions/runs/43127954327)已通过各自的三平台 CI。[四来源播放和队列隔离](https://github.com/ForceMind/Linko/actions/runs/43135410348)及[两端独立麦克风 CLI](https://github.com/ForceMind/Linko/actions/runs/43132393131)也通过三平台 CI。真实设备、录制提示、断线静音、输出切换及持续音质待验；[桌面麦克风入口](https://github.com/ForceMind/Linko/actions/runs/43137144867)通过三平台 CI，虚拟音频设备仍待开发与授权。 |
 | 便携包、安装和回滚 | [同源与校验](https://github.com/ForceMind/Linko/actions/runs/43110809035)；[隔离暂存、切换和回滚](https://github.com/ForceMind/Linko/actions/runs/43110821243) | 最终统一候选须核对两端包的版本、检出树与 SHA-256。真实安装、升级、回滚及长期资源观察待验。正式签名、公证、开机启动、系统服务、官网部署和发布按项目授权处理。 |
