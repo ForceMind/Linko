@@ -11,6 +11,7 @@ mod layout_control;
 mod multi_peer;
 mod pairing_worker;
 mod reconnect;
+mod secondary_layout;
 mod session;
 #[cfg(target_os = "linux")]
 mod x11_receive;
@@ -289,6 +290,12 @@ struct Options {
     receive_display: Option<(f64, f64)>,
     #[arg(skip)]
     receive_selection: Option<Arc<peerglide_platform::ReceiveDisplay>>,
+    /// Require confirmation from the selected computer's layout listener before sending input.
+    #[arg(long, requires = "native")]
+    request_secondary_layout: Option<SocketAddr>,
+    /// Require a bound layout reservation for incoming control on the selected local screen.
+    #[arg(long, requires = "receive_display")]
+    secondary_layout_bind: Option<SocketAddr>,
     /// Emit bounded input pipeline counts for the first 120 seconds.
     #[arg(long, requires_all = ["native", "managed"], conflicts_with = "reconnect")]
     input_diagnostics: bool,
@@ -676,6 +683,11 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
             || (o.managed && address.is_some() && !probe && !o.reconnect),
         "initial wait requires a managed non-probe connector without reconnect"
     );
+    anyhow::ensure!(
+        (o.request_secondary_layout.is_none() && o.secondary_layout_bind.is_none())
+            || (!probe && cfg!(any(windows, target_os = "macos"))),
+        "secondary layout confirmation requires a native Windows or macOS session"
+    );
     o.receive_selection = o
         .receive_display
         .map(peerglide_platform::ReceiveDisplay::select)
@@ -940,6 +952,14 @@ async fn run_inner(
         e.wait_idle().await;
         return result;
     }
+    let secondary = secondary_layout::Routes::start(
+        id,
+        peer,
+        &c,
+        o.request_secondary_layout,
+        o.secondary_layout_bind,
+        o.receive_selection.clone(),
+    )?;
     let diagnostics = o
         .input_diagnostics
         .then(input_diagnostics::DiagnosticWindow::start)
@@ -961,6 +981,7 @@ async fn run_inner(
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
             receive_display: o.receive_selection.clone(),
+            secondary: secondary.as_ref(),
         },
     )
     .await;
@@ -1007,6 +1028,13 @@ async fn exchange_hello(
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+
+    #[test]
+    fn secondary_layout_flags_require_the_existing_native_and_display_permissions() {
+        for flag in ["--request-secondary-layout=127.0.0.1:24878", "--secondary-layout-bind=127.0.0.1:24878"] {
+            assert!(Cli::try_parse_from(["peerglide", "listen", "--peer-cert", "peer.der", flag]).is_err());
+        }
+    }
 
     #[test]
     fn alternate_receive_display_requires_native_and_local_consent() {

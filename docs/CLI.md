@@ -139,3 +139,16 @@ peerglide listen --identity PATH --peer-cert SOURCE.der --native --allow-control
 ```
 
 真实 DPI、旋转、拖动和热插拔由集中验收确认。多机动态选择与跨机副屏协商单独推进。
+
+### 双端确认指定接收屏幕
+
+接收端可同时设置 `--secondary-layout-bind`，要求每次接管先由当前输入连接确认选定的
+本机屏幕。发送端用 `--request-secondary-layout` 指向该布局监听。两端方向须相反。
+旧端仍可使用原有单主屏或仅本机指定屏幕模式。启用双端确认时，未确认会保留本机控制。
+
+```text
+peerglide listen --peer-cert SOURCE.der --native --allow-control --edge left --receive-display=-1920,0 --secondary-layout-bind=0.0.0.0:24878
+peerglide connect HOST:24870 --peer-cert HOST.der --native --edge right --request-secondary-layout=HOST:24878
+```
+
+这条路径一次确认接收端明确配置的屏幕。多目标自动路由与热插拔重建仍待开发及真机验证。
