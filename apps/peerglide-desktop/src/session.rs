@@ -881,7 +881,10 @@ pub(super) async fn run_with_diagnostics(
     shutdown?;
     // A failed remote notification must not turn an unavailable local
     // snapshot into a generic network retry or bypass a fresh-layout check.
-    if result.as_ref().is_err_and(|error| error.is::<DisplayLayoutEnd>()) {
+    if result
+        .as_ref()
+        .is_err_and(|error| error.is::<DisplayLayoutEnd>())
+    {
         return result;
     }
     notification?;
@@ -1205,11 +1208,17 @@ mod tests {
             Some(DisplayLayoutEnd::Unavailable)
         );
         for changed in [removed, other_primary] {
-            assert_eq!(layout_change(Some(&original), Some(&changed)), changed_layout);
+            assert_eq!(
+                layout_change(Some(&original), Some(&changed)),
+                changed_layout
+            );
         }
         for display in [scaled, rotated, moved] {
             let changed = Layout::new(primary.id, vec![primary, display]).unwrap();
-            assert_eq!(layout_change(Some(&original), Some(&changed)), changed_layout);
+            assert_eq!(
+                layout_change(Some(&original), Some(&changed)),
+                changed_layout
+            );
         }
     }
 
