@@ -74,10 +74,18 @@ struct PointerEvent {
     input: Option<Input>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct OptIn {
+    pub(crate) pointer: bool,
+    pub(crate) buttons: bool,
+    pub(crate) scroll: bool,
+    pub(crate) keyboard: bool,
+}
+
 struct Native {
     flags: Arc<Flags>,
     thread: Thread,
-    edge: oneshot::Receiver<f64>,
+    edge: oneshot::Receiver<(f64, Vec<u16>)>,
     claim: Option<oneshot::Sender<PointerPermissions>>,
     ready: oneshot::Receiver<()>,
     events: mpsc::Receiver<PointerEvent>,
@@ -85,7 +93,7 @@ struct Native {
 }
 
 impl Native {
-    fn start(edge: Edge) -> Result<Self> {
+    fn start(edge: Edge, keyboard: bool) -> Result<Self> {
         let flags = Arc::new(Flags::default());
         let owned = flags.clone();
         let (arrived, position) = oneshot::channel();
@@ -96,7 +104,8 @@ impl Native {
         let owner = thread::Builder::new()
             .name("linko-xorg-pointer-source".into())
             .spawn(move || {
-                let result = native_source(edge, &owned, arrived, permit, admitted, publish);
+                let result =
+                    native_source(edge, keyboard, &owned, arrived, permit, admitted, publish);
                 owned.stop.store(true, Ordering::Release);
                 let _ = closed.send(result);
             })?;
@@ -126,10 +135,10 @@ impl Native {
             let progress = self.flags.drain_progress.load(Ordering::Acquire);
             ensure!(
                 progress != 0 && now_ms().saturating_sub(progress - 1) < WATCHDOG_MS,
-                "Xorg local pointer recovery is unconfirmed"
+                "Xorg local input recovery is unconfirmed"
             );
             if !reported {
-                eprintln!("Release the held mouse buttons to restore the local pointer.");
+                eprintln!("Release the held keys and mouse buttons to restore local input.");
                 reported = true;
             }
         }
@@ -144,13 +153,14 @@ impl Drop for Native {
 
 fn native_source(
     edge: Edge,
+    keyboard: bool,
     flags: &Flags,
-    arrived: oneshot::Sender<f64>,
+    arrived: oneshot::Sender<(f64, Vec<u16>)>,
     mut permit: oneshot::Receiver<PointerPermissions>,
     admitted: oneshot::Sender<()>,
     publish: mpsc::Sender<PointerEvent>,
 ) -> Result<()> {
-    let mut source = PointerSource::open()?;
+    let mut source = PointerSource::open(keyboard)?;
     let mut gate = EdgeGate::default();
     gate.require_interior();
     let along = loop {
@@ -171,7 +181,10 @@ fn native_source(
         }
         thread::park_timeout(NATIVE_POLL);
     };
-    if arrived.send(along).is_err() {
+    if arrived
+        .send((along, source.key_usages().collect()))
+        .is_err()
+    {
         return Ok(());
     }
     let limit = Instant::now() + PENDING;
@@ -189,7 +202,10 @@ fn native_source(
                     return Ok(());
                 }
                 permissions.check_mapping(&source)?;
-                if !flags.lease_live() || !source.claim(edge, along)? {
+                let keys = source
+                    .key_usages()
+                    .any(|usage| permissions.supports(Input::Key { usage, down: true }));
+                if !flags.lease_live() || !source.claim(edge, along, keys)? {
                     return Ok(());
                 }
                 let result = if flags.lease_live() && admitted.send(()).is_ok() {
@@ -248,6 +264,25 @@ fn forward_native(
                     input,
                 })
             }
+            PointerSample::Key {
+                dx,
+                dy,
+                usage,
+                down,
+                repeated,
+            } => {
+                let input = Input::Key { usage, down };
+                if !flags.lease_live() || !permissions.supports(input) {
+                    break;
+                }
+                source.accept_key(usage, down)?;
+                let input = (!repeated).then_some(input);
+                (input.is_some() || dx != 0.0 || dy != 0.0).then_some(PointerEvent {
+                    dx,
+                    dy,
+                    input,
+                })
+            }
         };
         if event.is_some_and(|event| !flags.lease_live() || publish.try_send(event).is_err()) {
             break;
@@ -285,12 +320,10 @@ pub(crate) async fn run(
     certificate: &Path,
     address: SocketAddr,
     edge: Edge,
-    allow: bool,
-    buttons: bool,
-    scroll: bool,
+    options: OptIn,
 ) -> Result<()> {
     ensure!(
-        allow,
+        options.pointer,
         "Xorg pointer sending requires explicit local consent"
     );
     let identity = transport::Identity::load(identity)?;
@@ -304,18 +337,16 @@ pub(crate) async fn run(
         certificate,
         secondary_layout: None,
     };
-    let mut native = Native::start(edge)?;
-    let offered = InputCapabilities::new(&[], true, if buttons { 7 } else { 0 }, scroll)
-        .map_err(anyhow::Error::msg)?;
+    let mut native = Native::start(edge, options.keyboard)?;
     let stop = tokio::signal::ctrl_c();
     tokio::pin!(stop);
     println!("Move the local pointer to the selected edge. Ctrl+C stops pointer sending.");
     let setup = tokio::select! {
         biased;
         stopped = &mut stop => stopped.map(|()| None).map_err(Into::into),
-        result = connect_at_edge(&mut native, &identity, &peer, offered.clone()) => result.map(Some),
+        result = connect_at_edge(&mut native, &identity, &peer, options) => result.map(Some),
     };
-    let (mut link, along) = match setup {
+    let (mut link, along, offered) = match setup {
         Ok(Some(setup)) => setup,
         other => {
             native.finish().await?;
@@ -346,19 +377,26 @@ async fn connect_at_edge(
     native: &mut Native,
     identity: &transport::Identity,
     peer: &Peer,
-    capabilities: InputCapabilities,
-) -> Result<(Link, f64)> {
-    let along = (&mut native.edge)
+    options: OptIn,
+) -> Result<(Link, f64, InputCapabilities)> {
+    let (along, keys) = (&mut native.edge)
         .await
         .context("Xorg edge owner stopped")?;
-    let link = tokio::time::timeout(PENDING, Link::connect(identity, peer, capabilities))
+    let offered = InputCapabilities::new(
+        &keys,
+        true,
+        if options.buttons { 7 } else { 0 },
+        options.scroll,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let link = tokio::time::timeout(PENDING, Link::connect(identity, peer, offered.clone()))
         .await
         .context("Xorg peer connection timed out")??;
     ensure!(
         link.capabilities.motion(),
         "selected peer does not receive pointer motion"
     );
-    Ok((link, along))
+    Ok((link, along, offered))
 }
 
 async fn send_pointer(
@@ -423,7 +461,7 @@ async fn send_pointer(
     if !ready {
         return Ok(None);
     }
-    println!("Pointer lease active. Move back across the entry edge or press a local key to stop.");
+    println!("Input lease active. Move back across the entry edge or use Ctrl+Alt+Esc to stop.");
     forward(link, native, edges, along).await
 }
 
@@ -435,7 +473,8 @@ async fn forward(
 ) -> Result<Option<Motion>> {
     let mut position = edges.positions(along).0;
     let mut sequence = 0;
-    let mut held = [false; 3];
+    let mut buttons_held = [false; 3];
+    let mut keys_held = [false; 256];
     let mut ticks = tokio::time::interval(HEARTBEAT);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     while native.flags.lease_live() {
@@ -466,11 +505,13 @@ async fn forward(
                     if !link.send(&Message::Input { lease: LEASE, event, cursor }).await? {
                         return Ok(None);
                     }
-                    if let Input::Button { button, down } = event {
-                        held[usize::from(button - 1)] = down;
+                    match event {
+                        Input::Button { button, down } => buttons_held[usize::from(button - 1)] = down,
+                        Input::Key { usage, down } => keys_held[usize::from(usage)] = down,
+                        Input::Scroll { .. } => (),
                     }
                 }
-                if edges.crossed_back(position) && !held.contains(&true) {
+                if edges.crossed_back(position) && !buttons_held.contains(&true) && !keys_held.contains(&true) {
                     return if input.is_some() {
                         Ok(Some(next_motion(&mut sequence, position)?))
                     } else {
@@ -507,7 +548,8 @@ mod tests {
             "127.0.0.1:24870",
             "--peer-cert",
             "peer.der",
-            "--allow-pointer-capture"
+            "--allow-pointer-capture",
+            "--allow-keyboard-capture"
         ])
         .is_ok());
         assert!(outward(Edge::Right, 0.1, 0.0));
@@ -570,7 +612,7 @@ mod tests {
             secondary_layout: None,
         };
         let capabilities =
-            InputCapabilities::new(&[], true, 7, true).map_err(anyhow::Error::msg)?;
+            InputCapabilities::new(&[0xe0], true, 7, true).map_err(anyhow::Error::msg)?;
         let (observed, acquire_received) = oneshot::channel();
         let (checked, can_grant) = oneshot::channel();
         let (arrived, motion_received) = oneshot::channel();
@@ -611,9 +653,17 @@ mod tests {
                     button: 2,
                     down: true,
                 },
+                Input::Key {
+                    usage: 0xe0,
+                    down: true,
+                },
                 Input::Scroll { x: -1, y: 0 },
                 Input::Button {
                     button: 2,
+                    down: false,
+                },
+                Input::Key {
+                    usage: 0xe0,
                     down: false,
                 },
             ]
@@ -668,9 +718,23 @@ mod tests {
             motion_received.await?;
             for (dx, input) in [
                 (0.0, pointer_input(3, true)),
+                (
+                    0.0,
+                    Some(Input::Key {
+                        usage: 0xe0,
+                        down: true,
+                    }),
+                ),
                 (-0.3, None),
                 (0.0, pointer_input(6, true)),
                 (0.0, pointer_input(3, false)),
+                (
+                    0.0,
+                    Some(Input::Key {
+                        usage: 0xe0,
+                        down: false,
+                    }),
+                ),
             ] {
                 publish.send(PointerEvent { dx, dy: 0.0, input }).await?;
             }
@@ -713,14 +777,14 @@ mod tests {
                 && std::env::var("LINKO_TEST_ISOLATED_X11").ok().as_deref() == Some("1"),
             "this test requires the dedicated CI display"
         );
-        let mut source = PointerSource::open()?;
+        let mut source = PointerSource::open(false)?;
         let injector = Injector::open_after_explicit_consent()?;
         injector.pointer(ReceivePoint { x: 1.0, y: 0.5 })?;
         assert!(matches!(source.poll()?, PointerSample::Idle));
         let along = source
             .edge_fraction(Edge::Right)?
             .context("right edge not reached")?;
-        assert!(source.claim(Edge::Right, along)?);
+        assert!(source.claim(Edge::Right, along, false)?);
         assert!(Activity::open_for_local_takeover().is_err());
         injector.pointer(ReceivePoint { x: 0.0, y: 0.5 })?;
         assert_eq!(source.edge_fraction(Edge::Right)?, Some(along));

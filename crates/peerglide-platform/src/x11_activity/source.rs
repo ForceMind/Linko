@@ -13,11 +13,15 @@ use x11rb::{
         },
         xproto::{
             Allow, ButtonPressEvent, ChangeWindowAttributesAux, ClipOrdering, ConnectionExt as _,
-            CreateWindowAux, EventMask, GrabMode, GrabStatus, Mapping, Window, WindowClass,
+            CreateWindowAux, EventMask, GrabMode, GrabStatus, KeyPressEvent, Mapping, Window,
+            WindowClass,
         },
     },
     CURRENT_TIME, NONE,
 };
+
+mod keyboard;
+use keyboard::Keyboard;
 
 pub enum PointerSample {
     Idle,
@@ -30,6 +34,13 @@ pub enum PointerSample {
         dy: f64,
         number: u8,
         down: bool,
+    },
+    Key {
+        dx: f64,
+        dy: f64,
+        usage: u16,
+        down: bool,
+        repeated: bool,
     },
     LocalInput,
 }
@@ -56,6 +67,7 @@ pub struct PointerSource {
     activity: Activity,
     master: u16,
     axes: BTreeMap<u16, [u16; 2]>,
+    keyboard: Option<Keyboard>,
     bounds: (i16, i16),
     confinement: Option<Window>,
     raw_button: Option<RawButton>,
@@ -64,7 +76,7 @@ pub struct PointerSource {
 }
 
 impl PointerSource {
-    pub fn open() -> Result<Self> {
+    pub fn open(keyboard: bool) -> Result<Self> {
         let (activity, devices) = Activity::open()?;
         let connection = &activity.connection;
         ensure!(
@@ -78,6 +90,9 @@ impl PointerSource {
                 .map(|device| device.deviceid),
         )
         .context("Xorg master pointer is ambiguous")?;
+        let keyboard = keyboard
+            .then(|| Keyboard::load(&activity, &devices, master))
+            .transpose()?;
         let rel_x = connection.intern_atom(true, b"Rel X")?.reply()?.atom;
         let rel_y = connection.intern_atom(true, b"Rel Y")?.reply()?.atom;
         let axes = devices
@@ -118,6 +133,7 @@ impl PointerSource {
             activity,
             master,
             axes,
+            keyboard,
             bounds,
             confinement: None,
             raw_button: None,
@@ -129,7 +145,14 @@ impl PointerSource {
     /// Drain one bounded batch. Unsupported input stops an active lease.
     /// Relative motion is coalesced before crossing the worker boundary.
     pub fn poll(&mut self) -> Result<PointerSample> {
-        ensure!(self.frozen_button.is_none(), "Xorg button needs a decision");
+        self.poll_input(false)
+    }
+
+    fn poll_input(&mut self, draining: bool) -> Result<PointerSample> {
+        ensure!(
+            self.frozen_button.is_none() && !self.keyboard.as_ref().is_some_and(Keyboard::pending),
+            "Xorg input needs a decision"
+        );
         let mut motion = (0.0, 0.0);
         let mut local_input = false;
         for _ in 0..MAX_EVENTS {
@@ -155,8 +178,11 @@ impl PointerSource {
                         None => local_input = true,
                     }
                 }
-                Event::XinputRawKeyPress(event) | Event::XinputRawKeyRelease(event) => {
-                    local_input |= !self.activity.xtest.contains(&event.sourceid);
+                Event::XinputRawKeyPress(event) => {
+                    local_input |= self.remember_key(&event, true);
+                }
+                Event::XinputRawKeyRelease(event) => {
+                    local_input |= self.remember_key(&event, false);
                 }
                 Event::XinputRawButtonPress(event) => {
                     local_input |= self.remember_button(&event, true);
@@ -170,8 +196,27 @@ impl PointerSource {
                 Event::ButtonRelease(event) if self.confinement.is_some() => {
                     return Ok(self.freeze_button(&event, false, motion, local_input));
                 }
-                Event::MappingNotify(event) if event.request == Mapping::POINTER => {
+                Event::KeyPress(event) if self.keyboard_grabbed() => {
+                    return Ok(self.freeze_key(&event, true, motion, local_input));
+                }
+                Event::KeyRelease(event) if self.keyboard_grabbed() => {
+                    return Ok(self.freeze_key(&event, false, motion, local_input));
+                }
+                Event::MappingNotify(event) if !draining && event.request == Mapping::POINTER => {
                     anyhow::bail!("Xorg pointer mapping changed");
+                }
+                Event::MappingNotify(event)
+                    if !draining
+                        && matches!(event.request, Mapping::KEYBOARD | Mapping::MODIFIER) =>
+                {
+                    self.check_keyboard_mapping()?;
+                }
+                Event::XkbNewKeyboardNotify(_)
+                | Event::XkbNamesNotify(_)
+                | Event::XkbMapNotify(_)
+                    if !draining =>
+                {
+                    self.check_keyboard_mapping()?;
                 }
                 Event::XinputHierarchy(_) | Event::ConfigureNotify(_) | Event::Error(_) => {
                     anyhow::bail!("Xorg input mapping or root geometry changed");
@@ -180,6 +225,60 @@ impl PointerSource {
             }
         }
         anyhow::bail!("Xorg input observation backlog exceeded its bound")
+    }
+
+    fn keyboard_grabbed(&self) -> bool {
+        self.keyboard.as_ref().is_some_and(Keyboard::grabbed)
+    }
+
+    fn check_keyboard_mapping(&self) -> Result<()> {
+        self.keyboard
+            .as_ref()
+            .map_or(Ok(()), |keyboard| keyboard.check_mapping(&self.activity))
+    }
+
+    fn remember_key(
+        &mut self,
+        event: &x11rb::protocol::xinput::RawKeyPressEvent,
+        down: bool,
+    ) -> bool {
+        if let Some(keyboard) = self.keyboard.as_mut().filter(|keyboard| keyboard.grabbed()) {
+            keyboard.remember(event, down);
+            false
+        } else {
+            !self.activity.xtest.contains(&event.sourceid)
+        }
+    }
+
+    fn freeze_key(
+        &mut self,
+        event: &KeyPressEvent,
+        down: bool,
+        motion: (f64, f64),
+        local_input: bool,
+    ) -> PointerSample {
+        let key = self
+            .keyboard
+            .as_mut()
+            .and_then(|keyboard| keyboard.freeze(&self.activity, event, down, local_input));
+        key.map_or(PointerSample::LocalInput, |key| PointerSample::Key {
+            dx: motion.0 / f64::from(self.bounds.0),
+            dy: motion.1 / f64::from(self.bounds.1),
+            usage: key.usage,
+            down: key.down,
+            repeated: key.repeated,
+        })
+    }
+
+    pub fn key_usages(&self) -> impl Iterator<Item = u16> + '_ {
+        self.keyboard.iter().flat_map(Keyboard::usages)
+    }
+
+    pub fn accept_key(&mut self, usage: u16, down: bool) -> Result<()> {
+        self.keyboard
+            .as_mut()
+            .context("Xorg keyboard not prepared")?
+            .accept(&self.activity, usage, down)
     }
 
     fn remember_button(&mut self, event: &RawButtonPressEvent, down: bool) -> bool {
@@ -268,7 +367,7 @@ impl PointerSource {
 
     /// Claim only after the pinned peer grants this lease and the native worker
     /// rechecks that the original edge position has not changed.
-    pub fn claim(&mut self, edge: Edge, along: f64) -> Result<bool> {
+    pub fn claim(&mut self, edge: Edge, along: f64, capture_keys: bool) -> Result<bool> {
         ensure!(self.confinement.is_none(), "Xorg pointer is already owned");
         let point = self.point()?;
         if fraction(self.bounds, point, edge) != Some(along) || !self.no_local_input()? {
@@ -278,6 +377,15 @@ impl PointerSource {
             return Ok(false);
         }
         let admitted = (|| -> Result<bool> {
+            if capture_keys {
+                let keyboard = self
+                    .keyboard
+                    .as_mut()
+                    .context("Xorg keyboard not prepared")?;
+                if !keyboard.claim(&self.activity)? {
+                    return Ok(false);
+                }
+            }
             if !self.no_local_input()? || !matches!(self.poll()?, PointerSample::Idle) {
                 return Ok(false);
             }
@@ -285,6 +393,9 @@ impl PointerSource {
                 .connection
                 .allow_events(Allow::SYNC_POINTER, CURRENT_TIME)?
                 .check()?;
+            if let Some(keyboard) = self.keyboard.as_ref().filter(|keyboard| keyboard.grabbed()) {
+                keyboard.resume(&self.activity)?;
+            }
             Ok(true)
         })();
         if !matches!(admitted, Ok(true)) {
@@ -384,19 +495,30 @@ impl PointerSource {
         // The network lease is already retired. Keep only the native owner
         // until presses consumed by this grab have their matching release.
         let drained = (|| -> Result<()> {
-            while self.has_suppressed_buttons() {
+            while self.has_suppressed_buttons()
+                || self.keyboard.as_ref().is_some_and(Keyboard::has_held)
+            {
                 progress();
-                if self.frozen_button.is_none() {
-                    self.poll()?;
+                if self.frozen_button.is_none()
+                    && !self.keyboard.as_ref().is_some_and(Keyboard::pending)
+                {
+                    self.poll_input(true)?;
                 }
                 if self.frozen_button.is_some() {
                     self.consume_button()?;
+                } else if let Some(keyboard) =
+                    self.keyboard.as_mut().filter(|keyboard| keyboard.pending())
+                {
+                    keyboard.consume(&self.activity)?;
                 } else {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             }
             Ok(())
         })();
+        let keyboard = self.keyboard.as_mut().map_or(Ok(()), |keyboard| {
+            keyboard.release(&self.activity, drained.is_ok())
+        });
         self.confinement = None;
         let connection = &self.activity.connection;
         // SyncPointer freezes on the first button event. Let the server
@@ -412,6 +534,7 @@ impl PointerSource {
         };
         connection.ungrab_pointer(CURRENT_TIME)?.check()?;
         connection.destroy_window(window)?.check()?;
+        keyboard?;
         restore?;
         drained?;
         self.frozen_button = None;
@@ -522,7 +645,7 @@ mod tests {
                 && std::env::var("LINKO_TEST_ISOLATED_X11").ok().as_deref() == Some("1"),
             "this test requires the dedicated CI display"
         );
-        let mut source = PointerSource::open()?;
+        let mut source = PointerSource::open(false)?;
         let mut injector = Injector::open_after_explicit_consent()?;
         let observer = local_connection()?.0;
         observer
@@ -536,7 +659,7 @@ mod tests {
         let along = source
             .edge_fraction(Edge::Right)?
             .context("right edge not reached")?;
-        assert!(source.claim(Edge::Right, along)?);
+        assert!(source.claim(Edge::Right, along, false)?);
         assert!(injector.button(2, true)?);
         assert!(matches!(source.poll()?, PointerSample::LocalInput));
         // Runtime admission rejects XTEST. Exercise the local cleanup of a
