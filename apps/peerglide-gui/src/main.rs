@@ -1005,6 +1005,8 @@ impl App {
             diagnostics,
             (&local.fingerprint(), peer_fingerprint),
         );
+        #[cfg(any(windows, target_os = "macos"))]
+        self.configure_receive_display(&mut cmd, mode)?;
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

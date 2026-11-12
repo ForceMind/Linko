@@ -607,7 +607,12 @@ impl App {
                         && !self.resource_check_mode
                         && !self.quit_check_mode
                         && self.layout_report.is_none();
-                    self.display_inventory.ui(ui, enabled, &self.wake_ui);
+                    let can_choose = enabled
+                        && self.layout_editable()
+                        && self.active_mode != Some(SessionMode::Native)
+                        && self.pending_start != Some(SessionMode::Native);
+                    self.display_inventory
+                        .ui(ui, enabled, can_choose, &self.wake_ui);
                 }
                 ui.separator();
                 self.connection_details(ui);

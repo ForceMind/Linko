@@ -167,12 +167,42 @@ const REQUEST_SHIFT: u32 = COUNT_BITS + GENERATION_BITS;
 const REQUEST_MAX: u64 = (1 << (58 - REQUEST_SHIFT)) - 1;
 const REQUEST: u64 = REQUEST_MAX << REQUEST_SHIFT;
 static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(1);
+/// The one local display snapshot selected for a worker, including reconnects.
+pub struct ReceiveDisplay {
+    #[cfg(any(windows, target_os = "macos"))]
+    layout: display_layout::Layout,
+    #[cfg(any(windows, target_os = "macos"))]
+    target: display_layout::PlacementTarget,
+}
+
+impl ReceiveDisplay {
+    pub fn select(origin: (f64, f64)) -> Result<Self> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let layout = read_display_layout()?;
+            let target = layout
+                .placement_at_origin(origin.0, origin.1)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("requested local display origin is missing or ambiguous")
+                })?;
+            Ok(Self { layout, target })
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = origin;
+            anyhow::bail!("local receive display requires Windows or macOS")
+        }
+    }
+}
+
 struct GateState {
     instance: u64,
     deadline: AtomicU64,
     control: Arc<AtomicU64>,
     healthy: std::sync::atomic::AtomicBool,
     receive: OnceLock<ReceiveControl>,
+    #[cfg(any(windows, target_os = "macos"))]
+    receive_display: OnceLock<Arc<ReceiveDisplay>>,
     return_pending: std::sync::atomic::AtomicBool,
     diagnostics: OnceLock<Arc<input_diagnostics::InputDiagnostics>>,
 }
@@ -202,6 +232,8 @@ impl Default for CaptureGate {
             control: Arc::new(AtomicU64::new(if instance == 0 { STOPPED } else { 0 })),
             healthy: std::sync::atomic::AtomicBool::new(instance != 0),
             receive: OnceLock::new(),
+            #[cfg(any(windows, target_os = "macos"))]
+            receive_display: OnceLock::new(),
             return_pending: std::sync::atomic::AtomicBool::new(false),
             diagnostics: OnceLock::new(),
         }))
@@ -846,7 +878,21 @@ fn submit_pointer(
         .filter(|d| d.sample_cursor(now_ms()))
         .map(|_| windows::diagnostic_cursor_position());
     let started = std::time::Instant::now();
-    let result = native::receive_pointer(point.x, point.y);
+    let result = if let Some(destination) = gate.0.receive_display.get() {
+        destination
+            .layout
+            .place(destination.target, point)
+            .ok_or(peerglide_actions::execution::NativeFailure::BeforeSubmission)
+            .and_then(|placement| {
+                native::receive_on_display(
+                    destination.target.display(),
+                    destination.target.desktop(),
+                    placement,
+                )
+            })
+    } else {
+        native::receive_pointer(point.x, point.y)
+    };
     note_slow_sdk(gate, started, input_diagnostics::Count::SlowPointer);
     if let Some(diagnostics) = diagnostics {
         use input_diagnostics::Count;
@@ -1152,12 +1198,28 @@ pub fn capture_with_diagnostics(
     target: InputCapabilities,
     diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
 ) -> Result<CaptureSession> {
+    capture_with_receive_display(tx, target, diagnostics, None)
+}
+
+/// Optional local display placement for the existing authenticated native owner.
+pub fn capture_with_receive_display(
+    tx: CaptureEventSender,
+    target: InputCapabilities,
+    diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
+    receive_display: Option<Arc<ReceiveDisplay>>,
+) -> Result<CaptureSession> {
     let gate = CaptureGate::default();
     if let Some(diagnostics) = diagnostics {
         let _ = gate.0.diagnostics.set(diagnostics);
     }
     #[cfg(any(windows, target_os = "macos"))]
     {
+        if let Some(display) = receive_display {
+            gate.0
+                .receive_display
+                .set(display)
+                .map_err(|_| anyhow::anyhow!("local receive display was already selected"))?;
+        }
         let wake = Arc::new(native::ReceiveWake::default());
         let wake_callback = wake.clone();
         let (driver, engine) =
@@ -1175,7 +1237,7 @@ pub fn capture_with_diagnostics(
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (tx, gate, target);
+        let _ = (tx, gate, target, receive_display);
         anyhow::bail!("native input currently requires Windows or macOS; use probe on Linux")
     }
 }

@@ -3,6 +3,7 @@ use anyhow::ensure;
 use std::{cell::RefCell, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::*,
+    Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO},
     System::Threading::GetCurrentThreadId,
     UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
@@ -713,6 +714,52 @@ pub(super) fn receive_pointer(
     input.Anonymous.mi.dy = (y * 65535.0).round() as i32;
     submit_inputs(&[input])
 }
+pub(super) fn receive_on_display(
+    expected: display_layout::Display,
+    desktop: display_layout::Bounds,
+    placement: display_layout::Placement,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    let handle = expected.id.0 as usize as HMONITOR;
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..MONITORINFO::default()
+    };
+    // SAFETY: monitor information is written into a live struct on the
+    // existing DPI-aware worker. Stale handles fail the documented query.
+    if unsafe { GetMonitorInfoW(handle, &mut info) } == 0 {
+        return Err(NativeFailure::TargetLost);
+    }
+    let rect = info.rcMonitor;
+    let actual = display_layout::Bounds {
+        left: f64::from(rect.left),
+        top: f64::from(rect.top),
+        right: f64::from(rect.right),
+        bottom: f64::from(rect.bottom),
+    };
+    // SAFETY: these read only documented metrics, in the same DPI context.
+    let current_desktop = unsafe {
+        let left = f64::from(GetSystemMetrics(SM_XVIRTUALSCREEN));
+        let top = f64::from(GetSystemMetrics(SM_YVIRTUALSCREEN));
+        display_layout::Bounds {
+            left,
+            top,
+            right: left + f64::from(GetSystemMetrics(SM_CXVIRTUALSCREEN)),
+            bottom: top + f64::from(GetSystemMetrics(SM_CYVIRTUALSCREEN)),
+        }
+    };
+    if actual != expected.bounds || current_desktop != desktop {
+        return Err(NativeFailure::TargetLost);
+    }
+    let mut input = mouse_packet(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        0,
+    );
+    input.Anonymous.mi.dx = placement.virtual_absolute[0];
+    input.Anonymous.mi.dy = placement.virtual_absolute[1];
+    submit_inputs(&[input])
+}
+
 // Set-1 physical scan positions; E0 distinguishes keypad/navigation and modifiers.
 const KEYS: &[(u16, u16, bool)] = &[
     (0x04, 0x1e, false),

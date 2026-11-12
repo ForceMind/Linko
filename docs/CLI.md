@@ -131,3 +131,16 @@ peerglide listen-x11 --peer-cert SOURCE.der --allow-pointer-control
 peerglide play-microphone --identity PATH --peer-cert SOURCE.der
 peerglide share-microphone RECEIVER_IP:24875 --identity PATH --peer-cert RECEIVER.der
 ```
+
+## 指定本机键鼠接收屏幕
+
+Windows 和 macOS 的原生接收会话可用 `--receive-display=X,Y` 选定一块本机屏幕。
+设备详情中的显示器列表提供当前位置。使用屏幕左上角坐标，镜像或重复坐标会拒绝。
+选项需要显式 `--native --allow-control`，可与现有 v5 电脑通信。源端的边缘方向仍按
+两端已有的配置。自动重连仍使用本次启动时的本机目标快照。更换目标需要停止并重新启动。
+
+```text
+peerglide listen --identity PATH --peer-cert SOURCE.der --native --allow-control --receive-display=-1920,0
+```
+
+真实 DPI、旋转、拖动和热插拔由集中验收确认。多机动态选择与跨机副屏协商单独推进。
