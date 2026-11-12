@@ -56,7 +56,10 @@ impl Draft {
         }
         let path = app.dir.join("route-draft.json");
         let bytes = config_store::read(&path)?.context("分段布局草稿尚未保存")?;
-        ensure!(config_store::decode::<Plan>(&bytes)? == self.plan, "分段布局草稿已变化，请重新打开窗口核对");
+        ensure!(
+            config_store::decode::<Plan>(&bytes)? == self.plan,
+            "分段布局草稿已变化，请重新打开窗口核对"
+        );
         Ok(super::RoutedLaunch {
             path,
             layout_fingerprint: blake3::hash(&bytes).to_hex().to_string(),
@@ -88,10 +91,15 @@ impl Panel {
             self.draw_peers(app, ui, draft);
             if let Some(layout) = app.display_inventory.snapshot() {
                 self.draw_routes(app, ui, draft, &layout);
-                if ui.add_enabled(
-                    app.dialog.is_none() && app.routed_start_available() && !draft.plan.routes.is_empty(),
-                    egui::Button::new("开启分段键鼠…"),
-                ).clicked() {
+                if ui
+                    .add_enabled(
+                        app.dialog.is_none()
+                            && app.routed_start_available()
+                            && !draft.plan.routes.is_empty(),
+                        egui::Button::new("开启分段键鼠…"),
+                    )
+                    .clicked()
+                {
                     match draft.launch(app, &layout) {
                         Ok(launch) => {
                             app.native_confirmation = false;
@@ -624,7 +632,9 @@ mod tests {
         launch.recheck(&app)?;
         let command = launch.command(PathBuf::from("peerglide"), app.identity_dir());
         assert!(command.get_args().any(|arg| arg == "--managed"));
-        assert!(command.get_args().any(|arg| arg == launch.layout_fingerprint.as_str()));
+        assert!(command
+            .get_args()
+            .any(|arg| arg == launch.layout_fingerprint.as_str()));
         let mut changed = plan.clone();
         changed.routes[0].remote_edge = Edge::Left;
         draft.save(changed)?;

@@ -109,21 +109,53 @@ pub(super) fn present(s: Snapshot) -> View {
     if s.running && s.routed {
         return match s.input {
             Some(WorkerInputState::ControllingRemote) => View::new(
-                "正在向分段目标发送键鼠", "正在发送", "Ctrl+Alt+Right 返回本机。", Tone::Accent, Action::None,
+                "正在向分段目标发送键鼠",
+                "正在发送",
+                "Ctrl+Alt+Right 返回本机。",
+                Tone::Accent,
+                Action::None,
             ),
             Some(WorkerInputState::Recovering) => View::new(
-                "正在等待上一台确认清理", "正在恢复", "清理确认后可重新跨边。", Tone::Warning, Action::None,
+                "正在等待上一台确认清理",
+                "正在恢复",
+                "清理确认后可重新跨边。",
+                Tone::Warning,
+                Action::None,
             ),
-            Some(WorkerInputState::Local) if s.switch_state == Some(WorkerSwitchState::Pending) => View::new(
-                "正在核对分段目标", "切换中", "等待目标允许接管。", Tone::Accent, Action::None,
-            ),
-            Some(WorkerInputState::Local) if s.switch_state == Some(WorkerSwitchState::PeerUnavailable) => View::new(
-                "选定的分段目标暂不可用", "本机控制", "返回屏内后可再次跨边。", Tone::Warning, Action::None,
-            ),
+            Some(WorkerInputState::Local) if s.switch_state == Some(WorkerSwitchState::Pending) => {
+                View::new(
+                    "正在核对分段目标",
+                    "切换中",
+                    "等待目标允许接管。",
+                    Tone::Accent,
+                    Action::None,
+                )
+            }
+            Some(WorkerInputState::Local)
+                if s.switch_state == Some(WorkerSwitchState::PeerUnavailable) =>
+            {
+                View::new(
+                    "选定的分段目标暂不可用",
+                    "本机控制",
+                    "返回屏内后可再次跨边。",
+                    Tone::Warning,
+                    Action::None,
+                )
+            }
             Some(WorkerInputState::Local) => View::new(
-                "分段发送已开启", "本机控制", "移动到已配置的屏幕外沿可申请接管。", Tone::Good, Action::None,
+                "分段发送已开启",
+                "本机控制",
+                "移动到已配置的屏幕外沿可申请接管。",
+                Tone::Good,
+                Action::None,
             ),
-            _ => View::new("正在启动分段发送", "正在启动", "等待工作进程报告键鼠状态。", Tone::Accent, Action::None),
+            _ => View::new(
+                "正在启动分段发送",
+                "正在启动",
+                "等待工作进程报告键鼠状态。",
+                Tone::Accent,
+                Action::None,
+            ),
         };
     }
     if s.running && !s.registered {

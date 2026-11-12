@@ -1019,7 +1019,11 @@ impl App {
             580.0f32.min((viewport.width() - 48.0).max(1.0)),
             540.0f32.min((viewport.height() - 48.0).max(1.0)),
         );
-        let title = if self.pending_routed.is_some() { "开启分段键鼠" } else { "开启键鼠协同" };
+        let title = if self.pending_routed.is_some() {
+            "开启分段键鼠"
+        } else {
+            "开启键鼠协同"
+        };
         egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
@@ -1065,7 +1069,11 @@ impl App {
                 let points = if routed {
                     routed_start_points()
                 } else {
-                    native_start_points(self.config.allow, !self.config.listen && !self.config.reconnect, self.child.is_some())
+                    native_start_points(
+                        self.config.allow,
+                        !self.config.listen && !self.config.reconnect,
+                        self.child.is_some(),
+                    )
                 };
                 for point in points {
                     safety_point(ui, point);
@@ -1107,17 +1115,19 @@ impl App {
                             && self.native_confirmation
                             && self.stopping.is_none()
                             && !self.recovery_blocked
-                            && (!routed || self.pending_routed.is_some() && self.routed_start_available());
+                            && (!routed
+                                || self.pending_routed.is_some() && self.routed_start_available());
                         let start = ui
                             .add_enabled(ready, egui::Button::new("确认并开启键鼠"))
                             .clicked();
-                        let diagnose = !routed && ui
-                            .add_enabled(
-                                ready && self.child.is_none(),
-                                egui::Button::new("开启并诊断"),
-                            )
-                            .on_hover_text("统计本机输入链路 120 秒，可复制不含输入内容的摘要")
-                            .clicked();
+                        let diagnose = !routed
+                            && ui
+                                .add_enabled(
+                                    ready && self.child.is_none(),
+                                    egui::Button::new("开启并诊断"),
+                                )
+                                .on_hover_text("统计本机输入链路 120 秒，可复制不含输入内容的摘要")
+                                .clicked();
                         if start || diagnose {
                             let result = if diagnose {
                                 self.request_native_with_diagnostics(true)
@@ -1784,13 +1794,34 @@ pub(super) fn native_start_points(
 
 fn routed_start_points() -> Vec<SafetyPoint> {
     vec![
-        SafetyPoint { icon: Icon::Keyboard, text: "本次开启真实原生键鼠发送。" },
-        SafetyPoint { icon: Icon::Link, text: "按已确认的分段布局选择核验过的目标。" },
-        SafetyPoint { icon: Icon::Lock, text: "各目标电脑单独决定是否接收。" },
-        SafetyPoint { icon: Icon::Recover, text: "上一台确认清理后才可切到下一台。" },
-        SafetyPoint { icon: Icon::Keyboard, text: "Ctrl+Alt+Right 返回本机。" },
-        SafetyPoint { icon: Icon::Recover, text: "Ctrl+Alt+Esc 停止并恢复。" },
-        SafetyPoint { icon: Icon::Warning, text: "多机键鼠、DPI 与恢复仍待真机验收。" },
+        SafetyPoint {
+            icon: Icon::Keyboard,
+            text: "本次开启真实原生键鼠发送。",
+        },
+        SafetyPoint {
+            icon: Icon::Link,
+            text: "按已确认的分段布局选择核验过的目标。",
+        },
+        SafetyPoint {
+            icon: Icon::Lock,
+            text: "各目标电脑单独决定是否接收。",
+        },
+        SafetyPoint {
+            icon: Icon::Recover,
+            text: "上一台确认清理后才可切到下一台。",
+        },
+        SafetyPoint {
+            icon: Icon::Keyboard,
+            text: "Ctrl+Alt+Right 返回本机。",
+        },
+        SafetyPoint {
+            icon: Icon::Recover,
+            text: "Ctrl+Alt+Esc 停止并恢复。",
+        },
+        SafetyPoint {
+            icon: Icon::Warning,
+            text: "多机键鼠、DPI 与恢复仍待真机验收。",
+        },
     ]
 }
 

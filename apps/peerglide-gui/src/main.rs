@@ -201,25 +201,42 @@ struct RoutedLaunch {
 impl RoutedLaunch {
     fn recheck(&self, app: &App) -> Result<()> {
         let bytes = config_store::read(&self.path)?.context("分段布局草稿已移除")?;
-        anyhow::ensure!(blake3::hash(&bytes).to_hex().as_str() == self.layout_fingerprint, "分段布局已变化，请重新打开确认窗口");
-        anyhow::ensure!(app.local_fingerprint().as_deref() == Some(self.local_fingerprint.as_str()), "本机身份已变化，请重新确认");
+        anyhow::ensure!(
+            blake3::hash(&bytes).to_hex().as_str() == self.layout_fingerprint,
+            "分段布局已变化，请重新打开确认窗口"
+        );
+        anyhow::ensure!(
+            app.local_fingerprint().as_deref() == Some(self.local_fingerprint.as_str()),
+            "本机身份已变化，请重新确认"
+        );
         Ok(())
     }
 
     fn command(&self, executable: PathBuf, identity: PathBuf) -> Command {
         let mut command = Command::new(executable);
-        command.args(["connect-routes", "--native", "--managed", "--identity"])
+        command
+            .args(["connect-routes", "--native", "--managed", "--identity"])
             .arg(identity)
-            .arg("--layout").arg(&self.path)
-            .arg("--expected-layout-fingerprint").arg(&self.layout_fingerprint)
-            .arg("--expected-local-fingerprint").arg(&self.local_fingerprint);
+            .arg("--layout")
+            .arg(&self.path)
+            .arg("--expected-layout-fingerprint")
+            .arg(&self.layout_fingerprint)
+            .arg("--expected-local-fingerprint")
+            .arg(&self.local_fingerprint);
         command
     }
 }
 
 fn worker_executable() -> Result<PathBuf> {
-    let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) { "peerglide.exe" } else { "peerglide" });
-    anyhow::ensure!(executable.is_file(), "缺少同目录的 peerglide 通信程序，请使用完整开发包");
+    let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+        "peerglide.exe"
+    } else {
+        "peerglide"
+    });
+    anyhow::ensure!(
+        executable.is_file(),
+        "缺少同目录的 peerglide 通信程序，请使用完整开发包"
+    );
     Ok(executable)
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1246,7 +1263,12 @@ impl App {
             "请先停止当前会话，再开启短时输入诊断"
         );
         if let Some(launch) = self.pending_routed.as_ref() {
-            anyhow::ensure!(!diagnostics && self.dialog == Some(Dialog::NativeStart) && self.routed_start_available(), "请先结束当前操作，再重新确认分段发送");
+            anyhow::ensure!(
+                !diagnostics
+                    && self.dialog == Some(Dialog::NativeStart)
+                    && self.routed_start_available(),
+                "请先结束当前操作，再重新确认分段发送"
+            );
             launch.recheck(self)?;
             let command = launch.command(worker_executable()?, self.identity_dir());
             self.spawn_session(command, SessionMode::Native, true)?;
@@ -1312,8 +1334,12 @@ impl App {
         }
         self.poll_layout();
         self.worker_permissions.poll();
-        self.discovery
-            .poll(!self.routed_active && self.child.is_some() && self.stopping.is_none() && self.config.listen);
+        self.discovery.poll(
+            !self.routed_active
+                && self.child.is_some()
+                && self.stopping.is_none()
+                && self.config.listen,
+        );
         let diagnostics_complete = if let Some(rx) = &self.events {
             loop {
                 match rx.try_recv() {
@@ -1377,7 +1403,12 @@ impl App {
                     }
                     Some(WorkerState::Listening) => {
                         self.connected = false;
-                        self.status = if self.routed_active { "分段发送就绪" } else { "等待另一台连接" }.into();
+                        self.status = if self.routed_active {
+                            "分段发送就绪"
+                        } else {
+                            "等待另一台连接"
+                        }
+                        .into();
                     }
                     Some(WorkerState::ProbePassed) => {
                         self.connected = false;
