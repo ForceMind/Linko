@@ -325,7 +325,7 @@ async fn run_with_status(
 pub(super) struct SessionControls<'a> {
     pub diagnostics: Option<&'a std::sync::Arc<InputDiagnostics>>,
     pub layout: Option<&'a super::layout_control::Controller>,
-    pub receive_origin: Option<(f64, f64)>,
+    pub receive_display: Option<std::sync::Arc<platform::ReceiveDisplay>>,
 }
 
 pub(super) async fn run_with_diagnostics(
@@ -340,7 +340,7 @@ pub(super) async fn run_with_diagnostics(
     let SessionControls {
         diagnostics,
         layout,
-        receive_origin,
+        receive_display,
     } = controls;
     let Policy {
         allow,
@@ -387,7 +387,7 @@ pub(super) async fn run_with_diagnostics(
             itx,
             peer.clone(),
             diagnostics.cloned(),
-            receive_origin,
+            receive_display,
         ) {
             Ok(capture) => Some(capture),
             Err(error) => {

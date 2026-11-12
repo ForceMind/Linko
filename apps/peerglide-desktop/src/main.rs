@@ -225,6 +225,8 @@ struct Options {
     /// Choose the local receive screen by its current desktop origin, X,Y.
     #[arg(long, requires_all = ["native", "allow_control"], value_parser = parse_display_origin)]
     receive_display: Option<(f64, f64)>,
+    #[arg(skip)]
+    receive_selection: Option<Arc<peerglide_platform::ReceiveDisplay>>,
     /// Emit bounded input pipeline counts for the first 120 seconds.
     #[arg(long, requires_all = ["native", "managed"], conflicts_with = "reconnect")]
     input_diagnostics: bool,
@@ -534,7 +536,7 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
+async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     anyhow::ensure!(
         o.receive_display.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
         "local receive display requires a native Windows or macOS session"
@@ -548,6 +550,8 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
             || (o.managed && address.is_some() && !probe && !o.reconnect),
         "initial wait requires a managed non-probe connector without reconnect"
     );
+    o.receive_selection = o.receive_display.map(peerglide_platform::ReceiveDisplay::select)
+        .transpose()?.map(Arc::new);
     let managed = o.managed;
     let mut input_status = InputReporter::new(managed);
     // No native capture/input effect exists during identity/network setup.
@@ -827,7 +831,7 @@ async fn run_inner(
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
-            receive_origin: o.receive_display,
+            receive_display: o.receive_selection.clone(),
         },
     )
     .await;

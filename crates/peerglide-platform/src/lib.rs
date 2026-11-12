@@ -165,10 +165,29 @@ const REQUEST_SHIFT: u32 = COUNT_BITS + GENERATION_BITS;
 const REQUEST_MAX: u64 = (1 << (58 - REQUEST_SHIFT)) - 1;
 const REQUEST: u64 = REQUEST_MAX << REQUEST_SHIFT;
 static NEXT_CAPTURE: AtomicU64 = AtomicU64::new(1);
-#[cfg(any(windows, target_os = "macos"))]
-struct ReceiveDisplay {
+/// The one local display snapshot selected for a worker, including reconnects.
+pub struct ReceiveDisplay {
+    #[cfg(any(windows, target_os = "macos"))]
     layout: display_layout::Layout,
+    #[cfg(any(windows, target_os = "macos"))]
     target: display_layout::PlacementTarget,
+}
+
+impl ReceiveDisplay {
+    pub fn select(origin: (f64, f64)) -> Result<Self> {
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let layout = read_display_layout()?;
+            let target = layout.placement_at_origin(origin.0, origin.1)
+                .ok_or_else(|| anyhow::anyhow!("requested local display origin is missing or ambiguous"))?;
+            Ok(Self { layout, target })
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = origin;
+            anyhow::bail!("local receive display requires Windows or macOS")
+        }
+    }
 }
 
 struct GateState {
@@ -178,7 +197,7 @@ struct GateState {
     healthy: std::sync::atomic::AtomicBool,
     receive: OnceLock<ReceiveControl>,
     #[cfg(any(windows, target_os = "macos"))]
-    receive_display: OnceLock<ReceiveDisplay>,
+    receive_display: OnceLock<Arc<ReceiveDisplay>>,
     return_pending: std::sync::atomic::AtomicBool,
     diagnostics: OnceLock<Arc<input_diagnostics::InputDiagnostics>>,
 }
@@ -1176,7 +1195,7 @@ pub fn capture_with_receive_display(
     tx: CaptureEventSender,
     target: InputCapabilities,
     diagnostics: Option<Arc<input_diagnostics::InputDiagnostics>>,
-    receive_origin: Option<(f64, f64)>,
+    receive_display: Option<Arc<ReceiveDisplay>>,
 ) -> Result<CaptureSession> {
     let gate = CaptureGate::default();
     if let Some(diagnostics) = diagnostics {
@@ -1184,11 +1203,8 @@ pub fn capture_with_receive_display(
     }
     #[cfg(any(windows, target_os = "macos"))]
     {
-        if let Some((x, y)) = receive_origin {
-            let layout = read_display_layout()?;
-            let target = layout.placement_at_origin(x, y)
-                .ok_or_else(|| anyhow::anyhow!("requested local display origin is missing or ambiguous"))?;
-            gate.0.receive_display.set(ReceiveDisplay { layout, target })
+        if let Some(display) = receive_display {
+            gate.0.receive_display.set(display)
                 .map_err(|_| anyhow::anyhow!("local receive display was already selected"))?;
         }
         let wake = Arc::new(native::ReceiveWake::default());
@@ -1208,7 +1224,7 @@ pub fn capture_with_receive_display(
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = (tx, gate, target, receive_origin);
+        let _ = (tx, gate, target, receive_display);
         anyhow::bail!("native input currently requires Windows or macOS; use probe on Linux")
     }
 }
