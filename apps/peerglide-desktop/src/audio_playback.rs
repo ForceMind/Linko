@@ -79,6 +79,7 @@ pub(super) async fn play_microphone(
     device: Option<&str>,
     volume: u8,
     duration: Duration,
+    supervisor: &super::audio_stop::Options,
 ) -> Result<()> {
     play(
         Source::Microphone,
@@ -87,7 +88,7 @@ pub(super) async fn play_microphone(
         bind,
         (device, volume),
         duration,
-        None,
+        Some(supervisor),
     )
     .await
 }
