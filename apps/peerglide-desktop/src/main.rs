@@ -241,6 +241,28 @@ enum Command {
         #[arg(long, value_parser = wayland_receive::parse_region)]
         region: Option<(u32, u32)>,
     },
+    /// Send input through an explicitly approved Wayland InputCapture session.
+    #[cfg(target_os = "linux")]
+    SendWayland {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, value_enum, default_value = "right")]
+        edge: Side,
+        /// Restrict the barrier to a compositor-provided X,Y zone origin.
+        #[arg(long, value_parser = session::wayland_source::parse_zone, allow_hyphen_values = true)]
+        zone: Option<(i32, i32)>,
+        #[arg(long, required = true)]
+        allow_pointer_capture: bool,
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_button_capture: bool,
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_scroll_capture: bool,
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_keyboard_capture: bool,
+    },
     /// Send pointer input from a local Xorg edge to one verified computer.
     #[cfg(target_os = "linux")]
     SendX11 {
@@ -566,6 +588,32 @@ fn main() -> Result<()> {
                     scroll: allow_scroll,
                     keyboard: allow_keyboard,
                     region,
+                },
+            )
+        }),
+        #[cfg(target_os = "linux")]
+        Command::SendWayland {
+            address,
+            identity,
+            peer_cert,
+            edge,
+            zone,
+            allow_pointer_capture,
+            allow_button_capture,
+            allow_scroll_capture,
+            allow_keyboard_capture,
+        } => run_cli_future(|| {
+            session::wayland_source::run(
+                &identity,
+                &peer_cert,
+                address,
+                edge.into(),
+                zone,
+                allow_pointer_capture,
+                peerglide_platform::wayland_input::capture::CaptureOptions {
+                    buttons: allow_button_capture,
+                    scroll: allow_scroll_capture,
+                    keyboard: allow_keyboard_capture,
                 },
             )
         }),
