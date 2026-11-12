@@ -226,6 +226,9 @@ peerglide connect-routes --identity PATH --layout routes.json --native
 带有已核对的证书指纹。用 `connect-routes --layout` 指向导出文件。现有导出不会被
 同名操作覆盖。物理多机切换仍待验收。
 
+也可在同一位置选择“开启分段键鼠”，检查本机权限后确认。桌面工作进程在捕获前重验
+草稿和身份。使用桌面的停止入口结束，上一台未确认清理时保留恢复警告。
+
 ## 查询已核验电脑的屏幕表
 
 Windows/macOS 发送端可明确临时共享一次屏幕位置、比例和方向。两台电脑需分别

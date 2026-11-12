@@ -146,7 +146,9 @@ impl App {
     }
 
     fn peer_connection_label(&self) -> &'static str {
-        if self.pairing_pending() {
+        if self.routed_active {
+            "正在使用分段布局"
+        } else if self.pairing_pending() {
             "核验尚未完成"
         } else if self.stopping.is_some() {
             "正在断开连接"
@@ -178,6 +180,9 @@ impl App {
     /// Badge of the peer screen; its text is the connection label of the context column.
     fn peer_badge(&self) -> (Badge, &'static str) {
         let label = self.peer_connection_label();
+        if self.routed_active {
+            return (Badge::Offline, label);
+        }
         let badge = if self.pairing_pending() {
             Badge::Pending
         } else if self.stopping.is_some() {
@@ -391,7 +396,9 @@ impl App {
 
     /// Name of the selected device and the switch of the details drawer.
     fn context_header(&mut self, ui: &mut egui::Ui) {
-        let name = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+        let name = if self.routed_active {
+            "分段键鼠".to_owned()
+        } else if self.workspace_peer_selected && self.config.fingerprint.is_some() {
             self.config.peer_name.clone()
         } else {
             desktop_ui::local_device_name().to_owned()
@@ -423,7 +430,12 @@ impl App {
     fn context_rows(&mut self, ui: &mut egui::Ui) {
         let registered = self.config.fingerprint.is_some();
         let running = self.child.is_some();
-        let (value, tone) = self.connection_short();
+        let (value, tone) = if self.routed_active {
+            let view = self.workspace_view();
+            (view.short, view.tone)
+        } else {
+            self.connection_short()
+        };
         let stop_width = if running {
             canvas_button_width(ui, Some(STOP_WORD))
         } else {
@@ -467,13 +479,15 @@ impl App {
             },
             |_| (),
         );
-        let allowed = self.config.allow;
+        let allowed = !self.routed_active && self.config.allow;
         let (value, tone) = if allowed {
             ("已允许", Tone::Accent)
         } else {
             ("关闭", Tone::Neutral)
         };
-        let full = if allowed {
+        let full = if self.routed_active {
+            "分段会话只发送键鼠。"
+        } else if allowed {
             "本机接收控制：已允许。另一台的接收许可由它单独设置。"
         } else {
             "本机接收控制：默认关闭。另一台的接收许可由它单独设置。"
@@ -492,7 +506,7 @@ impl App {
             |ui| {
                 let id = context_control_id("receive-settings");
                 let icon = Icon::Arrow(Direction::Right);
-                let shown = ui.add_enabled_ui(registered, |ui| {
+                let shown = ui.add_enabled_ui(registered && !self.routed_active, |ui| {
                     canvas_button(ui, id, icon, "设置本机接收控制", None, false)
                 });
                 shown.inner.clicked()

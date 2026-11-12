@@ -15,6 +15,7 @@ impl App {
     }
     pub(super) fn layout_editable(&self) -> bool {
         self.writable()
+            && !self.routed_active
             && self.stopping.is_none()
             && self.layout_request.is_none()
             && (self.child.is_none()
@@ -88,6 +89,7 @@ impl App {
         self.screen_drag = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
+            self.pending_routed = None;
             self.dialog = None;
         }
         self.wizard_name = self.config.peer_name.clone();
@@ -113,6 +115,7 @@ impl App {
                 && self.instance_lock.is_some()
                 && self.config_store.is_some(),
             running: self.child.is_some(),
+            routed: self.routed_active,
             connected: self.connected,
             failed: self.last_failure,
             stopping: self.stopping.is_some(),
@@ -140,6 +143,17 @@ impl App {
             && self.dialog.is_none()
             && (self.child.is_none() || self.active_mode == Some(SessionMode::Communication))
     }
+    pub(super) fn routed_start_available(&self) -> bool {
+        cfg!(any(windows, target_os = "macos"))
+            && self.native_exit_protected()
+            && self.idle_writable()
+            && !self.recovery_blocked
+            && !self.enrollment_blocked
+            && !self.pairing_pending()
+            && !self.close_requested
+            && !self.exit_confirmed
+            && self.wizard.is_none()
+    }
     pub(super) fn workspace_action(&mut self, action: desktop_state::Action) {
         match action {
             desktop_state::Action::CheckPermissions if self.native_start_available() => {
@@ -149,6 +163,7 @@ impl App {
             desktop_state::Action::AddDevice if self.idle_writable() => self.open_setup(),
             desktop_state::Action::StartInput if self.native_start_available() => {
                 self.native_confirmation = false;
+                self.pending_routed = None;
                 self.dialog = Some(Dialog::NativeStart);
             }
             desktop_state::Action::Connect if self.idle_writable() => {
@@ -1004,7 +1019,8 @@ impl App {
             580.0f32.min((viewport.width() - 48.0).max(1.0)),
             540.0f32.min((viewport.height() - 48.0).max(1.0)),
         );
-        egui::Window::new("开启键鼠协同")
+        let title = if self.pending_routed.is_some() { "开启分段键鼠" } else { "开启键鼠协同" };
+        egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -1014,6 +1030,7 @@ impl App {
             .show(ctx, |ui| self.native_start_contents(ui));
         if !open {
             self.native_confirmation = false;
+            self.pending_routed = None;
             self.dialog = None;
         }
     }
@@ -1021,6 +1038,7 @@ impl App {
     fn native_start_contents(&mut self, ui: &mut egui::Ui) {
         const HEADER_HEIGHT: f32 = 112.0;
         const FOOTER_HEIGHT: f32 = 104.0;
+        let routed = self.pending_routed.is_some();
         let permission_idle =
             self.child.is_none() || self.active_mode == Some(SessionMode::Communication);
         ui.allocate_ui_with_layout(
@@ -1044,11 +1062,11 @@ impl App {
             .show(ui, |ui| {
                 self.worker_permissions.native_start_details(ui);
                 ui.separator();
-                let points = native_start_points(
-                    self.config.allow,
-                    !self.config.listen && !self.config.reconnect,
-                    self.child.is_some(),
-                );
+                let points = if routed {
+                    routed_start_points()
+                } else {
+                    native_start_points(self.config.allow, !self.config.listen && !self.config.reconnect, self.child.is_some())
+                };
                 for point in points {
                     safety_point(ui, point);
                 }
@@ -1088,11 +1106,12 @@ impl App {
                                 == worker_permissions::Readiness::Ready
                             && self.native_confirmation
                             && self.stopping.is_none()
-                            && !self.recovery_blocked;
+                            && !self.recovery_blocked
+                            && (!routed || self.pending_routed.is_some() && self.routed_start_available());
                         let start = ui
                             .add_enabled(ready, egui::Button::new("确认并开启键鼠"))
                             .clicked();
-                        let diagnose = ui
+                        let diagnose = !routed && ui
                             .add_enabled(
                                 ready && self.child.is_none(),
                                 egui::Button::new("开启并诊断"),
@@ -1248,6 +1267,7 @@ impl App {
         self.screen_drag = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
+            self.pending_routed = None;
             self.dialog = None;
         }
     }
@@ -1291,6 +1311,7 @@ impl App {
         {
             if self.dialog.take().is_some() {
                 self.native_confirmation = false;
+                self.pending_routed = None;
             } else {
                 self.wizard = None;
             }
@@ -1759,6 +1780,18 @@ pub(super) fn native_start_points(
     points.extend_from_slice(&NATIVE_START_SHORTCUTS);
     points.extend_from_slice(&NATIVE_START_RETURN);
     points
+}
+
+fn routed_start_points() -> Vec<SafetyPoint> {
+    vec![
+        SafetyPoint { icon: Icon::Keyboard, text: "本次开启真实原生键鼠发送。" },
+        SafetyPoint { icon: Icon::Link, text: "按已确认的分段布局选择核验过的目标。" },
+        SafetyPoint { icon: Icon::Lock, text: "各目标电脑单独决定是否接收。" },
+        SafetyPoint { icon: Icon::Recover, text: "上一台确认清理后才可切到下一台。" },
+        SafetyPoint { icon: Icon::Keyboard, text: "Ctrl+Alt+Right 返回本机。" },
+        SafetyPoint { icon: Icon::Recover, text: "Ctrl+Alt+Esc 停止并恢复。" },
+        SafetyPoint { icon: Icon::Warning, text: "多机键鼠、DPI 与恢复仍待真机验收。" },
+    ]
 }
 
 static REVOKE_POINTS: [SafetyPoint; 2] = [

@@ -29,6 +29,7 @@ pub(super) struct Snapshot {
     pub registered: bool,
     pub writable: bool,
     pub running: bool,
+    pub routed: bool,
     pub connected: bool,
     pub failed: bool,
     pub stopping: bool,
@@ -104,6 +105,26 @@ pub(super) fn present(s: Snapshot) -> View {
             Tone::Warning,
             Action::Recovery,
         );
+    }
+    if s.running && s.routed {
+        return match s.input {
+            Some(WorkerInputState::ControllingRemote) => View::new(
+                "正在向分段目标发送键鼠", "正在发送", "Ctrl+Alt+Right 返回本机。", Tone::Accent, Action::None,
+            ),
+            Some(WorkerInputState::Recovering) => View::new(
+                "正在等待上一台确认清理", "正在恢复", "清理确认后可重新跨边。", Tone::Warning, Action::None,
+            ),
+            Some(WorkerInputState::Local) if s.switch_state == Some(WorkerSwitchState::Pending) => View::new(
+                "正在核对分段目标", "切换中", "等待目标允许接管。", Tone::Accent, Action::None,
+            ),
+            Some(WorkerInputState::Local) if s.switch_state == Some(WorkerSwitchState::PeerUnavailable) => View::new(
+                "选定的分段目标暂不可用", "本机控制", "返回屏内后可再次跨边。", Tone::Warning, Action::None,
+            ),
+            Some(WorkerInputState::Local) => View::new(
+                "分段发送已开启", "本机控制", "移动到已配置的屏幕外沿可申请接管。", Tone::Good, Action::None,
+            ),
+            _ => View::new("正在启动分段发送", "正在启动", "等待工作进程报告键鼠状态。", Tone::Accent, Action::None),
+        };
     }
     if s.running && !s.registered {
         return View::new(
@@ -360,6 +381,7 @@ mod tests {
     use super::*;
     fn snapshot() -> Snapshot {
         Snapshot {
+            routed: false,
             registered: true,
             writable: true,
             running: false,
@@ -378,6 +400,21 @@ mod tests {
             waiting_for_peer: false,
             peer_wait_expired: false,
         }
+    }
+
+    #[test]
+    fn routed_worker_can_be_local_without_a_single_paired_device() {
+        let mut current = snapshot();
+        current.registered = false;
+        current.running = true;
+        current.routed = true;
+        current.input = Some(WorkerInputState::Local);
+        assert_eq!(present(current).short, "本机控制");
+        let mut current = snapshot();
+        current.running = true;
+        current.routed = true;
+        current.recovery_blocked = true;
+        assert_eq!(present(current).action, Action::Recovery);
     }
     #[test]
     fn pairing_busy_and_pending_are_not_mislabeled_as_readonly_or_ready() {
