@@ -219,12 +219,23 @@ mod native {
             };
             ensure!(lease == *matched && now < self.expires, "文件预约已变化");
             ensure!(
-                link.worker.7.lock().is_ok_and(|inbox| inbox.lease_fence == *fence),
+                link.worker
+                    .7
+                    .lock()
+                    .is_ok_and(|inbox| inbox.lease_fence == *fence),
                 "输入租约已结束"
             );
             pin.recheck(app)?;
-            link.send(app, Command::Ready { session: *session, request: self.request, lease })?;
-            self.phase = Phase::AwaitingClaim(link.clone(), *session, lease, *fence, now + REPLY_TIMEOUT);
+            link.send(
+                app,
+                Command::Ready {
+                    session: *session,
+                    request: self.request,
+                    lease,
+                },
+            )?;
+            self.phase =
+                Phase::AwaitingClaim(link.clone(), *session, lease, *fence, now + REPLY_TIMEOUT);
             Ok(())
         }
 
@@ -457,6 +468,8 @@ mod native {
                 .publish(Event::new(3, 5, State::Claimed, Some(9)));
             reservation.tick(&mut app, &pin, now)?;
             assert!(matches!(reservation.status(), Status::Matched));
+            worker.7.lock().unwrap().input(WorkerInputState::Local);
+            assert!(reservation.tick(&mut app, &pin, now).is_err());
             reservation.cancel(&mut app);
 
             let child = app.child.take().unwrap();

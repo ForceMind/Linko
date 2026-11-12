@@ -306,7 +306,9 @@ impl Export {
                     true,
                 )
                 .map_err(admission_error)?;
-            handoff.reservation.confirm_ready(app, &source.pin, lease, now)?;
+            handoff
+                .reservation
+                .confirm_ready(app, &source.pin, lease, now)?;
         }
         Ok(())
     }

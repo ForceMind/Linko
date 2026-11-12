@@ -157,12 +157,19 @@ pub struct PendingWorkerClaim(Reservation);
 impl PendingWorkerClaim {
     pub fn is_live(&self) -> bool {
         Instant::now() < self.0.expires
-            && self.0.confirmation.as_ref().is_none_or(|(sender, _)| !sender.is_closed())
+            && self
+                .0
+                .confirmation
+                .as_ref()
+                .is_none_or(|(sender, _)| !sender.is_closed())
     }
 
     pub fn confirm(self) -> bool {
         self.is_live()
-            && self.0.confirmation.is_none_or(|(sender, record)| sender.send(record).is_ok())
+            && self
+                .0
+                .confirmation
+                .is_none_or(|(sender, record)| sender.send(record).is_ok())
     }
 }
 
@@ -417,7 +424,9 @@ impl<P> Reservations<P> {
         prepared.reservation = Some(Reservation {
             lease: request.lease,
             input,
-            expires: prepared.expires.min(Instant::now() + Duration::from_millis(LEASE_MS)),
+            expires: prepared
+                .expires
+                .min(Instant::now() + Duration::from_millis(LEASE_MS)),
             confirmation,
         });
         Ok(Some(Published {

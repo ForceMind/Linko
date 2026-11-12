@@ -583,11 +583,11 @@ pub(super) async fn run_with_diagnostics(
         let network_ready=!messages.is_empty();
         if !network_ready {
             if let Some(scope) = &drop_scope {
-                let live_lease = recovery.receiver.active().filter(|lease| {
-                    recovery.receiver.accepts(*lease, now)
+                if let Some(event) = scope.advance_claim(|lease| {
+                    !*stop.borrow()
+                        && recovery.receiver.accepts(lease, now_ms())
                         && (!native || recovery.snapshot() == ReceiveSnapshot::Active)
-                });
-                if let Some(event) = scope.advance_claim(live_lease) {
+                }) {
                     input_status.reporter.file_drop(event);
                 }
             }
@@ -2515,7 +2515,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn managed_file_reservation_requires_v5_grant_and_matching_local_readiness() -> Result<()> {
+    async fn managed_file_reservation_requires_v5_grant_and_matching_local_readiness() -> Result<()>
+    {
         exercise_file_worker(FileDecision::Ready).await
     }
 
@@ -2667,17 +2668,29 @@ mod tests {
             );
             let mut confirm = std::pin::pin!(confirmation.confirm());
             if decision != FileDecision::CancelBeforeGrant {
-                let matched = observed.recv().await.context("missing match before claim")?;
-                assert_eq!(matched, Event::new(session, request, State::Matched, Some(lease)));
-                let ready = |session, request, lease| Command::Ready { session, request, lease };
+                let matched = observed
+                    .recv()
+                    .await
+                    .context("missing match before claim")?;
+                assert_eq!(
+                    matched,
+                    Event::new(session, request, State::Matched, Some(lease))
+                );
+                let ready = |session, request, lease| Command::Ready {
+                    session,
+                    request,
+                    lease,
+                };
                 match decision {
                     FileDecision::Ready => {
                         controller.submit(ready(session + 1, request, lease));
                         controller.submit(ready(session, request + 1, lease));
                         controller.submit(ready(session, request, lease + 1));
-                        assert!(tokio::time::timeout(Duration::from_millis(50), confirm.as_mut())
-                            .await
-                            .is_err());
+                        assert!(
+                            tokio::time::timeout(Duration::from_millis(50), confirm.as_mut())
+                                .await
+                                .is_err()
+                        );
                         controller.submit(ready(session, request, lease));
                         assert_eq!(
                             observed.recv().await,
@@ -2694,7 +2707,14 @@ mod tests {
                     }
                     FileDecision::ReleaseBeforeReady | FileDecision::Expire => {
                         if decision == FileDecision::ReleaseBeforeReady {
-                            send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                            send(
+                                &mut tx,
+                                &Message::Release {
+                                    lease,
+                                    cursor: None,
+                                },
+                            )
+                            .await?;
                         }
                         assert_eq!(
                             observed.recv().await,

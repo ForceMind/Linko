@@ -146,7 +146,10 @@ impl Controller {
                 return None;
             }
             Command::Cancel { session, request } => {
-                let pending = active.claim.as_ref().is_some_and(|claim| claim.request == request);
+                let pending = active
+                    .claim
+                    .as_ref()
+                    .is_some_and(|claim| claim.request == request);
                 let armed = active
                     .sender
                     .borrow()
@@ -240,22 +243,29 @@ impl Scope<'_> {
         Some(event)
     }
 
-    pub(super) fn advance_claim(&self, live_lease: Option<u64>) -> Option<Event> {
+    pub(super) fn advance_claim(&self, accepts: impl FnOnce(u64) -> bool) -> Option<Event> {
         let mut state = self.controller.0.lock().ok()?;
-        let active = state.active.as_mut().filter(|active| active.session == self.session)?;
+        let active = state
+            .active
+            .as_mut()
+            .filter(|active| active.session == self.session)?;
         let claim = active.claim.as_ref()?;
-        let live = live_lease == Some(claim.lease) && claim.proof.is_live();
+        let live = claim.proof.is_live() && accepts(claim.lease);
         if live && !claim.ready {
             return None;
         }
         let claim = active.claim.take()?;
         Some(if live && claim.proof.confirm() {
-            Event::new(self.session, claim.request, State::Claimed, Some(claim.lease))
+            Event::new(
+                self.session,
+                claim.request,
+                State::Claimed,
+                Some(claim.lease),
+            )
         } else {
             self.event(claim.request, State::Rejected)
         })
     }
-
 }
 
 impl Drop for Scope<'_> {

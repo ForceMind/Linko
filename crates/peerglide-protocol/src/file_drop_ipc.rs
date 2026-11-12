@@ -247,7 +247,11 @@ mod tests {
         };
         assert!(matches!(
             Command::parse(&ready.line()),
-            Some(Command::Ready { session: 1, request: 2, lease: u64::MAX })
+            Some(Command::Ready {
+                session: 1,
+                request: 2,
+                lease: u64::MAX
+            })
         ));
         assert!(Command::parse("fd ready 1 2 0").is_none());
         assert!(Command::parse("fd ready 1 2 10000000000000000").is_none());
