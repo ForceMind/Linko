@@ -17,3 +17,7 @@ peerglide-core.workspace = true
 peerglide-protocol.workspace = true
 peerglide-transport.workspace = true
 peerglide-platform.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "=0.14.0", default-features = false, features = ["input_capture", "tokio"] }
+futures-util = "0.3.34"
