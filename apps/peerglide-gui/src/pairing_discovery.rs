@@ -99,7 +99,7 @@ fn search_spinner(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let now = ui.input(|input| input.time);
     let ink = tokens::muted_color(ui.visuals().dark_mode);
-    icons::paint_spinner(ui.painter(), rect, ink, motion::spinner_head(ui.ctx(), now));
+    icons::paint_spinner(ui.painter(), rect, ink, motion::spinner_head_for(ui.ctx(), now));
 }
 
 /// Only invalidates an old publication; these counters never authorize a peer.

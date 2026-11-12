@@ -85,7 +85,7 @@ pub(super) fn duration(ctx: &egui::Context, seconds: f32) -> f32 {
     scaled_secs(seconds, if reduced(ctx) { 0.0 } else { 1.0 })
 }
 
-pub(super) fn spinner_head(ctx: &egui::Context, now: f64) -> usize {
+pub(super) fn spinner_head_for(ctx: &egui::Context, now: f64) -> usize {
     if reduced(ctx) {
         0
     } else {

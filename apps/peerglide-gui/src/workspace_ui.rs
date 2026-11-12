@@ -279,7 +279,7 @@ impl App {
             devices.line_segment([shown_local.center(), shown_peer.center()], stroke);
         }
         let head = if self.activity_tick_active() {
-            motion::spinner_head(ui.ctx(), now)
+            motion::spinner_head_for(ui.ctx(), now)
         } else {
             0
         };

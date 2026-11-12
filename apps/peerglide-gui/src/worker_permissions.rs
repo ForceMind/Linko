@@ -450,6 +450,7 @@ impl Checker {
             desktop_style::tokens::STROKE_DRAW_SECS,
         );
         let now = ui.input(|input| input.time);
+        let head = motion::spinner_head_for(ui.ctx(), now);
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), 64.0),
             egui::Layout::top_down(egui::Align::LEFT),
@@ -459,10 +460,7 @@ impl Checker {
                 icon_row(ui, summary, |painter, rect| match state {
                     Readiness::Ready => icons::paint_check_progress(painter, rect, ink, drawn),
                     // Steps only on the existing permission poll beat; it never schedules one.
-                    Readiness::Checking => {
-                        let head = motion::spinner_head(ui.ctx(), now);
-                        icons::paint_spinner(painter, rect, ink, head);
-                    }
+                    Readiness::Checking => icons::paint_spinner(painter, rect, ink, head),
                     _ if neutral => Icon::Lock.paint(painter, rect, ink),
                     _ => Icon::Warning.paint(painter, rect, ink),
                 });

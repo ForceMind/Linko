@@ -123,7 +123,7 @@ impl App {
             ink,
             view.tone,
             spinning,
-            motion::spinner_head(ui.ctx(), now),
+            motion::spinner_head_for(ui.ctx(), now),
         );
         let text = egui::pos2(
             glyph.right() + tokens::SPACE_SM,

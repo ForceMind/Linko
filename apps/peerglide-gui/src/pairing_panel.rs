@@ -999,7 +999,7 @@ fn paint_glyph(ui: &egui::Ui, rect: egui::Rect, glyph: Glyph) {
         Glyph::Spinner => {
             let now = ui.input(|input| input.time);
             let ink = tokens::accent_color(dark);
-            icons::paint_spinner(painter, rect, ink, motion::spinner_head(ui.ctx(), now));
+            icons::paint_spinner(painter, rect, ink, motion::spinner_head_for(ui.ctx(), now));
         }
         Glyph::Check(progress) => {
             let ink = desktop_style::status_colors(dark, Tone::Good).1;
