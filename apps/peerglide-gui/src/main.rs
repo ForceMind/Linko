@@ -465,7 +465,7 @@ fn read_worker_output(
             if let Ok(mut slot) = snapshot.6.lock() {
                 *slot = Some(hint);
             }
-        } else {
+        } else if peerglide_protocol::file_drop_ipc::Event::parse(&line).is_none() {
             let _ = diagnostics.try_send(bounded_diagnostic(&line));
         }
         wake();
@@ -2342,6 +2342,22 @@ mod lifecycle_tests {
         assert!(!app.native_confirmation);
         Ok(())
     }
+    #[test]
+    fn file_reservation_control_records_stay_out_of_diagnostics() -> Result<()> {
+        use peerglide_protocol::file_drop_ipc::{Event, State};
+        let (send, receive) = mpsc::sync_channel(4);
+        let text = format!("{}\nregular diagnostic\n", Event::new(1, 2, State::Claimed, Some(7)).line());
+        read_worker_output(
+            std::io::Cursor::new(text),
+            Arc::new(WorkerSnapshot::default()),
+            send,
+            Arc::new(|| {}),
+        );
+        assert_eq!(receive.try_recv()?, "regular diagnostic");
+        assert!(receive.try_recv().is_err());
+        Ok(())
+    }
+
     #[test]
     fn output_wakes_ui_despite_full_diagnostics_and_eof_preserves_terminal_state() -> Result<()> {
         let snapshot = Arc::new(WorkerSnapshot::default());
