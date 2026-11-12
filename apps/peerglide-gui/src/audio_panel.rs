@@ -1,4 +1,4 @@
-//! Explicit local consent for one bounded, pinned system audio job.
+//! Explicit local consent for one bounded, pinned audio job.
 use super::{data_access, App};
 use anyhow::{ensure, Result};
 use eframe::egui;
@@ -8,13 +8,36 @@ use std::{
     time::{Duration, Instant},
 };
 
-const PORT: u16 = 24874;
 const STOP_TIMEOUT: Duration = Duration::from_secs(22);
 
 #[derive(Clone, Copy)]
 enum Mode {
     Playback,
-    ShareSystem,
+    Share,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    System,
+    Microphone,
+}
+
+impl Source {
+    fn port(self) -> u16 {
+        match self {
+            Self::System => 24874,
+            Self::Microphone => 24875,
+        }
+    }
+
+    fn command(self, mode: Mode) -> &'static str {
+        match (self, mode) {
+            (Self::System, Mode::Playback) => "play-audio",
+            (Self::System, Mode::Share) => "share-system-audio",
+            (Self::Microphone, Mode::Playback) => "play-microphone",
+            (Self::Microphone, Mode::Share) => "share-microphone",
+        }
+    }
 }
 
 struct Job {
@@ -54,7 +77,9 @@ fn output_devices() -> Result<Vec<OutputDevice>> {
 
 pub(super) struct Panel {
     job: Option<Job>,
-    address: String,
+    source: Source,
+    system_address: String,
+    microphone_address: String,
     volume: u8,
     output: Option<OutputDevice>,
     devices: Vec<OutputDevice>,
@@ -67,7 +92,9 @@ impl Default for Panel {
     fn default() -> Self {
         Self {
             job: None,
-            address: String::new(),
+            source: Source::System,
+            system_address: String::new(),
+            microphone_address: String::new(),
             volume: 100,
             output: None,
             devices: Vec::new(),
@@ -107,7 +134,7 @@ impl Panel {
                 } else if exit.success() {
                     "音频共享已停止"
                 } else {
-                    "音频会话结束。请检查两端操作、设备权限和系统音频格式。"
+                    "音频会话结束。请检查两端操作、设备权限和音频格式。"
                 };
                 self.job = None;
             }
@@ -221,18 +248,29 @@ impl Panel {
         });
         ensure!(executable.is_file(), "缺少同目录的 peerglide 通信程序");
         let mut command = Command::new(executable);
+        command.arg(self.source.command(mode));
         let status = match mode {
             Mode::Playback => {
-                command.args(["play-audio", "--volume", &self.volume.to_string()]);
+                command.args(["--volume", &self.volume.to_string()]);
                 if let Some(device) = self.selected_output()? {
                     command.args(["--device", device]);
                 }
-                "音频接收任务运行中"
+                match self.source {
+                    Source::System => "系统音频接收任务运行中",
+                    Source::Microphone => "麦克风接收任务运行中",
+                }
             }
-            Mode::ShareSystem => {
-                let address = data_access::send_address(&self.address, &app.config.address, PORT)?;
-                command.arg("share-system-audio").arg(address.to_string());
-                "系统音频发送任务运行中"
+            Mode::Share => {
+                let target = match self.source {
+                    Source::System => &self.system_address,
+                    Source::Microphone => &self.microphone_address,
+                };
+                let address = data_access::send_address(target, &app.config.address, self.source.port())?;
+                command.arg(address.to_string());
+                match self.source {
+                    Source::System => "系统音频发送任务运行中",
+                    Source::Microphone => "麦克风发送任务运行中",
+                }
             }
         };
         command
@@ -265,8 +303,6 @@ impl Panel {
     }
 
     pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
-        ui.strong("系统音频");
-        ui.label("在播放端先开启接收，再在另一台电脑发送系统音频。每次会话最长 10 分钟。");
         ui.label(self.status);
         if self.is_active() {
             if ui.button("停止音频").clicked() {
@@ -278,27 +314,40 @@ impl Panel {
             ui.label("完成配对后可开启音频共享。");
             return;
         }
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.source, Source::System, "系统音频");
+            ui.selectable_value(&mut self.source, Source::Microphone, "麦克风");
+        });
+        ui.label("先在播放端开启接收。每次会话最长 10 分钟。");
         ui.add(
             egui::Slider::new(&mut self.volume, 0..=100)
                 .suffix("%")
                 .text("播放音量"),
         );
         self.output_controls(app, ui);
-        ui.label("接收使用 UDP 端口 24874。");
+        let port = self.source.port();
+        ui.label(format!("接收使用 UDP 端口 {port}。"));
         if ui.button("在本机接收并播放").clicked() {
             let result = self.start(app, Mode::Playback);
             app.feedback(result, "已请求启动音频接收。");
         }
         ui.separator();
         ui.label("接收端 IP 地址和端口");
+        let (target, button) = match self.source {
+            Source::System => (&mut self.system_address, "发送本机系统音频"),
+            Source::Microphone => (&mut self.microphone_address, "发送本机麦克风"),
+        };
         ui.add(
-            egui::TextEdit::singleline(&mut self.address)
+            egui::TextEdit::singleline(target)
                 .char_limit(128)
-                .hint_text("留空使用已保存的地址与端口 24874"),
+                .hint_text(format!("留空使用已保存的地址与端口 {port}")),
         );
-        if ui.button("发送本机系统音频").clicked() {
-            let result = self.start(app, Mode::ShareSystem);
-            app.feedback(result, "已请求启动系统音频发送。");
+        if self.source == Source::Microphone {
+            ui.label("首次使用麦克风时，系统可能请求录音许可。");
+        }
+        if ui.button(button).clicked() {
+            let result = self.start(app, Mode::Share);
+            app.feedback(result, "已请求启动音频发送。");
         }
     }
 }
@@ -306,6 +355,14 @@ impl Panel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn microphone_and_system_audio_use_distinct_commands_and_ports() {
+        assert_eq!(Source::System.port(), 24874);
+        assert_eq!(Source::Microphone.port(), 24875);
+        assert_eq!(Source::Microphone.command(Mode::Playback), "play-microphone");
+        assert_eq!(Source::Microphone.command(Mode::Share), "share-microphone");
+    }
 
     #[test]
     fn losing_the_selected_device_does_not_select_the_system_default() -> Result<()> {
@@ -329,9 +386,12 @@ mod tests {
         let fixture = super::super::tests::Fixture::new()?;
         let app = App::load(fixture.path.clone());
         let mut panel = Panel::default();
-        for mode in [Mode::Playback, Mode::ShareSystem] {
-            assert!(panel.start(&app, mode).is_err());
-            assert!(!panel.is_active());
+        for source in [Source::System, Source::Microphone] {
+            panel.source = source;
+            for mode in [Mode::Playback, Mode::Share] {
+                assert!(panel.start(&app, mode).is_err());
+                assert!(!panel.is_active());
+            }
         }
         panel.stop();
         drop(app);

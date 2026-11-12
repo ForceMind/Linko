@@ -222,6 +222,8 @@ enum Command {
         volume: u8,
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
+        #[command(flatten)]
+        supervisor: audio_stop::Options,
     },
     /// Share the local microphone with one explicitly verified computer.
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -233,6 +235,8 @@ enum Command {
         peer_cert: PathBuf,
         #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
+        #[command(flatten)]
+        supervisor: audio_stop::Options,
     },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
@@ -403,6 +407,7 @@ async fn main() -> Result<()> {
             device,
             volume,
             duration_secs,
+            supervisor,
         } => {
             audio_playback::play_microphone(
                 &identity,
@@ -411,6 +416,7 @@ async fn main() -> Result<()> {
                 device.as_deref(),
                 volume,
                 Duration::from_secs(duration_secs),
+                &supervisor,
             )
             .await
         }
@@ -420,12 +426,14 @@ async fn main() -> Result<()> {
             identity,
             peer_cert,
             duration_secs,
+            supervisor,
         } => {
             audio_source::share_microphone(
                 &identity,
                 &peer_cert,
                 address,
                 Duration::from_secs(duration_secs),
+                &supervisor,
             )
             .await
         }

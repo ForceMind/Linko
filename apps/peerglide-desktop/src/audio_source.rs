@@ -75,6 +75,7 @@ pub(super) async fn share_microphone(
     peer_certificate: &std::path::Path,
     address: std::net::SocketAddr,
     duration: std::time::Duration,
+    supervisor: &super::audio_stop::Options,
 ) -> Result<()> {
     share(
         Source::Microphone,
@@ -82,7 +83,7 @@ pub(super) async fn share_microphone(
         peer_certificate,
         address,
         duration,
-        None,
+        Some(supervisor),
     )
     .await
 }
