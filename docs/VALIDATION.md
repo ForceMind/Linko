@@ -2656,3 +2656,29 @@ PR180 审阅提交 `7916b5e4eada6fe8580eb164fd4943ba0cb83b12` 的
 [三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43116253905)
 通过。便携回滚在 runner 隔离目录验证。实际系统音频、原生拖放、
 多设备路由、安装和 #3/C06 按最终候选记录。
+
+## 集中验收清单
+
+当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
+审阅提交 `d4c872b` 的 [三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43123212190) 已通过，包含 F13、F22、macOS 小数滚轮、多证书通信诊断和两端系统音频 CLI。随后增加了 IPv6 配对发现、X11 键位以及本机复制拖放适配器；更新后的集成提交使用各自的 Actions 检查。
+
+| 范围 | 已验证的证据 | 集中验收与开发缺口 |
+| --- | --- | --- |
+| 双向键鼠与恢复 | 运动、滚轮、按键映射和恢复回归覆盖于集成 CI；[macOS 小数滚轮 SDK 核对](https://github.com/ForceMind/Linko/actions/runs/43112306563) | 先跑 Mac→Windows，再跑 Windows→Mac。四边、回程、按键及修饰键、长按与拖拽、物理接管、滚轮、光标隐藏、睡眠、断网、退出和撤权均待真机。F03、F07 和 F12 需要两端诊断才能定位。 |
+| 配对、发现、权限和后台 | [IPv6 短码配对发现](https://github.com/ForceMind/Linko/actions/runs/43121334625)；[隔离 X11 窗口与流程](https://github.com/ForceMind/Linko/actions/runs/43123212190/artifacts/13901353937) | Windows/macOS 实际配对提示、IPv6 多网卡与作用域、关闭到托盘、从托盘停止、输入权限变化和键盘可访问性待验。 |
+| 本机手势 | [Windows 受控库工作器](https://github.com/ForceMind/Linko/actions/runs/43091867388)；隔离窗口录制、预览与规则回归 | G1 全局捕获和动作保持关闭。G2 保留设计，远程动作和脚本执行不在本次候选能力内。 |
+| 剪贴板与文件 | [双工作器文本及文件回归](https://github.com/ForceMind/Linko/actions/runs/43102482924)；[显式 PNG 导入和系统后端](https://github.com/ForceMind/Linko/actions/runs/43107244245) | 双向测试文本、PNG、同意／拒绝、撤权和外部剪贴板变化；文件测试续传、取消、历史、同名文件及文件负载下的键鼠。 |
+| 多台电脑、多屏与 Linux | [多证书通信诊断](https://github.com/ForceMind/Linko/actions/runs/43118044990)；[X11 键位映射](https://github.com/ForceMind/Linko/actions/runs/43120612721) | [多机原生会话](https://github.com/ForceMind/Linko/pull/215)、[副屏预留](https://github.com/ForceMind/Linko/pull/209)和 [Xorg 指针接收](https://github.com/ForceMind/Linko/pull/222)各自推进。多机动态切换、布局档案、热插拔、精确副屏目标、Linux 主动捕获、Wayland 和完整触摸板手势仍需开发与验证。 |
+| 原生拖放 | [Windows 适配器](https://github.com/ForceMind/Linko/actions/runs/43121324256)、[macOS 适配器](https://github.com/ForceMind/Linko/actions/runs/43121330845)与[已接收文件复核](https://github.com/ForceMind/Linko/actions/runs/43123048040) | Finder、Explorer 和其他目标应用的跨机文字、PNG、文件拖放仍待接线；验证保留复制、取消、失焦和原文件安全。 |
+| 系统音频 | [Windows WASAPI 与 macOS ScreenCaptureKit](https://github.com/ForceMind/Linko/actions/runs/43119118577)完成编译和会话回归；`d4c872b` 的集成已复验 | [桌面独立授权](https://github.com/ForceMind/Linko/pull/213)、[本机输出选择](https://github.com/ForceMind/Linko/pull/220)和[四来源播放](https://github.com/ForceMind/Linko/pull/219)仍按各自提交验证。真实设备、录制提示、断线静音、输出切换及持续音质待验；麦克风和虚拟音频设备仍待开发。 |
+| 便携包、安装和回滚 | [同源与校验](https://github.com/ForceMind/Linko/actions/runs/43110809035)；[隔离暂存、切换和回滚](https://github.com/ForceMind/Linko/actions/runs/43110821243) | 最终统一候选须核对两端包的版本、检出树与 SHA-256。真实安装、升级、回滚及长期资源观察待验。正式签名、公证、开机启动、系统服务、官网部署和发布按项目授权处理。 |
+
+### 物理回报
+
+- 在同一个最终候选版本记录 Windows 与 macOS 的系统版本、应用版本、屏幕排列和 DPI、输入设备接入方式。#3/C06 的蓝牙、USB 和 DPI 分别由实际设备确认。
+- Mac→Windows 记录跨屏后光标是否移动、点击和滚动是否生效、Mac 光标是否隐藏、普通返回与紧急停止，以及是否出现 `native receive service: Timeout`。Windows→Mac 用同样步骤测量，方向分开记录。
+- 每次故障带回两端对应时段的 `KVM-DIAG/5` 数值摘要和原始错误行。优先对齐跨屏提交、移动收发、滚轮来源与注入阶段，保持按键、剪贴板和文件内容在本机。
+- 先跑基础双向键鼠、恢复和权限，再跑数据与音频。多机和多屏仅测试最终候选实际公开的入口。按开发计划记录双向 500 次切换、关键恢复场景 100 轮、8 小时预览与 24 小时正式候选耐久的执行范围。
+
+F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMind/Linko/pull/125)待决定。
+#3/C06 与历史故障 #10 保留待验证状态。Linux Xvfb、模拟输入、编译通过和 SDK 核对仅作为各自范围的证据。
