@@ -232,9 +232,9 @@ impl PointerSource {
     }
 
     fn check_keyboard_mapping(&self) -> Result<()> {
-        self.keyboard.as_ref().map_or(Ok(()), |keyboard| {
-            keyboard.check_mapping(&self.activity)
-        })
+        self.keyboard
+            .as_ref()
+            .map_or(Ok(()), |keyboard| keyboard.check_mapping(&self.activity))
     }
 
     fn remember_key(
