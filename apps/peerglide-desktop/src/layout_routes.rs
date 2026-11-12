@@ -58,15 +58,27 @@ struct Routes {
 impl Routes {
     fn load(path: &Path, local: &[u8], layout: &Layout) -> Result<Self> {
         let metadata = std::fs::metadata(path).context("inspect display route plan")?;
-        ensure!(metadata.is_file(), "display route plan must be a regular file");
-        ensure!(metadata.len() <= MAX_PLAN_BYTES, "display route plan too large");
+        ensure!(
+            metadata.is_file(),
+            "display route plan must be a regular file"
+        );
+        ensure!(
+            metadata.len() <= MAX_PLAN_BYTES,
+            "display route plan too large"
+        );
         let file = File::open(path).context("open display route plan")?;
-        ensure!(file.metadata()?.is_file(), "display route plan must be a regular file");
+        ensure!(
+            file.metadata()?.is_file(),
+            "display route plan must be a regular file"
+        );
         let mut bytes = Vec::new();
         file.take(MAX_PLAN_BYTES + 1)
             .read_to_end(&mut bytes)
             .context("read display route plan")?;
-        ensure!(bytes.len() as u64 <= MAX_PLAN_BYTES, "display route plan too large");
+        ensure!(
+            bytes.len() as u64 <= MAX_PLAN_BYTES,
+            "display route plan too large"
+        );
         let plan: Plan = serde_json::from_slice(&bytes).context("invalid display route plan")?;
         let directory = path.parent().unwrap_or_else(|| Path::new("."));
         Self::bind(plan, directory, local, layout)
@@ -90,30 +102,57 @@ impl Routes {
                 "display route peer needs a destination address and port"
             );
             let certificate = transport::read_certificate(&directory.join(spec.certificate))?;
-            ensure!(certificate != local, "display route peer matches the local identity");
+            ensure!(
+                certificate != local,
+                "display route peer matches the local identity"
+            );
             let id = *blake3::hash(&certificate).as_bytes();
             ensure!(
-                peers.insert(id, Peer { address: spec.address, certificate }).is_none(),
+                peers
+                    .insert(
+                        id,
+                        Peer {
+                            address: spec.address,
+                            certificate
+                        }
+                    )
+                    .is_none(),
                 "display route peer certificate is repeated"
             );
             peer_ids.push(id);
         }
-        let links = plan.routes.into_iter().map(|spec| {
-            let [x, y] = spec.local_origin;
-            let mut candidates = layout.displays().iter().filter(|display| {
-                display.bounds.left == x && display.bounds.top == y
-            });
-            let display = candidates.next().context("display route local origin is missing")?;
-            ensure!(candidates.next().is_none(), "display route local origin is ambiguous");
-            let peer = *peer_ids.get(spec.peer).context("display route peer index is missing")?;
-            Ok(Link {
-                source_display: display.id,
-                source_edge: spec.local_edge,
-                source_span: span(spec.local_span),
-                target: Target { peer, display: None, edge: spec.remote_edge },
-                target_span: span(spec.remote_span),
+        let links = plan
+            .routes
+            .into_iter()
+            .map(|spec| {
+                let [x, y] = spec.local_origin;
+                let mut candidates = layout
+                    .displays()
+                    .iter()
+                    .filter(|display| display.bounds.left == x && display.bounds.top == y);
+                let display = candidates
+                    .next()
+                    .context("display route local origin is missing")?;
+                ensure!(
+                    candidates.next().is_none(),
+                    "display route local origin is ambiguous"
+                );
+                let peer = *peer_ids
+                    .get(spec.peer)
+                    .context("display route peer index is missing")?;
+                Ok(Link {
+                    source_display: display.id,
+                    source_edge: spec.local_edge,
+                    source_span: span(spec.local_span),
+                    target: Target {
+                        peer,
+                        display: None,
+                        edge: spec.remote_edge,
+                    },
+                    target_span: span(spec.remote_span),
+                })
             })
-        }).collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         let table = Table::new(layout, links)
             .map_err(|error| anyhow::anyhow!("invalid display route segments: {error:?}"))?;
         Ok(Self { table, peers })
@@ -139,7 +178,8 @@ async fn probe(identity: &transport::Identity, peer: &Peer) -> Result<()> {
         let (mut tx, mut rx) = connection.open_bi().await?;
         exchange_hello(&mut tx, &mut rx, InputCapabilities::default()).await?;
         probe_roundtrip(&mut tx, &mut rx).await
-    }).await;
+    })
+    .await;
     endpoint.close(0u8.into(), b"display route probe ended");
     result?
 }
@@ -149,8 +189,12 @@ pub(super) async fn run(identity: &Path, path: &Path, point: (f64, f64), edge: E
     let identity = transport::Identity::load(identity)?;
     let layout = peerglide_platform::read_display_layout()?;
     let routes = Routes::load(path, &identity.certificate, &layout)?;
-    let (route, peer) = routes.resolve(&layout, edge, point).context("no route on that exposed display edge")?;
-    probe(&identity, peer).await.context("selected route peer is unavailable or could not be verified")?;
+    let (route, peer) = routes
+        .resolve(&layout, edge, point)
+        .context("no route on that exposed display edge")?;
+    probe(&identity, peer)
+        .await
+        .context("selected route peer is unavailable or could not be verified")?;
     println!(
         "PASS: verified v5 route peer {}, entry edge {:?}.",
         transport::fingerprint(&peer.certificate),
@@ -171,7 +215,8 @@ mod tests {
     impl Fixture {
         fn new() -> Result<Self> {
             let time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-            let path = std::env::temp_dir().join(format!("linko-route-{}-{time}", std::process::id()));
+            let path =
+                std::env::temp_dir().join(format!("linko-route-{}-{time}", std::process::id()));
             std::fs::create_dir(&path)?;
             Ok(Self(path))
         }
@@ -186,13 +231,23 @@ mod tests {
     fn test_layout() -> Layout {
         let source = Display {
             id: DisplayId(1),
-            bounds: Bounds { left: -100.0, top: 0.0, right: 0.0, bottom: 100.0 },
+            bounds: Bounds {
+                left: -100.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 100.0,
+            },
             scale: 1.5,
             rotation: Rotation::Upright,
         };
         let attached = Display {
             id: DisplayId(2),
-            bounds: Bounds { left: 0.0, top: 0.0, right: 50.0, bottom: 25.0 },
+            bounds: Bounds {
+                left: 0.0,
+                top: 0.0,
+                right: 50.0,
+                bottom: 25.0,
+            },
             ..source
         };
         Layout::new(attached.id, vec![source, attached]).unwrap()
@@ -204,7 +259,10 @@ mod tests {
         let (mut tx, mut rx) = connection.accept_bi().await?;
         let caps = exchange_hello(&mut tx, &mut rx, InputCapabilities::default()).await?;
         ensure!(!caps.motion(), "probe must advertise no native input");
-        ensure!(matches!(transport::receive(&mut rx).await?, Message::Ping { lease: 0 }));
+        ensure!(matches!(
+            transport::receive(&mut rx).await?,
+            Message::Ping { lease: 0 }
+        ));
         transport::send(&mut tx, &Message::Pong { lease: 0 }).await?;
         connection.closed().await;
         Ok(())
@@ -241,10 +299,15 @@ mod tests {
         let layout = test_layout();
         let routes = Routes::load(&path, &local.certificate, &layout)?;
         assert!(routes.resolve(&layout, Edge::Right, (-1.0, 10.0)).is_none());
-        assert!(routes.resolve(&layout, Edge::Right, (-10.0, 35.0)).is_none());
-        assert!(routes.resolve(&test_layout(), Edge::Right, (-1.0, 60.0)).is_none());
+        assert!(routes
+            .resolve(&layout, Edge::Right, (-10.0, 35.0))
+            .is_none());
+        assert!(routes
+            .resolve(&test_layout(), Edge::Right, (-1.0, 60.0))
+            .is_none());
         let (first_route, first_peer) = routes.resolve(&layout, Edge::Right, (-1.0, 30.0)).unwrap();
-        let (second_route, second_peer) = routes.resolve(&layout, Edge::Right, (-1.0, 50.0)).unwrap();
+        let (second_route, second_peer) =
+            routes.resolve(&layout, Edge::Right, (-1.0, 50.0)).unwrap();
         assert_eq!(first_peer.certificate, first.certificate);
         assert_eq!(second_peer.certificate, second.certificate);
         assert_eq!(first_route.target.edge, Edge::Left);
@@ -262,7 +325,10 @@ mod tests {
             ensure!(incoming.await.is_err(), "wrong pin completed TLS");
             Ok::<_, anyhow::Error>(())
         });
-        let wrong = Peer { address: second_address, certificate: first.certificate };
+        let wrong = Peer {
+            address: second_address,
+            certificate: first.certificate,
+        };
         assert!(probe(&local, &wrong).await.is_err());
         tokio::time::timeout(TIMEOUT, incorrect).await???;
         first_endpoint.close(0u8.into(), b"offline test");
