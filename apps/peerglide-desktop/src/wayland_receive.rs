@@ -355,10 +355,17 @@ mod tests {
                 .await?;
             transport::verify_peer(&connection, &destination.certificate)?;
             let (mut tx, mut rx) = connection.open_bi().await?;
-            let caps = InputCapabilities::new(&[0xe4], true, 1, false).map_err(anyhow::Error::msg)?;
+            let caps =
+                InputCapabilities::new(&[0xe4], true, 1, false).map_err(anyhow::Error::msg)?;
             let offered = super::super::exchange_hello(&mut tx, &mut rx, caps).await?;
             assert!(offered.motion());
-            assert_eq!(offered.supports(Input::Key { usage: 0xe4, down: true }), case == Case::Keyboard);
+            assert_eq!(
+                offered.supports(Input::Key {
+                    usage: 0xe4,
+                    down: true
+                }),
+                case == Case::Keyboard
+            );
             let input = |sequence, cursor_lease, down| Message::Input {
                 lease: 7,
                 event: case.input(down),

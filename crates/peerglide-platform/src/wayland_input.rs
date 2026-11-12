@@ -333,9 +333,7 @@ impl WaylandInput {
             }
         })
         .await
-        .context(
-            "the compositor did not grant the requested Wayland input devices or region",
-        )??;
+        .context("the compositor did not grant the requested Wayland input devices or region")??;
         owner.confirm().await?;
         Ok(owner)
     }
@@ -469,7 +467,12 @@ impl WaylandInput {
                 *slot = capability;
             }
             (api.ei_seat_bind_capabilities)(
-                seat, caps[0], caps[1], caps[2], caps[3], null::<c_void>(),
+                seat,
+                caps[0],
+                caps[1],
+                caps[2],
+                caps[3],
+                null::<c_void>(),
             );
         }
         Ok(())

@@ -65,13 +65,16 @@ impl Keys {
     }
 
     pub(super) fn release(&mut self) -> impl Iterator<Item = u32> + '_ {
-        self.held.iter_mut().enumerate().filter_map(|(usage, down)| {
-            if std::mem::take(down) {
-                code(usage as u16)
-            } else {
-                None
-            }
-        })
+        self.held
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(usage, down)| {
+                if std::mem::take(down) {
+                    code(usage as u16)
+                } else {
+                    None
+                }
+            })
     }
 }
 
