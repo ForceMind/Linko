@@ -1,4 +1,4 @@
-// Thin Windows SDK adapter for the default render device's WASAPI loopback.
+// Thin Windows SDK adapter for explicitly selected loopback or microphone capture.
 #define NOMINMAX
 #include <windows.h>
 #include <audioclient.h>
@@ -136,9 +136,8 @@ HRESULT read_packet(Capture* capture) {
     }
     return result;
 }
-} // namespace
 
-extern "C" int32_t linko_wasapi_open(void** output) {
+HRESULT open_capture(void** output, bool microphone) {
     if (!output) {
         return E_POINTER;
     }
@@ -158,29 +157,46 @@ extern "C" int32_t linko_wasapi_open(void** output) {
     if (FAILED(result)) {
         return result;
     }
-    ComPtr<IMMDevice> render;
-    result = devices->GetDefaultAudioEndpoint(eRender, eConsole, render.ReleaseAndGetAddressOf());
+    ComPtr<IMMDevice> endpoint;
+    result = devices->GetDefaultAudioEndpoint(microphone ? eCapture : eRender,
+                                              microphone ? eCommunications : eConsole,
+                                              endpoint.ReleaseAndGetAddressOf());
     if (FAILED(result)) {
         return result;
     }
-    result = render->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, nullptr,
+    result = endpoint->Activate(__uuidof(IAudioClient), CLSCTX_INPROC_SERVER, nullptr,
                               reinterpret_cast<void**>(capture->client.ReleaseAndGetAddressOf()));
     if (FAILED(result)) {
         return result;
     }
-    WAVEFORMATEX* raw_format = nullptr;
-    result = capture->client->GetMixFormat(&raw_format);
-    std::unique_ptr<WAVEFORMATEX, decltype(&CoTaskMemFree)> format(raw_format, CoTaskMemFree);
-    if (FAILED(result) || !format) {
-        return FAILED(result) ? result : E_UNEXPECTED;
-    }
-    result = input_format(format.get(), &capture->format);
-    if (FAILED(result)) {
-        return result;
+    WAVEFORMATEX requested{};
+    std::unique_ptr<WAVEFORMATEX, decltype(&CoTaskMemFree)> mix_format(nullptr, CoTaskMemFree);
+    const WAVEFORMATEX* stream_format = &requested;
+    DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK;
+    if (microphone) {
+        requested.wFormatTag = WAVE_FORMAT_PCM;
+        requested.nChannels = channels;
+        requested.nSamplesPerSec = sample_rate;
+        requested.wBitsPerSample = 16;
+        requested.nBlockAlign = channels * sizeof(int16_t);
+        requested.nAvgBytesPerSec = sample_rate * requested.nBlockAlign;
+        flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    } else {
+        WAVEFORMATEX* raw_format = nullptr;
+        result = capture->client->GetMixFormat(&raw_format);
+        mix_format.reset(raw_format);
+        if (FAILED(result) || !mix_format) {
+            return FAILED(result) ? result : E_UNEXPECTED;
+        }
+        result = input_format(mix_format.get(), &capture->format);
+        if (FAILED(result)) {
+            return result;
+        }
+        stream_format = mix_format.get();
     }
     constexpr REFERENCE_TIME buffer_duration = 2'000'000; // 200 ms.
-    result = capture->client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-                                         buffer_duration, 0, format.get(), nullptr);
+    result = capture->client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags,
+                                         buffer_duration, 0, stream_format, nullptr);
     if (FAILED(result)) {
         return result;
     }
@@ -200,6 +216,16 @@ extern "C" int32_t linko_wasapi_open(void** output) {
     capture->started = true;
     *output = capture.release();
     return S_OK;
+}
+
+} // namespace
+
+extern "C" int32_t linko_wasapi_open(void** output) {
+    return open_capture(output, false);
+}
+
+extern "C" int32_t linko_wasapi_mic_open(void** output) {
+    return open_capture(output, true);
 }
 
 extern "C" int32_t linko_wasapi_read(void* owner, int16_t* output, uint32_t capacity,
