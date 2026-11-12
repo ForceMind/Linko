@@ -17,6 +17,9 @@ use x11rb::{
 mod keymap;
 use keymap::KeyMap;
 
+const MAX_WHEEL_AXIS: i16 = 12;
+const WHEEL_BUTTONS: [u8; 4] = [4, 5, 6, 7];
+
 fn submit_owned(slot: &mut bool, down: bool, submit: impl FnOnce() -> Result<()>) -> Result<bool> {
     if !down && !*slot {
         return Ok(false);
@@ -74,6 +77,7 @@ pub struct Injector {
     width: u16,
     height: u16,
     buttons: Buttons,
+    wheel_down: [bool; WHEEL_BUTTONS.len()],
     keyboard: Option<KeyMap>,
     owned_keys: [bool; 256],
 }
@@ -113,6 +117,7 @@ impl Injector {
             width: geometry.width,
             height: geometry.height,
             buttons: Buttons::new(),
+            wheel_down: [false; WHEEL_BUTTONS.len()],
             keyboard,
             owned_keys: [false; 256],
         })
@@ -168,8 +173,34 @@ impl Injector {
         })
     }
 
+    pub fn scroll_available(&self) -> Result<bool> {
+        let mapping = self.connection.get_pointer_mapping()?.reply()?.map;
+        Ok(mapping.get(3..7) == Some(WHEEL_BUTTONS.as_slice()))
+    }
+
+    /// A v5 wheel step becomes one balanced X11 click. Large bursts are
+    /// capped independently on each axis and local takeover wins between pairs.
+    pub fn scroll(&mut self, x: i16, y: i16, mut admit: impl FnMut() -> Result<bool>) -> Result<bool> {
+        ensure!(self.scroll_available()?, "X11 wheel button mapping changed or is unavailable");
+        for (button, steps) in wheel_clicks(x, y) {
+            let slot = &mut self.wheel_down[usize::from(button - 4)];
+            for _ in 0..steps {
+                if !admit()? {
+                    return Ok(false);
+                }
+                submit_owned(slot, true, || post_button(&self.connection, self.root, button, true))?;
+                submit_owned(slot, false, || post_button(&self.connection, self.root, button, false))?;
+            }
+        }
+        Ok(true)
+    }
+
     pub fn release_owned(&mut self) -> Result<()> {
         let mut result = self.release_buttons();
+        for (button, slot) in WHEEL_BUTTONS.into_iter().zip(&mut self.wheel_down) {
+            let release = submit_owned(slot, false, || post_button(&self.connection, self.root, button, false));
+            result = result.and(release.map(|_| ()));
+        }
         for (code, slot) in self.owned_keys.iter_mut().enumerate() {
             let release = submit_owned(slot, false, || {
                 post_key(&self.connection, self.root, code as u8, false)
@@ -195,6 +226,13 @@ impl Drop for Injector {
     fn drop(&mut self) {
         let _ = self.release_owned();
     }
+}
+
+fn wheel_clicks(x: i16, y: i16) -> [(u8, u16); 2] {
+    [
+        (if y < 0 { 5 } else { 4 }, y.clamp(-MAX_WHEEL_AXIS, MAX_WHEEL_AXIS).unsigned_abs()),
+        (if x < 0 { 6 } else { 7 }, x.clamp(-MAX_WHEEL_AXIS, MAX_WHEEL_AXIS).unsigned_abs()),
+    ]
 }
 
 pub(super) fn local_connection() -> Result<(RustConnection, usize)> {
@@ -272,6 +310,14 @@ fn post(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn x11_wheel_keeps_axis_direction_and_bounds_each_burst() {
+        assert_eq!(wheel_clicks(1, -1), [(5, 1), (7, 1)]);
+        assert_eq!(wheel_clicks(-3, 8), [(4, 8), (6, 3)]);
+        assert_eq!(wheel_clicks(0, 0), [(4, 0), (7, 0)]);
+        assert_eq!(wheel_clicks(i16::MIN, i16::MAX), [(4, 12), (6, 12)]);
+    }
 
     #[test]
     fn local_display_selection_rejects_tcp_and_unbounded_values() {

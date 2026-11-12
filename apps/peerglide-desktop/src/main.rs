@@ -137,6 +137,9 @@ enum Command {
         /// Also receive supported keys and the three mouse buttons.
         #[arg(long, requires = "allow_pointer_control")]
         allow_discrete_input: bool,
+        /// Also receive wheel steps on a standard X11 pointer mapping.
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_scroll: bool,
     },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
@@ -234,6 +237,7 @@ async fn main() -> Result<()> {
             bind,
             allow_pointer_control,
             allow_discrete_input,
+            allow_scroll,
         } => {
             x11_receive::run(
                 &identity,
@@ -241,6 +245,7 @@ async fn main() -> Result<()> {
                 bind,
                 allow_pointer_control,
                 allow_discrete_input,
+                allow_scroll,
             )
             .await
         }

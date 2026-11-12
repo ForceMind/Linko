@@ -177,7 +177,11 @@ fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64
                         injector.button(button, down)?,
                         "X11 button ownership changed"
                     ),
-                    Input::Scroll { .. } => anyhow::bail!("X11 scrolling is not enabled"),
+                    Input::Scroll { x, y } => {
+                        if !injector.scroll(x, y, admitted)? {
+                            return Ok(());
+                        }
+                    }
                 }
                 if input.completed.send(()).is_err() {
                     return Ok(());
@@ -218,8 +222,8 @@ fn serve_native(mailbox: &Mailbox, ready: oneshot::Sender<()>, admit_before: u64
     result
 }
 
-async fn capabilities(allow_discrete: bool) -> Result<InputCapabilities> {
-    if !allow_discrete {
+async fn capabilities(allow_discrete: bool, allow_scroll: bool) -> Result<InputCapabilities> {
+    if !allow_discrete && !allow_scroll {
         return InputCapabilities::new(&[], true, 0, false).map_err(anyhow::Error::msg);
     }
     let (ready, result) = oneshot::channel();
@@ -227,8 +231,10 @@ async fn capabilities(allow_discrete: bool) -> Result<InputCapabilities> {
         .name("linko-x11-keymap".into())
         .spawn(move || {
             let caps = Injector::open_after_explicit_consent().and_then(|injector| {
-                let keys = injector.key_usages().collect::<Vec<_>>();
-                InputCapabilities::new(&keys, true, 7, false).map_err(anyhow::Error::msg)
+                ensure!(!allow_scroll || injector.scroll_available()?, "standard X11 wheel mapping unavailable");
+                let keys = if allow_discrete { injector.key_usages().collect::<Vec<_>>() } else { Vec::new() };
+                InputCapabilities::new(&keys, true, if allow_discrete { 7 } else { 0 }, allow_scroll)
+                    .map_err(anyhow::Error::msg)
             });
             let _ = ready.send(caps);
         })?;
@@ -243,6 +249,7 @@ pub(super) async fn run(
     bind: SocketAddr,
     allow: bool,
     allow_discrete: bool,
+    allow_scroll: bool,
 ) -> Result<()> {
     ensure!(allow, "X11 pointer control requires explicit local consent");
     let identity = transport::Identity::load(identity)?;
@@ -267,12 +274,12 @@ pub(super) async fn run(
         } => result?,
     };
     transport::verify_peer(&connection, &peer)?;
-    let result = drive(&connection, &mut stop, allow_discrete).await;
+    let result = drive(&connection, &mut stop, allow_discrete, allow_scroll).await;
     endpoint.close(0u8.into(), b"X11 input session ended");
     result
 }
 
-async fn drive<F>(connection: &quinn::Connection, stop: F, allow_discrete: bool) -> Result<()>
+async fn drive<F>(connection: &quinn::Connection, stop: F, allow_discrete: bool, allow_scroll: bool) -> Result<()>
 where
     F: Future<Output = std::io::Result<()>>,
 {
@@ -283,7 +290,7 @@ where
         result = async {
             let (mut send, mut receive) =
                 tokio::time::timeout(Duration::from_secs(5), connection.accept_bi()).await??;
-            let local = capabilities(allow_discrete).await?;
+            let local = capabilities(allow_discrete, allow_scroll).await?;
             let peer = super::exchange_hello(&mut send, &mut receive, local.clone()).await?;
             Ok::<_, anyhow::Error>((send, receive, peer, local))
         } => result?,
