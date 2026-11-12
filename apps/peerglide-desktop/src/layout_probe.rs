@@ -81,7 +81,7 @@ pub(super) async fn listen(
     }
 }
 
-fn unspecified_for(address: SocketAddr) -> SocketAddr {
+pub(super) fn unspecified_for(address: SocketAddr) -> SocketAddr {
     if address.is_ipv4() {
         SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))
     } else {

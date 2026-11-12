@@ -2,7 +2,7 @@
 use crate::display_layout::{DisplayId, EdgeAnchor, Layout, Revision};
 use peerglide_protocol::Edge;
 
-const MAX_LINKS: usize = 128;
+pub const MAX_LINKS: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Span {

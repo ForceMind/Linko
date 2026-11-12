@@ -2204,12 +2204,14 @@ name = "peerglide-desktop"
 version = "0.3.23-dev"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "peerglide-core",
  "peerglide-platform",
  "peerglide-protocol",
  "peerglide-transport",
  "quinn",
+ "serde",
  "serde_json",
  "tokio",
 ]
