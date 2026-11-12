@@ -2782,7 +2782,7 @@ macOS 约 30 秒的可见窗口 NoNative 测量为平均 CPU 1.398%、峰值 RSS
 证书。目标能力在确认租约时发布，回程归还到原出发显示器。普通关闭、超时或不匹配的
 回执会阻止继续发送。分段角点同时匹配两条路由时保留本机控制。
 [捕获 CI](https://github.com/ForceMind/Linko/actions/runs/43163016016)覆盖能力替换和既有捕获代次。
-[发送 CI](https://github.com/ForceMind/Linko/actions/runs/43163510577)的三身份隔离回环检查
+[发送 CI](https://github.com/ForceMind/Linko/actions/runs/43163903912)的三身份隔离回环检查
 释放报文、可靠流结束和同连接回执。该回环使用模拟的恢复终态。
 物理三机切换、混合 DPI、真实按键归属、屏幕热插拔及缺失回执时的设备行为由 #3/C06 验收。
 

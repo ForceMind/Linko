@@ -1189,7 +1189,10 @@ mod context_cli_tests {
         let args = ["peerglide", "connect-routes", "--layout", "routes.json"];
         assert!(Cli::try_parse_from(args).is_err());
         let cli = Cli::try_parse_from(args.into_iter().chain(["--native"])).unwrap();
-        assert!(matches!(cli.command, Command::ConnectRoutes { native: true, .. }));
+        assert!(matches!(
+            cli.command,
+            Command::ConnectRoutes { native: true, .. }
+        ));
     }
 
     #[test]
