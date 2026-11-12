@@ -93,7 +93,11 @@ impl Panel {
                             if display.id == layout.primary() {
                                 ui.weak(description(display, true));
                             } else {
-                                ui.radio_value(&mut self.receive_display, Some(*display), description(display, false));
+                                ui.radio_value(
+                                    &mut self.receive_display,
+                                    Some(*display),
+                                    description(display, false),
+                                );
                             }
                         }
                     });
@@ -152,13 +156,23 @@ mod tests {
     fn a_changed_receive_display_requires_explicit_selection() -> anyhow::Result<()> {
         let main = Display {
             id: DisplayId(1),
-            bounds: Bounds { left: 0.0, top: 0.0, right: 1920.0, bottom: 1080.0 },
+            bounds: Bounds {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1080.0,
+            },
             scale: 1.0,
             rotation: Rotation::Upright,
         };
         let mut secondary = Display {
             id: DisplayId(2),
-            bounds: Bounds { left: -1600.0, top: 0.0, right: 0.0, bottom: 900.0 },
+            bounds: Bounds {
+                left: -1600.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 900.0,
+            },
             ..main
         };
         let layout = Layout::new(main.id, vec![main, secondary]).unwrap();
@@ -169,7 +183,10 @@ mod tests {
         let fixture = super::super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         app.display_inventory = panel;
-        assert_eq!(app.display_inventory.receive_origin()?, Some((-1600.0, 0.0)));
+        assert_eq!(
+            app.display_inventory.receive_origin()?,
+            Some((-1600.0, 0.0))
+        );
         let mut command = std::process::Command::new("peerglide");
         app.configure_receive_display(&mut command, SessionMode::Native)?;
         assert_eq!(command.get_args().len(), 0);
@@ -177,12 +194,17 @@ mod tests {
         app.configure_receive_display(&mut command, SessionMode::Communication)?;
         assert_eq!(command.get_args().len(), 0);
         app.configure_receive_display(&mut command, SessionMode::Native)?;
-        assert_eq!(command.get_args().next().unwrap(), "--receive-display=-1600,0");
+        assert_eq!(
+            command.get_args().next().unwrap(),
+            "--receive-display=-1600,0"
+        );
 
         secondary.scale = 1.5;
         let updated = Layout::new(main.id, vec![main, secondary]).unwrap();
         *app.display_inventory.state.lock().unwrap() = State::Ready(Arc::new(updated));
-        assert!(app.configure_receive_display(&mut command, SessionMode::Native).is_err());
+        assert!(app
+            .configure_receive_display(&mut command, SessionMode::Native)
+            .is_err());
         drop(app);
         fixture.close()
     }
