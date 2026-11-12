@@ -398,7 +398,8 @@ impl HookState {
             && alt
             && fresh
             && usage == 0x4f
-            && (self.target.motion() || (route.remote() && self.gate.0.routed_target.get().is_some()))
+            && (self.target.motion()
+                || (route.remote() && self.gate.0.routed_target.get().is_some()))
             && (route.remote() || self.pairs.debt == 0)
             && !self.stopping
         {
