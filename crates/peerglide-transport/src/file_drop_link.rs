@@ -12,7 +12,10 @@ use anyhow::{ensure, Context, Result};
 use peerglide_protocol::LEASE_MS;
 use peerglide_transfer::drop_admission::{Admission, Context as DropContext, Ticket};
 use quinn::{crypto::rustls::HandshakeData, Connection};
-use std::{sync::Mutex, time::{Duration, Instant}};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 const LABEL: &[u8] = b"EXPORTER-Linko-Verified-File-Drop-v1";
 const IO_TIMEOUT: Duration = Duration::from_secs(4);
@@ -31,20 +34,34 @@ pub(crate) struct Receipt {
 }
 
 impl Receipt {
-    pub(crate) fn from_data(connection: &Connection, pin: &[u8], transfer: [u8; 16]) -> Result<Self> {
-        ensure!(transfer != [0; 16] && connection.close_reason().is_none(), "file transfer ended");
+    pub(crate) fn from_data(
+        connection: &Connection,
+        pin: &[u8],
+        transfer: [u8; 16],
+    ) -> Result<Self> {
+        ensure!(
+            transfer != [0; 16] && connection.close_reason().is_none(),
+            "file transfer ended"
+        );
         let handshake = connection
             .handshake_data()
             .context("file handshake unavailable")?
             .downcast::<HandshakeData>()
             .map_err(|_| anyhow::anyhow!("unexpected file handshake"))?;
-        ensure!(handshake.protocol.as_deref() == Some(data::ALPN), "file data ALPN required");
+        ensure!(
+            handshake.protocol.as_deref() == Some(data::ALPN),
+            "file data ALPN required"
+        );
         verify_peer(connection, pin)?;
         let mut key = [0; 32];
         connection
             .export_keying_material(&mut key, LABEL, &transfer)
             .map_err(|_| anyhow::anyhow!("file connection exporter unavailable"))?;
-        Ok(Self { transfer, peer: blake3::hash(pin), key })
+        Ok(Self {
+            transfer,
+            peer: blake3::hash(pin),
+            key,
+        })
     }
 
     fn tag(&self, kind: u8, lease: u64, input: &Binding) -> blake3::Hash {
@@ -97,8 +114,14 @@ impl Slot {
         now: u64,
         authorized: bool,
     ) -> Result<Self> {
-        ensure!(file.origin.connection() == context.connection, "prepared file connection differs");
-        let receipt = file.receipt.take().context("prepared file has no transfer proof")?;
+        ensure!(
+            file.origin.connection() == context.connection,
+            "prepared file connection differs"
+        );
+        let receipt = file
+            .receipt
+            .take()
+            .context("prepared file has no transfer proof")?;
         let remaining = admission
             .file_ready(ticket, context, receipt.transfer, now, authorized)
             .map_err(|error| anyhow::anyhow!("file preparation unavailable ({error:?})"))?;
@@ -118,7 +141,9 @@ impl Slot {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Option<Prepared>>> {
-        self.0.lock().map_err(|_| anyhow::anyhow!("file reservation slot unavailable"))
+        self.0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("file reservation slot unavailable"))
     }
 
     /// Only call from the local input owner after the normal v5 Acquire was
@@ -139,13 +164,22 @@ impl Slot {
         let Some(reservation) = &prepared.reservation else {
             return Ok(None);
         };
-        if reservation.lease != granted_lease || prepared.receipt.peer != blake3::hash(pin)
-            || !reservation.input.matches(input, pin, &reservation.input.proof())?
+        if reservation.lease != granted_lease
+            || prepared.receipt.peer != blake3::hash(pin)
+            || !reservation
+                .input
+                .matches(input, pin, &reservation.input.proof())?
         {
             return Ok(None);
         }
         if admission
-            .file_ready(prepared.ticket, prepared.context, prepared.receipt.transfer, now, true)
+            .file_ready(
+                prepared.ticket,
+                prepared.context,
+                prepared.receipt.transfer,
+                now,
+                true,
+            )
             .is_err()
         {
             *state = None;
@@ -181,7 +215,11 @@ impl Slot {
             input,
             expires: Instant::now() + Duration::from_millis(LEASE_MS),
         });
-        Ok(Some(Published { slot: self, tag, confirmed: false }))
+        Ok(Some(Published {
+            slot: self,
+            tag,
+            confirmed: false,
+        }))
     }
 }
 
@@ -190,7 +228,10 @@ fn live(state: &mut Option<Prepared>, current: Option<DropContext>) -> Option<&m
     if state.as_ref().is_some_and(|prepared| {
         Some(prepared.context) != current
             || now >= prepared.expires
-            || prepared.reservation.as_ref().is_some_and(|grant| now >= grant.expires)
+            || prepared
+                .reservation
+                .as_ref()
+                .is_some_and(|grant| now >= grant.expires)
     }) {
         *state = None;
     }
@@ -222,7 +263,10 @@ pub async fn reserve(
 ) -> Result<bool> {
     let receipt = receipt.0;
     verify_sidecar(sidecar, pin)?;
-    ensure!(lease != 0 && receipt.peer == blake3::hash(pin), "file reservation peer or lease differs");
+    ensure!(
+        lease != 0 && receipt.peer == blake3::hash(pin),
+        "file reservation peer or lease differs"
+    );
     let binding = Binding::from_v5(input, pin)?;
     let request = Record {
         kind: REQUEST,
@@ -239,11 +283,20 @@ pub async fn reserve(
         receive.read_exact(&mut bytes).await?;
         require_end(&mut receive).await?;
         let reply = Record::decode(bytes)?;
-        ensure!(reply.lease == lease && reply.transfer == receipt.transfer, "file reservation reply differs");
+        ensure!(
+            reply.lease == lease && reply.transfer == receipt.transfer,
+            "file reservation reply differs"
+        );
         match reply.kind {
             READY => {
-                ensure!(reply.tag == receipt.tag(READY, lease, &binding), "file reservation proof differs");
-                ensure!(binding.matches(input, pin, &binding.proof())?, "input binding retired");
+                ensure!(
+                    reply.tag == receipt.tag(READY, lease, &binding),
+                    "file reservation proof differs"
+                );
+                ensure!(
+                    binding.matches(input, pin, &binding.proof())?,
+                    "input binding retired"
+                );
                 Ok(true)
             }
             DECLINED if reply.tag == blake3::Hash::from_bytes([0; 32]) => Ok(false),
@@ -274,9 +327,16 @@ pub async fn accept(
         ensure!(request.kind == REQUEST, "invalid file reservation request");
         let binding = Binding::from_v5(input, pin)?;
         let published = slot.publish(&request, binding, pin, current())?;
-        let (kind, tag) = published.as_ref().map_or((DECLINED, blake3::Hash::from_bytes([0; 32])),
-                                                    |grant| (READY, grant.tag));
-        let reply = Record { kind, tag, ..request };
+        let (kind, tag) = published
+            .as_ref()
+            .map_or((DECLINED, blake3::Hash::from_bytes([0; 32])), |grant| {
+                (READY, grant.tag)
+            });
+        let reply = Record {
+            kind,
+            tag,
+            ..request
+        };
         send.write_all(&reply.encode()).await?;
         send.finish()?;
         if let Some(mut published) = published {
@@ -308,10 +368,21 @@ impl Record {
     }
 
     fn decode(bytes: [u8; BYTES]) -> Result<Self> {
-        ensure!(&bytes[..4] == MAGIC && bytes[4] == 1 && bytes[6..8] == [0, 0], "invalid file reservation header");
+        ensure!(
+            &bytes[..4] == MAGIC && bytes[4] == 1 && bytes[6..8] == [0, 0],
+            "invalid file reservation header"
+        );
         let lease = u64::from_le_bytes(bytes[8..16].try_into()?);
         let transfer = bytes[16..32].try_into()?;
-        ensure!(lease != 0 && transfer != [0; 16], "invalid file reservation identity");
-        Ok(Self { kind: bytes[5], lease, transfer, tag: blake3::Hash::from_bytes(bytes[32..].try_into()?) })
+        ensure!(
+            lease != 0 && transfer != [0; 16],
+            "invalid file reservation identity"
+        );
+        Ok(Self {
+            kind: bytes[5],
+            lease,
+            transfer,
+            tag: blake3::Hash::from_bytes(bytes[32..].try_into()?),
+        })
     }
 }

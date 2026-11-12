@@ -1,5 +1,8 @@
 //! File offer and disk orchestration on the authenticated data connection.
-use crate::{data, file_drop_link::{Receipt, SentReceipt}};
+use crate::{
+    data,
+    file_drop_link::{Receipt, SentReceipt},
+};
 use anyhow::{ensure, Context, Result};
 pub use peerglide_transfer::drop_admission;
 use peerglide_transfer::{
@@ -270,7 +273,10 @@ pub async fn send_for_drop(
 ) -> Result<(FileOutcome, Option<SentReceipt>)> {
     let receipt = Receipt::from_data(connection, pinned_peer, source.id())?;
     let outcome = send(connection, pinned_peer, source, stop, progress).await?;
-    Ok((outcome, (outcome == FileOutcome::Committed).then_some(SentReceipt(receipt))))
+    Ok((
+        outcome,
+        (outcome == FileOutcome::Committed).then_some(SentReceipt(receipt)),
+    ))
 }
 
 /// Send one explicitly selected file and require the matching terminal receipt.
@@ -837,7 +843,10 @@ mod tests {
         Ok(())
     }
 
-    async fn connect_pair(client: &Endpoint, server: &Endpoint) -> Result<(Connection, Connection)> {
+    async fn connect_pair(
+        client: &Endpoint,
+        server: &Endpoint,
+    ) -> Result<(Connection, Connection)> {
         tokio::time::timeout(Duration::from_secs(5), async {
             tokio::try_join!(
                 async {
@@ -849,7 +858,8 @@ mod tests {
                     Ok::<_, anyhow::Error>(incoming.await?)
                 }
             )
-        }).await?
+        })
+        .await?
     }
 
     async fn exercise_drop_reservation(
@@ -875,10 +885,17 @@ mod tests {
             focused: true,
         };
         let mut admission = Admission::default();
-        let ticket = admission.begin(context, origin.transfer(), Content::File, 0, true).unwrap();
+        let ticket = admission
+            .begin(context, origin.transfer(), Content::File, 0, true)
+            .unwrap();
         admission.verified(ticket, context, 1, true).unwrap();
         let slot = file_drop_link::Slot::arm(
-            file.prepare_drop(|| Ok(()))?, &mut admission, ticket, context, 2, true,
+            file.prepare_drop(|| Ok(()))?,
+            &mut admission,
+            ticket,
+            context,
+            2,
+            true,
         )?;
 
         let other_data_source = data::endpoint(bind, source, &target.certificate)?;
@@ -888,32 +905,95 @@ mod tests {
         let sidecar = connect_pair(&sender, &receiver).await?;
         let lease = 7;
         let rejected = tokio::try_join!(
-            file_drop_link::reserve(&sidecar.0, &input.0, &target.certificate, SentReceipt(wrong), lease),
-            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(context)),
+            file_drop_link::reserve(
+                &sidecar.0,
+                &input.0,
+                &target.certificate,
+                SentReceipt(wrong),
+                lease
+            ),
+            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(
+                context
+            )),
         )?;
-        assert_eq!(rejected, (false, false), "a matching transfer id alone is insufficient");
+        assert_eq!(
+            rejected,
+            (false, false),
+            "a matching transfer id alone is insufficient"
+        );
 
         let sidecar = connect_pair(&sender, &receiver).await?;
         let rejected = tokio::try_join!(
-            file_drop_link::reserve(&sidecar.0, &replacement.0, &target.certificate, SentReceipt(receipt.0.clone()), lease),
-            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(context)),
+            file_drop_link::reserve(
+                &sidecar.0,
+                &replacement.0,
+                &target.certificate,
+                SentReceipt(receipt.0.clone()),
+                lease
+            ),
+            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(
+                context
+            )),
         )?;
-        assert_eq!(rejected, (false, false), "file proof cannot move to another input connection");
+        assert_eq!(
+            rejected,
+            (false, false),
+            "file proof cannot move to another input connection"
+        );
 
         let sidecar = connect_pair(&sender, &receiver).await?;
         let accepted = tokio::try_join!(
             file_drop_link::reserve(&sidecar.0, &input.0, &target.certificate, receipt, lease),
-            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(context)),
+            file_drop_link::accept(&sidecar.1, &input.1, &source.certificate, &slot, || Some(
+                context
+            )),
         )?;
         assert_eq!(accepted, (true, true));
         let granted = confirm_input_lease(&input, lease).await?;
-        assert!(slot.claim(&input.1, &source.certificate, lease + 1, Some(context), &mut admission, 3)?.is_none());
-        assert!(slot.claim(&replacement.1, &source.certificate, lease, Some(context), &mut admission, 3)?.is_none());
-        let claim = slot.claim(&input.1, &source.certificate, granted, Some(context), &mut admission, 4)?
+        assert!(slot
+            .claim(
+                &input.1,
+                &source.certificate,
+                lease + 1,
+                Some(context),
+                &mut admission,
+                3
+            )?
+            .is_none());
+        assert!(slot
+            .claim(
+                &replacement.1,
+                &source.certificate,
+                lease,
+                Some(context),
+                &mut admission,
+                3
+            )?
+            .is_none());
+        let claim = slot
+            .claim(
+                &input.1,
+                &source.certificate,
+                granted,
+                Some(context),
+                &mut admission,
+                4,
+            )?
             .context("current lease did not claim its file")?;
         assert!(claim.ticket == ticket && claim.file.path() == file.path.as_path());
-        admission.submit(claim.ticket, context, 5, true, Effect::Copy).unwrap();
-        assert!(slot.claim(&input.1, &source.certificate, lease, Some(context), &mut admission, 6)?.is_none());
+        admission
+            .submit(claim.ticket, context, 5, true, Effect::Copy)
+            .unwrap();
+        assert!(slot
+            .claim(
+                &input.1,
+                &source.certificate,
+                lease,
+                Some(context),
+                &mut admission,
+                6
+            )?
+            .is_none());
         Ok(())
     }
 
@@ -922,7 +1002,15 @@ mod tests {
         let (granted, _) = tokio::try_join!(
             async {
                 let (mut send, mut receive) = input.0.open_bi().await?;
-                crate::send(&mut send, &Message::Acquire { lease, edge: Edge::Right, along: 0.5 }).await?;
+                crate::send(
+                    &mut send,
+                    &Message::Acquire {
+                        lease,
+                        edge: Edge::Right,
+                        along: 0.5,
+                    },
+                )
+                .await?;
                 match crate::receive(&mut receive).await? {
                     Message::Granted { lease: granted } if granted == lease => Ok(granted),
                     _ => anyhow::bail!("test v5 lease not granted"),
@@ -931,7 +1019,9 @@ mod tests {
             async {
                 let (mut send, mut receive) = input.1.accept_bi().await?;
                 match crate::receive(&mut receive).await? {
-                    Message::Acquire { lease: requested, .. } if requested == lease => {
+                    Message::Acquire {
+                        lease: requested, ..
+                    } if requested == lease => {
                         crate::send(&mut send, &Message::Granted { lease }).await
                     }
                     _ => anyhow::bail!("test v5 acquire differed"),
