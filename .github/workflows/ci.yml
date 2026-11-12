@@ -128,6 +128,32 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  portable-update:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: build
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linko-prototype-${{ matrix.os }}
+          path: ${{ runner.temp }}/linko-current-portable
+      - name: Rehearse portable update and rollback with CI packages
+        run: python tools/verify_packaged_update.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINKO_REVIEW_HEAD: ${{ github.event.pull_request.head.sha }}
+          LINKO_PACKAGE_ARTIFACT: linko-prototype-${{ matrix.os }}
+          LINKO_CURRENT_PACKAGE_DIR: ${{ runner.temp }}/linko-current-portable
+
   dependency-audit:
     runs-on: ubuntu-latest
     env:

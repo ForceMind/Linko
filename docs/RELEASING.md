@@ -51,6 +51,11 @@ python tools/portable_update.py --versions PATH rollback
 文件内容。系统级安装、后台服务、代码签名、公证及真实更新后的
 系统权限继续分别授权和验收。
 
+同仓库 PR 的 GitHub Actions 在临时目录暂存并选择当轮成品，运行同包
+worker 的版本入口。找到同分支或基线分支中来源匹配、尚未过期的上一轮
+通过产物时，作业还会验证损坏版本被拒绝及恢复旧版入口。缺少上一版时
+记录跳过回滚，暂存与选择仍须通过。
+
 ## 首个预览的来源
 
 0.3.16-dev 程序来自 `cb27bce72ece205f138180fd1b6ef0c8cbf0764f`、CI `42382394527`。首个公开包仅替换 ZIP 根目录的 README／SECURITY，程序和 App 内成员保持原样。标签的 Rust 源码须与该基线一致。新 ZIP 有独立摘要，不能混用原始 CI artifact 外层摘要。
