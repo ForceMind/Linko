@@ -91,7 +91,7 @@ mod tests {
         let client = endpoint(address, &left, &right.certificate)?;
         let server = endpoint(address, &right, &left.certificate)?;
         let (first_left, first_right) = pair(&client, &server).await?;
-        let (second_left, _) = pair(&client, &server).await?;
+        let (second_left, _second_right) = pair(&client, &server).await?;
         let sent = Binding::from_v5(&first_left, &right.certificate)?;
         let peer = Binding::from_v5(&first_right, &left.certificate)?;
         assert_eq!(sent.proof(), peer.proof());

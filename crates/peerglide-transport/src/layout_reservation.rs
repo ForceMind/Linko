@@ -260,7 +260,7 @@ mod tests {
         let a_layout = endpoint(bind, &a, &b.certificate)?;
         let b_layout = endpoint(bind, &b, &a.certificate)?;
         let (a_v5, b_v5) = pair(&a_input, &b_input).await?;
-        let (_, other_v5) = pair(&a_input, &b_input).await?;
+        let (_other_client, other_v5) = pair(&a_input, &b_input).await?;
         let request = Request {
             lease: 19,
             display: 12,
