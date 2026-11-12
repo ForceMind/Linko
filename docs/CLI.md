@@ -145,3 +145,15 @@ peerglide listen --identity PATH --peer-cert SOURCE.der --native --allow-control
 ```
 
 真实 DPI、旋转、拖动和热插拔由集中验收确认。多机动态选择与跨机副屏协商单独推进。
+
+## 查询已核验电脑的屏幕表
+
+Windows/macOS 发送端可明确临时共享一次屏幕位置、比例和方向。两台电脑需分别
+核对证书，查询使用独立的 v5 认证探针与布局连接。
+
+```text
+peerglide listen-displays --identity PATH --peer-cert REQUESTER.der --share-display-layout
+peerglide probe-displays HOST:24876 HOST:24877 --identity PATH --peer-cert HOST.der
+```
+
+屏幕编号只用于本次查询。此命令不授予键鼠控制权限。
