@@ -5,7 +5,7 @@ use std::{net::SocketAddr, path::PathBuf};
 
 pub const VERSION: u8 = 1;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     pub version: u8,
@@ -23,7 +23,15 @@ impl Default for Plan {
     }
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+/// The desktop's local configuration envelope, accepted for pinned launches.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredPlan {
+    pub store_version: u16,
+    pub data: Plan,
+}
+
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PeerSpec {
     pub address: SocketAddr,
@@ -34,7 +42,7 @@ pub struct PeerSpec {
     pub fingerprint: Option<String>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteSpec {
     pub local_origin: [f64; 2],

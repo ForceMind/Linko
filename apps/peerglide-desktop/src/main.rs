@@ -293,6 +293,12 @@ enum Command {
         /// Enable real Windows or macOS keyboard and mouse capture.
         #[arg(long, required = true)]
         native: bool,
+        #[arg(long, hide = true, requires_all = ["expected_layout_fingerprint", "expected_local_fingerprint"])]
+        managed: bool,
+        #[arg(long, hide = true, requires = "managed")]
+        expected_layout_fingerprint: Option<String>,
+        #[arg(long, hide = true, requires = "managed")]
+        expected_local_fingerprint: Option<String>,
     },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
@@ -559,12 +565,24 @@ fn main() -> Result<()> {
             identity,
             layout,
             native,
+            managed,
+            expected_layout_fingerprint,
+            expected_local_fingerprint,
         } => {
             anyhow::ensure!(
                 native,
                 "configured routing requires explicit native consent"
             );
-            run_cli_future(|| session::routed_source::run(&identity, &layout))
+            run_cli_future(|| {
+                run_routed_worker(
+                    &identity,
+                    &layout,
+                    managed,
+                    expected_layout_fingerprint
+                        .as_deref()
+                        .zip(expected_local_fingerprint.as_deref()),
+                )
+            })
         }
         Command::Connect {
             address,
@@ -793,6 +811,81 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
     }
 }
 
+fn managed_stop_reader(
+    stop: tokio::sync::watch::Sender<bool>,
+    layout: Option<Arc<layout_control::Controller>>,
+) -> tokio::sync::oneshot::Receiver<()> {
+    let (request, requested) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = stdin.lock();
+        loop {
+            match layout_control::read_command(&mut reader) {
+                Ok(Some(line)) if line.trim() == "stop" => break,
+                Ok(Some(line)) => {
+                    if let Some(layout) = &layout {
+                        if let Some(update) =
+                            peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line)
+                        {
+                            layout.submit(update);
+                        }
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        // Wake the existing native owner even if the async worker is stalled.
+        let _ = stop.send(true);
+        request_native_stop();
+        let _ = request.send(());
+    });
+    requested
+}
+
+async fn run_routed_worker(
+    identity: &std::path::Path,
+    layout: &std::path::Path,
+    managed: bool,
+    expected: Option<(&str, &str)>,
+) -> Result<()> {
+    anyhow::ensure!(
+        managed == expected.is_some(),
+        "managed route startup requires both confirmed fingerprints"
+    );
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let _requested = managed.then(|| managed_stop_reader(stop.clone(), None));
+    let mut reporter = InputReporter::new(managed);
+    reporter.set(WorkerInputState::Disabled);
+    let result = {
+        let mut work = Box::pin(session::routed_source::run(
+            identity,
+            layout,
+            expected,
+            stopped,
+            &mut reporter,
+        ));
+        tokio::select! {
+            result = &mut work => result,
+            _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); request_native_stop(); work.await },
+        }
+    };
+    let terminal = reporter.finish();
+    worker_event(
+        managed,
+        if result.is_ok() && terminal != WorkerInputState::RecoveryUnconfirmed {
+            WorkerState::Stopped
+        } else {
+            WorkerState::Failed
+        },
+    );
+    result?;
+    anyhow::ensure!(
+        terminal != WorkerInputState::RecoveryUnconfirmed,
+        "native input recovery remains unconfirmed"
+    );
+    Ok(())
+}
+
 async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     anyhow::ensure!(
         o.remote_entry_edge.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
@@ -829,31 +922,7 @@ async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result
     let result = {
         let mut work = Box::pin(supervise(&o, address, probe, stopped, &mut input_status));
         if managed {
-            let (request, requested) = tokio::sync::oneshot::channel();
-            let direct_stop = stop.clone();
-            let layout = o.layout.clone();
-            std::thread::spawn(move || {
-                let stdin = std::io::stdin();
-                let mut reader = stdin.lock();
-                loop {
-                    match layout_control::read_command(&mut reader) {
-                        Ok(Some(line)) if line.trim() == "stop" => break,
-                        Ok(Some(line)) => {
-                            if let Some(update) =
-                                peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line)
-                            {
-                                layout.submit(update);
-                            }
-                        }
-                        Ok(None) | Err(_) => break,
-                    }
-                }
-                // This thread must also wake native recovery when the async
-                // session itself is stalled. No OS input is injected here.
-                let _ = direct_stop.send(true);
-                request_native_stop();
-                let _ = request.send(());
-            });
+            let requested = managed_stop_reader(stop.clone(), Some(o.layout.clone()));
             tokio::select! {
                 result = &mut work => result,
                 _ = requested => { let _ = stop.send(true); request_native_stop(); work.await },
@@ -1192,6 +1261,30 @@ mod context_cli_tests {
         assert!(matches!(
             cli.command,
             Command::ConnectRoutes { native: true, .. }
+        ));
+    }
+
+    #[test]
+    fn managed_routes_require_both_confirmed_fingerprints() {
+        let managed = [
+            "peerglide",
+            "connect-routes",
+            "--layout",
+            "draft.json",
+            "--native",
+            "--managed",
+        ];
+        assert!(Cli::try_parse_from(managed).is_err());
+        let cli = Cli::try_parse_from(managed.into_iter().chain([
+            "--expected-layout-fingerprint",
+            "layout",
+            "--expected-local-fingerprint",
+            "local",
+        ]))
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::ConnectRoutes { managed: true, .. }
         ));
     }
 
