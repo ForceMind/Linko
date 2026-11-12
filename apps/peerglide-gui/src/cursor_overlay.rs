@@ -235,7 +235,7 @@ fn viewport(origin: egui::Pos2) -> egui::ViewportBuilder {
         .with_always_on_top()
 }
 
-fn points(
+pub(super) fn points(
     [x, y]: [f64; 2],
     physical: bool,
     pixels_per_point: f32,

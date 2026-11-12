@@ -26,6 +26,7 @@ pub(super) struct Panel {
     peer: PeerForm,
     route: RouteForm,
     export_name: String,
+    projection: Option<super::route_projection::Projection>,
 }
 
 struct Draft {
@@ -86,11 +87,28 @@ impl Panel {
     }
 
     fn draw(&mut self, app: &mut App, ui: &mut egui::Ui, draft: &mut Draft) {
-        let editable = app.idle_writable() && !app.pairing_pending() && !app.enrollment_blocked;
+        let editable = self.projection.is_none()
+            && app.idle_writable()
+            && !app.pairing_pending()
+            && !app.enrollment_blocked;
         ui.add_enabled_ui(editable, |ui| {
             self.draw_peers(app, ui, draft);
             if let Some(layout) = app.display_inventory.snapshot() {
                 self.draw_routes(app, ui, draft, &layout);
+                if ui
+                    .add_enabled(
+                        projection_allowed(app)
+                            && !draft.plan.routes.is_empty()
+                            && !ui.ctx().embed_viewports(),
+                        egui::Button::new("投影分段布局…"),
+                    )
+                    .clicked()
+                {
+                    match super::route_projection::Projection::new(&draft.plan, layout.clone()) {
+                        Ok(projection) => self.projection = Some(projection),
+                        Err(error) => app.notice = format!("无法投影布局：{error:#}"),
+                    }
+                }
                 if ui
                     .add_enabled(
                         app.dialog.is_none()
@@ -139,6 +157,45 @@ impl Panel {
                 ui.label("请先在“本机显示器”读取当前布局。");
             }
         });
+    }
+
+    pub(super) fn close_projection(&mut self, ctx: &egui::Context) {
+        if let Some(projection) = self.projection.take() {
+            projection.close(ctx);
+        }
+    }
+
+    pub(super) fn projection_ui(&mut self, app: &mut App, ctx: &egui::Context) {
+        use super::route_projection::Decision;
+
+        if !projection_allowed(app) || ctx.embed_viewports() {
+            self.close_projection(ctx);
+            return;
+        }
+        let Some(projection) = self.projection.as_ref() else {
+            return;
+        };
+        let Some(decision) = projection.ui(ctx) else {
+            return;
+        };
+        if let Decision::Save(plan) = decision {
+            let result = (|| {
+                let draft = self
+                    .local
+                    .as_mut()
+                    .and_then(|local| local.as_mut().ok())
+                    .context("分段草稿不可写")?;
+                let current =
+                    peerglide_platform::read_display_layout().context("无法重新读取当前屏幕")?;
+                projection.validate_save(&draft.plan, &plan, &current)?;
+                draft.save(plan)
+            })();
+            if result.is_ok() {
+                self.route = RouteForm::default();
+            }
+            app.feedback(result, "已保存投影布局。");
+        }
+        self.close_projection(ctx);
     }
 
     fn draw_peers(&mut self, app: &mut App, ui: &mut egui::Ui, draft: &mut Draft) {
@@ -424,7 +481,7 @@ fn edge_span(ui: &mut egui::Ui, label: &str, edge: &mut Edge, span: &mut [f64; 2
     });
 }
 
-fn edge_label(edge: Edge) -> &'static str {
+pub(super) fn edge_label(edge: Edge) -> &'static str {
     match edge {
         Edge::Left => "左沿",
         Edge::Right => "右沿",
@@ -491,7 +548,20 @@ fn validate_shape(plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-fn validate_layout(plan: &Plan, layout: &Layout) -> Result<()> {
+pub(super) fn projection_allowed(app: &App) -> bool {
+    app.idle_writable()
+        && !app.pairing_pending()
+        && !app.enrollment_blocked
+        && !app.recovery_blocked
+        && !app.window_hidden
+        && !app.close_requested
+        && !app.exit_confirmed
+        && app.dialog.is_none()
+        && app.wizard.is_none()
+        && app.layout_report.is_none()
+}
+
+pub(super) fn validate_layout(plan: &Plan, layout: &Layout) -> Result<()> {
     validate_shape(plan)?;
     let mut links = Vec::with_capacity(plan.routes.len());
     for route in &plan.routes {
