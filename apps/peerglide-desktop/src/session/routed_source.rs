@@ -235,11 +235,14 @@ impl<'a> Source<'a> {
         let edges = chosen.edges();
         let along = chosen.route.fraction;
         *attempted = true;
-        if !link.send(&Message::Acquire {
+        if !link
+            .send(&Message::Acquire {
                 lease: LEASE,
                 edge: edges.wire_edge(),
                 along,
-            }).await? {
+            })
+            .await?
+        {
             return Ok(Exit::Local(None));
         }
         let mut pending = Some(request);
@@ -450,7 +453,12 @@ impl Link {
         match self.messages.recv().await {
             Some(Ok(message)) => Ok(Some(message)),
             Some(Err(error)) if error.is::<transport::InvalidMessageFrame>() => Err(error),
-            Some(Err(error)) if error.is::<transport::MessageStreamEnded>() || self.connection.close_reason().is_some() => Ok(None),
+            Some(Err(error))
+                if error.is::<transport::MessageStreamEnded>()
+                    || self.connection.close_reason().is_some() =>
+            {
+                Ok(None)
+            }
             Some(Err(error)) => Err(error),
             None => Ok(None),
         }
@@ -543,9 +551,14 @@ mod tests {
                     ReleaseOrder::SourceFirst => {
                         assert!(matches!(
                             transport::receive(&mut rx).await?,
-                            Message::Release { lease: LEASE, cursor: None }
+                            Message::Release {
+                                lease: LEASE,
+                                cursor: None
+                            }
                         ));
-                        assert!(matches!(transport::receive(&mut rx).await, Err(error) if error.is::<transport::MessageStreamEnded>()));
+                        assert!(
+                            matches!(transport::receive(&mut rx).await, Err(error) if error.is::<transport::MessageStreamEnded>())
+                        );
                     }
                     ReleaseOrder::PeerFirst => {
                         tx.finish()?;
@@ -578,7 +591,10 @@ mod tests {
                     },
                 )
                 .await?;
-                assert!(matches!(link.next().await?, Some(Message::Granted { lease: LEASE })));
+                assert!(matches!(
+                    link.next().await?,
+                    Some(Message::Granted { lease: LEASE })
+                ));
                 match order {
                     ReleaseOrder::SourceFirst => (),
                     ReleaseOrder::PeerFirst => {
@@ -586,7 +602,9 @@ mod tests {
                         assert!(saw_fin.send(()).is_ok());
                     }
                     ReleaseOrder::InvalidFrame => {
-                        assert!(matches!(link.next().await, Err(error) if error.is::<transport::InvalidMessageFrame>()));
+                        assert!(
+                            matches!(link.next().await, Err(error) if error.is::<transport::InvalidMessageFrame>())
+                        );
                         assert!(saw_fin.send(()).is_ok());
                     }
                 }
