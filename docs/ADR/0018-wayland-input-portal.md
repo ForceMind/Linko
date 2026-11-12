@@ -34,6 +34,14 @@ v5 输入租约的对端授权与本机提交检查。合成器的激活 ID 和 
 同一桌面只运行一个输入所有者；Wayland 路径不通过 XWayland 重新打开捕获，
 也不要求 root 或直接设备权限。软件依赖按锁文件和审计门槛单独核对。
 
+### 物理接管信号
+
+RemoteDesktop 的 EIS sender 提供注入和设备状态。通用空闲通知也没有向客户端报告
+输入来源。KWin 的 `get_input_idle_notification` 选择忽略 idle inhibitor 的检测器，
+其用户活动监听会收到 EIS 注入的按键。把 `resumed` 直接当成物理输入可能在本轮注入时
+自行退役。接管候选需要合成器提供可区分来源的信号，再验证自有注入不触发、物理键鼠
+能退役、断开信号监听时清理及旧代次不影响新租约。
+
 ## 验证顺序
 
 先检查门户版本、许可拒绝、取消、父窗口及会话结束。测试不同合成器的 EIS
@@ -43,3 +51,6 @@ v5 输入租约的对端授权与本机提交检查。合成器的激活 ID 和 
 - [XDG InputCapture](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.InputCapture.html)
 - [XDG RemoteDesktop](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.RemoteDesktop.html)
 - [XDG 窗口标识](https://flatpak.github.io/xdg-desktop-portal/docs/window-identifiers.html)
+- [KWin 空闲通知](https://github.com/KDE/kwin/blob/ad9ba77376a0d81b0813a28bbeb9003040ef92b2/src/wayland/idlenotify_v1.cpp)
+- [KWin 输入活动监听](https://github.com/KDE/kwin/blob/ad9ba77376a0d81b0813a28bbeb9003040ef92b2/src/input.cpp)
+- [KWin EIS 输入分派](https://github.com/KDE/kwin/blob/ad9ba77376a0d81b0813a28bbeb9003040ef92b2/src/plugins/eis/eiscontext.cpp)
