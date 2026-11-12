@@ -583,7 +583,26 @@ impl App {
                             let result = self.set_desktop_preferences(ctx, preferences);
                             self.feedback(result, "已保存界面动效偏好。");
                         }
+                        if cursor_overlay::SUPPORTED && ui
+                            .add_enabled(
+                                !self.desktop_preferences.reduce_motion,
+                                egui::Checkbox::new(&mut preferences.cursor_trail, "光标拖尾"),
+                            )
+                            .changed()
+                        {
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            if result.is_ok() {
+                                self.cursor_overlay.reenable();
+                            }
+                            self.feedback(result, "已保存光标拖尾偏好。");
+                        }
                     });
+                    if cursor_overlay::SUPPORTED && ui
+                        .add_enabled(self.cursor_overlay_available(), egui::Button::new("定位光标"))
+                        .clicked()
+                    {
+                        self.cursor_overlay.locate(Instant::now());
+                    }
                     ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                         if ui
                             .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
