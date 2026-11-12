@@ -410,6 +410,13 @@ pub(super) async fn run_with_diagnostics(
     // Native display enumeration runs before installing capture, on the
     // worker. A failed OS query keeps the compatible primary-screen behavior.
     let topology = monitor_layout(native);
+    if let Some(selection) = &receive_display
+        && topology.as_ref().is_none_or(|current| !selection.matches_snapshot(current))
+    {
+        input_status.reporter.set(WorkerInputState::Disabled);
+        bail!("The selected receive display is no longer current. Select it again before restarting.");
+    }
+    let mut display_change = Box::pin(watch_display_layout(topology.as_ref()));
     let mut capture = if native {
         match platform::capture_with_receive_display(
             itx,
@@ -539,6 +546,7 @@ pub(super) async fn run_with_diagnostics(
         let acquire_wake=pending.map(PendingAcquire::wake_at);
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
+            changed=&mut display_change,if native && cfg!(any(windows,target_os="macos"))=>return changed,
             _=tokio::time::sleep_until(motion_outbox.next_send),if motion_outbox.latest.is_some()=>{
                 if *stop.borrow() || stop.has_changed().is_err(){return Ok(());}
                 if let Some(m)=motion_outbox.take_due(tokio::time::Instant::now()){
@@ -988,6 +996,34 @@ fn monitor_layout(_: bool) -> Option<Layout> {
     None
 }
 
+fn layout_unchanged(original: Option<&Layout>, current: Option<&Layout>) -> bool {
+    match (original, current) {
+        (Some(original), Some(current)) => original.same_configuration(current),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+async fn watch_display_layout(original: Option<&Layout>) -> Result<()> {
+    let period = Duration::from_secs(1);
+    loop {
+        tokio::time::sleep(period).await;
+        // Display enumeration can block in the OS. Keep it off the async
+        // session and the native input owner, with at most one query in flight.
+        let current = tokio::time::timeout(
+            period,
+            tokio::task::spawn_blocking(|| monitor_layout(true)),
+        )
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .ok_or_else(|| anyhow::anyhow!("Display layout could not be checked. Restart the session."))?;
+        if !layout_unchanged(original, current.as_ref()) {
+            bail!("Display layout changed or became unavailable. Check the display selection before restarting.");
+        }
+    }
+}
+
 fn exposed_primary_edge(
     layout: Option<&Layout>,
     edge: Edge,
@@ -1068,6 +1104,53 @@ pub(super) fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
 mod tests {
     use super::*;
     use transport::Identity;
+
+    #[test]
+    fn native_display_watch_rejects_an_obsolete_snapshot() {
+        use platform::display_layout::{Bounds, Display, DisplayId, Rotation};
+
+        let primary = Display {
+            id: DisplayId(1),
+            bounds: Bounds {
+                left: 0.0,
+                top: 0.0,
+                right: 100.0,
+                bottom: 100.0,
+            },
+            scale: 1.0,
+            rotation: Rotation::Upright,
+        };
+        let secondary = Display {
+            id: DisplayId(2),
+            bounds: Bounds {
+                left: -100.0,
+                right: 0.0,
+                ..primary.bounds
+            },
+            ..primary
+        };
+        let original = Layout::new(primary.id, vec![primary, secondary]).unwrap();
+        let same = Layout::new(primary.id, vec![secondary, primary]).unwrap();
+        let removed = Layout::new(primary.id, vec![primary]).unwrap();
+        let other_primary = Layout::new(secondary.id, vec![primary, secondary]).unwrap();
+        let scaled = Display { scale: 2.0, ..secondary };
+        let rotated = Display { rotation: Rotation::Clockwise90, ..secondary };
+        let moved = Display {
+            bounds: Bounds { top: 50.0, bottom: 150.0, ..secondary.bounds },
+            ..secondary
+        };
+        assert!(layout_unchanged(Some(&original), Some(&same)));
+        assert!(layout_unchanged(None, None));
+        assert!(!layout_unchanged(None, Some(&same)));
+        assert!(!layout_unchanged(Some(&original), None));
+        for changed in [removed, other_primary] {
+            assert!(!layout_unchanged(Some(&original), Some(&changed)));
+        }
+        for display in [scaled, rotated, moved] {
+            let changed = Layout::new(primary.id, vec![primary, display]).unwrap();
+            assert!(!layout_unchanged(Some(&original), Some(&changed)));
+        }
+    }
 
     fn pending_request(lease: u64, started: u64) -> (PendingAcquire, CaptureEpoch) {
         let gate = platform::CaptureGate::default();

@@ -139,6 +139,8 @@ Windows 和 macOS 的原生接收会话可用 `--receive-display=X,Y` 选定一�
 设备详情中的显示器列表提供当前位置。使用屏幕左上角坐标，镜像或重复坐标会拒绝。
 选项需要显式 `--native --allow-control`，可与现有 v5 电脑通信。源端的边缘方向仍按
 两端已有的配置。自动重连仍使用本次启动时的本机目标快照。更换目标需要停止并重新启动。
+工作器定期核对本机布局。检测到变化或无法重新核对已有布局时，会结束原生会话并执行
+键鼠释放和本机恢复。重启会话前重新确认接收屏幕，避免沿用热插拔前的目标。
 
 ```text
 peerglide listen --identity PATH --peer-cert SOURCE.der --native --allow-control --receive-display=-1920,0
