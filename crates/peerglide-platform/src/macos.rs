@@ -633,6 +633,12 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
     }
 }
 struct OwnedEvent(Ref);
+pub(super) fn cursor_position() -> Option<[f64; 2]> {
+    // Read the current position from a private, unposted CoreGraphics event.
+    let event = OwnedEvent::created(unsafe { CGEventCreate(null_mut()) }).ok()?;
+    let point = unsafe { CGEventGetLocation(event.0) };
+    Some([point.x, point.y])
+}
 impl OwnedEvent {
     fn created(
         event: Ref,

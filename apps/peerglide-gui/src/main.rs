@@ -6,6 +6,7 @@ mod audio_panel;
 mod clipboard_panel;
 mod config_store;
 mod connection_info;
+mod cursor_overlay;
 mod data_access;
 mod desktop_state;
 mod desktop_style;
@@ -184,6 +185,7 @@ struct DesktopPreferences {
     tray_enabled: bool,
     close_to_tray: bool,
     reduce_motion: bool,
+    cursor_trail: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SessionMode {
@@ -546,6 +548,7 @@ struct App {
     permission_report: Option<peerglide_platform::context::PermissionReport>,
     worker_permissions: worker_permissions::Checker,
     desktop_preferences: DesktopPreferences,
+    cursor_overlay: cursor_overlay::Overlay,
     desktop_store: Option<config_store::Store>,
     tray: Option<peerglide_platform::tray::Tray>,
     tray_mailbox: Arc<peerglide_platform::tray::Mailbox>,
@@ -693,6 +696,7 @@ impl App {
             permission_report: None,
             worker_permissions: worker_permissions::Checker::default(),
             desktop_preferences,
+            cursor_overlay: cursor_overlay::Overlay::default(),
             desktop_store,
             tray: None,
             tray_mailbox: peerglide_platform::tray::Mailbox::new(Arc::new(|| {})),
@@ -1865,12 +1869,52 @@ impl App {
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.logic_tick(ctx);
+        if !self.cursor_overlay_available() {
+            self.cursor_overlay.clear(ctx);
+        }
     }
     fn ui(&mut self, root: &mut egui::Ui, _: &mut eframe::Frame) {
+        if self.cursor_overlay.visible() {
+            root.painter()
+                .rect_filled(root.max_rect(), 0.0, cursor_overlay::root_background());
+        }
         self.desktop(root);
+        if self.cursor_overlay_available() {
+            self.cursor_overlay.ui(
+                root.ctx(),
+                self.desktop_preferences.cursor_trail && !self.desktop_preferences.reduce_motion,
+            );
+        } else {
+            self.cursor_overlay.clear(root.ctx());
+        }
         // UI actions may start work after logic ran for this frame. Schedule
         // its first poll even if the app was completely idle before the click.
         self.request_activity_tick(root.ctx());
+    }
+    fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
+        if self.cursor_overlay.visible() {
+            [0.0; 4]
+        } else {
+            cursor_overlay::root_background().to_normalized_gamma_f32()
+        }
+    }
+}
+
+impl App {
+    fn cursor_overlay_available(&self) -> bool {
+        cursor_overlay::SUPPORTED
+            && !self.window_hidden
+            && !self.close_requested
+            && !self.exit_confirmed
+            && self.stopping.is_none()
+            && !self.recovery_blocked
+            && !self.resource_check_mode
+            && !self.quit_check_mode
+            && self.layout_report.is_none()
+            && matches!(
+                self.input_state,
+                None | Some(WorkerInputState::Local | WorkerInputState::Disabled)
+            )
     }
 }
 impl Drop for App {
@@ -1950,6 +1994,8 @@ fn main() -> eframe::Result<()> {
     let dir = options.data_dir.unwrap_or_else(default_data_dir);
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            // The Mac GL context is shared by the main window and overlays.
+            .with_transparent(cfg!(target_os = "macos"))
             .with_icon(app_icon::icon())
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([920.0, 700.0]),
@@ -1959,6 +2005,9 @@ fn main() -> eframe::Result<()> {
         "Linko / 屏跃",
         native_options,
         Box::new(move |cc| {
+            #[cfg(target_os = "macos")]
+            cc.egui_ctx
+                .send_viewport_cmd(egui::ViewportCommand::Transparent(false));
             let mut app = App::new(cc, dir);
             app.quit_check_mode = quit_check.is_some();
             app.quit_check = quit_check;

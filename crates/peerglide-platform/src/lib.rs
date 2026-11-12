@@ -1462,6 +1462,24 @@ pub fn pointer(x: f64, y: f64) -> Result<()> {
         anyhow::bail!("native injection unavailable")
     }
 }
+/// Read the local cursor outside input callbacks. Windows returns physical
+/// desktop pixels and macOS returns CoreGraphics desktop points.
+pub fn cursor_position() -> Option<[f64; 2]> {
+    #[cfg(windows)]
+    {
+        let _dpi = windows_display::PhysicalContext::enter().ok()?;
+        windows::diagnostic_cursor_position().map(|(x, y)| [f64::from(x), f64::from(y)])
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::cursor_position()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
 /// Outside callbacks only. Windows keeps its existing parked cursor instead.
 fn freeze_source_cursor(gate: &CaptureGate, epoch: CaptureEpoch) {
     #[cfg(target_os = "macos")]
