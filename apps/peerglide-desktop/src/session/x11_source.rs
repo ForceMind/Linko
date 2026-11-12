@@ -176,14 +176,15 @@ fn forward_native(
     motion: &mpsc::Sender<(f64, f64)>,
 ) -> Result<()> {
     while flags.lease_live() {
-        match source.poll()? {
-            PointerSample::LocalInput => break,
-            PointerSample::Motion { dx, dy } if flags.lease_live() => {
-                if motion.try_send((dx, dy)).is_err() {
-                    break;
-                }
+        let keep_running = match source.poll()? {
+            PointerSample::Idle => true,
+            PointerSample::LocalInput => false,
+            PointerSample::Motion { dx, dy } => {
+                flags.lease_live() && motion.try_send((dx, dy)).is_ok()
             }
-            _ => (),
+        };
+        if !keep_running {
+            break;
         }
         thread::park_timeout(NATIVE_POLL);
     }
