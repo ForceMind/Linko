@@ -2130,14 +2130,23 @@ pub(super) mod safety_dialog_tests {
 
     fn press_escape(app: &mut App, ctx: &egui::Context, modifiers: egui::Modifiers) {
         let input = egui::RawInput {
-            modifiers,
-            events: vec![egui::Event::Key {
-                key: egui::Key::Escape,
-                physical_key: Some(egui::Key::Escape),
-                pressed: true,
-                repeat: false,
-                modifiers,
-            }],
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
             ..Default::default()
         };
         ctx.run_ui(input, |root| app.desktop(root))
