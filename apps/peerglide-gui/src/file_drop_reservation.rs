@@ -868,14 +868,82 @@ mod native {
                 .publish(Event::new(3, 5, State::Claimed, Some(9)));
             reservation.tick(&mut app, &pin, now)?;
             assert!(matches!(reservation.status(), Status::Matched));
-            worker.7.lock().unwrap().input(WorkerInputState::Local);
-            assert!(reservation.tick(&mut app, &pin, now).is_err());
+            worker
+                .7
+                .lock()
+                .unwrap()
+                .publish(Event::new(3, 5, State::TargetDown, Some(9)));
+            reservation.tick(&mut app, &pin, now)?;
+            assert!(reservation.target_down());
+
+            #[cfg(target_os = "macos")]
+            {
+                reservation.target_started(&mut app)?;
+                worker
+                    .7
+                    .lock()
+                    .unwrap()
+                    .publish(Event::new(3, 5, State::TargetDrop, Some(9)));
+                reservation.tick(&mut app, &pin, now)?;
+                assert!(reservation.target_drop());
+                reservation.target_drop_ready(&mut app)?;
+                assert!(!reservation.target_released());
+                let mut inbox = worker.7.lock().unwrap();
+                inbox.publish(Event::new(3, 5, State::TargetReleased, Some(9)));
+                inbox.input(WorkerInputState::Local);
+                drop(inbox);
+                reservation.tick(&mut app, &pin, now)?;
+                assert!(reservation.target_released());
+            }
+            #[cfg(all(windows, target_env = "msvc"))]
+            let consumed = {
+                let delivery = WindowsDelivery::open(&reservation, &mut app)?;
+                assert!(delivery.native_check(0));
+                worker
+                    .7
+                    .lock()
+                    .unwrap()
+                    .publish(Event::new(3, 5, State::TargetDrop, Some(9)));
+                // The fake peer cannot issue the matching release until it
+                // observes the local drop-ready command. Keep the fixture
+                // deterministic by waiting for the actual inherited pipe.
+                let child = app.child.as_mut().unwrap();
+                let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+                let (send, received) = std::sync::mpsc::sync_channel(1);
+                let reader = std::thread::spawn(move || {
+                    let mut consumed = String::new();
+                    let mut line = String::new();
+                    while stdout.read_line(&mut line).is_ok_and(|bytes| bytes != 0) {
+                        consumed.push_str(&line);
+                        if line.contains("fixture fd target-drop-ready 3 5 9") {
+                            let _ = send.send(consumed);
+                            break;
+                        }
+                        line.clear();
+                    }
+                    stdout
+                });
+                let commands = received.recv_timeout(Duration::from_secs(5))?;
+                assert_eq!(delivery.signal.load(Ordering::Acquire), 0);
+                let mut inbox = worker.7.lock().unwrap();
+                inbox.publish(Event::new(3, 5, State::TargetReleased, Some(9)));
+                inbox.input(WorkerInputState::Local);
+                drop(inbox);
+                assert!(delivery.native_check(2));
+                delivery.finish(&mut app);
+                // Keep stdout open until the echo child has finished writing.
+                (commands, reader.join().unwrap())
+            };
+            #[cfg(target_os = "macos")]
             reservation.cancel(&mut app);
 
             let child = app.child.take().unwrap();
             let output = child.wait_with_output()?;
             assert!(output.status.success());
+            #[cfg(target_os = "macos")]
             let commands = String::from_utf8(output.stdout)?;
+            #[cfg(all(windows, target_env = "msvc"))]
+            let (commands, _stdout) = consumed;
             assert_eq!(commands.matches("fixture fd inspect").count(), 1);
             assert_eq!(commands.matches("fixture fd arm 3 5 ").count(), 1);
             assert_eq!(
@@ -888,7 +956,12 @@ mod native {
                 commands.matches("fixture fd prepare-target 3 5 8").count(),
                 0
             );
-            assert_eq!(commands.matches("fixture fd cancel 3 5").count(), 1);
+            assert_eq!(commands.matches("fixture fd target-started 3 5 9").count(), 1);
+            assert_eq!(
+                commands.matches("fixture fd target-drop-ready 3 5 9").count(),
+                1
+            );
+            assert_eq!(commands.matches("fixture fd cancel 3 5").count(), 0);
             drop(app);
             fixture.close()
         }

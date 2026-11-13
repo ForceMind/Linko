@@ -17,6 +17,7 @@ using DropPromise = void (*)(void*);
 @public
     std::atomic<int32_t> outcome;
     std::atomic<bool> allowed;
+    std::atomic<bool> started;
     std::atomic<bool> promise_requested;
     std::atomic<int32_t> promise_outcome;
     Clock::time_point deadline;
@@ -47,6 +48,7 @@ static bool can_write_promise(void* owner) {
     if (self) {
         outcome.store(0, std::memory_order_relaxed);
         allowed.store(false, std::memory_order_relaxed);
+        started.store(false, std::memory_order_relaxed);
         promise_requested.store(false, std::memory_order_relaxed);
         promise_outcome.store(0, std::memory_order_relaxed);
     }
@@ -83,6 +85,12 @@ static bool can_write_promise(void* owner) {
     (void)session;
     (void)context;
     return [self offerAvailable] ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession*)session willBeginAtPoint:(NSPoint)point {
+    (void)session;
+    (void)point;
+    started.store(true, std::memory_order_release);
 }
 
 - (void)draggingSession:(NSDraggingSession*)session endedAtPoint:(NSPoint)point
@@ -284,6 +292,11 @@ extern "C" int32_t linko_macos_copy_drag_outcome(void* owner) {
         return source->promise_outcome.load(std::memory_order_acquire);
     }
     return operation;
+}
+
+extern "C" bool linko_macos_copy_drag_started(void* owner) {
+    auto* source = (__bridge LinkoNativeCopySource*)owner;
+    return source && source->started.load(std::memory_order_acquire);
 }
 
 extern "C" void linko_macos_copy_drag_cancel(void* owner) {

@@ -332,6 +332,11 @@ impl Export {
         }
         #[cfg(target_os = "macos")]
         {
+            if handoff.reservation.target_down()
+                && handoff.drag.as_ref().is_some_and(|drag| drag.started())
+            {
+                handoff.reservation.target_started(app)?;
+            }
             if handoff.reservation.target_drop() {
                 handoff.attempt.scope.verify_layout()?;
                 source.pin.recheck(app)?;
@@ -766,7 +771,6 @@ impl Export {
                     press,
                     write,
                 )?);
-                handoff.reservation.target_started(app)?;
             }
             #[cfg(all(windows, target_env = "msvc"))]
             {

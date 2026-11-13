@@ -47,6 +47,7 @@ extern "C" {
         owner: *mut *mut c_void,
     ) -> i32;
     fn linko_macos_copy_drag_outcome(owner: *mut c_void) -> i32;
+    fn linko_macos_copy_drag_started(owner: *mut c_void) -> bool;
     fn linko_macos_copy_drag_cancel(owner: *mut c_void);
     fn linko_macos_copy_drag_release(owner: *mut c_void);
 }
@@ -177,6 +178,11 @@ impl Drag {
             "macOS native copy drag could not start ({result})"
         );
         Ok(Self { owner })
+    }
+
+    pub fn started(&self) -> bool {
+        // SAFETY: the owner remains retained for the lifetime of the drag.
+        unsafe { linko_macos_copy_drag_started(self.owner) }
     }
 
     pub fn outcome(&self) -> Option<Outcome> {
