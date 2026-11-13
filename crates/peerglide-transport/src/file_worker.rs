@@ -25,6 +25,7 @@ pub enum Request {
         target: SocketAddr,
         source: PathBuf,
         resume_id: Option<[u8; 16]>,
+        prepare_handoff: bool,
     },
     Receive {
         bind: SocketAddr,
@@ -36,7 +37,10 @@ pub enum Event {
     Prepared([u8; 16]),
     Listening(SocketAddr),
     Offer(Offer),
-    Sent(FileOutcome),
+    Sent {
+        outcome: FileOutcome,
+        handoff: Option<(SocketAddr, crate::file_drop_link::SentReceipt)>,
+    },
     Received(ReceiveResult),
     Stopped,
     Failed,
@@ -200,6 +204,7 @@ async fn run(
             target,
             source,
             resume_id,
+            prepare_handoff,
         } => {
             let source = Source::open(source, resume_id, stop.clone()).await?;
             status.post(Event::Prepared(source.id()))?;
@@ -210,15 +215,26 @@ async fn run(
             let endpoint = data::endpoint(bind, &identity, &pinned_peer)?;
             let connecting = endpoint.connect(target, "peerglide.local")?;
             let connection = tokio::time::timeout(CONNECT_TIMEOUT, connecting).await??;
-            let outcome = file_transfer::send(&connection, &pinned_peer, source, stop, |p| {
+            let progress = |p: file_transfer::SentProgress| {
                 status.progress(Progress {
                     bytes: p.queued_bytes,
                     total: p.total_bytes,
                     verified_locally: false,
                 });
+            };
+            let (outcome, receipt) = if prepare_handoff {
+                file_transfer::send_for_drop(&connection, &pinned_peer, source, stop, progress)
+                    .await?
+            } else {
+                (
+                    file_transfer::send(&connection, &pinned_peer, source, stop, progress).await?,
+                    None,
+                )
+            };
+            Ok(Event::Sent {
+                outcome,
+                handoff: receipt.map(|receipt| (target, receipt)),
             })
-            .await?;
-            Ok(Event::Sent(outcome))
         }
         Request::Receive { bind, budget } => {
             let endpoint = data::endpoint(bind, &identity, &pinned_peer)?;
@@ -342,6 +358,7 @@ mod tests {
                 target,
                 source,
                 resume_id: None,
+                prepare_handoff: true,
             },
             left,
             right_pin,
@@ -376,7 +393,10 @@ mod tests {
         })?;
         assert!(matches!(
             next(&mut sender)?,
-            Event::Sent(FileOutcome::Committed)
+            Event::Sent {
+                outcome: FileOutcome::Committed,
+                handoff: Some(_),
+            }
         ));
         assert!(matches!(
             next(&mut receiver)?,

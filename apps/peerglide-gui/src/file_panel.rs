@@ -36,10 +36,48 @@ struct HistorySearch {
     query: HistoryQuery,
 }
 
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+struct SourceHandoff {
+    pin: Pin,
+    edge: String,
+    layout: peerglide_platform::display_layout::Layout,
+    reservation: super::file_drop_reservation::Reservation,
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+impl SourceHandoff {
+    fn new(
+        app: &mut App,
+        pin: Pin,
+        target: std::net::SocketAddr,
+        receipt: transport::file_drop_link::SentReceipt,
+    ) -> Result<Self> {
+        let layout = peerglide_platform::read_display_layout().context("无法读取本机显示器")?;
+        let request = super::file_drop_reservation::next_request(app)?;
+        let expires = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        Ok(Self {
+            pin,
+            edge: app.displayed_edge().to_owned(),
+            layout,
+            reservation: super::file_drop_reservation::Reservation::source(
+                receipt, request, target, expires,
+            ),
+        })
+    }
+
+    fn check_layout(&self) -> Result<()> {
+        let current = peerglide_platform::read_display_layout().context("无法读取本机显示器")?;
+        anyhow::ensure!(self.layout.same_configuration(&current), "显示器布局已变化");
+        Ok(())
+    }
+}
+
 pub(super) struct Panel {
     active: Option<Active>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     export: super::native_drop_panel::Export,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    sending_handoff: Option<SourceHandoff>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     edge: Option<super::file_edge_drop::Offer>,
     source: String,
@@ -61,6 +99,8 @@ impl Default for Panel {
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             export: super::native_drop_panel::Export::default(),
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            sending_handoff: None,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             edge: None,
             source: String::new(),
             destination: String::new(),
@@ -79,7 +119,7 @@ impl Default for Panel {
 impl Panel {
     pub(super) fn is_active(&self) -> bool {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        if self.export.active() {
+        if self.export.active() || self.sending_handoff.is_some() {
             return true;
         }
         self.active.is_some() || self.edge_active()
@@ -89,6 +129,7 @@ impl Panel {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         {
             self.export.stop(_app);
+            self.cancel_source_handoff(_app);
             self.edge = None;
         }
         if let Some(active) = self.active.as_mut().filter(|active| !active.stopping) {
@@ -101,6 +142,7 @@ impl Panel {
 
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     pub(super) fn cancel_handoff(&mut self, app: &mut App) {
+        self.cancel_source_handoff(app);
         if self.export.handoff_active() {
             self.export.stop(app);
         }
@@ -108,7 +150,7 @@ impl Panel {
 
     fn handoff_active(&self) -> bool {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        return self.export.handoff_active();
+        return self.export.handoff_active() || self.sending_handoff.is_some();
         #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
         false
     }
@@ -117,6 +159,7 @@ impl Panel {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if _ctx.viewport_id() == egui::ViewportId::ROOT {
             self.tick_edge(app, _ctx);
+            self.tick_source_handoff(app, _ctx);
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.export.tick(app, _ctx);
@@ -137,7 +180,25 @@ impl Panel {
         self.progress = active.job.progress();
         while let Some(event) = active.job.poll() {
             self.notice = match event {
-                Event::Sent(outcome) => outcome_label(outcome, false).into(),
+                Event::Sent {
+                    outcome,
+                    handoff: _handoff,
+                } => {
+                    let notice = outcome_label(outcome, false);
+                    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                    if let Some((target, receipt)) = _handoff.filter(|_| {
+                        !active.stopping && source_context(app, _ctx) && active.pin.matches(app)
+                    }) {
+                        match SourceHandoff::new(app, active.pin.clone(), target, receipt) {
+                            Ok(handoff) => self.sending_handoff = Some(handoff),
+                            Err(_) => {
+                                self.notice = format!("{notice} 无法准备本次跨机拖动。");
+                                continue;
+                            }
+                        }
+                    }
+                    notice.into()
+                }
                 Event::Received(result) => {
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if !active.stopping && active.pin.matches(app) {
@@ -187,7 +248,7 @@ impl Panel {
         }
     }
 
-    fn start(&mut self, app: &mut App, sending: bool) -> Result<()> {
+    fn start(&mut self, app: &mut App, sending: bool, prepare_handoff: bool) -> Result<()> {
         anyhow::ensure!(self.active.is_none(), "请先结束当前文件任务");
         anyhow::ensure!(!self.edge_active(), "请先关闭边沿发送");
         let request = if sending {
@@ -195,6 +256,7 @@ impl Panel {
                 target: data_access::send_address(&self.target, &app.config.address, PORT)?,
                 source: absolute_path(&self.source).context("请填写源文件的绝对路径")?,
                 resume_id: parse_id(&self.resume)?,
+                prepare_handoff,
             }
         } else {
             Request::Receive {
@@ -294,6 +356,7 @@ impl Panel {
                             target: offer.target,
                             source,
                             resume_id: None,
+                            prepare_handoff: false,
                         },
                         Some(&offer.pin),
                     )
@@ -307,6 +370,92 @@ impl Panel {
             Event::InvalidFile => "请重新开启边沿发送并拖入一个本机文件。".into(),
             Event::PositionUnavailable => "无法定位边沿接收条，请检查屏幕布局。".into(),
         };
+    }
+
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    fn cancel_source_handoff(&mut self, app: &mut App) {
+        if let Some(handoff) = self.sending_handoff.take() {
+            handoff.reservation.cancel(app);
+            self.notice = "本次跨机拖动已结束，另一台电脑保留已接收文件。".into();
+        }
+    }
+
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    fn tick_source_handoff(&mut self, app: &mut App, ctx: &egui::Context) {
+        use super::file_drop_reservation::Status;
+        let Some(handoff) = &mut self.sending_handoff else {
+            return;
+        };
+        let valid = source_context(app, ctx)
+            && handoff.pin.matches(app)
+            && handoff.edge == app.displayed_edge();
+        if !valid {
+            self.cancel_source_handoff(app);
+            return;
+        }
+        let now = std::time::Instant::now();
+        if handoff.reservation.tick(app, &handoff.pin, now).is_err() {
+            self.cancel_source_handoff(app);
+        } else if matches!(handoff.reservation.status(), Status::SourceReleased) {
+            self.sending_handoff = None;
+            self.notice = "已将释放交给另一台电脑，请在目标应用确认文件。".into();
+        }
+    }
+
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    fn source_handoff_ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        use super::file_drop_reservation::Status;
+        let Some(handoff) = &mut self.sending_handoff else {
+            return;
+        };
+        if ui.button("取消跨机拖动").clicked() {
+            self.cancel_source_handoff(app);
+            return;
+        }
+        match handoff.reservation.status() {
+            Status::WaitingForWorker => {
+                ui.label("请让另一台电脑准备跨机接收，然后连接键鼠。");
+                if ui
+                    .add_enabled(
+                        app.native_start_available(),
+                        egui::Button::new("开启键鼠协同"),
+                    )
+                    .clicked()
+                {
+                    app.workspace_action(super::desktop_state::Action::StartInput);
+                }
+            }
+            Status::Press => {
+                let drag =
+                    ui.add(egui::Button::new("按住并拖向切换边沿").sense(egui::Sense::drag()));
+                let pressed = ui.input(|input| {
+                    input.focused
+                        && input.pointer.button_pressed(egui::PointerButton::Primary)
+                        && input.pointer.primary_down()
+                });
+                if drag.hovered() && pressed {
+                    let result = handoff.check_layout().and_then(|()| {
+                        handoff
+                            .reservation
+                            .press(app, &handoff.pin, std::time::Instant::now())
+                    });
+                    if result.is_err() {
+                        self.cancel_source_handoff(app);
+                    }
+                }
+            }
+            Status::Confirming => {
+                ui.label("等待键鼠会话确认。");
+            }
+            Status::SourceArmed => {
+                ui.label("保持按住，拖向切换边沿。");
+            }
+            Status::SourceCommitted => {
+                ui.label("已交给另一台电脑，移动到目标后释放。");
+            }
+            Status::SourceReleased => (),
+            Status::Listening(_) | Status::Matched => unreachable!("receive reservation in sender"),
+        }
     }
 
     fn decide(&mut self, app: &App, choice: Approval) -> Result<()> {
@@ -361,8 +510,20 @@ impl Panel {
                         .hint_text("续传编号，首次发送留空"),
                 );
                 if ui.button("发送选定文件").clicked() {
-                    let result = self.start(app, true);
+                    let result = self.start(app, true, false);
                     if let Err(error) = result {
+                        self.notice = error.to_string();
+                    }
+                }
+                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                if ui
+                    .add_enabled(
+                        source_context(app, ui.ctx()),
+                        egui::Button::new("发送并准备跨机拖动"),
+                    )
+                    .clicked()
+                {
+                    if let Err(error) = self.start(app, true, true) {
                         self.notice = error.to_string();
                     }
                 }
@@ -380,7 +541,7 @@ impl Panel {
                 ui.label("本机监听地址");
                 ui.text_edit_singleline(&mut self.bind);
                 if ui.button("等待文件请求").clicked() {
-                    let result = self.start(app, false);
+                    let result = self.start(app, false, false);
                     if let Err(error) = result {
                         self.notice = error.to_string();
                     }
@@ -396,6 +557,8 @@ impl Panel {
                 offer.show(ui.ctx());
             }
         }
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        self.source_handoff_ui(app, ui);
         if let Some(id) = self.prepared_id {
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!("续传编号 {}", encode_id(id)));
@@ -427,7 +590,7 @@ impl Panel {
             ui.label(&self.notice);
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        if self.active.is_none() && !self.edge_active() {
+        if self.active.is_none() && !self.edge_active() && self.sending_handoff.is_none() {
             self.export.ui(app, ui);
         }
         ui.collapsing("接收历史与配额", |ui| {
@@ -540,6 +703,23 @@ impl HistorySearch {
         };
         self.query = HistoryQuery::Complete(result);
     }
+}
+
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+fn source_context(app: &App, ctx: &egui::Context) -> bool {
+    data_access::ready(app)
+        && app.page == super::Page::Transfers
+        && !app.routed_active
+        && (app.child.is_none() || app.active_mode == Some(super::SessionMode::Native))
+        && !app.window_hidden
+        && !app.recovery_blocked
+        && !app.input_terminal
+        && app.stopping.is_none()
+        && ctx.input(|input| {
+            input.focused
+                && !input.viewport().close_requested()
+                && !input.viewport().minimized.unwrap_or(false)
+        })
 }
 
 fn render_history(ui: &mut egui::Ui, history: &History) {

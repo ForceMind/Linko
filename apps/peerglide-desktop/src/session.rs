@@ -702,7 +702,12 @@ pub(super) async fn run_with_diagnostics(
                 if let (Some(super::file_drop_control::Route::Source(source)), Some(scope)) =
                     (&drop_route, &drop_scope)
                 {
-                    if !scope.current(source.request) {
+                    let current = scope.current(source.request);
+                    let held = capture.as_ref().and_then(|cap| cap.gate.held_primary());
+                    if !current || held != Some(source.hold) {
+                        if current {
+                            input_status.reporter.file_drop(scope.event(source.request, FileDropState::Rejected));
+                        }
                         scope.retire(source.request);
                         drop_route = None;
                     }
@@ -1011,6 +1016,11 @@ pub(super) async fn run_with_diagnostics(
                         if matches!(event, Input::Button { button: 1, down: false }) {
                             if let (Some((file, request)), Some(scope)) = (file_lease, &drop_scope) {
                                 if file == lease {
+                                    if scope.current(request) {
+                                        input_status.reporter.file_drop(FileDropEvent::new(
+                                            scope.session, request, FileDropState::SourceReleased, Some(lease),
+                                        ));
+                                    }
                                     scope.retire(request);
                                     file_lease = None;
                                 }

@@ -548,6 +548,8 @@ struct App {
     #[cfg(any(windows, target_os = "macos"))]
     clipboard_panel: clipboard_panel::Panel,
     file_panel: file_panel::Panel,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    file_drop_sequence: u32,
     wizard: Option<SetupStep>,
     wizard_name: String,
     wizard_address: String,
@@ -696,6 +698,8 @@ impl App {
             #[cfg(any(windows, target_os = "macos"))]
             clipboard_panel: clipboard_panel::Panel::default(),
             file_panel: file_panel::Panel::default(),
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            file_drop_sequence: 0,
             wizard: None,
             wizard_name: config.peer_name.clone(),
             wizard_address: config.address.clone(),
