@@ -1,7 +1,10 @@
 //! Local supervisor approval for a lease-bound file reservation.
 use anyhow::{ensure, Context, Result};
 use peerglide_platform::{now_ms, CaptureGate, HeldPrimary};
-use peerglide_protocol::{file_drop_ipc::{Command, EntryPoint, Event, State}, Input, Motion};
+use peerglide_protocol::{
+    file_drop_ipc::{Command, EntryPoint, Event, State},
+    Input, Motion,
+};
 use peerglide_transport::{file_drop_link, layout_reservation, Identity};
 use quinn::{Connection, Endpoint};
 use std::{
@@ -52,7 +55,11 @@ enum TargetPhase {
     WaitingForDown(EntryPoint),
     WaitingForStart(u64),
     Dragging,
-    WaitingForDrop { cursor: Motion, deadline: u64, ready: bool },
+    WaitingForDrop {
+        cursor: Motion,
+        deadline: u64,
+        ready: bool,
+    },
 }
 
 struct TargetInput {
@@ -190,30 +197,51 @@ impl Controller {
                 Direction::Send(target),
                 proof,
             ),
-            Command::Ready { session, request, lease } => {
+            Command::Ready {
+                session,
+                request,
+                lease,
+            } => {
                 active.ready(session, request, lease, Readiness::Legacy);
                 return None;
             }
-            Command::PrepareTarget { session, request, lease, entry } => {
+            Command::PrepareTarget {
+                session,
+                request,
+                lease,
+                entry,
+            } => {
                 active.ready(session, request, lease, Readiness::Native(entry));
                 return None;
             }
-            Command::TargetStarted { session, request, lease } => {
+            Command::TargetStarted {
+                session,
+                request,
+                lease,
+            } => {
                 if let Some(target) = active.target.as_mut().filter(|target| {
                     active.session == session && target.request == request && target.lease == lease
                 }) {
-                    if matches!(target.phase, TargetPhase::WaitingForStart(deadline) if now_ms() < deadline) {
+                    if matches!(target.phase, TargetPhase::WaitingForStart(deadline) if now_ms() < deadline)
+                    {
                         target.phase = TargetPhase::Dragging;
                         active.sender.send_modify(|_| {});
                     }
                 }
                 return None;
             }
-            Command::TargetDropReady { session, request, lease } => {
+            Command::TargetDropReady {
+                session,
+                request,
+                lease,
+            } => {
                 if let Some(target) = active.target.as_mut().filter(|target| {
                     active.session == session && target.request == request && target.lease == lease
                 }) {
-                    if let TargetPhase::WaitingForDrop { deadline, ready, .. } = &mut target.phase {
+                    if let TargetPhase::WaitingForDrop {
+                        deadline, ready, ..
+                    } = &mut target.phase
+                    {
                         if !*ready && now_ms() < *deadline {
                             *ready = true;
                             active.sender.send_modify(|_| {});
@@ -232,7 +260,10 @@ impl Controller {
                     .borrow()
                     .as_ref()
                     .is_some_and(|arm| arm.request == request);
-                let targeting = active.target.as_ref().is_some_and(|target| target.request == request);
+                let targeting = active
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.request == request);
                 if session != active.session || !(armed || pending || targeting) {
                     return None;
                 }
@@ -370,7 +401,12 @@ impl Scope<'_> {
                     placement: None,
                 });
             }
-            Event::new(self.session, claim.request, State::Claimed, Some(claim.lease))
+            Event::new(
+                self.session,
+                claim.request,
+                State::Claimed,
+                Some(claim.lease),
+            )
         } else {
             self.event(claim.request, State::Rejected)
         })
@@ -378,7 +414,11 @@ impl Scope<'_> {
 
     fn with_active<T>(&self, action: impl FnOnce(&mut Active) -> T) -> Option<T> {
         let mut state = self.controller.0.lock().ok()?;
-        state.active.as_mut().filter(|active| active.session == self.session).map(action)
+        state
+            .active
+            .as_mut()
+            .filter(|active| active.session == self.session)
+            .map(action)
     }
 
     pub(super) fn target_input(&self, lease: u64, event: Input, cursor: Motion) -> TargetAction {
@@ -386,24 +426,39 @@ impl Scope<'_> {
             if active.retired_target == Some(lease) {
                 return TargetAction::Abort;
             }
-            let Some(target) = active.target.as_mut().filter(|target| target.lease == lease) else {
+            let Some(target) = active
+                .target
+                .as_mut()
+                .filter(|target| target.lease == lease)
+            else {
                 return TargetAction::Ordinary;
             };
             if now_ms() >= target.deadline {
                 return TargetAction::Abort;
             }
             match (target.phase, event) {
-                (TargetPhase::WaitingForDown(entry), Input::Button { button: 1, down: true })
-                    if cursor.lease == lease && cursor.sequence == 1 && cursor.valid() =>
-                {
+                (
+                    TargetPhase::WaitingForDown(entry),
+                    Input::Button {
+                        button: 1,
+                        down: true,
+                    },
+                ) if cursor.lease == lease && cursor.sequence == 1 && cursor.valid() => {
                     let (x, y) = entry.coordinates();
                     let entry = Motion { x, y, ..cursor };
-                    target.placement = Some(Placement { original: cursor, entry });
+                    target.placement = Some(Placement {
+                        original: cursor,
+                        entry,
+                    });
                     TargetAction::AtEntry(entry)
                 }
-                (TargetPhase::Dragging, Input::Button { button: 1, down: false })
-                    if cursor.lease == lease && cursor.sequence > 1 && cursor.valid() =>
-                {
+                (
+                    TargetPhase::Dragging,
+                    Input::Button {
+                        button: 1,
+                        down: false,
+                    },
+                ) if cursor.lease == lease && cursor.sequence > 1 && cursor.valid() => {
                     let Some(placement) = target.placement else {
                         return TargetAction::Abort;
                     };
@@ -412,22 +467,37 @@ impl Scope<'_> {
                         deadline: now_ms().saturating_add(TARGET_DROP_MS),
                         ready: false,
                     };
-                    TargetAction::Drop(Event::new(self.session, target.request, State::TargetDrop, Some(lease)))
+                    TargetAction::Drop(Event::new(
+                        self.session,
+                        target.request,
+                        State::TargetDrop,
+                        Some(lease),
+                    ))
                 }
                 _ => TargetAction::Abort,
             }
-        }).unwrap_or(TargetAction::Abort)
+        })
+        .unwrap_or(TargetAction::Abort)
     }
 
     pub(super) fn target_down(&self, lease: u64) -> Option<Event> {
         self.with_active(|active| {
-            let target = active.target.as_mut().filter(|target| target.lease == lease)?;
+            let target = active
+                .target
+                .as_mut()
+                .filter(|target| target.lease == lease)?;
             if !matches!(target.phase, TargetPhase::WaitingForDown(_)) {
                 return None;
             }
             target.phase = TargetPhase::WaitingForStart(now_ms().saturating_add(TARGET_START_MS));
-            Some(Event::new(self.session, target.request, State::TargetDown, Some(lease)))
-        }).flatten()
+            Some(Event::new(
+                self.session,
+                target.request,
+                State::TargetDown,
+                Some(lease),
+            ))
+        })
+        .flatten()
     }
 
     pub(super) fn target_motion(&self, motion: Motion) -> Option<Motion> {
@@ -435,38 +505,55 @@ impl Scope<'_> {
             if active.retired_target == Some(motion.lease) {
                 return None;
             }
-            let Some(target) = active.target.as_ref().filter(|target| target.lease == motion.lease) else {
+            let Some(target) = active
+                .target
+                .as_ref()
+                .filter(|target| target.lease == motion.lease)
+            else {
                 return Some(motion);
             };
             if !matches!(target.phase, TargetPhase::Dragging) || now_ms() >= target.deadline {
                 return None;
             }
             target.placement.map(|placement| placement.map(motion))
-        }).flatten()
+        })
+        .flatten()
     }
 
     pub(super) fn target_expired(&self, lease: u64) -> bool {
         self.with_active(|active| {
             let now = now_ms();
             active.retired_target == Some(lease)
-                || active.target.as_ref().filter(|target| target.lease == lease).is_some_and(|target| {
-                    now >= target.deadline
-                        || matches!(target.phase,
+                || active
+                    .target
+                    .as_ref()
+                    .filter(|target| target.lease == lease)
+                    .is_some_and(|target| {
+                        now >= target.deadline
+                            || matches!(target.phase,
                             TargetPhase::WaitingForStart(deadline)
                             | TargetPhase::WaitingForDrop { deadline, .. } if now >= deadline)
-                })
-        }).unwrap_or(true)
+                    })
+        })
+        .unwrap_or(true)
     }
 
     pub(super) fn confirmed_drop(&self, lease: u64) -> Option<Motion> {
         self.with_active(|active| {
-            let target = active.target.as_ref().filter(|target| target.lease == lease)?;
+            let target = active
+                .target
+                .as_ref()
+                .filter(|target| target.lease == lease)?;
             match target.phase {
-                TargetPhase::WaitingForDrop { cursor, deadline, ready: true }
-                    if now_ms() < deadline.min(target.deadline) => Some(cursor),
+                TargetPhase::WaitingForDrop {
+                    cursor,
+                    deadline,
+                    ready: true,
+                } if now_ms() < deadline.min(target.deadline) => Some(cursor),
                 _ => None,
             }
-        }).flatten()
+        })
+        .flatten()
     }
 
     pub(super) fn end_target(&self, lease: u64, dropped: bool) -> Option<Event> {
@@ -474,14 +561,18 @@ impl Scope<'_> {
             if active.retired_target == Some(lease) {
                 active.retired_target = None;
             }
-            if !active.target.as_ref().is_some_and(|target| target.lease == lease) {
+            if !active
+                .target
+                .as_ref()
+                .is_some_and(|target| target.lease == lease)
+            {
                 return None;
             }
             let target = active.target.take()?;
             (!dropped).then(|| self.event(target.request, State::Rejected))
-        }).flatten()
+        })
+        .flatten()
     }
-
 }
 
 impl Drop for Scope<'_> {
@@ -734,7 +825,12 @@ mod tests {
 
     #[test]
     fn target_coordinates_keep_the_first_press_at_the_local_entry() {
-        let point = |x, y| Motion { lease: 1, sequence: 1, x, y };
+        let point = |x, y| Motion {
+            lease: 1,
+            sequence: 1,
+            x,
+            y,
+        };
         let placement = Placement {
             original: point(0.002, 0.8),
             entry: point(0.25, 0.5),

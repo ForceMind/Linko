@@ -2788,7 +2788,9 @@ mod tests {
             );
             let target = matches!(
                 decision,
-                FileDecision::TargetDrop | FileDecision::TargetEarlyRelease | FileDecision::TargetCancel
+                FileDecision::TargetDrop
+                    | FileDecision::TargetEarlyRelease
+                    | FileDecision::TargetCancel
             );
             let mut confirm = std::pin::pin!(confirmation.confirm());
             if decision != FileDecision::CancelBeforeGrant {
@@ -2869,7 +2871,12 @@ mod tests {
                 let input = |lease, sequence, down| Message::Input {
                     lease,
                     event: Input::Button { button: 1, down },
-                    cursor: Motion { lease, sequence, x: 0.5, y: 0.5 },
+                    cursor: Motion {
+                        lease,
+                        sequence,
+                        x: 0.5,
+                        y: 0.5,
+                    },
                 };
                 send(&mut tx, &input(lease + 1, 1, true)).await?;
                 send(&mut tx, &input(lease, 1, true)).await?;
@@ -2877,7 +2884,11 @@ mod tests {
                     observed.recv().await,
                     Some(Event::new(session, request, State::TargetDown, Some(lease)))
                 );
-                let start = |lease| Command::TargetStarted { session, request, lease };
+                let start = |lease| Command::TargetStarted {
+                    session,
+                    request,
+                    lease,
+                };
                 controller.submit(start(lease + 1));
                 match decision {
                     FileDecision::TargetDrop => {
@@ -2887,14 +2898,24 @@ mod tests {
                             observed.recv().await,
                             Some(Event::new(session, request, State::TargetDrop, Some(lease)))
                         );
-                        let confirm = |lease| Command::TargetDropReady { session, request, lease };
+                        let confirm = |lease| Command::TargetDropReady {
+                            session,
+                            request,
+                            lease,
+                        };
                         controller.submit(confirm(lease + 1));
-                        assert!(tokio::time::timeout(Duration::from_millis(30), observed.recv()).await.is_err());
+                        assert!(
+                            tokio::time::timeout(Duration::from_millis(30), observed.recv())
+                                .await
+                                .is_err()
+                        );
                         controller.submit(confirm(lease));
                         // Confirmed Up removes the drop state. The later ordinary
                         // v5 Release will not reject or repeat this file drop.
                         send(&mut tx, &Message::Ping { lease }).await?;
-                        assert!(matches!(transport::receive(&mut rx).await?, Message::Pong { lease: active } if active == lease));
+                        assert!(
+                            matches!(transport::receive(&mut rx).await?, Message::Pong { lease: active } if active == lease)
+                        );
                     }
                     FileDecision::TargetEarlyRelease => {
                         send(&mut tx, &input(lease, 2, false)).await?;
@@ -2912,7 +2933,9 @@ mod tests {
                     _ => unreachable!("not a native target fixture"),
                 }
                 if decision != FileDecision::TargetDrop {
-                    assert!(matches!(transport::receive(&mut rx).await?, Message::Release { lease: retired, .. } if retired == lease));
+                    assert!(
+                        matches!(transport::receive(&mut rx).await?, Message::Release { lease: retired, .. } if retired == lease)
+                    );
                 }
             }
             if decision == FileDecision::Ready {

@@ -11,13 +11,16 @@ pub struct EntryPoint([u32; 2]);
 
 impl EntryPoint {
     pub fn new(x: f64, y: f64) -> Option<Self> {
-        [x, y].into_iter()
+        [x, y]
+            .into_iter()
             .all(|value| (0.0..=1.0).contains(&value))
             .then(|| Self([x, y].map(|value| (value * f64::from(POINT_SCALE)).round() as u32)))
     }
 
     pub fn coordinates(self) -> (f64, f64) {
-        let [x, y] = self.0.map(|value| f64::from(value) / f64::from(POINT_SCALE));
+        let [x, y] = self
+            .0
+            .map(|value| f64::from(value) / f64::from(POINT_SCALE));
         (x, y)
     }
 }
@@ -124,7 +127,12 @@ impl Command {
                 if x > POINT_SCALE || y > POINT_SCALE {
                     return None;
                 }
-                Self::PrepareTarget { session, request, lease, entry: EntryPoint([x, y]) }
+                Self::PrepareTarget {
+                    session,
+                    request,
+                    lease,
+                    entry: EntryPoint([x, y]),
+                }
             }
             "target-started" => Self::TargetStarted {
                 session: identifier(fields.next()?)?,
@@ -169,14 +177,27 @@ impl Command {
                 request,
                 lease,
             } => format!("fd ready {session:x} {request:x} {lease:x}"),
-            Self::PrepareTarget { session, request, lease, entry } => {
+            Self::PrepareTarget {
+                session,
+                request,
+                lease,
+                entry,
+            } => {
                 let [x, y] = entry.0;
                 format!("fd prepare-target {session:x} {request:x} {lease:x} {x} {y}")
             }
-            Self::TargetStarted { session, request, lease } => {
+            Self::TargetStarted {
+                session,
+                request,
+                lease,
+            } => {
                 format!("fd target-started {session:x} {request:x} {lease:x}")
             }
-            Self::TargetDropReady { session, request, lease } => {
+            Self::TargetDropReady {
+                session,
+                request,
+                lease,
+            } => {
                 format!("fd target-drop-ready {session:x} {request:x} {lease:x}")
             }
             Self::Cancel { session, request } => format!("fd cancel {session:x} {request:x}"),
@@ -333,7 +354,12 @@ mod tests {
     #[test]
     fn target_entry_is_local_bounded_and_lease_scoped() {
         let entry = EntryPoint::new(0.25, 0.75).unwrap();
-        let command = Command::PrepareTarget { session: 1, request: 2, lease: 3, entry };
+        let command = Command::PrepareTarget {
+            session: 1,
+            request: 2,
+            lease: 3,
+            entry,
+        };
         assert!(matches!(
             Command::parse(&command.line()),
             Some(Command::PrepareTarget { session: 1, request: 2, lease: 3, entry: decoded })
