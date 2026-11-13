@@ -10,6 +10,8 @@ pub enum Capability {
     TextReceive,
     FileSend,
     FileReceive,
+    ImageSend,
+    ImageReceive,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -18,6 +20,8 @@ pub struct Permissions {
     pub text_receive: bool,
     pub file_send: bool,
     pub file_receive: bool,
+    pub image_send: bool,
+    pub image_receive: bool,
 }
 impl Permissions {
     fn allows(self, capability: Capability) -> bool {
@@ -26,6 +30,8 @@ impl Permissions {
             Capability::TextReceive => self.text_receive,
             Capability::FileSend => self.file_send,
             Capability::FileReceive => self.file_receive,
+            Capability::ImageSend => self.image_send,
+            Capability::ImageReceive => self.image_receive,
         }
     }
 }
@@ -186,6 +192,37 @@ impl DataSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_consent_never_inherits_text_file_or_the_reverse_direction() {
+        let mut session = DataSession::new([1; 32], [2; 32], 0);
+        session
+            .consent(
+                Permissions {
+                    text_receive: true,
+                    file_receive: true,
+                    ..Permissions::default()
+                },
+                1000,
+                0,
+            )
+            .unwrap();
+        assert!(session.authorize(Capability::ImageReceive, 1).is_err());
+        session
+            .consent(
+                Permissions {
+                    image_receive: true,
+                    ..Permissions::default()
+                },
+                1000,
+                2,
+            )
+            .unwrap();
+        assert!(session.authorize(Capability::ImageReceive, 3).is_ok());
+        assert!(session.authorize(Capability::ImageSend, 3).is_err());
+        assert!(session.authorize(Capability::TextReceive, 3).is_err());
+        assert!(session.authorize(Capability::FileReceive, 3).is_err());
+    }
 
     fn receive() -> Permissions {
         Permissions {

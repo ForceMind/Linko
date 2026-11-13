@@ -24,6 +24,7 @@ pub struct FrameReceiver {
 fn supported(capabilities: Capabilities, kind: Kind) -> bool {
     match kind {
         Kind::Text | Kind::TextReceived | Kind::TextResult => capabilities.text,
+        Kind::Image | Kind::ImageResult => capabilities.images,
         Kind::Offer | Kind::Chunk | Kind::Cancel | Kind::FileAccepted | Kind::FileResult => {
             capabilities.files
         }

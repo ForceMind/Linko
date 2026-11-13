@@ -24,6 +24,7 @@ use std::{
 const FILES: data::Capabilities = data::Capabilities {
     text: false,
     files: true,
+    images: false,
 };
 const DATA_BYTES: u64 = MAX_FILE_BYTES
     + MAX_MANIFEST_BYTES as u64

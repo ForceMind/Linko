@@ -135,7 +135,8 @@ impl Consent {
         );
         ensure!(
             (self.capabilities.text || !permissions.text_send && !permissions.text_receive)
-                && (self.capabilities.files || !permissions.file_send && !permissions.file_receive),
+                && (self.capabilities.files || !permissions.file_send && !permissions.file_receive)
+                && (self.capabilities.images || !permissions.image_send && !permissions.image_receive),
             "data consent requests an unsupported capability"
         );
         self.policy
@@ -415,6 +416,8 @@ fn is_file(kind: Kind) -> bool {
 fn outbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextSend,
+        Kind::Image => Capability::ImageSend,
+        Kind::ImageResult => Capability::ImageReceive,
         Kind::TextReceived | Kind::TextResult => Capability::TextReceive,
         Kind::FileAccepted | Kind::FileResult => Capability::FileReceive,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileSend,
@@ -424,6 +427,8 @@ fn outbound(kind: Kind) -> Capability {
 fn inbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextReceive,
+        Kind::Image => Capability::ImageReceive,
+        Kind::ImageResult => Capability::ImageSend,
         Kind::TextReceived | Kind::TextResult => Capability::TextSend,
         Kind::FileAccepted | Kind::FileResult => Capability::FileSend,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileReceive,

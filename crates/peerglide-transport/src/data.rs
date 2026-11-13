@@ -11,6 +11,7 @@ const MAGIC: &[u8; 4] = b"PGDH";
 const VERSION: u8 = 1;
 const TEXT: u8 = 1;
 const FILES: u8 = 2;
+const IMAGES: u8 = 4;
 const HELLO_BYTES: usize = 8;
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -18,11 +19,14 @@ const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(4);
 pub struct Capabilities {
     pub text: bool,
     pub files: bool,
+    pub images: bool,
 }
 
 impl Capabilities {
     fn hello(self) -> [u8; HELLO_BYTES] {
-        let flags = (u8::from(self.text) * TEXT) | (u8::from(self.files) * FILES);
+        let flags = (u8::from(self.text) * TEXT)
+            | (u8::from(self.files) * FILES)
+            | (u8::from(self.images) * IMAGES);
         [MAGIC[0], MAGIC[1], MAGIC[2], MAGIC[3], VERSION, flags, 0, 0]
     }
 
@@ -30,13 +34,14 @@ impl Capabilities {
         ensure!(
             &hello[..4] == MAGIC
                 && hello[4] == VERSION
-                && hello[5] & !(TEXT | FILES) == 0
+                && hello[5] & !(TEXT | FILES | IMAGES) == 0
                 && hello[6..] == [0, 0],
             "invalid or unsupported data hello"
         );
         Ok(Self {
             text: hello[5] & TEXT != 0,
             files: hello[5] & FILES != 0,
+            images: hello[5] & IMAGES != 0,
         })
     }
 
@@ -44,6 +49,7 @@ impl Capabilities {
         Self {
             text: self.text && peer.text,
             files: self.files && peer.files,
+            images: self.images && peer.images,
         }
     }
 }
@@ -186,10 +192,12 @@ mod tests {
     const TEXT_ONLY: Capabilities = Capabilities {
         text: true,
         files: false,
+        images: false,
     };
     const TEXT_AND_FILES: Capabilities = Capabilities {
         text: true,
         files: true,
+        images: false,
     };
 
     async fn connect(client: &Endpoint, server: &Endpoint) -> Result<(Connection, Connection)> {
@@ -216,6 +224,15 @@ mod tests {
             invalid[index] = value;
             assert!(Capabilities::from_hello(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn image_bit_requires_both_endpoints_and_preserves_text_file_hello() {
+        let all = Capabilities { images: true, ..TEXT_AND_FILES };
+        assert_eq!(TEXT_AND_FILES.hello()[5], 3);
+        assert_eq!(Capabilities::from_hello(all.hello()).unwrap(), all);
+        assert_eq!(all.shared(TEXT_ONLY), TEXT_ONLY);
+        assert_eq!(all.shared(all), all);
     }
 
     #[tokio::test]

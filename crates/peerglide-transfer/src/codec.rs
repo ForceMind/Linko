@@ -1,6 +1,10 @@
 //! Bounded framing for a future separately negotiated authenticated data stream.
 //! Never route these bytes to the v5 input stream. No authentication is performed.
-use crate::{clipboard::MAX_TEXT_BYTES, Manifest, CHUNK_BYTES, MAX_FILE_BYTES, MAX_MANIFEST_BYTES};
+use crate::{
+    clipboard::MAX_TEXT_BYTES,
+    clipboard_image::{MAX_PNG_BYTES, PNG_SIGNATURE},
+    Manifest, CHUNK_BYTES, MAX_FILE_BYTES, MAX_MANIFEST_BYTES,
+};
 use std::io::{self, Read, Write};
 
 const MAGIC: [u8; 4] = *b"PGD1";
@@ -40,11 +44,19 @@ pub enum Frame {
         id: [u8; 16],
         outcome: FileOutcome,
     },
+    Image {
+        sequence: u64,
+        png: Vec<u8>,
+    },
+    ImageResult {
+        sequence: u64,
+        outcome: ClipboardOutcome,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-pub enum TextOutcome {
+pub enum ClipboardOutcome {
     Submitted = 1,
     Changed = 2,
     Declined = 3,
@@ -52,7 +64,9 @@ pub enum TextOutcome {
     Unknown = 5,
 }
 
-impl TextOutcome {
+pub type TextOutcome = ClipboardOutcome;
+
+impl ClipboardOutcome {
     fn parse(byte: u8) -> io::Result<Self> {
         match byte {
             1 => Ok(Self::Submitted),
@@ -101,6 +115,8 @@ pub enum Kind {
     TextResult = 6,
     FileAccepted = 7,
     FileResult = 8,
+    Image = 9,
+    ImageResult = 10,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,6 +139,8 @@ impl Header {
             6 => Kind::TextResult,
             7 => Kind::FileAccepted,
             8 => Kind::FileResult,
+            9 => Kind::Image,
+            10 => Kind::ImageResult,
             _ => return Err(invalid()),
         };
         let body_bytes =
@@ -152,7 +170,17 @@ fn valid_length(kind: Kind, len: usize) -> bool {
         Kind::TextResult => len == 9,
         Kind::FileAccepted => len == 20,
         Kind::FileResult => len == 17,
+        Kind::Image => (8 + PNG_SIGNATURE.len()..=8 + MAX_PNG_BYTES).contains(&len),
+        Kind::ImageResult => len == 9,
     }
+}
+
+fn read_sequence(bytes: &[u8]) -> io::Result<u64> {
+    let sequence = u64::from_le_bytes(bytes.try_into().map_err(|_| invalid())?);
+    if sequence == 0 {
+        return Err(invalid());
+    }
+    Ok(sequence)
 }
 
 fn valid_text(text: &str) -> bool {
@@ -175,6 +203,8 @@ impl Frame {
             Self::TextResult { .. } => Kind::TextResult,
             Self::FileAccepted { .. } => Kind::FileAccepted,
             Self::FileResult { .. } => Kind::FileResult,
+            Self::Image { .. } => Kind::Image,
+            Self::ImageResult { .. } => Kind::ImageResult,
         }
     }
 
@@ -235,20 +265,13 @@ impl Frame {
                 id: body.try_into().map_err(|_| invalid())?,
             }),
             Kind::TextReceived => {
-                let sequence = u64::from_le_bytes(body.try_into().map_err(|_| invalid())?);
-                if sequence == 0 {
-                    return Err(invalid());
-                }
+                let sequence = read_sequence(body)?;
                 Ok(Self::TextReceived { sequence })
             }
             Kind::TextResult => {
-                let sequence = u64::from_le_bytes(body[..8].try_into().map_err(|_| invalid())?);
-                if sequence == 0 {
-                    return Err(invalid());
-                }
                 Ok(Self::TextResult {
-                    sequence,
-                    outcome: TextOutcome::parse(body[8])?,
+                    sequence: read_sequence(&body[..8])?,
+                    outcome: ClipboardOutcome::parse(body[8])?,
                 })
             }
             Kind::FileAccepted => {
@@ -265,6 +288,21 @@ impl Frame {
             Kind::FileResult => Ok(Self::FileResult {
                 id: body[..16].try_into().map_err(|_| invalid())?,
                 outcome: FileOutcome::parse(body[16])?,
+            }),
+            Kind::Image => {
+                let sequence = read_sequence(&body[..8])?;
+                let png = &body[8..];
+                if !png.starts_with(&PNG_SIGNATURE) {
+                    return Err(invalid());
+                }
+                Ok(Self::Image {
+                    sequence,
+                    png: png.to_vec(),
+                })
+            }
+            Kind::ImageResult => Ok(Self::ImageResult {
+                sequence: read_sequence(&body[..8])?,
+                outcome: ClipboardOutcome::parse(body[8])?,
             }),
         }
     }
@@ -330,6 +368,23 @@ impl Frame {
                 body.push(*outcome as u8);
                 body
             }
+            Self::Image { sequence, png } => {
+                if *sequence == 0 || png.len() > MAX_PNG_BYTES || !png.starts_with(&PNG_SIGNATURE) {
+                    return Err(invalid());
+                }
+                let mut body = Vec::with_capacity(8 + png.len());
+                body.extend_from_slice(&sequence.to_le_bytes());
+                body.extend_from_slice(png);
+                body
+            }
+            Self::ImageResult { sequence, outcome } => {
+                if *sequence == 0 {
+                    return Err(invalid());
+                }
+                let mut body = sequence.to_le_bytes().to_vec();
+                body.push(*outcome as u8);
+                body
+            }
         };
         if !valid_length(kind, body.len()) {
             return Err(invalid());
@@ -389,6 +444,33 @@ mod tests {
         ));
         declined[HEADER_BYTES + 16] = 0xff;
         assert!(Frame::read(declined.as_slice()).is_err());
+    }
+
+    #[test]
+    fn image_payload_checks_size_signature_and_separate_result_kind() {
+        let mut wire = encoded(&Frame::Image {
+            sequence: 2,
+            png: PNG_SIGNATURE.to_vec(),
+        });
+        assert!(matches!(
+            Frame::read(wire.as_slice()).unwrap(),
+            Frame::Image { sequence: 2, png } if png == PNG_SIGNATURE
+        ));
+        wire[HEADER_BYTES + 8] ^= 0xff;
+        assert!(Frame::read(wire.as_slice()).is_err());
+        let too_large = (MAX_PNG_BYTES as u32 + 9).to_le_bytes();
+        wire[8..12].copy_from_slice(&too_large);
+        assert!(Header::parse(wire[..HEADER_BYTES].try_into().unwrap()).is_err());
+
+        let result = encoded(&Frame::ImageResult {
+            sequence: 2,
+            outcome: ClipboardOutcome::Declined,
+        });
+        assert!(matches!(
+            Frame::read(result.as_slice()).unwrap(),
+            Frame::ImageResult { sequence: 2, outcome: ClipboardOutcome::Declined }
+        ));
+        assert_ne!(result[4], Kind::TextResult as u8);
     }
 
     struct Fragmented(Cursor<Vec<u8>>);

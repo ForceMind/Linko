@@ -18,6 +18,7 @@ use tokio::sync::{oneshot, watch};
 const TEXT: data::Capabilities = data::Capabilities {
     text: true,
     files: false,
+    images: false,
 };
 const WIRE_BYTES: u64 = MAX_TEXT_BYTES as u64 + 1024;
 const CONTROL_BYTES: u64 = 1024;
