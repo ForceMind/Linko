@@ -1,7 +1,7 @@
 //! Local supervisor approval for a lease-bound file reservation.
 use anyhow::{ensure, Context, Result};
 use peerglide_platform::{now_ms, CaptureGate, HeldPrimary};
-use peerglide_protocol::file_drop_ipc::{Command, Event, State};
+use peerglide_protocol::{file_drop_ipc::{Command, EntryPoint, Event, State}, Input, Motion};
 use peerglide_transport::{file_drop_link, layout_reservation, Identity};
 use quinn::{Connection, Endpoint};
 use std::{
@@ -30,13 +30,73 @@ struct Active {
     watermark: u32,
     sender: watch::Sender<Option<Arc<Arm>>>,
     claim: Option<LocalClaim>,
+    target: Option<TargetInput>,
+    retired_target: Option<u64>,
 }
 
 struct LocalClaim {
     request: u32,
     lease: u64,
     proof: file_drop_link::PendingWorkerClaim,
-    ready: bool,
+    readiness: Option<Readiness>,
+    deadline: u64,
+}
+
+enum Readiness {
+    Legacy,
+    Native(EntryPoint),
+}
+
+#[derive(Clone, Copy)]
+enum TargetPhase {
+    WaitingForDown(EntryPoint),
+    WaitingForStart(u64),
+    Dragging,
+    WaitingForDrop { cursor: Motion, deadline: u64, ready: bool },
+}
+
+struct TargetInput {
+    request: u32,
+    lease: u64,
+    deadline: u64,
+    phase: TargetPhase,
+    placement: Option<Placement>,
+}
+
+#[derive(Clone, Copy)]
+struct Placement {
+    original: Motion,
+    entry: Motion,
+}
+
+impl Placement {
+    fn map(self, point: Motion) -> Motion {
+        // Both ends of each axis stay reachable from the local start point.
+        fn axis(value: f64, original: f64, entry: f64) -> f64 {
+            if value < original {
+                entry * (value / original)
+            } else if value > original {
+                entry + (1.0 - entry) * ((value - original) / (1.0 - original))
+            } else {
+                entry
+            }
+        }
+        Motion {
+            x: axis(point.x, self.original.x, self.entry.x),
+            y: axis(point.y, self.original.y, self.entry.y),
+            ..point
+        }
+    }
+}
+
+const TARGET_START_MS: u64 = 750;
+const TARGET_DROP_MS: u64 = 500;
+
+pub(super) enum TargetAction {
+    Ordinary,
+    AtEntry(Motion),
+    Drop(Event),
+    Abort,
 }
 
 pub(super) struct Arm {
@@ -85,6 +145,8 @@ impl Controller {
             watermark: 0,
             sender,
             claim: None,
+            target: None,
+            retired_target: None,
         });
         Ok((
             Scope {
@@ -128,20 +190,35 @@ impl Controller {
                 Direction::Send(target),
                 proof,
             ),
-            Command::Ready {
-                session,
-                request,
-                lease,
-            } => {
-                let claim = active.claim.as_mut().filter(|claim| {
-                    session == active.session
-                        && claim.request == request
-                        && claim.lease == lease
-                        && claim.proof.is_live()
-                })?;
-                if !claim.ready {
-                    claim.ready = true;
-                    active.sender.send_modify(|_| {});
+            Command::Ready { session, request, lease } => {
+                active.ready(session, request, lease, Readiness::Legacy);
+                return None;
+            }
+            Command::PrepareTarget { session, request, lease, entry } => {
+                active.ready(session, request, lease, Readiness::Native(entry));
+                return None;
+            }
+            Command::TargetStarted { session, request, lease } => {
+                if let Some(target) = active.target.as_mut().filter(|target| {
+                    active.session == session && target.request == request && target.lease == lease
+                }) {
+                    if matches!(target.phase, TargetPhase::WaitingForStart(deadline) if now_ms() < deadline) {
+                        target.phase = TargetPhase::Dragging;
+                        active.sender.send_modify(|_| {});
+                    }
+                }
+                return None;
+            }
+            Command::TargetDropReady { session, request, lease } => {
+                if let Some(target) = active.target.as_mut().filter(|target| {
+                    active.session == session && target.request == request && target.lease == lease
+                }) {
+                    if let TargetPhase::WaitingForDrop { deadline, ready, .. } = &mut target.phase {
+                        if !*ready && now_ms() < *deadline {
+                            *ready = true;
+                            active.sender.send_modify(|_| {});
+                        }
+                    }
                 }
                 return None;
             }
@@ -155,10 +232,14 @@ impl Controller {
                     .borrow()
                     .as_ref()
                     .is_some_and(|arm| arm.request == request);
-                if session != active.session || !(armed || pending) {
+                let targeting = active.target.as_ref().is_some_and(|target| target.request == request);
+                if session != active.session || !(armed || pending || targeting) {
                     return None;
                 }
                 active.claim = None;
+                if targeting {
+                    active.retire_target();
+                }
                 active.sender.send_replace(None);
                 return Some(Event::new(session, request, State::Cancelled, None));
             }
@@ -166,6 +247,7 @@ impl Controller {
         if session == active.session && request > active.watermark {
             active.watermark = request;
             active.claim = None;
+            active.retire_target();
             let deadline = now_ms().saturating_add(u64::from(lifetime_ms));
             active.sender.send_replace(Some(Arc::new(Arm {
                 request,
@@ -175,6 +257,28 @@ impl Controller {
             })));
         }
         None
+    }
+}
+
+impl Active {
+    fn ready(&mut self, session: u32, request: u32, lease: u64, readiness: Readiness) {
+        let Some(claim) = self.claim.as_mut().filter(|claim| {
+            self.session == session
+                && claim.request == request
+                && claim.lease == lease
+                && claim.readiness.is_none()
+                && claim.proof.is_live()
+        }) else {
+            return;
+        };
+        claim.readiness = Some(readiness);
+        self.sender.send_modify(|_| {});
+    }
+
+    fn retire_target(&mut self) {
+        if let Some(target) = self.target.take() {
+            self.retired_target = Some(target.lease);
+        }
     }
 }
 
@@ -229,7 +333,8 @@ impl Scope<'_> {
                 request: route.request,
                 lease,
                 proof,
-                ready: false,
+                readiness: None,
+                deadline: route.deadline,
             });
             route.claimed.store(true, Ordering::Release);
             Event::new(self.session, route.request, State::Matched, Some(lease))
@@ -251,21 +356,132 @@ impl Scope<'_> {
             .filter(|active| active.session == self.session)?;
         let claim = active.claim.as_ref()?;
         let live = claim.proof.is_live() && accepts(claim.lease);
-        if live && !claim.ready {
+        if live && claim.readiness.is_none() {
             return None;
         }
         let claim = active.claim.take()?;
         Some(if live && claim.proof.confirm() {
-            Event::new(
-                self.session,
-                claim.request,
-                State::Claimed,
-                Some(claim.lease),
-            )
+            if let Some(Readiness::Native(entry)) = claim.readiness {
+                active.target = Some(TargetInput {
+                    request: claim.request,
+                    lease: claim.lease,
+                    deadline: claim.deadline,
+                    phase: TargetPhase::WaitingForDown(entry),
+                    placement: None,
+                });
+            }
+            Event::new(self.session, claim.request, State::Claimed, Some(claim.lease))
         } else {
             self.event(claim.request, State::Rejected)
         })
     }
+
+    fn with_active<T>(&self, action: impl FnOnce(&mut Active) -> T) -> Option<T> {
+        let mut state = self.controller.0.lock().ok()?;
+        state.active.as_mut().filter(|active| active.session == self.session).map(action)
+    }
+
+    pub(super) fn target_input(&self, lease: u64, event: Input, cursor: Motion) -> TargetAction {
+        self.with_active(|active| {
+            if active.retired_target == Some(lease) {
+                return TargetAction::Abort;
+            }
+            let Some(target) = active.target.as_mut().filter(|target| target.lease == lease) else {
+                return TargetAction::Ordinary;
+            };
+            if now_ms() >= target.deadline {
+                return TargetAction::Abort;
+            }
+            match (target.phase, event) {
+                (TargetPhase::WaitingForDown(entry), Input::Button { button: 1, down: true })
+                    if cursor.lease == lease && cursor.sequence == 1 && cursor.valid() =>
+                {
+                    let (x, y) = entry.coordinates();
+                    let entry = Motion { x, y, ..cursor };
+                    target.placement = Some(Placement { original: cursor, entry });
+                    TargetAction::AtEntry(entry)
+                }
+                (TargetPhase::Dragging, Input::Button { button: 1, down: false })
+                    if cursor.lease == lease && cursor.sequence > 1 && cursor.valid() =>
+                {
+                    let Some(placement) = target.placement else {
+                        return TargetAction::Abort;
+                    };
+                    target.phase = TargetPhase::WaitingForDrop {
+                        cursor: placement.map(cursor),
+                        deadline: now_ms().saturating_add(TARGET_DROP_MS),
+                        ready: false,
+                    };
+                    TargetAction::Drop(Event::new(self.session, target.request, State::TargetDrop, Some(lease)))
+                }
+                _ => TargetAction::Abort,
+            }
+        }).unwrap_or(TargetAction::Abort)
+    }
+
+    pub(super) fn target_down(&self, lease: u64) -> Option<Event> {
+        self.with_active(|active| {
+            let target = active.target.as_mut().filter(|target| target.lease == lease)?;
+            if !matches!(target.phase, TargetPhase::WaitingForDown(_)) {
+                return None;
+            }
+            target.phase = TargetPhase::WaitingForStart(now_ms().saturating_add(TARGET_START_MS));
+            Some(Event::new(self.session, target.request, State::TargetDown, Some(lease)))
+        }).flatten()
+    }
+
+    pub(super) fn target_motion(&self, motion: Motion) -> Option<Motion> {
+        self.with_active(|active| {
+            if active.retired_target == Some(motion.lease) {
+                return None;
+            }
+            let Some(target) = active.target.as_ref().filter(|target| target.lease == motion.lease) else {
+                return Some(motion);
+            };
+            if !matches!(target.phase, TargetPhase::Dragging) || now_ms() >= target.deadline {
+                return None;
+            }
+            target.placement.map(|placement| placement.map(motion))
+        }).flatten()
+    }
+
+    pub(super) fn target_expired(&self, lease: u64) -> bool {
+        self.with_active(|active| {
+            let now = now_ms();
+            active.retired_target == Some(lease)
+                || active.target.as_ref().filter(|target| target.lease == lease).is_some_and(|target| {
+                    now >= target.deadline
+                        || matches!(target.phase,
+                            TargetPhase::WaitingForStart(deadline)
+                            | TargetPhase::WaitingForDrop { deadline, .. } if now >= deadline)
+                })
+        }).unwrap_or(true)
+    }
+
+    pub(super) fn confirmed_drop(&self, lease: u64) -> Option<Motion> {
+        self.with_active(|active| {
+            let target = active.target.as_ref().filter(|target| target.lease == lease)?;
+            match target.phase {
+                TargetPhase::WaitingForDrop { cursor, deadline, ready: true }
+                    if now_ms() < deadline.min(target.deadline) => Some(cursor),
+                _ => None,
+            }
+        }).flatten()
+    }
+
+    pub(super) fn end_target(&self, lease: u64, dropped: bool) -> Option<Event> {
+        self.with_active(|active| {
+            if active.retired_target == Some(lease) {
+                active.retired_target = None;
+            }
+            if !active.target.as_ref().is_some_and(|target| target.lease == lease) {
+                return None;
+            }
+            let target = active.target.take()?;
+            (!dropped).then(|| self.event(target.request, State::Rejected))
+        }).flatten()
+    }
+
 }
 
 impl Drop for Scope<'_> {
@@ -297,6 +513,7 @@ pub(super) enum Route {
 
 pub(super) struct Target {
     request: u32,
+    deadline: u64,
     slot: Arc<file_drop_link::WorkerSlot>,
     task: JoinHandle<()>,
     claimed: AtomicBool,
@@ -456,6 +673,7 @@ impl Target {
         Ok((
             Self {
                 request: arm.request,
+                deadline: arm.deadline,
                 slot,
                 task,
                 claimed: AtomicBool::new(false),
@@ -513,6 +731,22 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_coordinates_keep_the_first_press_at_the_local_entry() {
+        let point = |x, y| Motion { lease: 1, sequence: 1, x, y };
+        let placement = Placement {
+            original: point(0.002, 0.8),
+            entry: point(0.25, 0.5),
+        };
+        let initial = placement.map(placement.original);
+        assert!((initial.x - 0.25).abs() < f64::EPSILON);
+        assert!((initial.y - 0.5).abs() < f64::EPSILON);
+        let low = placement.map(point(0.0, 0.0));
+        let high = placement.map(point(1.0, 1.0));
+        assert!(low.x.abs() < f64::EPSILON && low.y.abs() < f64::EPSILON);
+        assert!((high.x - 1.0).abs() < f64::EPSILON && (high.y - 1.0).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn local_commands_cannot_rearm_an_old_session_or_replay_a_request() -> Result<()> {

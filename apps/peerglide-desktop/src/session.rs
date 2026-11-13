@@ -22,6 +22,7 @@ pub(super) mod routed_source;
 pub(super) mod wayland_source;
 #[cfg(target_os = "linux")]
 pub(super) mod x11_source;
+use super::file_drop_control::TargetAction;
 use recovery::Recovery;
 
 pub(super) struct Abort(pub(super) tokio::task::JoinHandle<()>);
@@ -549,10 +550,16 @@ pub(super) async fn run_with_diagnostics(
         if native && recovery.outcome()==ReceiveAck::RecoveryRequired {
             input_status.checked::<()>(Err(anyhow::anyhow!("native receive recovery remains unconfirmed")))?;
         }
-        if let Some(lease)=recovery.receiver.active().filter(|_|native && recovery.snapshot()!=ReceiveSnapshot::Active) {
-            edge_gate.require_interior();
-            input_status.release(&mut recovery).await?;
-            send(&mut tx,&Message::Release{lease,cursor:None}).await?;
+        if let Some(lease) = recovery.receiver.active() {
+            let file_expired = drop_scope.as_ref().is_some_and(|scope| scope.target_expired(lease));
+            if file_expired || (native && recovery.snapshot() != ReceiveSnapshot::Active) {
+                edge_gate.require_interior();
+                if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                    input_status.reporter.file_drop(event);
+                }
+                input_status.release(&mut recovery).await?;
+                send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+            }
         }
         if recovery.snapshot()==ReceiveSnapshot::Draining || (native && recovery.receiver.active().is_none() && recovery.outcome()==ReceiveAck::Submitted) {input_status.recovering();}
         else{input_status.routing(outgoing.is_some(), recovery.receiver.active().is_some());}
@@ -589,6 +596,25 @@ pub(super) async fn run_with_diagnostics(
                         && (!native || recovery.snapshot() == ReceiveSnapshot::Active)
                 }) {
                     input_status.reporter.file_drop(event);
+                }
+            }
+        }
+        if !network_ready {
+            if let (Some(scope), Some(lease)) = (&drop_scope, recovery.receiver.active()) {
+                if let Some(cursor) = scope.confirmed_drop(lease).filter(|_| {
+                    !*stop.borrow() && recovery.receiver.accepts(lease, now_ms())
+                }) {
+                    let applied = recovery.input(
+                        lease, Input::Button { button: 1, down: false }, cursor, now_ms(),
+                    ).await;
+                    let dropped = input_status.checked(applied)?;
+                    if let Some(event) = scope.end_target(lease, dropped) {
+                        input_status.reporter.file_drop(event);
+                    }
+                    if !dropped {
+                        input_status.release(&mut recovery).await?;
+                        send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                    }
                 }
             }
         }
@@ -712,7 +738,14 @@ pub(super) async fn run_with_diagnostics(
                         drop_route = None;
                     }
                 }
-                if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
+                if recovery.receiver.expired(now) {
+                    if let Some(event) = recovery.receiver.active().and_then(|lease|
+                        drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false))
+                    ) {
+                        input_status.reporter.file_drop(event);
+                    }
+                    input_status.release(&mut recovery).await?;
+                }
                 if let Some(Outgoing {lease,epoch})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
                         count(Count::PongTimeout);
@@ -825,7 +858,43 @@ pub(super) async fn run_with_diagnostics(
                     Message::Input{lease,event,cursor}=>{
                         count(Count::ReliableReceived);
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
+                        let mut target_down = false;
+                        let cursor = if recovery.receiver.accepts(lease, now) {
+                            match drop_scope.as_ref().map_or(TargetAction::Ordinary, |scope| scope.target_input(lease, event, cursor)) {
+                                TargetAction::Ordinary => cursor,
+                                TargetAction::AtEntry(entry) => {
+                                    target_down = true;
+                                    entry
+                                }
+                                TargetAction::Drop(event) => {
+                                    input_status.reporter.file_drop(event);
+                                    continue;
+                                }
+                                TargetAction::Abort => {
+                                    edge_gate.require_interior();
+                                    if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                                        input_status.reporter.file_drop(event);
+                                    }
+                                    input_status.release(&mut recovery).await?;
+                                    send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                                    continue;
+                                }
+                            }
+                        } else {
+                            cursor
+                        };
                         let result=recovery.input(lease,event,cursor,now).await;
+                        if target_down {
+                            if let Some(event) = drop_scope.as_ref().and_then(|scope| {
+                                if matches!(&result, Ok(true)) && !*stop.borrow() {
+                                    scope.target_down(lease)
+                                } else {
+                                    scope.end_target(lease, false)
+                                }
+                            }) {
+                                input_status.reporter.file_drop(event);
+                            }
+                        }
                         match &result {
                             Ok(true)=>{
                                 count(Count::ReliableSubmitted);
@@ -839,7 +908,12 @@ pub(super) async fn run_with_diagnostics(
                     },
                     Message::Release { lease, cursor }=>{
                         if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);}
-                        if recovery.receiver.active()==Some(lease){input_status.recovering();}
+                        if recovery.receiver.active()==Some(lease){
+                            if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                                input_status.reporter.file_drop(event);
+                            }
+                            input_status.recovering();
+                        }
                         input_status.checked(recovery.finish(lease,cursor,now).await)?;
                         if outgoing.is_some_and(|current|current.lease==lease){count(Count::PeerRelease);outgoing=None;input_status.restore(capture.as_ref())?;}
                     },
@@ -851,8 +925,12 @@ pub(super) async fn run_with_diagnostics(
             d=c.read_datagram()=>{
                 let d=match d {Ok(d)=>d,Err(_) if normal_close(&c)=>return Ok(()),Err(e)=>return Err(e.into())};
                 if let Some(m)=read_motion_batch(&c,&mut recovery.receiver,&d,&count).await {
-                    let result=if recovery.receiver.accepts(m.lease,now_ms()) {
-                        recovery.pointer(m.x,m.y).await
+                    let point = match &drop_scope {
+                        Some(scope) => scope.target_motion(m),
+                        None => Some(m),
+                    };
+                    let result=if let Some(point) = point.filter(|point| recovery.receiver.accepts(point.lease,now_ms())) {
+                        recovery.pointer(point.x,point.y).await
                     } else {
                         Ok(false)
                     };
@@ -877,6 +955,9 @@ pub(super) async fn run_with_diagnostics(
                     continue;
                 }}
                 if let Some(lease)=local_takeover(e,recovery.receiver.active().zip(recovery.receive_epoch),&mut edge_gate) {
+                    if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                        input_status.reporter.file_drop(event);
+                    }
                     input_status.release(&mut recovery).await?;
                     input_status.reporter.switch(super::WorkerSwitchState::Idle);
 
@@ -892,7 +973,13 @@ pub(super) async fn run_with_diagnostics(
                         input_status.restore(capture.as_ref())?;
                         if let Some(request)=pending.take(){send(&mut tx,&Message::Release { lease:request.lease, cursor: None }).await?;}
                         input_status.reporter.switch(super::WorkerSwitchState::Idle); if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
-                        if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery).await?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        if let Some(lease)=recovery.receiver.active(){
+                            if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                                input_status.reporter.file_drop(event);
+                            }
+                            input_status.release(&mut recovery).await?;
+                            send(&mut tx,&Message::Release { lease, cursor: None }).await?;
+                        }
                     },
                     Captured::Position{x,y,width,height,route,primary}=>{
                         if !matches!(route,CaptureRoute::Local(_)){continue;}
@@ -1031,6 +1118,11 @@ pub(super) async fn run_with_diagnostics(
             }
         }
     }    }.await;
+    if let (Some(scope), Some(lease)) = (&drop_scope, recovery.receiver.active()) {
+        if let Some(event) = scope.end_target(lease, false) {
+            input_status.reporter.file_drop(event);
+        }
+    }
     drop(drop_route);
     drop(drop_scope);
     // Always finish local release and capture shutdown before returning to the
@@ -2522,6 +2614,9 @@ mod tests {
         CancelAfterGrant,
         ReleaseBeforeReady,
         Expire,
+        TargetDrop,
+        TargetEarlyRelease,
+        TargetCancel,
     }
 
     #[tokio::test]
@@ -2550,9 +2645,24 @@ mod tests {
         exercise_file_worker(FileDecision::Expire).await
     }
 
+    #[tokio::test]
+    async fn target_drop_waits_for_matching_native_start_and_release_confirmation() -> Result<()> {
+        exercise_file_worker(FileDecision::TargetDrop).await
+    }
+
+    #[tokio::test]
+    async fn target_release_before_native_start_cannot_drop() -> Result<()> {
+        exercise_file_worker(FileDecision::TargetEarlyRelease).await
+    }
+
+    #[tokio::test]
+    async fn target_cancel_after_down_retires_the_live_input_lease() -> Result<()> {
+        exercise_file_worker(FileDecision::TargetCancel).await
+    }
+
     async fn exercise_file_worker(decision: FileDecision) -> Result<()> {
         use file_transfer::drop_admission::{Admission, Content, Context as DropContext};
-        use peerglide_protocol::file_drop_ipc::{Command, Event, State};
+        use peerglide_protocol::file_drop_ipc::{Command, EntryPoint, Event, State};
         use transport::{file_drop_link, file_transfer, layout_reservation};
 
         let a = Identity::generate()?;
@@ -2676,6 +2786,10 @@ mod tests {
             assert!(
                 matches!(transport::receive(&mut rx).await?, Message::Granted { lease: granted } if granted == lease)
             );
+            let target = matches!(
+                decision,
+                FileDecision::TargetDrop | FileDecision::TargetEarlyRelease | FileDecision::TargetCancel
+            );
             let mut confirm = std::pin::pin!(confirmation.confirm());
             if decision != FileDecision::CancelBeforeGrant {
                 let matched = observed
@@ -2692,7 +2806,10 @@ mod tests {
                     lease,
                 };
                 match decision {
-                    FileDecision::Ready => {
+                    FileDecision::Ready
+                    | FileDecision::TargetDrop
+                    | FileDecision::TargetEarlyRelease
+                    | FileDecision::TargetCancel => {
                         controller.submit(ready(session + 1, request, lease));
                         controller.submit(ready(session, request + 1, lease));
                         controller.submit(ready(session, request, lease + 1));
@@ -2701,7 +2818,17 @@ mod tests {
                                 .await
                                 .is_err()
                         );
-                        controller.submit(ready(session, request, lease));
+                        let approval = if target {
+                            Command::PrepareTarget {
+                                session,
+                                request,
+                                lease,
+                                entry: EntryPoint::new(0.25, 0.75).unwrap(),
+                            }
+                        } else {
+                            ready(session, request, lease)
+                        };
+                        controller.submit(approval);
                         assert_eq!(
                             observed.recv().await,
                             Some(Event::new(session, request, State::Claimed, Some(lease)))
@@ -2736,8 +2863,58 @@ mod tests {
                 }
             }
             let proof = tokio::time::timeout(Duration::from_secs(3), confirm.as_mut()).await?;
-            assert_eq!(proof.is_ok(), decision == FileDecision::Ready);
+            assert_eq!(proof.is_ok(), target || decision == FileDecision::Ready);
             side.close(0u8.into(), b"reservation resolved");
+            if target {
+                let input = |lease, sequence, down| Message::Input {
+                    lease,
+                    event: Input::Button { button: 1, down },
+                    cursor: Motion { lease, sequence, x: 0.5, y: 0.5 },
+                };
+                send(&mut tx, &input(lease + 1, 1, true)).await?;
+                send(&mut tx, &input(lease, 1, true)).await?;
+                assert_eq!(
+                    observed.recv().await,
+                    Some(Event::new(session, request, State::TargetDown, Some(lease)))
+                );
+                let start = |lease| Command::TargetStarted { session, request, lease };
+                controller.submit(start(lease + 1));
+                match decision {
+                    FileDecision::TargetDrop => {
+                        controller.submit(start(lease));
+                        send(&mut tx, &input(lease, 2, false)).await?;
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::TargetDrop, Some(lease)))
+                        );
+                        let confirm = |lease| Command::TargetDropReady { session, request, lease };
+                        controller.submit(confirm(lease + 1));
+                        assert!(tokio::time::timeout(Duration::from_millis(30), observed.recv()).await.is_err());
+                        controller.submit(confirm(lease));
+                        // Confirmed Up removes the drop state. The later ordinary
+                        // v5 Release will not reject or repeat this file drop.
+                        send(&mut tx, &Message::Ping { lease }).await?;
+                        assert!(matches!(transport::receive(&mut rx).await?, Message::Pong { lease: active } if active == lease));
+                    }
+                    FileDecision::TargetEarlyRelease => {
+                        send(&mut tx, &input(lease, 2, false)).await?;
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::Rejected, None))
+                        );
+                    }
+                    FileDecision::TargetCancel => {
+                        assert_eq!(
+                            controller.submit(Command::Cancel { session, request }),
+                            Some(Event::new(session, request, State::Cancelled, None))
+                        );
+                    }
+                    _ => unreachable!("not a native target fixture"),
+                }
+                if decision != FileDecision::TargetDrop {
+                    assert!(matches!(transport::receive(&mut rx).await?, Message::Release { lease: retired, .. } if retired == lease));
+                }
+            }
             if decision == FileDecision::Ready {
                 admission
                     .submit(
