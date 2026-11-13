@@ -1,302 +1,56 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
+use peerglide_platform::display_layout::Layout;
 use peerglide_platform::input_diagnostics::{Count, InputDiagnostics};
 use peerglide_platform::{
     self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute,
     Captured,
 };
+use peerglide_protocol::file_drop_ipc::{Event as FileDropEvent, State as FileDropState};
 use peerglide_protocol::{
     decode, encode, layout_ipc::LayoutHint, worker::WorkerInputState, Edge, Input,
     InputCapabilities, Message, Motion,
 };
 use peerglide_transport as transport;
-use platform::{ReceiveAck, ReceiveDriver, ReceiveError, ReceivePoint, ReceiveSnapshot};
-use std::time::Duration;
+use platform::{ReceiveAck, ReceiveSnapshot};
+use std::{future::Future, pin::Pin, time::Duration};
 use tokio::sync::mpsc;
 
-struct Recovery {
-    receiver: Receiver,
-    native: bool,
-    pending_releases: PendingReleases,
-    driver: Option<ReceiveDriver>,
-    receive_epoch: Option<CaptureEpoch>,
-}
-impl Recovery {
-    fn snapshot(&self) -> ReceiveSnapshot {
-        match (&self.driver, self.receive_epoch) {
-            (Some(driver), Some(epoch)) => driver.snapshot(epoch),
-            _ => ReceiveSnapshot::Retired,
-        }
-    }
-    fn outcome(&self) -> ReceiveAck {
-        self.driver
-            .as_ref()
-            .map_or(ReceiveAck::Retired, |driver| driver.control().outcome())
-    }
-    fn protection_pending(&self) -> bool {
-        self.native
-            && (self.snapshot() != ReceiveSnapshot::Retired
-                || self.outcome() != ReceiveAck::Retired)
-    }
-    async fn begin_receive(&mut self) -> Result<bool> {
-        if !self.native {
-            return Ok(true);
-        }
-        let driver = self
-            .driver
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-        match driver.begin().await {
-            Ok(epoch) => {
-                self.receive_epoch = Some(epoch);
-                Ok(driver.is_current(epoch))
-            }
-            Err(ReceiveError::Busy | ReceiveError::Stale) => Ok(false),
-            Err(error) => Err(error.into()),
-        }
-    }
-    async fn release(&mut self) -> Result<()> {
-        if !self.native {
-            return self.release_with(|_| Ok(()));
-        }
-        // Core owns protocol intent only. The Native loop is the sole OS owner,
-        // including after the async worker stalls or an acknowledgement is lost.
-        let _ = self.receiver.release();
-        if let Some(epoch) = self.receive_epoch {
-            let driver = self
-                .driver
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
-                self.receive_epoch = None;
-                return Ok(());
-            }
-            let ack = driver.release(epoch, None).await?;
-            anyhow::ensure!(
-                ack != ReceiveAck::RecoveryRequired,
-                "native receive cleanup requires recovery"
-            );
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
-                self.receive_epoch = None;
-            }
-        }
-        Ok(())
-    }
-    fn release_with(&mut self, inject: impl FnMut(Input) -> Result<()>) -> Result<()> {
-        self.pending_releases.extend(self.receiver.release());
-        self.pending_releases.flush(inject).map_err(|remaining| {
-            anyhow::anyhow!(
-                "native input cleanup failed: {remaining} releases remain pending; session stopped"
-            )
-        })
-    }
-    async fn finish(&mut self, lease: u64, cursor: Option<Motion>, now: u64) -> Result<()> {
-        if !self.native {
-            return self.finish_with(lease, cursor, now, |_| Ok(()), |_| Ok(()));
-        }
-        let Some(end) = self.receiver.finish(lease, cursor, now) else {
-            return Ok(());
-        };
-        // Never replay Core's release list into the OS. Native already retains
-        // and retires actual submitted Downs, independently of this ledger.
-        if let Some(epoch) = self.receive_epoch {
-            let driver = self
-                .driver
-                .as_mut()
-                .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
-                self.receive_epoch = None;
-                return Ok(());
-            }
-            let terminal = end.cursor.map(|m| ReceivePoint { x: m.x, y: m.y });
-            let ack = driver.release(epoch, terminal).await?;
-            anyhow::ensure!(
-                ack != ReceiveAck::RecoveryRequired,
-                "native receive cleanup requires recovery"
-            );
-            if driver.snapshot(epoch) == ReceiveSnapshot::Retired {
-                self.receive_epoch = None;
-            }
-        }
-        Ok(())
-    }
-    fn finish_with(
-        &mut self,
-        lease: u64,
-        cursor: Option<Motion>,
-        now: u64,
-        mut pointer: impl FnMut(Motion) -> Result<()>,
-        inject: impl FnMut(Input) -> Result<()>,
-    ) -> Result<()> {
-        let Some(end) = self.receiver.finish(lease, cursor, now) else {
-            return Ok(());
-        };
-        self.pending_releases.extend(end.releases);
-        let pointer_result = end.cursor.map(&mut pointer).unwrap_or(Ok(()));
-        // Pointer failure must not bypass balanced key/button cleanup.
-        self.pending_releases.flush(inject).map_err(|remaining| {
-            anyhow::anyhow!(
-                "native input cleanup failed: {remaining} releases remain pending; session stopped"
-            )
-        })?;
-        pointer_result
-    }
-    async fn input(&mut self, lease: u64, event: Input, cursor: Motion, now: u64) -> Result<bool> {
-        if !self.native {
-            return self.input_with(lease, event, cursor, now, |_| Ok(()), |_| Ok(()));
-        }
-        if !self.receiver.accepts_input(lease, event, now)
-            || cursor.lease != lease
-            || !self.receiver.anchor(cursor, now)
-        {
-            return Ok(false);
-        }
-        let Some(epoch) = self.receive_epoch else {
-            return Ok(false);
-        };
-        let driver = self
-            .driver
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-        let ack = match driver
-            .input(
-                epoch,
-                event,
-                ReceivePoint {
-                    x: cursor.x,
-                    y: cursor.y,
-                },
-            )
-            .await
-        {
-            Ok(ack) => ack,
-            Err(ReceiveError::Stale)
-                if matches!(
-                    driver.snapshot(epoch),
-                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
-                ) =>
-            {
-                return Ok(false)
-            }
-            Err(ReceiveError::Timeout)
-                if matches!(
-                    driver.snapshot(epoch),
-                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
-                ) =>
-            {
-                // The expired request already asked the Native owner to retire this
-                // epoch; the loop then releases the lease and confirms cleanup.
-                eprintln!("Native receive input timed out; ending remote control.");
-                return Ok(false);
-            }
-            Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => {
-                return Ok(false)
-            }
-            Err(error) => return Err(error.into()),
-        };
-        anyhow::ensure!(
-            ack != ReceiveAck::RecoveryRequired,
-            "native receive submission requires recovery"
-        );
-        if ack == ReceiveAck::Submitted && driver.is_current(epoch) {
-            Ok(self.receiver.input(lease, event, now))
-        } else {
-            Ok(false)
-        }
-    }
-    fn input_with(
-        &mut self,
-        lease: u64,
-        event: Input,
-        cursor: Motion,
-        now: u64,
-        pointer: impl FnOnce(Motion) -> Result<()>,
-        inject: impl FnOnce(Input) -> Result<()>,
-    ) -> Result<bool> {
-        if !self.receiver.accepts_input(lease, event, now)
-            || cursor.lease != lease
-            || !self.receiver.anchor(cursor, now)
-        {
-            return Ok(false);
-        }
-        // Positioning can fail before injection. Never retire an owned release
-        // before either operation succeeds; session cleanup must still retry it.
-        pointer(cursor)?;
-        self.receiver.input_with(lease, event, now, inject)
-    }
-    async fn pointer(&mut self, x: f64, y: f64) -> Result<bool> {
-        if !self.native {
-            return Ok(true);
-        }
-        let Some(epoch) = self.receive_epoch else {
-            return Ok(false);
-        };
-        let driver = self
-            .driver
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("native receive service unavailable"))?;
-        let ack = match driver.pointer(epoch, ReceivePoint { x, y }).await {
-            Ok(ack) => ack,
-            Err(ReceiveError::Stale)
-                if matches!(
-                    driver.snapshot(epoch),
-                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
-                ) =>
-            {
-                return Ok(false)
-            }
-            Err(ReceiveError::Timeout)
-                if matches!(
-                    driver.snapshot(epoch),
-                    ReceiveSnapshot::Draining | ReceiveSnapshot::Retired
-                ) =>
-            {
-                eprintln!("Native receive pointer timed out; ending remote control.");
-                return Ok(false);
-            }
-            Err(ReceiveError::Closed) if driver.snapshot(epoch) == ReceiveSnapshot::Retired => {
-                return Ok(false)
-            }
-            Err(error) => return Err(error.into()),
-        };
-        anyhow::ensure!(
-            ack != ReceiveAck::RecoveryRequired,
-            "native receive pointer requires recovery"
-        );
-        Ok(ack == ReceiveAck::Submitted && driver.is_current(epoch))
-    }
-    fn heartbeat(&mut self, lease: u64, now: u64) -> bool {
-        if !self.receiver.accepts(lease, now) {
-            return false;
-        }
-        if self.native {
-            let (Some(driver), Some(epoch)) = (&mut self.driver, self.receive_epoch) else {
-                return false;
-            };
-            if !driver.heartbeat(epoch) {
-                return false;
-            }
-        }
-        self.receiver.heartbeat(lease, now)
-    }
-}
-impl Drop for Recovery {
+mod recovery;
+pub(super) mod routed_source;
+#[cfg(target_os = "linux")]
+pub(super) mod wayland_source;
+#[cfg(target_os = "linux")]
+pub(super) mod x11_source;
+use super::file_drop_control::TargetAction;
+use recovery::Recovery;
+
+pub(super) struct Abort(pub(super) tokio::task::JoinHandle<()>);
+impl Drop for Abort {
     fn drop(&mut self) {
-        if self.native {
-            if let (Some(driver), Some(epoch)) = (&self.driver, self.receive_epoch) {
-                let control = driver.control();
-                control.request_recovery(epoch);
-                control.wake_loop();
-            }
-        } else if self.release_with(|_| Ok(())).is_err() {
-            eprintln!("Input cleanup remains incomplete; check local input state.");
-        }
+        self.0.abort();
     }
 }
-async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
+
+pub(super) async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
     tokio::time::timeout(Duration::from_millis(250), transport::send(tx, m)).await??;
     Ok(())
 }
+
+pub(super) const NATIVE_INPUT_RECOVERED: &[u8] = b"linko native input recovered/1";
+
+pub(super) fn close_reason_after_recovery(
+    session: &Result<()>,
+    state: Option<WorkerInputState>,
+    fallback: &'static [u8],
+) -> &'static [u8] {
+    if session.is_ok() && state == Some(WorkerInputState::Local) {
+        NATIVE_INPUT_RECOVERED
+    } else {
+        fallback
+    }
+}
+
 fn normal_close(c: &quinn::Connection) -> bool {
     matches!(c.close_reason(),Some(quinn::ConnectionError::ApplicationClosed(closed)) if closed.error_code==0u8.into())
 }
@@ -600,6 +354,37 @@ async fn run_with_status(
 pub(super) struct SessionControls<'a> {
     pub diagnostics: Option<&'a std::sync::Arc<InputDiagnostics>>,
     pub layout: Option<&'a super::layout_control::Controller>,
+    pub file_drop: Option<super::file_drop_control::Config<'a>>,
+    pub receive_display: Option<std::sync::Arc<platform::ReceiveDisplay>>,
+    pub secondary: Option<&'a super::secondary_layout::Routes>,
+    pub rebuilding_display_layout: bool,
+    pub remote_entry_edge: Option<Edge>,
+}
+
+// Store the optional network negotiation outside the inline session future.
+// Unused CLI branches still contribute to the Windows debug startup stack.
+fn secondary_confirmation<'a>(
+    routes: Option<&'a super::secondary_layout::Routes>,
+    connection: &'a quinn::Connection,
+    stop: &'a mut tokio::sync::watch::Receiver<bool>,
+    gate: &'a platform::CaptureGate,
+    request: PendingAcquire,
+    edge: Edge,
+    fraction: f64,
+) -> Option<Pin<Box<dyn Future<Output = bool> + 'a>>> {
+    let routes = routes.filter(|routes| routes.has_outbound())?;
+    Some(Box::pin(async move {
+        let confirmed = routes
+            .confirm_outbound(connection, stop, request.lease, edge, fraction)
+            .await;
+        if !confirmed {
+            eprintln!("Secondary layout reservation was not confirmed.");
+        }
+        confirmed
+            && now_ms() < request.deadline
+            && !*stop.borrow()
+            && gate.commit_pending(request.token)
+    }))
 }
 
 pub(super) async fn run_with_diagnostics(
@@ -614,6 +399,11 @@ pub(super) async fn run_with_diagnostics(
     let SessionControls {
         diagnostics,
         layout,
+        file_drop,
+        receive_display,
+        secondary,
+        rebuilding_display_layout,
+        remote_entry_edge,
     } = controls;
     let Policy {
         allow,
@@ -639,6 +429,16 @@ pub(super) async fn run_with_diagnostics(
         let (_sender, receiver) = mpsc::channel(1);
         (None, receiver)
     };
+    let (drop_scope, mut drop_requests) = if let Some(config) = file_drop {
+        let (scope, mailbox) = config.controller.open()?;
+        (Some(scope), mailbox)
+    } else {
+        let (_sender, mailbox) = tokio::sync::watch::channel(None);
+        (None, mailbox)
+    };
+    let mut drop_route = None;
+    let mut file_lease: Option<(u64, u32)> = None;
+    let mut file_confirmation: Option<super::file_drop_control::SourceReservation> = None;
     // Publish connection readiness only after its private configuration queue
     // exists, so an immediate GUI edit cannot disappear during session startup.
     super::worker_event(
@@ -652,8 +452,31 @@ pub(super) async fn run_with_diagnostics(
             diagnostics.increment(kind);
         }
     };
+    // Native display enumeration runs before installing capture, on the
+    // worker. A failed OS query keeps the compatible primary-screen behavior.
+    let topology = monitor_layout(native);
+    if rebuilding_display_layout && topology.is_none() {
+        input_status.reporter.set(WorkerInputState::Disabled);
+        return Err(DisplayLayoutEnd::Unavailable.into());
+    }
+    if receive_display.as_ref().is_some_and(|selection| {
+        topology
+            .as_ref()
+            .is_none_or(|current| !selection.matches_snapshot(current))
+    }) {
+        input_status.reporter.set(WorkerInputState::Disabled);
+        bail!(
+            "The selected receive display is no longer current. Select it again before restarting."
+        );
+    }
+    let mut display_change = Box::pin(watch_display_layout(topology.as_ref()));
     let mut capture = if native {
-        match platform::capture_with_diagnostics(itx, peer.clone(), diagnostics.cloned()) {
+        match platform::capture_with_receive_display(
+            itx,
+            peer.clone(),
+            diagnostics.cloned(),
+            receive_display,
+        ) {
             Ok(capture) => Some(capture),
             Err(error) => {
                 input_status.reporter.set(WorkerInputState::Disabled);
@@ -691,12 +514,6 @@ pub(super) async fn run_with_diagnostics(
             }
         }
     });
-    struct Abort(tokio::task::JoinHandle<()>);
-    impl Drop for Abort {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
     let _reader = Abort(reader);
     let mut recovery = Recovery {
         receiver: Receiver::default(),
@@ -714,7 +531,7 @@ pub(super) async fn run_with_diagnostics(
     let mut local_return = (0.5, 0.5);
     let mut size = (1920.0, 1080.0);
     let mut last_pong = 0u64;
-    let mut edge_gate = EdgeGate::default();
+    let mut edge_gate = session_edge_gate(rebuilding_display_layout);
     let mut hint_reported: Option<(Edge, Edge)> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(200));
     let result: Result<()> = async {
@@ -733,18 +550,74 @@ pub(super) async fn run_with_diagnostics(
         if native && recovery.outcome()==ReceiveAck::RecoveryRequired {
             input_status.checked::<()>(Err(anyhow::anyhow!("native receive recovery remains unconfirmed")))?;
         }
-        if let Some(lease)=recovery.receiver.active().filter(|_|native && recovery.snapshot()!=ReceiveSnapshot::Active) {
-            edge_gate.require_interior();
-            input_status.release(&mut recovery).await?;
-            send(&mut tx,&Message::Release{lease,cursor:None}).await?;
+        if let Some(lease) = recovery.receiver.active() {
+            let file_expired = drop_scope.as_ref().is_some_and(|scope| scope.target_expired(lease));
+            if file_expired || (native && recovery.snapshot() != ReceiveSnapshot::Active) {
+                edge_gate.require_interior();
+                if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                    input_status.reporter.file_drop(event);
+                }
+                input_status.release(&mut recovery).await?;
+                send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+            }
         }
         if recovery.snapshot()==ReceiveSnapshot::Draining || (native && recovery.receiver.active().is_none() && recovery.outcome()==ReceiveAck::Submitted) {input_status.recovering();}
         else{input_status.routing(outgoing.is_some(), recovery.receiver.active().is_some());}
-        let current=pending.is_none_or(|request|capture.as_ref().is_some_and(|cap|cap.gate.commit_pending(request.token)) && !recovery.protection_pending());
+        if let (Some((lease, request)), Some(scope)) = (file_lease, &drop_scope) {
+            let acquiring = pending.is_some_and(|pending| pending.lease == lease);
+            let sending = outgoing.is_some_and(|outgoing| outgoing.lease == lease);
+            if sending && !scope.current(request) {
+                input_status.restore(capture.as_ref())?;
+                outgoing = None;
+                edge_gate.require_interior();
+                motion_outbox.latest = None;
+                send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+            }
+            if !acquiring && outgoing.is_none_or(|outgoing| outgoing.lease != lease) {
+                if scope.current(request) {
+                    input_status.reporter.file_drop(scope.event(request, FileDropState::Rejected));
+                }
+                scope.retire(request);
+                file_lease = None;
+                file_confirmation = None;
+            }
+        }
+        let file_current = file_lease.is_none_or(|(_, request)| drop_scope.as_ref().is_some_and(|scope| scope.current(request)));
+        let current=file_current && pending.is_none_or(|request|capture.as_ref().is_some_and(|cap|cap.gate.commit_pending(request.token)) && !recovery.protection_pending());
         let now=now_ms();
         // Process already-received reliable Release/Denied/stream errors before
         // retrying. Keep the other select branches fair; only retries yield.
         let network_ready=!messages.is_empty();
+        if !network_ready {
+            if let Some(scope) = &drop_scope {
+                if let Some(event) = scope.advance_claim(|lease| {
+                    !*stop.borrow()
+                        && recovery.receiver.accepts(lease, now_ms())
+                        && (!native || recovery.snapshot() == ReceiveSnapshot::Active)
+                }) {
+                    input_status.reporter.file_drop(event);
+                }
+            }
+        }
+        if !network_ready {
+            if let (Some(scope), Some(lease)) = (&drop_scope, recovery.receiver.active()) {
+                if let Some(cursor) = scope.confirmed_drop(lease).filter(|_| {
+                    !*stop.borrow() && recovery.receiver.accepts(lease, now_ms())
+                }) {
+                    let applied = recovery.input(
+                        lease, Input::Button { button: 1, down: false }, cursor, now_ms(),
+                    ).await;
+                    let dropped = input_status.checked(applied)?;
+                    if let Some(event) = scope.end_target(lease, dropped) {
+                        input_status.reporter.file_drop(event);
+                    }
+                    if !dropped {
+                        input_status.release(&mut recovery).await?;
+                        send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                    }
+                }
+            }
+        }
         let defer_commit=network_ready && current && pending.is_some_and(|request|now<request.deadline);
         // Stage-only diagnostics: never key/button contents, positions or lease ids.
         let peer_granted=pending.is_some_and(|request|request.commit.is_some());
@@ -759,6 +632,25 @@ pub(super) async fn run_with_diagnostics(
                 motion_outbox.latest=None;
                 input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now_ms();
                 if let Some(cap)=&capture{cap.gate.refresh();}
+                if let (Some((file, request)), Some(scope)) = (file_lease, &drop_scope) {
+                    if file == lease {
+                        if *stop.borrow() || !scope.current(request)
+                            || !capture.as_ref().is_some_and(|cap| cap.gate.is_current(CaptureRoute::Remote(epoch)))
+                        {
+                            input_status.restore(capture.as_ref())?;
+                            outgoing = None;
+                            send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                            continue;
+                        }
+                        sequence = 1;
+                        let cursor = Motion { lease, sequence, x: position.0, y: position.1 };
+                        let event = Input::Button { button: 1, down: true };
+                        send(&mut tx, &Message::Input { lease, event, cursor }).await?;
+                        input_status.reporter.file_drop(FileDropEvent::new(
+                            scope.session, request, FileDropState::SourceCommitted, Some(lease),
+                        ));
+                    }
+                }
                 continue;
             },
             PendingStep::Cancelled{lease,timed_out}=>{
@@ -774,8 +666,10 @@ pub(super) async fn run_with_diagnostics(
             },
         }
         let acquire_wake=pending.map(PendingAcquire::wake_at);
+        let departure=OutgoingEdges::new(edge,remote_entry_edge);
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
+            changed=&mut display_change,if native && cfg!(any(windows,target_os="macos"))=>return changed,
             _=tokio::time::sleep_until(motion_outbox.next_send),if motion_outbox.latest.is_some()=>{
                 if *stop.borrow() || stop.has_changed().is_err(){return Ok(());}
                 if let Some(m)=motion_outbox.take_due(tokio::time::Instant::now()){
@@ -812,19 +706,52 @@ pub(super) async fn run_with_diagnostics(
                     println!("{}",request.update.reply(applied).line());
                 }
             },
+            changed=drop_requests.changed(),if drop_scope.is_some()=>{
+                drop(drop_route.take());
+                if changed.is_ok() && !*stop.borrow() {
+                    if let (Some(scope), Some(config)) = (&drop_scope, file_drop) {
+                        let (route, event) = super::file_drop_control::Route::update(
+                            scope, &mut drop_requests, config, &c,
+                            capture.as_ref().map(|cap| &cap.gate), allow,
+                        );
+                        drop_route = route;
+                        if let Some(event) = event { input_status.reporter.file_drop(event); }
+                    }
+                }
+            },
             closed=c.closed()=>return if invalid_frame.load(std::sync::atomic::Ordering::Acquire) {
                 Err(transport::InvalidMessageFrame.into())
             } else { connection_end(closed) },
             _=pending_wake(acquire_wake),if !network_ready=>{},
             _=tick.tick()=>{
                 let now=now_ms();
-                if recovery.receiver.expired(now){input_status.release(&mut recovery).await?;}
+                if let (Some(super::file_drop_control::Route::Source(source)), Some(scope)) =
+                    (&drop_route, &drop_scope)
+                {
+                    let current = scope.current(source.request);
+                    let held = capture.as_ref().and_then(|cap| cap.gate.held_primary());
+                    if !current || held != Some(source.hold) {
+                        if current {
+                            input_status.reporter.file_drop(scope.event(source.request, FileDropState::Rejected));
+                        }
+                        scope.retire(source.request);
+                        drop_route = None;
+                    }
+                }
+                if recovery.receiver.expired(now) {
+                    if let Some(event) = recovery.receiver.active().and_then(|lease|
+                        drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false))
+                    ) {
+                        input_status.reporter.file_drop(event);
+                    }
+                    input_status.release(&mut recovery).await?;
+                }
                 if let Some(Outgoing {lease,epoch})=outgoing {
                     if now.saturating_sub(last_pong)>=1000 {
                         count(Count::PongTimeout);
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
-                    }else if input.is_empty() && returned_to_source(edge,position.0,position.1) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
+                    }else if file_lease.is_none() && input.is_empty() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
                         count(Count::EdgeReturn);
                         // A motion can wake this task before its callback drops.
                         // Retry on the existing tick after older captured input
@@ -855,7 +782,11 @@ pub(super) async fn run_with_diagnostics(
                         let argument_ok=along.is_finite() && (0.0..=1.0).contains(&along);
                         let idle=pending.is_none() && outgoing.is_none() && capture.as_ref().is_none_or(|cap|cap.gate.idle());
                         let authorized=allow && local.motion();
-                        let mut granted=argument_ok && idle && recovery.receiver.acquire(lease,now,authorized);
+                        let route_allowed = !argument_ok || !idle || !authorized
+                            || secondary.is_none_or(|routes| routes.accepts_incoming(&c, lease, edge, remote_edge, along));
+                        let authorized = authorized && route_allowed;
+                        let admitted_at = if secondary.is_some() { now_ms() } else { now };
+                        let mut granted=argument_ok && idle && recovery.receiver.acquire(lease,admitted_at,authorized);
                         if !granted {
                             count(if !argument_ok {Count::DenyArgument} else if !idle {Count::DenyBusy} else if !authorized {Count::DenyAuthorization} else {Count::DenyLease});
                         }
@@ -870,13 +801,50 @@ pub(super) async fn run_with_diagnostics(
                             position=entry_position(remote_edge.opposite(),along);
                             let placed=recovery.pointer(position.0,position.1).await;
                             if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
-                            if input_status.checked(placed)? {input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Granted{lease}).await?;}
-                            else{count(Count::DenyPlacement);input_status.release(&mut recovery).await?;send(&mut tx,&Message::Denied{lease}).await?;}
+                            granted=input_status.checked(placed)?;
+                            if !granted {count(Count::DenyPlacement);input_status.release(&mut recovery).await?;}
+                        }
+                        if granted {
+                            input_status.reporter.switch(super::WorkerSwitchState::Idle);
+                            send(&mut tx,&Message::Granted{lease}).await?;
                         }else{send(&mut tx,&Message::Denied{lease}).await?;}
+                        if !*stop.borrow() {
+                            if let (Some(scope), Some(route), Some(config)) = (&drop_scope, &drop_route, file_drop) {
+                                if let Some(event) = scope.resolve(route, &c, config.pin, lease, granted) {
+                                    input_status.reporter.file_drop(event);
+                                }
+                            }
+                        }
                     },
                     Message::Granted{lease}=>{
                         let first_grant=pending.is_some_and(|request|request.lease==lease && request.commit.is_none() && now<request.deadline);
-                        if !pending.as_mut().is_some_and(|request|request.grant(lease,now)) {
+                        if let (Some(request), Some((file, number)), Some(scope)) =
+                            (pending, file_lease, &drop_scope)
+                        {
+                            if first_grant && file == lease {
+                                let budget = Duration::from_millis(request.deadline.saturating_sub(now));
+                                let confirmed = if let Some(proof) = file_confirmation.take() {
+                                    let mut updates = drop_requests.clone();
+                                    tokio::select! {
+                                        biased;
+                                        _ = super::stop_requested(&mut stop) => false,
+                                        _ = updates.changed() => false,
+                                        result = tokio::time::timeout(budget, Box::pin(proof.confirm())) =>
+                                            matches!(result, Ok(Ok(()))),
+                                    }
+                                } else {
+                                    false
+                                };
+                                if !confirmed || !scope.current(number) {
+                                    pending = None;
+                                    edge_gate.require_interior();
+                                    input_status.reporter.switch(super::WorkerSwitchState::Denied);
+                                    send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                                    continue;
+                                }
+                            }
+                        }
+                        if !pending.as_mut().is_some_and(|request|request.grant(lease,now_ms())) {
                             if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::TimedOut);}
                             // A duplicate Grant for the already active lease is
                             // inert; a late/foreign Grant is explicitly released.
@@ -890,7 +858,43 @@ pub(super) async fn run_with_diagnostics(
                     Message::Input{lease,event,cursor}=>{
                         count(Count::ReliableReceived);
                         if recovery.receiver.accepts(lease,now) && !local.supports(event) { bail!("peer sent input outside advertised capabilities"); }
+                        let mut target_down = false;
+                        let cursor = if recovery.receiver.accepts(lease, now) {
+                            match drop_scope.as_ref().map_or(TargetAction::Ordinary, |scope| scope.target_input(lease, event, cursor)) {
+                                TargetAction::Ordinary => cursor,
+                                TargetAction::AtEntry(entry) => {
+                                    target_down = true;
+                                    entry
+                                }
+                                TargetAction::Drop(event) => {
+                                    input_status.reporter.file_drop(event);
+                                    continue;
+                                }
+                                TargetAction::Abort => {
+                                    edge_gate.require_interior();
+                                    if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                                        input_status.reporter.file_drop(event);
+                                    }
+                                    input_status.release(&mut recovery).await?;
+                                    send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                                    continue;
+                                }
+                            }
+                        } else {
+                            cursor
+                        };
                         let result=recovery.input(lease,event,cursor,now).await;
+                        if target_down {
+                            if let Some(event) = drop_scope.as_ref().and_then(|scope| {
+                                if matches!(&result, Ok(true)) && !*stop.borrow() {
+                                    scope.target_down(lease)
+                                } else {
+                                    scope.end_target(lease, false)
+                                }
+                            }) {
+                                input_status.reporter.file_drop(event);
+                            }
+                        }
                         match &result {
                             Ok(true)=>{
                                 count(Count::ReliableSubmitted);
@@ -904,7 +908,12 @@ pub(super) async fn run_with_diagnostics(
                     },
                     Message::Release { lease, cursor }=>{
                         if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);}
-                        if recovery.receiver.active()==Some(lease){input_status.recovering();}
+                        if recovery.receiver.active()==Some(lease){
+                            if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                                input_status.reporter.file_drop(event);
+                            }
+                            input_status.recovering();
+                        }
                         input_status.checked(recovery.finish(lease,cursor,now).await)?;
                         if outgoing.is_some_and(|current|current.lease==lease){count(Count::PeerRelease);outgoing=None;input_status.restore(capture.as_ref())?;}
                     },
@@ -916,8 +925,12 @@ pub(super) async fn run_with_diagnostics(
             d=c.read_datagram()=>{
                 let d=match d {Ok(d)=>d,Err(_) if normal_close(&c)=>return Ok(()),Err(e)=>return Err(e.into())};
                 if let Some(m)=read_motion_batch(&c,&mut recovery.receiver,&d,&count).await {
-                    let result=if recovery.receiver.accepts(m.lease,now_ms()) {
-                        recovery.pointer(m.x,m.y).await
+                    let point = match &drop_scope {
+                        Some(scope) => scope.target_motion(m),
+                        None => Some(m),
+                    };
+                    let result=if let Some(point) = point.filter(|point| recovery.receiver.accepts(point.lease,now_ms())) {
+                        recovery.pointer(point.x,point.y).await
                     } else {
                         Ok(false)
                     };
@@ -942,6 +955,9 @@ pub(super) async fn run_with_diagnostics(
                     continue;
                 }}
                 if let Some(lease)=local_takeover(e,recovery.receiver.active().zip(recovery.receive_epoch),&mut edge_gate) {
+                    if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                        input_status.reporter.file_drop(event);
+                    }
                     input_status.release(&mut recovery).await?;
                     input_status.reporter.switch(super::WorkerSwitchState::Idle);
 
@@ -957,20 +973,34 @@ pub(super) async fn run_with_diagnostics(
                         input_status.restore(capture.as_ref())?;
                         if let Some(request)=pending.take(){send(&mut tx,&Message::Release { lease:request.lease, cursor: None }).await?;}
                         input_status.reporter.switch(super::WorkerSwitchState::Idle); if let Some(Outgoing{lease,..})=outgoing.take(){send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
-                        if let Some(lease)=recovery.receiver.active(){input_status.release(&mut recovery).await?;send(&mut tx,&Message::Release { lease, cursor: None }).await?;}
+                        if let Some(lease)=recovery.receiver.active(){
+                            if let Some(event) = drop_scope.as_ref().and_then(|scope| scope.end_target(lease, false)) {
+                                input_status.reporter.file_drop(event);
+                            }
+                            input_status.release(&mut recovery).await?;
+                            send(&mut tx,&Message::Release { lease, cursor: None }).await?;
+                        }
                     },
-                    Captured::Position{x,y,width,height,route}=>{
+                    Captured::Position{x,y,width,height,route,primary}=>{
                         if !matches!(route,CaptureRoute::Local(_)){continue;}
                         if !width.is_finite() || !height.is_finite() || width<1.0 || height<1.0 {continue;}
                         size=(width,height);
-                        let entry=primary_edge_entry(&mut edge_gate,edge,(x,y),size,now_ms());
+                        let entry=primary_edge_entry(&mut edge_gate,edge,(x,y),size,now_ms(),topology.as_ref());
                         let cross=entry.is_some();
                         if cross {count(Count::EdgeHit);}
                         // Same order as the original condition chain; only the first blocker is tallied.
                         let gate_idle=capture.as_ref().is_some_and(|cap|cap.gate.idle());
+                        let source_hold = match &drop_route {
+                            Some(super::file_drop_control::Route::Source(source))
+                                if primary == Some(source.hold) && peer.supports(Input::Button { button: 1, down: true }) =>
+                            {
+                                Some(source.hold)
+                            }
+                            _ => None,
+                        };
                         let blocker=if !cross {None}
                             else if !peer.motion() {Some(Count::BlockPeer)}
-                            else if !gate_idle {Some(Count::BlockGate)}
+                            else if !gate_idle && source_hold.is_none() {Some(Count::BlockGate)}
                             else if outgoing.is_some() || pending.is_some() {Some(Count::BlockBusy)}
                             else if recovery.receiver.active().is_some() {Some(Count::BlockReceiving)}
                             else if recovery.protection_pending() {Some(Count::BlockProtection)}
@@ -978,26 +1008,78 @@ pub(super) async fn run_with_diagnostics(
                         if let Some(kind)=blocker {count(kind);}
                         if let Some(along)=entry.filter(|_|blocker.is_none()){
                             let CaptureRoute::Local(epoch)=route else{continue;};
-                            let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
+                            let Some(cap)=&capture else{continue;};
+                            let token = match source_hold {
+                                Some(hold) => cap.gate.prepare_file_drop(epoch, hold),
+                                None => cap.gate.prepare_commit(epoch),
+                            };
+                            let Some(token) = token else { continue; };
                             next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
-                            position=entry_position(edge.opposite(),along);local_return=entry_position(edge,along);
-                            pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along}).await?;
+                            let acquire=PendingAcquire::new(next_lease,token,now_ms());
+                            let wire_edge=departure.wire_edge();
+                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, wire_edge, along) {
+                                if !confirmation.await {
+                                    edge_gate.require_interior();
+                                    input_status.reporter.switch(super::WorkerSwitchState::Denied);
+                                    continue;
+                                }
+                            }
+                            if source_hold.is_some() {
+                                let (Some(scope), Some(config), Some(super::file_drop_control::Route::Source(source))) =
+                                    (&drop_scope, file_drop, drop_route.take()) else { continue; };
+                                let request = source.request;
+                                let budget = Duration::from_millis(acquire.deadline.saturating_sub(now_ms()).min(450));
+                                let mut updates = drop_requests.clone();
+                                if scope.current(request) && cap.gate.commit_pending(token) {
+                                    file_confirmation = tokio::select! {
+                                        biased;
+                                        _ = super::stop_requested(&mut stop) => None,
+                                        _ = updates.changed() => None,
+                                        result = tokio::time::timeout(budget, Box::pin(source.reserve(config, &c, next_lease))) =>
+                                            result.ok().and_then(Result::ok).flatten(),
+                                    };
+                                }
+                                if file_confirmation.is_none() || !scope.current(request) || !cap.gate.commit_pending(token) || now_ms() >= acquire.deadline {
+                                    file_confirmation = None;
+                                    if scope.current(request) {
+                                        input_status.reporter.file_drop(scope.event(request, FileDropState::Rejected));
+                                    }
+                                    scope.retire(request);
+                                    edge_gate.require_interior();
+                                    continue;
+                                }
+                                file_lease = Some((next_lease, request));
+                            }
+                            (position,local_return)=departure.positions(along);
+                            pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge:wire_edge,along}).await?;
                         }
                     },
                     Captured::Toggle{route}=>{
                         if let Some(Outgoing{lease,..})=outgoing.take(){input_status.restore(capture.as_ref())?;send(&mut tx,&Message::Release { lease, cursor: Some(Motion {lease,sequence,x:position.0,y:position.1}) }).await?;}
                         else if let Some(request)=pending.take(){edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);send(&mut tx,&Message::Release{lease:request.lease,cursor:None}).await?;}
                         else if let CaptureRoute::Local(epoch)=route {if peer.motion() && recovery.receiver.active().is_none() && !recovery.protection_pending(){
-                            let Some(token)=capture.as_ref().and_then(|cap|cap.gate.prepare_commit(epoch)) else{continue;};
-                            next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;position=entry_position(edge.opposite(),0.5);local_return=entry_position(edge,0.5);pending=Some(PendingAcquire::new(next_lease,token,now_ms()));input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge,along:0.5}).await?;
+                            let Some(cap)=&capture else{continue;};
+                            let Some(token)=cap.gate.prepare_commit(epoch) else{continue;};
+                            next_lease=next_lease.checked_add(1).ok_or_else(||anyhow::anyhow!("lease counter exhausted"))?;
+                            let acquire=PendingAcquire::new(next_lease,token,now_ms());
+                            let wire_edge=departure.wire_edge();
+                            if let Some(confirmation) = secondary_confirmation(secondary, &c, &mut stop, &cap.gate, acquire, wire_edge, 0.5) {
+                                if !confirmation.await {
+                                    edge_gate.require_interior();
+                                    input_status.reporter.switch(super::WorkerSwitchState::Denied);
+                                    continue;
+                                }
+                            }
+                            (position,local_return)=departure.positions(0.5);pending=Some(acquire);input_status.reporter.switch(super::WorkerSwitchState::Pending);count(Count::AcquireSent);send(&mut tx,&Message::Acquire{lease:next_lease,edge:wire_edge,along:0.5}).await?;
                         }}
                     },
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         // Sign tallies only; displacement values are never recorded.
                         if dx>0.0 {count(Count::MovePositive);} else if dx<0.0 {count(Count::MoveNegative);}
-                        position.0=(position.0+dx/size.0).clamp(0.0,1.0);position.1=(position.1+dy/size.1).clamp(0.0,1.0);
+                        let (dx,dy)=departure.motion(dx/size.0,dy/size.1);
+                        position.0=(position.0+dx).clamp(0.0,1.0);position.1=(position.1+dy).clamp(0.0,1.0);
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
-                        if returned_to_source(edge, position.0, position.1) && input_status.restore_at_boundary(capture.as_ref(),route)? {
+                        if file_lease.is_none() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),route)? {
                             count(Count::EdgeReturn);
                             // Same reliable stream as earlier discrete input: motion cannot
                             // overtake those events and revoke their lease at the receiver.
@@ -1018,11 +1100,31 @@ pub(super) async fn run_with_diagnostics(
                         count(if result.is_ok(){Count::ReliableSent}else{Count::ReliableFailed});
                         if let (Ok(()),Input::Scroll{..})=(&result,event){count(Count::ScrollSent);}
                         result?;
+                        if matches!(event, Input::Button { button: 1, down: false }) {
+                            if let (Some((file, request)), Some(scope)) = (file_lease, &drop_scope) {
+                                if file == lease {
+                                    if scope.current(request) {
+                                        input_status.reporter.file_drop(FileDropEvent::new(
+                                            scope.session, request, FileDropState::SourceReleased, Some(lease),
+                                        ));
+                                    }
+                                    scope.retire(request);
+                                    file_lease = None;
+                                }
+                            }
+                        }
                     }},
                 }
             }
         }
     }    }.await;
+    if let (Some(scope), Some(lease)) = (&drop_scope, recovery.receiver.active()) {
+        if let Some(event) = scope.end_target(lease, false) {
+            input_status.reporter.file_drop(event);
+        }
+    }
+    drop(drop_route);
+    drop(drop_scope);
     // Always finish local release and capture shutdown before returning to the
     // supervisor, including managed stop and network errors. Both are attempted
     // even when one fails; no canceled future bypasses this tail.
@@ -1075,6 +1177,14 @@ pub(super) async fn run_with_diagnostics(
     input_status.finish(clean);
     cleanup?;
     shutdown?;
+    // A failed remote notification must not turn an unavailable local
+    // snapshot into a generic network retry or bypass a fresh-layout check.
+    if result
+        .as_ref()
+        .is_err_and(|error| error.is::<DisplayLayoutEnd>())
+    {
+        return result;
+    }
     notification?;
     result
 }
@@ -1190,12 +1300,117 @@ fn observe_motion_datagram(
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
+fn monitor_layout(native: bool) -> Option<Layout> {
+    native
+        .then(platform::read_display_layout)
+        .and_then(Result::ok)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn monitor_layout(_: bool) -> Option<Layout> {
+    None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DisplayLayoutEnd {
+    Changed,
+    Unavailable,
+}
+
+impl DisplayLayoutEnd {
+    pub fn may_rebuild(self, reconnect: bool, selected_display: bool) -> bool {
+        self == Self::Changed && reconnect && !selected_display
+    }
+}
+
+impl std::fmt::Display for DisplayLayoutEnd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Changed => {
+                "Display layout changed. Check the display selection before restarting."
+            }
+            Self::Unavailable => "Display layout could not be checked. Restart the session.",
+        })
+    }
+}
+
+impl std::error::Error for DisplayLayoutEnd {}
+
+fn layout_change(original: Option<&Layout>, current: Option<&Layout>) -> Option<DisplayLayoutEnd> {
+    match (original, current) {
+        (Some(original), Some(current)) if original.same_configuration(current) => None,
+        (None, None) => None,
+        (Some(_), None) => Some(DisplayLayoutEnd::Unavailable),
+        (_, Some(_)) => Some(DisplayLayoutEnd::Changed),
+    }
+}
+
+fn session_edge_gate(rebuilding: bool) -> EdgeGate {
+    let mut gate = EdgeGate::default();
+    if rebuilding {
+        gate.require_interior();
+    }
+    gate
+}
+
+async fn watch_display_layout(original: Option<&Layout>) -> Result<()> {
+    let period = Duration::from_secs(1);
+    loop {
+        tokio::time::sleep(period).await;
+        // Display enumeration can block in the OS. Keep it off the async
+        // session and the native input owner, with at most one query in flight.
+        let current =
+            tokio::time::timeout(period, tokio::task::spawn_blocking(|| monitor_layout(true)))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .ok_or(DisplayLayoutEnd::Unavailable)?;
+        if let Some(change) = layout_change(original, current.as_ref()) {
+            return Err(change.into());
+        }
+    }
+}
+
+fn exposed_primary_edge(
+    layout: Option<&Layout>,
+    edge: Edge,
+    (x, y): (f64, f64),
+    (width, height): (f64, f64),
+) -> bool {
+    let Some(layout) = layout else {
+        return true;
+    };
+    let primary = layout.primary();
+    let Some(display) = layout
+        .displays()
+        .iter()
+        .find(|display| display.id == primary)
+    else {
+        return false;
+    };
+    let bounds = display.bounds;
+    if (bounds.right - bounds.left - width).abs() > f64::EPSILON
+        || (bounds.bottom - bounds.top - height).abs() > f64::EPSILON
+    {
+        return false;
+    }
+    let axis = match edge {
+        Edge::Left | Edge::Right => width,
+        Edge::Top | Edge::Bottom => height,
+    };
+    layout
+        .edge_at(edge, bounds.left + x, bounds.top + y, 1.0 + axis * 0.001)
+        .is_some_and(|anchor| anchor.display == primary)
+}
+
 fn primary_edge_entry(
     gate: &mut EdgeGate,
     edge: Edge,
     (x, y): (f64, f64),
     (width, height): (f64, f64),
     now: u64,
+    layout: Option<&Layout>,
 ) -> Option<f64> {
     // A secondary display can produce coordinates beyond the primary rectangle.
     // Only an observed position inside that rectangle can rearm the entry gate.
@@ -1208,12 +1423,59 @@ fn primary_edge_entry(
         Edge::Left | Edge::Right => ny,
         Edge::Top | Edge::Bottom => nx,
     };
-    gate.update(distance(edge, nx, ny) <= 0.001, now)
-        .then_some(along)
+    let at_edge = distance(edge, nx, ny) <= 0.001;
+    if at_edge && !exposed_primary_edge(layout, edge, (x, y), (width, height)) {
+        return None;
+    }
+    gate.update(at_edge, now).then_some(along)
 }
 
-fn returned_to_source(source_edge: Edge, x: f64, y: f64) -> bool {
-    distance(source_edge.opposite(), x, y) <= 0.001
+#[derive(Clone, Copy)]
+struct OutgoingEdges {
+    local: Edge,
+    remote: Edge,
+}
+
+impl OutgoingEdges {
+    fn new(local: Edge, remote: Option<Edge>) -> Self {
+        Self {
+            local,
+            remote: remote.unwrap_or_else(|| local.opposite()),
+        }
+    }
+
+    /// v5 receivers place the cursor on the opposite edge of the Acquire.
+    fn wire_edge(&self) -> Edge {
+        self.remote.opposite()
+    }
+
+    fn positions(&self, along: f64) -> ((f64, f64), (f64, f64)) {
+        (
+            entry_position(self.remote, along),
+            entry_position(self.local, along),
+        )
+    }
+
+    fn crossed_back(&self, (x, y): (f64, f64)) -> bool {
+        distance(self.remote, x, y) <= 0.001
+    }
+
+    fn motion(&self, dx: f64, dy: f64) -> (f64, f64) {
+        // Progress out of the source edge becomes progress into the receiver.
+        // Keep the along-edge direction consistent with both endpoint fractions.
+        let (forward, along) = match self.local {
+            Edge::Left => (-dx, dy),
+            Edge::Right => (dx, dy),
+            Edge::Top => (-dy, dx),
+            Edge::Bottom => (dy, dx),
+        };
+        match self.remote {
+            Edge::Left => (forward, along),
+            Edge::Right => (-forward, along),
+            Edge::Top => (along, forward),
+            Edge::Bottom => (along, -forward),
+        }
+    }
 }
 fn distance(edge: Edge, x: f64, y: f64) -> f64 {
     match edge {
@@ -1223,7 +1485,7 @@ fn distance(edge: Edge, x: f64, y: f64) -> f64 {
         Edge::Bottom => 1.0 - y,
     }
 }
-fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
+pub(super) fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
     match edge {
         Edge::Left => (0.002, along),
         Edge::Right => (0.998, along),
@@ -1235,7 +1497,89 @@ fn entry_position(edge: Edge, along: f64) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use transport::Identity;
+
+    #[test]
+    fn native_display_watch_rejects_an_obsolete_snapshot() {
+        use platform::display_layout::{Bounds, Display, DisplayId, Rotation};
+
+        let primary = Display {
+            id: DisplayId(1),
+            bounds: Bounds {
+                left: 0.0,
+                top: 0.0,
+                right: 100.0,
+                bottom: 100.0,
+            },
+            scale: 1.0,
+            rotation: Rotation::Upright,
+        };
+        let secondary = Display {
+            id: DisplayId(2),
+            bounds: Bounds {
+                left: -100.0,
+                right: 0.0,
+                ..primary.bounds
+            },
+            ..primary
+        };
+        let original = Layout::new(primary.id, vec![primary, secondary]).unwrap();
+        let same = Layout::new(primary.id, vec![secondary, primary]).unwrap();
+        let removed = Layout::new(primary.id, vec![primary]).unwrap();
+        let other_primary = Layout::new(secondary.id, vec![primary, secondary]).unwrap();
+        let scaled = Display {
+            scale: 2.0,
+            ..secondary
+        };
+        let rotated = Display {
+            rotation: Rotation::Clockwise90,
+            ..secondary
+        };
+        let moved = Display {
+            bounds: Bounds {
+                top: 50.0,
+                bottom: 150.0,
+                ..secondary.bounds
+            },
+            ..secondary
+        };
+        let changed_layout = Some(DisplayLayoutEnd::Changed);
+        assert_eq!(layout_change(Some(&original), Some(&same)), None);
+        assert_eq!(layout_change(None, None), None);
+        assert_eq!(layout_change(None, Some(&same)), changed_layout);
+        assert_eq!(
+            layout_change(Some(&original), None),
+            Some(DisplayLayoutEnd::Unavailable)
+        );
+        for changed in [removed, other_primary] {
+            assert_eq!(
+                layout_change(Some(&original), Some(&changed)),
+                changed_layout
+            );
+        }
+        for display in [scaled, rotated, moved] {
+            let changed = Layout::new(primary.id, vec![primary, display]).unwrap();
+            assert_eq!(
+                layout_change(Some(&original), Some(&changed)),
+                changed_layout
+            );
+        }
+    }
+
+    #[test]
+    fn display_rebuild_requires_opt_in_current_geometry_and_a_fresh_edge() {
+        let changed = DisplayLayoutEnd::Changed;
+        assert!(changed.may_rebuild(true, false));
+        assert!(!changed.may_rebuild(false, false));
+        assert!(!changed.may_rebuild(true, true));
+        assert!(!DisplayLayoutEnd::Unavailable.may_rebuild(true, false));
+        let mut rebuilt = session_edge_gate(true);
+        assert!(!rebuilt.update(true, 1000));
+        assert!(!rebuilt.update(false, 1001));
+        assert!(rebuilt.update(true, 1002));
+        assert!(session_edge_gate(false).update(true, 1000));
+    }
 
     fn pending_request(lease: u64, started: u64) -> (PendingAcquire, CaptureEpoch) {
         let gate = platform::CaptureGate::default();
@@ -1500,6 +1844,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_receipt_is_a_normal_close_on_the_authenticated_connection() -> Result<()> {
+        let sender = Identity::generate()?;
+        let receiver = Identity::generate()?;
+        let bind = "127.0.0.1:0".parse()?;
+        let source = transport::endpoint(bind, &sender, &receiver.certificate)?;
+        let target = transport::endpoint(bind, &receiver, &sender.certificate)?;
+        let address = target.local_addr()?;
+        let generic = b"session ended";
+        for (state, clean) in [
+            (WorkerInputState::Local, true),
+            (WorkerInputState::Local, false),
+            (WorkerInputState::RecoveryUnconfirmed, true),
+            (WorkerInputState::Disabled, true),
+        ] {
+            let receive = async {
+                let c = target.accept().await.unwrap().await?;
+                transport::verify_peer(&c, &sender.certificate)?;
+                let (_, mut rx) = c.accept_bi().await?;
+                assert!(matches!(
+                    transport::receive(&mut rx).await?,
+                    Message::Ping { lease: 0 }
+                ));
+                let result = if clean {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("session failed"))
+                };
+                let reason = close_reason_after_recovery(&result, Some(state), generic);
+                c.close(0u8.into(), reason);
+                Ok::<_, anyhow::Error>(())
+            };
+            let send_probe = async {
+                let c = source.connect(address, "peerglide.local")?.await?;
+                transport::verify_peer(&c, &receiver.certificate)?;
+                let (mut tx, _rx) = c.open_bi().await?;
+                send(&mut tx, &Message::Ping { lease: 0 }).await?;
+                let quinn::ConnectionError::ApplicationClosed(closed) = c.closed().await else {
+                    anyhow::bail!("expected authenticated application close");
+                };
+                assert_eq!(closed.error_code, 0u8.into());
+                let expected = if clean && state == WorkerInputState::Local {
+                    NATIVE_INPUT_RECOVERED
+                } else {
+                    generic
+                };
+                assert_eq!(closed.reason.as_ref(), expected);
+                Ok::<_, anyhow::Error>(())
+            };
+            tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(receive, send_probe)
+            })
+            .await??;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn shutdown_timeout_keeps_the_worker_future_alive_until_the_original_capture_drains() {
         use std::sync::atomic::{AtomicBool, Ordering};
         for initial_failure in [false, true] {
@@ -1674,27 +2075,27 @@ mod tests {
         ] {
             let mut gate = EdgeGate::default();
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, outside, size, 500),
+                primary_edge_entry(&mut gate, edge, outside, size, 500, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, boundary, size, 501),
+                primary_edge_entry(&mut gate, edge, boundary, size, 501, None),
                 Some(0.5)
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, outside, size, 900),
+                primary_edge_entry(&mut gate, edge, outside, size, 900, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, boundary, size, 901),
+                primary_edge_entry(&mut gate, edge, boundary, size, 901, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, interior, size, 902),
+                primary_edge_entry(&mut gate, edge, interior, size, 902, None),
                 None
             );
             assert_eq!(
-                primary_edge_entry(&mut gate, edge, boundary, size, 903),
+                primary_edge_entry(&mut gate, edge, boundary, size, 903, None),
                 Some(0.5)
             );
         }
@@ -1706,30 +2107,118 @@ mod tests {
         let size = (1920.0, 1080.0);
         for y in [-1.0, 1080.0, f64::NAN, f64::INFINITY] {
             assert_eq!(
-                primary_edge_entry(&mut gate, Edge::Right, (1919.0, y), size, 500),
+                primary_edge_entry(&mut gate, Edge::Right, (1919.0, y), size, 500, None),
                 None
             );
         }
         assert_eq!(
-            primary_edge_entry(&mut gate, Edge::Right, (1919.0, 539.5), size, 501),
+            primary_edge_entry(&mut gate, Edge::Right, (1919.0, 539.5), size, 501, None),
             Some(0.5)
         );
     }
 
     #[test]
+    fn attached_screen_blocks_only_its_shared_primary_edge() {
+        use platform::display_layout::{Bounds, Display, DisplayId, Rotation};
+        let primary = Display {
+            id: DisplayId(1),
+            bounds: Bounds {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1080.0,
+            },
+            scale: 1.0,
+            rotation: Rotation::Upright,
+        };
+        let right = Display {
+            id: DisplayId(2),
+            bounds: Bounds {
+                left: 1920.0,
+                top: 0.0,
+                right: 2920.0,
+                bottom: 600.0,
+            },
+            ..primary
+        };
+        let layout = Layout::new(primary.id, vec![primary, right]).unwrap();
+        let mut gate = EdgeGate::default();
+        let size = (1920.0, 1080.0);
+        assert!(primary_edge_entry(
+            &mut gate,
+            Edge::Right,
+            (1919.0, 200.0),
+            size,
+            500,
+            Some(&layout)
+        )
+        .is_none());
+        assert!(primary_edge_entry(
+            &mut gate,
+            Edge::Right,
+            (1919.0, 700.0),
+            size,
+            501,
+            Some(&layout)
+        )
+        .is_some());
+        let mut rebuilding = session_edge_gate(true);
+        for (at, now, crossed) in [
+            ((1919.0, 200.0), 600, false),
+            ((1919.0, 700.0), 601, false),
+            ((1800.0, 700.0), 602, false),
+            ((1919.0, 700.0), 603, true),
+        ] {
+            assert_eq!(
+                primary_edge_entry(&mut rebuilding, Edge::Right, at, size, now, Some(&layout))
+                    .is_some(),
+                crossed
+            );
+        }
+        let mut gate = EdgeGate::default();
+        assert!(primary_edge_entry(
+            &mut gate,
+            Edge::Right,
+            (1918.0, 700.0),
+            (1919.0, 1080.0),
+            600,
+            Some(&layout)
+        )
+        .is_none());
+    }
+
+    #[test]
     fn source_return_boundary_handles_all_edges_without_minimum_travel() {
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
-            let entry = entry_position(edge.opposite(), 0.5);
-            assert!(!returned_to_source(edge, entry.0, entry.1));
-            assert!(!returned_to_source(edge, 0.5, 0.5));
+            let departure = OutgoingEdges::new(edge, None);
+            let (entry, local_return) = departure.positions(0.5);
+            assert_eq!(departure.wire_edge(), edge);
+            assert_eq!(entry, entry_position(edge.opposite(), 0.5));
+            assert_eq!(local_return, entry_position(edge, 0.5));
+            assert_eq!(departure.motion(0.1, -0.25), (0.1, -0.25));
+            assert!(!departure.crossed_back(entry));
+            assert!(!departure.crossed_back((0.5, 0.5)));
             let boundary = match edge {
                 Edge::Left => (1.0, 0.5),
                 Edge::Right => (0.0, 0.5),
                 Edge::Top => (0.5, 1.0),
                 Edge::Bottom => (0.5, 0.0),
             };
-            assert!(returned_to_source(edge, boundary.0, boundary.1));
+            assert!(departure.crossed_back(boundary));
         }
+    }
+
+    #[test]
+    fn outgoing_entry_and_return_follow_the_selected_remote_edge() {
+        let departure = OutgoingEdges::new(Edge::Right, Some(Edge::Top));
+        let (entry, local_return) = departure.positions(0.25);
+        assert_eq!(departure.wire_edge(), Edge::Bottom);
+        assert_eq!(entry, (0.25, 0.002));
+        assert_eq!(local_return, (0.998, 0.25));
+        assert_eq!(departure.motion(0.1, 0.25), (0.25, 0.1));
+        assert_eq!(departure.motion(-0.1, 0.25), (0.25, -0.1));
+        assert!(departure.crossed_back((0.25, 0.0)));
+        assert!(!departure.crossed_back((0.0, 0.25)));
     }
     #[test]
     fn physical_takeover_at_each_edge_cannot_immediately_reverse_control() {
@@ -1749,6 +2238,7 @@ mod tests {
                 width: 1920.0,
                 height: 1080.0,
                 route: CaptureRoute::Local(epoch),
+                primary: None,
             };
             assert_eq!(local_takeover(event, Some((7, epoch)), &mut gate), Some(7));
             assert!(!gate.update(distance(edge, nx, ny) <= 0.001, 1000));
@@ -2115,6 +2605,464 @@ mod tests {
                 WorkerInputState::RecoveryUnconfirmed,
             ]
         );
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum FileDecision {
+        Ready,
+        CancelBeforeGrant,
+        CancelAfterGrant,
+        ReleaseBeforeReady,
+        Expire,
+        TargetDrop,
+        TargetEarlyRelease,
+        TargetCancel,
+    }
+
+    #[tokio::test]
+    async fn managed_file_reservation_requires_v5_grant_and_matching_local_readiness() -> Result<()>
+    {
+        exercise_file_worker(FileDecision::Ready).await
+    }
+
+    #[tokio::test]
+    async fn local_cancel_before_v5_grant_retires_the_file_reservation() -> Result<()> {
+        exercise_file_worker(FileDecision::CancelBeforeGrant).await
+    }
+
+    #[tokio::test]
+    async fn local_cancel_after_v5_grant_withholds_the_file_proof() -> Result<()> {
+        exercise_file_worker(FileDecision::CancelAfterGrant).await
+    }
+
+    #[tokio::test]
+    async fn v5_release_retires_the_pending_local_file_claim() -> Result<()> {
+        exercise_file_worker(FileDecision::ReleaseBeforeReady).await
+    }
+
+    #[tokio::test]
+    async fn expired_local_file_claim_cannot_be_confirmed() -> Result<()> {
+        exercise_file_worker(FileDecision::Expire).await
+    }
+
+    #[tokio::test]
+    async fn target_drop_waits_for_matching_native_start_and_release_confirmation() -> Result<()> {
+        exercise_file_worker(FileDecision::TargetDrop).await
+    }
+
+    #[tokio::test]
+    async fn target_release_before_native_start_cannot_drop() -> Result<()> {
+        exercise_file_worker(FileDecision::TargetEarlyRelease).await
+    }
+
+    #[tokio::test]
+    async fn target_cancel_after_down_retires_the_live_input_lease() -> Result<()> {
+        exercise_file_worker(FileDecision::TargetCancel).await
+    }
+
+    async fn exercise_file_worker(decision: FileDecision) -> Result<()> {
+        use file_transfer::drop_admission::{Admission, Content, Context as DropContext};
+        use peerglide_protocol::file_drop_ipc::{Command, EntryPoint, Event, State};
+        use transport::{file_drop_link, file_transfer, layout_reservation};
+
+        let a = Identity::generate()?;
+        let b = Identity::generate()?;
+        let (receipt, file) = test_file_transfer(&a, &b).await?;
+        let prepared = file.received.prepare_drop(|| Ok(()))?;
+        let origin = file.received.drop_origin();
+        let context = DropContext {
+            connection: origin.connection(),
+            layout_epoch: (1, 1),
+            gesture_generation: 1,
+            focused: true,
+        };
+        let mut admission = Admission::default();
+        let now = now_ms();
+        let ticket = admission
+            .begin(context, origin.transfer(), Content::File, now, true)
+            .unwrap();
+        admission.verified(ticket, context, now, true).unwrap();
+        let slot = file_drop_link::Slot::arm(prepared, &mut admission, ticket, context, now, true)?;
+        let (local, proof, lifetime_ms) = slot.into_worker()?;
+
+        let bind = "127.0.0.1:0".parse()?;
+        let ea = transport::endpoint(bind, &a, &b.certificate)?;
+        let eb = transport::endpoint(bind, &b, &a.certificate)?;
+        let controller = super::super::file_drop_control::Controller::default();
+        let (stop, stopped) = tokio::sync::watch::channel(false);
+        let (events, mut observed) = tokio::sync::mpsc::channel(8);
+        let server = async {
+            let c = eb.accept().await.context("missing v5 connection")?.await?;
+            let (tx, rx) = c.accept_bi().await?;
+            let mut reporter = super::super::InputReporter::new(false);
+            reporter.file_drop_events = Some(events);
+            run_with_diagnostics(
+                c.clone(),
+                tx,
+                rx,
+                Policy {
+                    allow: true,
+                    native: false,
+                    edge: Edge::Left,
+                    local: InputCapabilities::new(&[4], true, 1, true).unwrap(),
+                    peer: InputCapabilities::default(),
+                },
+                stopped,
+                &mut reporter,
+                SessionControls {
+                    file_drop: Some(super::super::file_drop_control::Config {
+                        controller: &controller,
+                        identity: &b,
+                        pin: &a.certificate,
+                    }),
+                    ..SessionControls::default()
+                },
+            )
+            .await?;
+            assert!(controller.submit(Command::Inspect).is_none());
+            c.close(0u8.into(), b"file reservation fixture finished");
+            Ok::<_, anyhow::Error>(())
+        };
+        let client = async {
+            let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
+            let (mut tx, mut rx) = c.open_bi().await?;
+            send(&mut tx, &Message::Ping { lease: 0 }).await?;
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Pong { lease: 0 }
+            ));
+            let session = controller
+                .submit(Command::Inspect)
+                .context("missing worker session")?
+                .session;
+            let request = 4;
+            let arm = Command::Arm {
+                session,
+                request,
+                bind,
+                lifetime_ms,
+                proof,
+            };
+            controller.submit(Command::parse(&arm.line()).context("invalid arm fixture")?);
+            let armed = observed.recv().await.context("missing armed event")?;
+            assert_eq!(
+                (armed.session, armed.request, armed.state),
+                (session, request, State::Armed)
+            );
+            let address = (
+                std::net::Ipv4Addr::LOCALHOST,
+                armed.port.context("missing sidecar port")?,
+            )
+                .into();
+            let sidecar = layout_reservation::endpoint(bind, &a, &b.certificate)?;
+            let side = sidecar.connect(address, "peerglide.local")?.await?;
+            let lease = 7;
+            let source_proof = receipt.into_local_worker();
+            assert!(
+                file_drop_link::SentReceipt::from_local_worker(&source_proof, &a.certificate)
+                    .is_err()
+            );
+            let receipt =
+                file_drop_link::SentReceipt::from_local_worker(&source_proof, &b.certificate)?;
+            let confirmation =
+                file_drop_link::reserve_for_worker(&side, &c, &b.certificate, receipt, lease)
+                    .await?
+                    .context("receiver declined initial reservation")?;
+            if decision == FileDecision::CancelBeforeGrant {
+                let event = controller
+                    .submit(Command::Cancel { session, request })
+                    .context("cancel not accepted")?;
+                assert_eq!(event.state, State::Cancelled);
+            }
+            send(
+                &mut tx,
+                &Message::Acquire {
+                    lease,
+                    edge: Edge::Right,
+                    along: 0.5,
+                },
+            )
+            .await?;
+            assert!(
+                matches!(transport::receive(&mut rx).await?, Message::Granted { lease: granted } if granted == lease)
+            );
+            let target = matches!(
+                decision,
+                FileDecision::TargetDrop
+                    | FileDecision::TargetEarlyRelease
+                    | FileDecision::TargetCancel
+            );
+            let mut confirm = std::pin::pin!(confirmation.confirm());
+            if decision != FileDecision::CancelBeforeGrant {
+                let matched = observed
+                    .recv()
+                    .await
+                    .context("missing match before claim")?;
+                assert_eq!(
+                    matched,
+                    Event::new(session, request, State::Matched, Some(lease))
+                );
+                let ready = |session, request, lease| Command::Ready {
+                    session,
+                    request,
+                    lease,
+                };
+                match decision {
+                    FileDecision::Ready
+                    | FileDecision::TargetDrop
+                    | FileDecision::TargetEarlyRelease
+                    | FileDecision::TargetCancel => {
+                        controller.submit(ready(session + 1, request, lease));
+                        controller.submit(ready(session, request + 1, lease));
+                        controller.submit(ready(session, request, lease + 1));
+                        assert!(
+                            tokio::time::timeout(Duration::from_millis(50), confirm.as_mut())
+                                .await
+                                .is_err()
+                        );
+                        let approval = if target {
+                            Command::PrepareTarget {
+                                session,
+                                request,
+                                lease,
+                                entry: EntryPoint::new(0.25, 0.75).unwrap(),
+                            }
+                        } else {
+                            ready(session, request, lease)
+                        };
+                        controller.submit(approval);
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::Claimed, Some(lease)))
+                        );
+                        controller.submit(ready(session, request, lease));
+                    }
+                    FileDecision::CancelAfterGrant => {
+                        let cancelled = controller
+                            .submit(Command::Cancel { session, request })
+                            .context("pending claim cancel not accepted")?;
+                        assert_eq!(cancelled.state, State::Cancelled);
+                        controller.submit(ready(session, request, lease));
+                    }
+                    FileDecision::ReleaseBeforeReady | FileDecision::Expire => {
+                        if decision == FileDecision::ReleaseBeforeReady {
+                            send(
+                                &mut tx,
+                                &Message::Release {
+                                    lease,
+                                    cursor: None,
+                                },
+                            )
+                            .await?;
+                        }
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::Rejected, None))
+                        );
+                        controller.submit(ready(session, request, lease));
+                    }
+                    FileDecision::CancelBeforeGrant => unreachable!("already cancelled"),
+                }
+            }
+            let proof = tokio::time::timeout(Duration::from_secs(3), confirm.as_mut()).await?;
+            assert_eq!(proof.is_ok(), target || decision == FileDecision::Ready);
+            side.close(0u8.into(), b"reservation resolved");
+            if target {
+                let input = |lease, sequence, down| Message::Input {
+                    lease,
+                    event: Input::Button { button: 1, down },
+                    cursor: Motion {
+                        lease,
+                        sequence,
+                        x: 0.5,
+                        y: 0.5,
+                    },
+                };
+                send(&mut tx, &input(lease + 1, 1, true)).await?;
+                send(&mut tx, &input(lease, 1, true)).await?;
+                assert_eq!(
+                    observed.recv().await,
+                    Some(Event::new(session, request, State::TargetDown, Some(lease)))
+                );
+                let start = |lease| Command::TargetStarted {
+                    session,
+                    request,
+                    lease,
+                };
+                controller.submit(start(lease + 1));
+                match decision {
+                    FileDecision::TargetDrop => {
+                        controller.submit(start(lease));
+                        send(&mut tx, &input(lease, 2, false)).await?;
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::TargetDrop, Some(lease)))
+                        );
+                        let confirm = |lease| Command::TargetDropReady {
+                            session,
+                            request,
+                            lease,
+                        };
+                        controller.submit(confirm(lease + 1));
+                        assert!(
+                            tokio::time::timeout(Duration::from_millis(30), observed.recv())
+                                .await
+                                .is_err()
+                        );
+                        controller.submit(confirm(lease));
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(
+                                session,
+                                request,
+                                State::TargetReleased,
+                                Some(lease)
+                            ))
+                        );
+                        // Confirmed Up removes the drop state. The later ordinary
+                        // v5 Release will not reject or repeat this file drop.
+                        send(&mut tx, &Message::Ping { lease }).await?;
+                        assert!(
+                            matches!(transport::receive(&mut rx).await?, Message::Pong { lease: active } if active == lease)
+                        );
+                    }
+                    FileDecision::TargetEarlyRelease => {
+                        send(&mut tx, &input(lease, 2, false)).await?;
+                        assert_eq!(
+                            observed.recv().await,
+                            Some(Event::new(session, request, State::Rejected, None))
+                        );
+                    }
+                    FileDecision::TargetCancel => {
+                        assert_eq!(
+                            controller.submit(Command::Cancel { session, request }),
+                            Some(Event::new(session, request, State::Cancelled, None))
+                        );
+                    }
+                    _ => unreachable!("not a native target fixture"),
+                }
+                if decision != FileDecision::TargetDrop {
+                    assert!(
+                        matches!(transport::receive(&mut rx).await?, Message::Release { lease: retired, .. } if retired == lease)
+                    );
+                }
+            }
+            if decision == FileDecision::Ready {
+                admission
+                    .submit(
+                        local.ticket,
+                        context,
+                        now_ms(),
+                        true,
+                        file_transfer::drop_admission::Effect::Copy,
+                    )
+                    .unwrap();
+            }
+            send(
+                &mut tx,
+                &Message::Release {
+                    lease,
+                    cursor: None,
+                },
+            )
+            .await?;
+            send(&mut tx, &Message::Ping { lease: 0 }).await?;
+            assert!(matches!(
+                transport::receive(&mut rx).await?,
+                Message::Pong { lease: 0 }
+            ));
+            assert!(observed.try_recv().is_err());
+            let _ = stop.send(true);
+            Ok::<_, anyhow::Error>(())
+        };
+        tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::try_join!(server, client)
+        })
+        .await??;
+        Ok(())
+    }
+
+    struct FileFixture {
+        received: transport::file_transfer::ReceivedFile,
+        _directory: TestFileDirectory,
+    }
+
+    struct TestFileDirectory(std::path::PathBuf);
+
+    impl Drop for TestFileDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn test_file_transfer(
+        a: &Identity,
+        b: &Identity,
+    ) -> Result<(transport::file_drop_link::SentReceipt, FileFixture)> {
+        use transport::file_transfer::{self, Cancellation, Decision, ReceiveOptions, Source};
+        let directory =
+            std::env::temp_dir().join(format!("linko-file-reservation-{}", a.fingerprint()));
+        std::fs::create_dir(&directory)?;
+        let cleanup = TestFileDirectory(directory.clone());
+        let path = directory.join("source.txt");
+        let target = directory.join("target");
+        std::fs::write(&path, b"one file reservation")?;
+        std::fs::create_dir(&target)?;
+        let bind = "127.0.0.1:0".parse()?;
+        let sender = transport::data::endpoint(bind, a, &b.certificate)?;
+        let receiver = transport::data::endpoint(bind, b, &a.certificate)?;
+        let (send, receive) = tokio::try_join!(
+            async {
+                Ok::<_, anyhow::Error>(
+                    sender
+                        .connect(receiver.local_addr()?, "peerglide.local")?
+                        .await?,
+                )
+            },
+            async {
+                Ok::<_, anyhow::Error>(
+                    receiver
+                        .accept()
+                        .await
+                        .context("missing file connection")?
+                        .await?,
+                )
+            },
+        )?;
+        let source = Source::open(path, None, Cancellation::default()).await?;
+        let ((_, receipt), result) = tokio::try_join!(
+            file_transfer::send_for_drop(
+                &send,
+                &b.certificate,
+                source,
+                Cancellation::default(),
+                |_| {}
+            ),
+            file_transfer::receive(
+                &receive,
+                &a.certificate,
+                ReceiveOptions {
+                    budget: 1024 * 1024,
+                    stop: Cancellation::default()
+                },
+                |_| async {
+                    Ok(Decision::Accept {
+                        directory: target,
+                        resume: false,
+                    })
+                },
+                |_| {},
+            ),
+        )?;
+        let received = result.file.context("missing verified file")?;
+        let receipt = receipt.context("missing verified send receipt")?;
+        Ok((
+            receipt,
+            FileFixture {
+                received,
+                _directory: cleanup,
+            },
+        ))
     }
 
     #[tokio::test]

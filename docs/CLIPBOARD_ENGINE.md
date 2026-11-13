@@ -57,3 +57,29 @@ cross-host/native privacy and usability acceptance. Do not enable this engine fr
 the input grant or advertise a working clipboard button until those paths exist.
 File permissions are reusable policy primitives; they are not yet connected to
 the existing offline Receiver's disk effects. See TRANSFER_STORAGE.md and #6.
+
+
+## Windows 文本后端
+
+原生后端只在明确调用时访问剪贴板。它枚举允许的纯文本格式，遇到
+任何未知或私有格式则保持本机。读取限制 UTF-16 内存和最终 UTF-8
+长度，并核对读取前后的版本。接收端先备好自己的可移动内存，再
+持有剪贴板锁核对原版本、清空并提交。清空成功后若提交失败，返回
+结果未知，不自动重试。只记录本次导入的版本用于来源判定。
+CI 使用纯数据回归并编译原生接口，系统实际读写留到集中验收。
+
+- [OpenClipboard](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openclipboard)
+- [GetClipboardSequenceNumber](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getclipboardsequencenumber)
+- [SetClipboardData](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setclipboarddata)
+
+
+## macOS 文本后端
+
+后端由 AppKit 主线程持有，只按明确调用读取。先枚举有界纯文本类型，
+遇到未知、私有或隐藏标记则保留本机。读取前后核对 pasteboard
+`changeCount`。写入准备完毕后再核对预期版本，清空后复核当前归属，
+提交后也检查版本。公开 API 将版本查询、清空和写入分开，其他进程
+仍可能在相邻操作间修改剪贴板。清空后出现竞争或失败即返回结果
+未知，禁止自动重试。真实竞争和系统读写留到集中验收。
+
+- [Apple NSPasteboard changeCount](https://developer.apple.com/documentation/appkit/nspasteboard/changecount)

@@ -1,8 +1,25 @@
+#[cfg(any(windows, target_os = "macos", test))]
+mod audio_mix_playback;
+#[cfg(any(windows, target_os = "macos", test))]
+mod audio_playback;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+mod audio_source;
+#[cfg(any(windows, target_os = "macos", test))]
+mod audio_stop;
+mod file_drop_control;
 mod input_diagnostics;
 mod layout_control;
+mod layout_probe;
+mod layout_routes;
+mod multi_peer;
 mod pairing_worker;
 mod reconnect;
+mod secondary_layout;
 mod session;
+#[cfg(target_os = "linux")]
+mod wayland_receive;
+#[cfg(target_os = "linux")]
+mod x11_receive;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
@@ -15,6 +32,7 @@ use peerglide_protocol::{
 };
 use peerglide_transport as transport;
 use std::{
+    future::Future,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -120,6 +138,238 @@ enum Command {
     },
     /// Accept a connection from exactly the enrolled certificate. No input permission by default.
     Listen(Options),
+    /// Listen for several enrolled peers with at most one selected native session.
+    ListenPeers {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        /// Repeat for each independently enrolled public certificate.
+        #[arg(long, required = true)]
+        peer_cert: Vec<PathBuf>,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+        #[command(flatten)]
+        native_route: multi_peer::Options,
+    },
+    /// List the local playback devices without opening an audio stream.
+    #[cfg(any(windows, target_os = "macos"))]
+    AudioOutputDevices,
+    /// Play audio from one explicitly verified computer on this computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayAudio {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24874")]
+        bind: SocketAddr,
+        /// Local output device ID on Windows or device UID on macOS.
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+        #[command(flatten)]
+        supervisor: audio_stop::Options,
+    },
+    /// Mix audio from up to four explicitly verified computers to one local output.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayAudioMix {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long, required = true)]
+        peer_cert: Vec<PathBuf>,
+        #[arg(long, default_value = "0.0.0.0:24874")]
+        bind: SocketAddr,
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+    },
+    /// Share the local system audio with one verified computer.
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    ShareSystemAudio {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+        #[command(flatten)]
+        supervisor: audio_stop::Options,
+    },
+    /// Receive pointer motion from one verified peer on the local Xorg desktop.
+    #[cfg(target_os = "linux")]
+    ListenX11 {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+        /// Explicitly allow the selected computer to move the local pointer.
+        #[arg(long, required = true)]
+        allow_pointer_control: bool,
+        /// Also receive supported keys and the three mouse buttons.
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_discrete_input: bool,
+        /// Also receive wheel steps on a standard X11 pointer mapping.
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_scroll: bool,
+    },
+    /// Receive one verified computer's input through a Wayland RemoteDesktop session.
+    #[cfg(target_os = "linux")]
+    ListenWayland {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24870")]
+        bind: SocketAddr,
+        #[arg(long, required = true)]
+        allow_pointer_control: bool,
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_buttons: bool,
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_scroll: bool,
+        /// Also request keyboard permission and receive supported physical keys.
+        #[arg(long, requires = "allow_pointer_control")]
+        allow_keyboard: bool,
+        /// Select an EIS region by its compositor-provided X,Y origin.
+        #[arg(long, value_parser = wayland_receive::parse_region)]
+        region: Option<(u32, u32)>,
+    },
+    /// Send input through an explicitly approved Wayland InputCapture session.
+    #[cfg(target_os = "linux")]
+    SendWayland {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, value_enum, default_value = "right")]
+        edge: Side,
+        /// Restrict the barrier to a compositor-provided X,Y zone origin.
+        #[arg(long, value_parser = session::wayland_source::parse_zone, allow_hyphen_values = true)]
+        zone: Option<(i32, i32)>,
+        #[arg(long, required = true)]
+        allow_pointer_capture: bool,
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_button_capture: bool,
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_scroll_capture: bool,
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_keyboard_capture: bool,
+    },
+    /// Send pointer input from a local Xorg edge to one verified computer.
+    #[cfg(target_os = "linux")]
+    SendX11 {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, value_enum, default_value = "right")]
+        edge: Side,
+        /// Explicitly allow this session to take the local pointer at that edge.
+        #[arg(long, required = true)]
+        allow_pointer_capture: bool,
+        /// Also send the three standard mouse buttons when the receiver allows them.
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_button_capture: bool,
+        /// Also send standard horizontal and vertical Xorg wheel steps.
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_scroll_capture: bool,
+        /// Also send supported XKB physical keys. Ctrl+Alt+Esc ends the lease.
+        #[arg(long, requires = "allow_pointer_capture")]
+        allow_keyboard_capture: bool,
+    },
+    /// Play the microphone of one explicitly verified computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    PlayMicrophone {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24875")]
+        bind: SocketAddr,
+        #[arg(long)]
+        device: Option<String>,
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u8).range(0..=100))]
+        volume: u8,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+        #[command(flatten)]
+        supervisor: audio_stop::Options,
+    },
+    /// Share the local microphone with one explicitly verified computer.
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    ShareMicrophone {
+        address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value_t = 600, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+        #[command(flatten)]
+        supervisor: audio_stop::Options,
+    },
+    /// Read the opted-in display geometry from one verified computer.
+    ProbeDisplays {
+        address: SocketAddr,
+        layout_address: SocketAddr,
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+    },
+    /// Offer the local display geometry to one verified computer.
+    #[cfg(any(windows, target_os = "macos"))]
+    ListenDisplays {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        peer_cert: PathBuf,
+        #[arg(long, default_value = "0.0.0.0:24876")]
+        bind: SocketAddr,
+        #[arg(long, default_value = "0.0.0.0:24877")]
+        layout_bind: SocketAddr,
+        /// Explicit local consent to offer display metadata during this query.
+        #[arg(long, required = true)]
+        share_display_layout: bool,
+    },
+    /// Resolve one local display edge segment and check its pinned v5 peer.
+    #[cfg(any(windows, target_os = "macos"))]
+    ProbeRoute {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        layout: PathBuf,
+        #[arg(long, value_parser = parse_display_origin, allow_hyphen_values = true)]
+        point: (f64, f64),
+        #[arg(long, value_enum)]
+        edge: Side,
+    },
+    /// Send native input to the pinned computer selected by each display edge segment.
+    ConnectRoutes {
+        #[arg(long, default_value = "identity")]
+        identity: PathBuf,
+        #[arg(long)]
+        layout: PathBuf,
+        /// Enable real Windows or macOS keyboard and mouse capture.
+        #[arg(long, required = true)]
+        native: bool,
+        #[arg(long, hide = true, requires_all = ["expected_layout_fingerprint", "expected_local_fingerprint"])]
+        managed: bool,
+        #[arg(long, hide = true, requires = "managed")]
+        expected_layout_fingerprint: Option<String>,
+        #[arg(long, hide = true, requires = "managed")]
+        expected_local_fingerprint: Option<String>,
+    },
     /// Establish a peer connection. Network roles do not determine input roles.
     Connect {
         address: SocketAddr,
@@ -150,6 +400,8 @@ impl From<Side> for Edge {
 struct Options {
     #[arg(skip)]
     layout: std::sync::Arc<layout_control::Controller>,
+    #[arg(skip)]
+    file_drop: Arc<file_drop_control::Controller>,
     /// Accept a stop command on stdin from the local GUI supervisor.
     #[arg(long, hide = true)]
     managed: bool,
@@ -170,6 +422,17 @@ struct Options {
     /// Enable real OS capture/injection; without this flag the endpoint provides connection diagnostics only.
     #[arg(long)]
     native: bool,
+    /// Choose the local receive screen by its current desktop origin, X,Y.
+    #[arg(long, requires_all = ["native", "allow_control"], value_parser = parse_display_origin)]
+    receive_display: Option<(f64, f64)>,
+    #[arg(skip)]
+    receive_selection: Option<Arc<peerglide_platform::ReceiveDisplay>>,
+    /// Require confirmation from the selected computer's layout listener before sending input.
+    #[arg(long, requires = "native")]
+    request_secondary_layout: Option<SocketAddr>,
+    /// Require a bound layout reservation for incoming control on the selected local screen.
+    #[arg(long, requires = "receive_display")]
+    secondary_layout_bind: Option<SocketAddr>,
     /// Emit bounded input pipeline counts for the first 120 seconds.
     #[arg(long, requires_all = ["native", "managed"], conflicts_with = "reconnect")]
     input_diagnostics: bool,
@@ -181,20 +444,38 @@ struct Options {
     wait_for_peer_secs: Option<u64>,
     #[arg(long, value_enum, default_value = "right")]
     edge: Side,
+    /// Choose the remote entry edge independently of the local departure edge.
+    #[arg(long, value_enum, requires = "native")]
+    remote_entry_edge: Option<Side>,
 }
-#[tokio::main]
-async fn main() -> Result<()> {
+fn parse_display_origin(text: &str) -> std::result::Result<(f64, f64), &'static str> {
+    let parse = |value: &str| {
+        value
+            .parse::<f64>()
+            .ok()
+            .filter(|number| number.is_finite())
+            .ok_or("display origin must be two finite numbers: X,Y")
+    };
+    let (x, y) = text.split_once(',').ok_or("display origin must be X,Y")?;
+    Ok((parse(x)?, parse(y)?))
+}
+
+fn main() -> Result<()> {
     match Cli::parse().command {
         Command::PairOffer {
             identity,
             bind,
             managed,
-        } => pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed).await,
+        } => run_cli_future(|| {
+            pairing_worker::run(identity, pairing_worker::Mode::Offer(bind), managed)
+        }),
         Command::PairConnect {
             address,
             identity,
             managed,
-        } => pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed).await,
+        } => run_cli_future(|| {
+            pairing_worker::run(identity, pairing_worker::Mode::Connect(address), managed)
+        }),
         Command::DiagnoseContext {
             include_application_id,
             observe_ms,
@@ -208,13 +489,264 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::Listen(o) => run(o, None, false).await,
+        Command::Listen(o) => run_cli_future(|| run(o, None, false)),
+        Command::ListenPeers {
+            identity,
+            peer_cert,
+            bind,
+            native_route,
+        } => run_cli_future(|| multi_peer::run(&identity, &peer_cert, bind, native_route)),
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::AudioOutputDevices => audio_playback::list_outputs(),
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayAudio {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+            supervisor,
+        } => run_cli_future(|| {
+            audio_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+                &supervisor,
+            )
+        }),
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayAudioMix {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+        } => run_cli_future(|| {
+            audio_mix_playback::run(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+            )
+        }),
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        Command::ShareSystemAudio {
+            address,
+            identity,
+            peer_cert,
+            duration_secs,
+            supervisor,
+        } => run_cli_future(|| {
+            audio_source::share_system(
+                &identity,
+                &peer_cert,
+                address,
+                Duration::from_secs(duration_secs),
+                &supervisor,
+            )
+        }),
+        #[cfg(target_os = "linux")]
+        Command::ListenX11 {
+            identity,
+            peer_cert,
+            bind,
+            allow_pointer_control,
+            allow_discrete_input,
+            allow_scroll,
+        } => run_cli_future(|| {
+            x11_receive::run(
+                &identity,
+                &peer_cert,
+                bind,
+                allow_pointer_control,
+                allow_discrete_input,
+                allow_scroll,
+            )
+        }),
+        #[cfg(target_os = "linux")]
+        Command::ListenWayland {
+            identity,
+            peer_cert,
+            bind,
+            allow_pointer_control,
+            allow_buttons,
+            allow_scroll,
+            allow_keyboard,
+            region,
+        } => run_cli_future(|| {
+            wayland_receive::run(
+                &identity,
+                &peer_cert,
+                bind,
+                allow_pointer_control,
+                peerglide_platform::wayland_input::Options {
+                    buttons: allow_buttons,
+                    scroll: allow_scroll,
+                    keyboard: allow_keyboard,
+                    region,
+                },
+            )
+        }),
+        #[cfg(target_os = "linux")]
+        Command::SendWayland {
+            address,
+            identity,
+            peer_cert,
+            edge,
+            zone,
+            allow_pointer_capture,
+            allow_button_capture,
+            allow_scroll_capture,
+            allow_keyboard_capture,
+        } => run_cli_future(|| {
+            session::wayland_source::run(
+                &identity,
+                &peer_cert,
+                address,
+                edge.into(),
+                zone,
+                allow_pointer_capture,
+                peerglide_platform::wayland_input::capture::CaptureOptions {
+                    buttons: allow_button_capture,
+                    scroll: allow_scroll_capture,
+                    keyboard: allow_keyboard_capture,
+                },
+            )
+        }),
+        #[cfg(target_os = "linux")]
+        Command::SendX11 {
+            address,
+            identity,
+            peer_cert,
+            edge,
+            allow_pointer_capture,
+            allow_button_capture,
+            allow_scroll_capture,
+            allow_keyboard_capture,
+        } => run_cli_future(|| {
+            session::x11_source::run(
+                &identity,
+                &peer_cert,
+                address,
+                edge.into(),
+                session::x11_source::OptIn {
+                    pointer: allow_pointer_capture,
+                    buttons: allow_button_capture,
+                    scroll: allow_scroll_capture,
+                    keyboard: allow_keyboard_capture,
+                },
+            )
+        }),
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::PlayMicrophone {
+            identity,
+            peer_cert,
+            bind,
+            device,
+            volume,
+            duration_secs,
+            supervisor,
+        } => run_cli_future(|| {
+            audio_playback::play_microphone(
+                &identity,
+                &peer_cert,
+                bind,
+                device.as_deref(),
+                volume,
+                Duration::from_secs(duration_secs),
+                &supervisor,
+            )
+        }),
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        Command::ShareMicrophone {
+            address,
+            identity,
+            peer_cert,
+            duration_secs,
+            supervisor,
+        } => run_cli_future(|| {
+            audio_source::share_microphone(
+                &identity,
+                &peer_cert,
+                address,
+                Duration::from_secs(duration_secs),
+                &supervisor,
+            )
+        }),
+        Command::ProbeDisplays {
+            address,
+            layout_address,
+            identity,
+            peer_cert,
+        } => run_cli_future(|| layout_probe::probe(&identity, &peer_cert, address, layout_address)),
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::ListenDisplays {
+            identity,
+            peer_cert,
+            bind,
+            layout_bind,
+            share_display_layout,
+        } => {
+            anyhow::ensure!(
+                share_display_layout,
+                "local display sharing requires explicit consent"
+            );
+            run_cli_future(|| layout_probe::listen(&identity, &peer_cert, bind, layout_bind))
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        Command::ProbeRoute {
+            identity,
+            layout,
+            point,
+            edge,
+        } => run_cli_future(|| layout_routes::run(&identity, &layout, point, edge.into())),
+        Command::ConnectRoutes {
+            identity,
+            layout,
+            native,
+            managed,
+            expected_layout_fingerprint,
+            expected_local_fingerprint,
+        } => {
+            anyhow::ensure!(
+                native,
+                "configured routing requires explicit native consent"
+            );
+            run_cli_future(|| {
+                run_routed_worker(
+                    &identity,
+                    &layout,
+                    managed,
+                    expected_layout_fingerprint
+                        .as_deref()
+                        .zip(expected_local_fingerprint.as_deref()),
+                )
+            })
+        }
         Command::Connect {
             address,
             options,
             probe,
-        } => run(options, Some(address), probe).await,
+        } => run_cli_future(|| run(options, Some(address), probe)),
     }
+}
+
+// Parse without constructing a large async dispatch frame. Only the selected
+// operation constructs a future, and the runtime holds a pinned heap value.
+#[inline(never)]
+fn run_cli_future<F: Future<Output = Result<()>>>(start: impl FnOnce() -> F) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    runtime.block_on(Box::pin(start()))
 }
 
 fn diagnose_context(include_application_id: bool, observe_ms: Option<u64>) -> Result<()> {
@@ -318,6 +850,8 @@ pub(crate) struct InputReporter {
     emitted: Vec<WorkerInputEvent>,
     #[cfg(test)]
     observed_switches: Vec<WorkerSwitchState>,
+    #[cfg(test)]
+    file_drop_events: Option<tokio::sync::mpsc::Sender<peerglide_protocol::file_drop_ipc::Event>>,
 }
 impl InputReporter {
     fn new(managed: bool) -> Self {
@@ -334,6 +868,8 @@ impl InputReporter {
             emitted: Vec::new(),
             #[cfg(test)]
             observed_switches: Vec::new(),
+            #[cfg(test)]
+            file_drop_events: None,
         }
     }
     fn switch(&mut self, state: WorkerSwitchState) {
@@ -358,6 +894,15 @@ impl InputReporter {
     fn peer_motion(&mut self, available: bool) {
         self.peer_unavailable = !available;
         self.switch(WorkerSwitchState::Idle);
+    }
+    fn file_drop(&mut self, event: peerglide_protocol::file_drop_ipc::Event) {
+        #[cfg(test)]
+        if let Some(sender) = &self.file_drop_events {
+            let _ = sender.try_send(event);
+        }
+        if self.managed {
+            println!("{}", event.line());
+        }
     }
     fn clear_switch(&mut self) {
         self.peer_unavailable = false;
@@ -425,7 +970,101 @@ async fn stop_requested(stop: &mut tokio::sync::watch::Receiver<bool>) {
     }
 }
 
-async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
+fn managed_stop_reader(
+    stop: tokio::sync::watch::Sender<bool>,
+    layout: Option<Arc<layout_control::Controller>>,
+    file_drop: Option<Arc<file_drop_control::Controller>>,
+) -> tokio::sync::oneshot::Receiver<()> {
+    let (request, requested) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = stdin.lock();
+        loop {
+            match layout_control::read_command(&mut reader) {
+                Ok(Some(line)) if line.trim() == "stop" => break,
+                Ok(Some(line)) => {
+                    if let Some(file_drop) = &file_drop {
+                        if let Some(command) =
+                            peerglide_protocol::file_drop_ipc::Command::parse(&line)
+                        {
+                            if let Some(event) = file_drop.submit(command) {
+                                println!("{}", event.line());
+                            }
+                            continue;
+                        }
+                    }
+                    if let Some(layout) = &layout {
+                        if let Some(update) =
+                            peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line)
+                        {
+                            layout.submit(update);
+                        }
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        // Wake the existing native owner even if the async worker is stalled.
+        let _ = stop.send(true);
+        request_native_stop();
+        let _ = request.send(());
+    });
+    requested
+}
+
+async fn run_routed_worker(
+    identity: &std::path::Path,
+    layout: &std::path::Path,
+    managed: bool,
+    expected: Option<(&str, &str)>,
+) -> Result<()> {
+    anyhow::ensure!(
+        managed == expected.is_some(),
+        "managed route startup requires both confirmed fingerprints"
+    );
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let _requested = managed.then(|| managed_stop_reader(stop.clone(), None, None));
+    let mut reporter = InputReporter::new(managed);
+    reporter.set(WorkerInputState::Disabled);
+    let result = {
+        let mut work = Box::pin(session::routed_source::run(
+            identity,
+            layout,
+            expected,
+            stopped,
+            &mut reporter,
+        ));
+        tokio::select! {
+            result = &mut work => result,
+            _ = tokio::signal::ctrl_c() => { let _ = stop.send(true); request_native_stop(); work.await },
+        }
+    };
+    let terminal = reporter.finish();
+    worker_event(
+        managed,
+        if result.is_ok() && terminal != WorkerInputState::RecoveryUnconfirmed {
+            WorkerState::Stopped
+        } else {
+            WorkerState::Failed
+        },
+    );
+    result?;
+    anyhow::ensure!(
+        terminal != WorkerInputState::RecoveryUnconfirmed,
+        "native input recovery remains unconfirmed"
+    );
+    Ok(())
+}
+
+async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
+    anyhow::ensure!(
+        o.remote_entry_edge.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
+        "remote entry edge requires a native Windows or macOS session"
+    );
+    anyhow::ensure!(
+        o.receive_display.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
+        "local receive display requires a native Windows or macOS session"
+    );
     anyhow::ensure!(
         !probe || !o.input_diagnostics,
         "input diagnostics require a native session"
@@ -435,40 +1074,29 @@ async fn run(o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()>
             || (o.managed && address.is_some() && !probe && !o.reconnect),
         "initial wait requires a managed non-probe connector without reconnect"
     );
+    anyhow::ensure!(
+        (o.request_secondary_layout.is_none() && o.secondary_layout_bind.is_none())
+            || (!probe && cfg!(any(windows, target_os = "macos"))),
+        "secondary layout confirmation requires a native Windows or macOS session"
+    );
+    o.receive_selection = o
+        .receive_display
+        .map(peerglide_platform::ReceiveDisplay::select)
+        .transpose()?
+        .map(Arc::new);
     let managed = o.managed;
     let mut input_status = InputReporter::new(managed);
     // No native capture/input effect exists during identity/network setup.
     input_status.set(WorkerInputState::Disabled);
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let result = {
-        let work = supervise(&o, address, probe, stopped, &mut input_status);
-        tokio::pin!(work);
+        let mut work = Box::pin(supervise(&o, address, probe, stopped, &mut input_status));
         if managed {
-            let (request, requested) = tokio::sync::oneshot::channel();
-            let direct_stop = stop.clone();
-            let layout = o.layout.clone();
-            std::thread::spawn(move || {
-                let stdin = std::io::stdin();
-                let mut reader = stdin.lock();
-                loop {
-                    match layout_control::read_command(&mut reader) {
-                        Ok(Some(line)) if line.trim() == "stop" => break,
-                        Ok(Some(line)) => {
-                            if let Some(update) =
-                                peerglide_protocol::layout_ipc::LayoutUpdate::parse(&line)
-                            {
-                                layout.submit(update);
-                            }
-                        }
-                        Ok(None) | Err(_) => break,
-                    }
-                }
-                // This thread must also wake native recovery when the async
-                // session itself is stalled. No OS input is injected here.
-                let _ = direct_stop.send(true);
-                request_native_stop();
-                let _ = request.send(());
-            });
+            let requested = managed_stop_reader(
+                stop.clone(),
+                Some(o.layout.clone()),
+                (o.native && !probe).then(|| o.file_drop.clone()),
+            );
             tokio::select! {
                 result = &mut work => result,
                 _ = requested => { let _ = stop.send(true); request_native_stop(); work.await },
@@ -525,6 +1153,7 @@ async fn supervise(
     );
     let mut backoff = reconnect::Backoff::default();
     let mut initial = reconnect::InitialWait::new(o.wait_for_peer_secs);
+    let mut rebuilding_display_layout = false;
     loop {
         if *stop.borrow() {
             return Ok(());
@@ -539,6 +1168,7 @@ async fn supervise(
                 id: &id,
                 peer: &peer,
                 initial: &mut initial,
+                rebuilding_display_layout,
             },
             stop.clone(),
             input_status,
@@ -558,6 +1188,21 @@ async fn supervise(
         }
         match result {
             Ok(()) => (),
+            Err(error)
+                if error
+                    .downcast_ref::<session::DisplayLayoutEnd>()
+                    .is_some_and(|reason| {
+                        reason.may_rebuild(
+                            o.reconnect,
+                            o.receive_selection.is_some() || o.request_secondary_layout.is_some(),
+                        )
+                    }) =>
+            {
+                rebuilding_display_layout = true;
+                eprintln!(
+                    "Local input was released. Rechecking the display layout before resuming input."
+                );
+            }
             Err(error) if reconnect::retryable(&error) => (),
             Err(error) => return Err(error),
         }
@@ -586,6 +1231,7 @@ struct Attempt<'a> {
     id: &'a transport::Identity,
     peer: &'a [u8],
     initial: &'a mut reconnect::InitialWait,
+    rebuilding_display_layout: bool,
 }
 async fn initial_wait_deadline(deadline: Option<tokio::time::Instant>) {
     if let Some(deadline) = deadline {
@@ -606,6 +1252,7 @@ async fn run_inner(
         id,
         peer,
         initial,
+        rebuilding_display_layout,
     } = attempt;
     input_status.clear_switch();
     println!(
@@ -650,22 +1297,7 @@ async fn run_inner(
     } else {
         InputCapabilities::default()
     };
-    transport::send(
-        &mut tx,
-        &Message::Hello {
-            version: VERSION,
-            capabilities: local.clone(),
-        },
-    )
-    .await?;
-    let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??;
-    let peer_capabilities = match hello {
-        Message::Hello {
-            version: VERSION,
-            capabilities,
-        } if capabilities.valid() => capabilities,
-        _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
-    };
+    let peer_capabilities = exchange_hello(&mut tx, &mut rx, local.clone()).await?;
     Ok::<_, anyhow::Error>((c, tx, rx, local, peer_capabilities))
         } => Some(result),
     };
@@ -691,14 +1323,7 @@ async fn run_inner(
         input_status.set(WorkerInputState::Disabled);
         let result = tokio::select! {
             result = async {
-                transport::send(&mut tx, &Message::Ping { lease: 0 }).await?;
-                anyhow::ensure!(
-                    matches!(
-                        tokio::time::timeout(Duration::from_secs(3), transport::receive(&mut rx)).await??,
-                        Message::Pong { lease: 0 }
-                    ),
-                    "probe response mismatch"
-                );
+                probe_roundtrip(&mut tx, &mut rx).await?;
                 println!("PASS: mutual TLS, protocol negotiation, reliable roundtrip.");
                 worker_event(o.managed, WorkerState::ProbePassed);
                 Ok::<_, anyhow::Error>(())
@@ -709,6 +1334,14 @@ async fn run_inner(
         e.wait_idle().await;
         return result;
     }
+    let secondary = secondary_layout::Routes::start(
+        id,
+        peer,
+        &c,
+        o.request_secondary_layout,
+        o.secondary_layout_bind,
+        o.receive_selection.clone(),
+    )?;
     let diagnostics = o
         .input_diagnostics
         .then(input_diagnostics::DiagnosticWindow::start)
@@ -729,6 +1362,15 @@ async fn run_inner(
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
             layout: Some(&o.layout),
+            file_drop: (o.managed && o.native).then_some(file_drop_control::Config {
+                controller: &o.file_drop,
+                identity: id,
+                pin: peer,
+            }),
+            receive_display: o.receive_selection.clone(),
+            secondary: secondary.as_ref(),
+            rebuilding_display_layout,
+            remote_entry_edge: o.remote_entry_edge.map(Edge::from),
         },
     )
     .await;
@@ -737,7 +1379,9 @@ async fn run_inner(
     }
     worker_event(o.managed, WorkerState::Disconnected);
     let reason = c.close_reason();
-    c.close(0u8.into(), b"session ended");
+    let receipt =
+        session::close_reason_after_recovery(&result, input_status.last, b"session ended");
+    c.close(0u8.into(), receipt);
     e.wait_idle().await;
     result?;
     if let Some(reason) = reason {
@@ -749,9 +1393,135 @@ async fn run_inner(
     Ok(())
 }
 
+async fn exchange_hello(
+    tx: &mut quinn::SendStream,
+    rx: &mut quinn::RecvStream,
+    local: InputCapabilities,
+) -> Result<InputCapabilities> {
+    transport::send(
+        tx,
+        &Message::Hello {
+            version: VERSION,
+            capabilities: local,
+        },
+    )
+    .await?;
+    let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(rx)).await??;
+    match hello {
+        Message::Hello {
+            version: VERSION,
+            capabilities,
+        } if capabilities.valid() => Ok(capabilities),
+        _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
+    }
+}
+
+async fn probe_roundtrip(tx: &mut quinn::SendStream, rx: &mut quinn::RecvStream) -> Result<()> {
+    transport::send(tx, &Message::Ping { lease: 0 }).await?;
+    anyhow::ensure!(
+        matches!(
+            tokio::time::timeout(Duration::from_secs(3), transport::receive(rx)).await??,
+            Message::Pong { lease: 0 }
+        ),
+        "probe response mismatch"
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod context_cli_tests {
     use super::*;
+
+    #[test]
+    fn configured_routes_require_explicit_native_consent() {
+        let args = ["peerglide", "connect-routes", "--layout", "routes.json"];
+        assert!(Cli::try_parse_from(args).is_err());
+        let cli = Cli::try_parse_from(args.into_iter().chain(["--native"])).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::ConnectRoutes { native: true, .. }
+        ));
+    }
+
+    #[test]
+    fn managed_routes_require_both_confirmed_fingerprints() {
+        let managed = [
+            "peerglide",
+            "connect-routes",
+            "--layout",
+            "draft.json",
+            "--native",
+            "--managed",
+        ];
+        assert!(Cli::try_parse_from(managed).is_err());
+        let cli = Cli::try_parse_from(managed.into_iter().chain([
+            "--expected-layout-fingerprint",
+            "layout",
+            "--expected-local-fingerprint",
+            "local",
+        ]))
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::ConnectRoutes { managed: true, .. }
+        ));
+    }
+
+    #[test]
+    fn remote_entry_edge_requires_native_mode_and_preserves_local_direction() {
+        let options = [
+            "peerglide",
+            "connect",
+            "127.0.0.1:24870",
+            "--peer-cert",
+            "peer.der",
+            "--edge",
+            "right",
+            "--remote-entry-edge",
+            "top",
+        ];
+        assert!(Cli::try_parse_from(options).is_err());
+        let enabled = options.into_iter().chain(["--native"]);
+        let Command::Connect { options, .. } = Cli::try_parse_from(enabled).unwrap().command else {
+            panic!("expected connect");
+        };
+        assert_eq!(Edge::from(options.edge), Edge::Right);
+        assert_eq!(options.remote_entry_edge.map(Edge::from), Some(Edge::Top));
+        assert!(!options.allow_control);
+    }
+
+    #[test]
+    fn secondary_layout_flags_require_the_existing_native_and_display_permissions() {
+        for flag in [
+            "--request-secondary-layout=127.0.0.1:24878",
+            "--secondary-layout-bind=127.0.0.1:24878",
+        ] {
+            assert!(
+                Cli::try_parse_from(["peerglide", "listen", "--peer-cert", "peer.der", flag])
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn alternate_receive_display_requires_native_and_local_consent() {
+        let without_consent = [
+            "peerglide",
+            "listen",
+            "--peer-cert",
+            "peer.der",
+            "--native",
+            "--receive-display=-1920,0",
+        ];
+        assert!(Cli::try_parse_from(without_consent).is_err());
+        let enabled = without_consent.into_iter().chain(["--allow-control"]);
+        let Command::Listen(options) = Cli::try_parse_from(enabled).unwrap().command else {
+            panic!("expected listen");
+        };
+        assert_eq!(options.receive_display, Some((-1920.0, 0.0)));
+        assert!(parse_display_origin("NaN,0").is_err());
+        assert!(parse_display_origin("1,2,3").is_err());
+    }
     #[tokio::test]
     async fn initial_wait_invalid_modes_reject_before_identity_io() {
         for args in [

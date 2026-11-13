@@ -68,11 +68,25 @@ impl Manifest {
     /// This is not an atomic filesystem snapshot of a concurrently edited file.
     /// A regular file only: no directory/symlink traversal is implemented.
     pub fn from_file(path: &Path) -> io::Result<Self> {
+        Self::open_checked(path, || Ok(())).map(|(manifest, _)| manifest)
+    }
+
+    /// Build the manifest and retain the same open handle for later chunk reads.
+    /// The local owner can cancel before opening and between bounded reads.
+    pub fn open_checked(
+        path: &Path,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<(Self, File)> {
+        check()?;
         if !fs::symlink_metadata(path)?.file_type().is_file() {
             return Err(invalid("source must be a regular non-symlink file"));
         }
         let mut file = File::open(path)?;
-        let size = file.metadata()?.len();
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(invalid("source must be a regular file"));
+        }
+        let size = metadata.len();
         if size > MAX_FILE_BYTES {
             return Err(invalid("file exceeds limit"));
         }
@@ -89,22 +103,27 @@ impl Manifest {
         let mut buffer = vec![0; CHUNK_BYTES];
         let mut remaining = size;
         while remaining > 0 {
+            check()?;
             let len = remaining.min(CHUNK_BYTES as u64) as usize;
             file.read_exact(&mut buffer[..len])?;
             whole.update(&buffer[..len]);
             chunks.push(*blake3::hash(&buffer[..len]).as_bytes());
             remaining -= len as u64;
         }
+        check()?;
         if file.read(&mut [0])? != 0 || file.metadata()?.len() != size {
             return Err(invalid("source size changed"));
         }
-        Ok(Self {
-            version: VERSION,
-            name,
-            size,
-            whole: *whole.finalize().as_bytes(),
-            chunks,
-        })
+        Ok((
+            Self {
+                version: VERSION,
+                name,
+                size,
+                whole: *whole.finalize().as_bytes(),
+                chunks,
+            },
+            file,
+        ))
     }
     fn validate(&self) -> io::Result<()> {
         if self.version != VERSION
@@ -243,6 +262,16 @@ impl Receiver {
     /// Re-verify every partial chunk rather than trusting persisted counters.
     /// Same binding, exact canonical manifest and regular private files required.
     pub fn resume(root: &Path, binding: PeerBinding, manifest: Manifest) -> io::Result<Self> {
+        Self::resume_checked(root, binding, manifest, || Ok(()))
+    }
+
+    pub fn resume_checked(
+        root: &Path,
+        binding: PeerBinding,
+        manifest: Manifest,
+        mut check: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<Self> {
+        check()?;
         manifest.validate()?;
         require_dir(root)?;
         let expected = serde_json::to_vec(&Receipt {
@@ -287,6 +316,7 @@ impl Receiver {
         };
         let mut buffer = vec![0; CHUNK_BYTES];
         for index in 0..receiver.manifest.chunks.len() {
+            check()?;
             let len = receiver.manifest.chunk_len(index)?;
             receiver.partial.read_exact(&mut buffer[..len])?;
             if blake3::hash(&buffer[..len]).as_bytes() == &receiver.manifest.chunks[index] {
@@ -294,6 +324,7 @@ impl Receiver {
                 receiver.verified_bytes += len as u64;
             }
         }
+        check()?;
         Ok(receiver)
     }
     pub fn progress(&self) -> Progress {
@@ -308,6 +339,10 @@ impl Receiver {
             .iter()
             .enumerate()
             .filter_map(|(i, present)| (!present).then_some(i))
+    }
+    /// First missing chunk, or the manifest chunk count if every chunk verified.
+    pub fn next_chunk(&self) -> usize {
+        self.missing().next().unwrap_or(self.manifest.chunks())
     }
     /// Input slice is bounded and hashed before touching disk; a duplicate valid
     /// chunk is idempotent. The future wire reader must cap allocation itself.
@@ -334,7 +369,7 @@ impl Receiver {
     pub fn commit(self, root: &Path) -> io::Result<PathBuf> {
         self.commit_checked(root, || Ok(()))
     }
-    /// Checks current local permission before verification, marker and publication.
+    /// Checks current local permission during verification and before publication.
     /// Callback failure preserves staged data and never retries publication.
     pub fn commit_checked(
         mut self,
@@ -354,6 +389,7 @@ impl Receiver {
         let mut buffer = vec![0; CHUNK_BYTES];
         let mut bounded = (&mut self.partial).take(self.manifest.size + 1);
         loop {
+            check()?;
             let n = bounded.read(&mut buffer)?;
             if n == 0 {
                 break;
@@ -478,12 +514,14 @@ mod tests {
         drop(receiver);
         let mut resumed = Receiver::resume(&root, binding(), manifest.clone()).unwrap();
         assert_eq!(resumed.missing().collect::<Vec<_>>(), vec![1, 3]);
+        assert_eq!(resumed.next_chunk(), 1);
         for i in [3, 1] {
             resumed
                 .write_chunk(i, &manifest.read_chunk(&mut source, i).unwrap())
                 .unwrap();
         }
         assert!(resumed.progress().chunks_complete);
+        assert_eq!(resumed.next_chunk(), manifest.chunks());
         let result = resumed.commit(&root).unwrap();
         assert_eq!(fs::read(result).unwrap(), bytes);
         assert!(Receiver::resume(&root, binding(), manifest).is_err());
@@ -618,8 +656,9 @@ mod tests {
     #[test]
     fn sender_rechecks_content_and_exact_last_chunk_bounds() {
         let f = Fixture::new();
-        let (path, _, m) = f.source(CHUNK_BYTES + 7);
-        let mut file = File::open(&path).unwrap();
+        let (path, _, original) = f.source(CHUNK_BYTES + 7);
+        let (m, mut file) = Manifest::open_checked(&path, || Ok(())).unwrap();
+        assert!(m == original);
         assert_eq!(m.read_chunk(&mut file, 1).unwrap().len(), 7);
         assert!(m.read_chunk(&mut file, 2).is_err());
         fs::write(path, b"changed").unwrap();
@@ -721,8 +760,10 @@ mod commit_regressions {
 }
 
 mod admission;
-pub use admission::Inventory;
+pub use admission::{receive_history, History, HistoryEntry, HistoryState, Inventory};
 pub mod clipboard;
+pub mod clipboard_image;
 pub mod codec;
 pub mod data_policy;
+pub mod drop_admission;
 pub mod manager;

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import plistlib
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -17,7 +18,9 @@ import zipfile
 
 import build_version
 import package
+import portable_update
 import verify_macos_package
+import verify_portable_package
 
 
 MAIN_METADATA = ("Identifier=com.peerglide.PeerGlide\nSignature=adhoc\n"
@@ -100,6 +103,7 @@ class Packaging(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
         os.environ.pop("LINKO_VERSION", None)
+        os.environ.pop("LINKO_REVIEW_HEAD", None)
 
     def test_macos_icon_has_transparent_optical_margin(self):
         root = Path(package.__file__).resolve().parent.parent
@@ -385,6 +389,257 @@ class Packaging(unittest.TestCase):
                 with self.assertRaises(OSError):
                     package.build_package(root, "Linux", "x86_64", FakeCodesign())
             self.assertEqual(list((root / "dist").iterdir()), [])
+
+    @staticmethod
+    def portable_fixture(root, system, machine, wrong_cpu=False, extra=None, version="2026.11.12-0600"):
+        archive = root / f"Linko-{version}-{system.lower()}-{machine.lower()}.zip"
+        source = package.build_source(root, version, system, machine)
+        if system == "Windows":
+            payload = bytearray(128 + 26)
+            payload[:2] = b"MZ"
+            struct.pack_into("<I", payload, 60, 128)
+            payload[128:132] = b"PE\0\0"
+            struct.pack_into("<H", payload, 132, 0xAA64 if wrong_cpu else 0x8664)
+            struct.pack_into("<HH", payload, 150, 0x0002, 0x20B)
+            binaries = ("Linko.exe", "peerglide.exe")
+        elif system == "Darwin":
+            payload = b"\xcf\xfa\xed\xfe" + struct.pack("<III", 0x0100000C, 0, 2)
+            contents = "Linko.app/Contents/"
+            binaries = (contents + "MacOS/peerglide-gui", contents + "MacOS/peerglide")
+        else:
+            payload = b"\x7fELF\x02\x01" + bytes(10) + struct.pack("<HH", 3, 62)
+            binaries = ("linko", "peerglide")
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
+            prefix = archive.stem + "/"
+            for name in ("README.md", "LICENSE", "SECURITY.md"):
+                zipped.writestr(prefix + name, "fixture")
+            zipped.writestr(prefix + package.SOURCE_MANIFEST, json.dumps(source))
+            if system == "Darwin":
+                zipped.writestr(prefix + contents + "Info.plist", plistlib.dumps(package.bundle_info(version)))
+            for name in binaries:
+                zipped.writestr(prefix + name, payload)
+            if extra is not None:
+                extra(zipped, prefix)
+        return archive, hashlib.sha256(archive.read_bytes()).hexdigest(), source
+
+    def test_portable_package_verifies_platform_and_bound_source(self):
+        for system, machine in (("Windows", "AMD64"), ("Darwin", "arm64"), ("Linux", "x86_64")):
+            with self.subTest(system=system), tempfile.TemporaryDirectory() as folder:
+                archive, digest, source = self.portable_fixture(Path(folder), system, machine)
+                verify_portable_package.verify(archive, digest, source)
+                with self.assertRaisesRegex(ValueError, "checksum differs"):
+                    verify_portable_package.verify(archive, "0" * 64, source)
+                with self.assertRaisesRegex(ValueError, "source record differs"):
+                    verify_portable_package.verify(archive, digest, dict(source, checkout_tree="0" * 40))
+
+    def test_portable_package_rejects_wrong_cpu_and_unsafe_members(self):
+        with tempfile.TemporaryDirectory() as folder:
+            args = self.portable_fixture(Path(folder), "Windows", "AMD64", wrong_cpu=True)
+            with self.assertRaisesRegex(ValueError, "architecture or type differs"):
+                verify_portable_package.verify(*args)
+
+        def add_symlink(zipped, prefix):
+            entry = zipfile.ZipInfo(prefix + "docs/link")
+            entry.create_system = 3
+            entry.external_attr = (stat.S_IFLNK | 0o777) << 16
+            zipped.writestr(entry, "elsewhere")
+
+        for extra, error in (
+            (lambda zipped, root: zipped.writestr(root + "../outside", "fixture"), "unsafe"),
+            (lambda zipped, root: zipped.writestr(root + "readme.MD", "fixture"), "duplicate"),
+            (add_symlink, "regular file"),
+        ):
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as folder:
+                args = self.portable_fixture(Path(folder), "Linux", "x86_64", extra=extra)
+                with self.assertRaisesRegex(ValueError, error):
+                    verify_portable_package.verify(*args)
+
+    def test_portable_checksum_accepts_windows_line_endings_and_checks_name(self):
+        with tempfile.TemporaryDirectory() as folder:
+            checksum = Path(folder) / "test.sha256"
+            digest = "0" * 64
+            checksum.write_bytes(f"{digest}  Linko.zip\r\n".encode("ascii"))
+            self.assertEqual(verify_portable_package.read_checksum(checksum, "Linko.zip"), digest)
+            with self.assertRaisesRegex(ValueError, "does not name"):
+                verify_portable_package.read_checksum(checksum, "other.zip")
+
+    def test_portable_stage_uses_new_version_and_retains_other_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Linux", "x86_64")
+            versions = root / "versions"
+            versions.mkdir()
+            (versions / "unrelated").write_bytes(b"keep")
+            with self.assertRaisesRegex(ValueError, "checksum differs"):
+                portable_update.stage(versions, archive, "0" * 64, source)
+            self.assertEqual(list(versions.iterdir()), [versions / "unrelated"])
+
+            staged = portable_update.stage(versions, archive, digest, source)
+            receipt = json.loads((staged / portable_update.RECEIPT).read_bytes())
+            self.assertEqual(receipt["archive_sha256"], digest)
+            self.assertEqual(receipt["source"], source)
+            worker = staged / portable_update.PAYLOAD / "peerglide"
+            self.assertEqual(
+                hashlib.sha256(worker.read_bytes()).hexdigest(),
+                receipt["members"]["peerglide"],
+            )
+            self.assertEqual((versions / "unrelated").read_bytes(), b"keep")
+            with self.assertRaisesRegex(ValueError, "version already exists"):
+                portable_update.stage(versions, archive, digest, source)
+            self.assertEqual(
+                sorted(item.name for item in versions.iterdir()),
+                sorted([archive.stem, "unrelated"]),
+            )
+
+    def test_portable_upgrade_and_rollback_preserve_older_version_and_selection(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            versions = root / "versions"
+            versions.mkdir()
+            installs = []
+            for version in ("2026.11.12-0600", "2026.11.12-0610"):
+                archive, digest, source = self.portable_fixture(
+                    root, "Linux", "x86_64", version=version
+                )
+                staged = portable_update.stage(versions, archive, digest, source)
+                receipt = hashlib.sha256((staged / portable_update.RECEIPT).read_bytes()).hexdigest()
+                installs.append((staged, digest, receipt))
+
+            first, second = installs
+            with patch.object(portable_update.platform, "system", return_value="Linux"), patch.object(
+                portable_update.platform, "machine", return_value="x86_64"
+            ):
+                old = portable_update.activate(versions, first[0].name, first[1], first[2])
+                self.assertEqual(portable_update.current_entry(versions), old)
+                selected = versions / portable_update.ACTIVE
+                initial = selected.read_bytes()
+                with portable_update.update_lock(versions):
+                    with self.assertRaisesRegex(ValueError, "another portable update"):
+                        portable_update.activate(versions, second[0].name, second[1], second[2])
+                with patch.object(portable_update.os, "replace", side_effect=OSError("fixture")):
+                    with self.assertRaises(OSError):
+                        portable_update.activate(versions, second[0].name, second[1], second[2])
+                self.assertEqual(selected.read_bytes(), initial)
+                self.assertFalse(list(versions.glob(".linko-selection-*")))
+
+                new = portable_update.activate(versions, second[0].name, second[1], second[2])
+                self.assertEqual(portable_update.current_entry(versions), new)
+                self.assertNotEqual(new, old)
+                after_upgrade = selected.read_bytes()
+                original = old.read_bytes()
+                old.write_bytes(b"fixture changed")
+                with self.assertRaisesRegex(ValueError, "staged member changed"):
+                    portable_update.rollback(versions)
+                self.assertEqual(selected.read_bytes(), after_upgrade)
+                old.write_bytes(original)
+                self.assertEqual(portable_update.rollback(versions), old)
+                self.assertEqual(portable_update.current_entry(versions), old)
+                self.assertTrue(new.exists())
+
+    def test_portable_activation_checks_exact_receipt_digest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Linux", "x86_64")
+            versions = root / "versions"
+            versions.mkdir()
+            staged = portable_update.stage(versions, archive, digest, source)
+            receipt_path = staged / portable_update.RECEIPT
+            receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+            receipt_path.write_bytes(receipt_path.read_bytes() + b" ")
+            with self.assertRaisesRegex(ValueError, "staged receipt changed"):
+                portable_update.activate(versions, staged.name, digest, receipt_digest)
+            self.assertFalse((versions / portable_update.ACTIVE).exists())
+
+    def test_stage_does_not_take_over_empty_version_directory(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            archive, digest, source = self.portable_fixture(root, "Windows", "AMD64")
+            versions = root / "versions"
+            versions.mkdir()
+            existing = versions / archive.stem
+            existing.mkdir()
+            with self.assertRaisesRegex(ValueError, "version already exists"):
+                portable_update.stage(versions, archive, digest, source)
+            self.assertEqual(list(existing.iterdir()), [])
+
+    def test_package_records_review_commit_and_actual_checkout_tree(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            checkout, tree, base, head = ("1" * 40, "2" * 40, "3" * 40, "4" * 40)
+            git_results = [
+                subprocess.CompletedProcess(["git"], 0, stdout=(checkout + "\n").encode()),
+                subprocess.CompletedProcess(
+                    ["git"], 0, stdout=f"tree {tree}\nparent {base}\nparent {head}\n\n".encode()
+                ),
+            ]
+            environment = {
+                "LINKO_VERSION": "2026.11.12-0600",
+                "LINKO_REVIEW_HEAD": head,
+                "GITHUB_SHA": checkout,
+            }
+            with patch.dict(os.environ, environment), patch.object(
+                package.subprocess, "run", side_effect=git_results
+            ):
+                archive = package.build_package(root, "Linux", "x86_64", FakeCodesign())
+            with zipfile.ZipFile(archive) as zipped:
+                source = json.loads(zipped.read(f"{archive.stem}/{package.SOURCE_MANIFEST}"))
+            self.assertEqual(source["checkout_commit"], checkout)
+            self.assertEqual(source["checkout_tree"], tree)
+            self.assertEqual(source["review_commit"], head)
+            self.assertEqual(source["build_version"], environment["LINKO_VERSION"])
+
+    def test_shallow_checkout_preserves_raw_merge_parents_for_provenance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin = root / "origin"
+            origin.mkdir()
+
+            def git(directory, *args, input=None):
+                return subprocess.run(
+                    ["git", "-C", str(directory), *args],
+                    input=input, capture_output=True, text=True, check=True,
+                ).stdout.strip()
+
+            git(origin, "init", "--initial-branch=main")
+            git(origin, "config", "user.name", "Package Test")
+            git(origin, "config", "user.email", "package@example.invalid")
+            git(origin, "commit", "--allow-empty", "-m", "base")
+            base = git(origin, "rev-parse", "HEAD")
+            git(origin, "commit", "--allow-empty", "-m", "review")
+            review = git(origin, "rev-parse", "HEAD")
+            tree = git(origin, "rev-parse", "HEAD^{tree}")
+            merge = git(origin, "commit-tree", tree, "-p", base, "-p", review, input="candidate\n")
+            git(origin, "update-ref", "refs/heads/candidate", merge)
+            checkout = root / "shallow"
+            git(root, "clone", "--depth", "1", "--branch", "candidate", origin.as_uri(), str(checkout))
+            self.assertEqual(git(checkout, "rev-parse", "--is-shallow-repository"), "true")
+            with patch.dict(os.environ, {"LINKO_REVIEW_HEAD": review, "GITHUB_SHA": merge}):
+                source = package.build_source(checkout, "2026.11.12-0600", "Linux", "x86_64")
+            self.assertEqual(source["checkout_commit"], merge)
+            self.assertEqual(source["checkout_tree"], tree)
+            self.assertEqual(source["review_commit"], review)
+
+    def test_wrong_review_checkout_stops_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fixture(root)
+            checkout, tree, head = "1" * 40, "2" * 40, "3" * 40
+            git_results = [
+                subprocess.CompletedProcess(["git"], 0, stdout=(checkout + "\n").encode()),
+                subprocess.CompletedProcess(["git"], 0, stdout=f"tree {tree}\n\n".encode()),
+            ]
+            environment = {
+                "LINKO_VERSION": "2026.11.12-0600",
+                "LINKO_REVIEW_HEAD": head,
+                "GITHUB_SHA": checkout,
+            }
+            with patch.dict(os.environ, environment), patch.object(
+                package.subprocess, "run", side_effect=git_results
+            ):
+                with self.assertRaisesRegex(ValueError, "review commit does not match"):
+                    package.build_package(root, "Linux", "x86_64", FakeCodesign())
+            self.assertFalse((root / "dist").exists())
 
     def test_datetime_version_names_archive_and_sets_both_bundle_fields(self):
         with tempfile.TemporaryDirectory() as folder:

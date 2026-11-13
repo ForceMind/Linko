@@ -146,7 +146,9 @@ impl App {
     }
 
     fn peer_connection_label(&self) -> &'static str {
-        if self.pairing_pending() {
+        if self.routed_active {
+            "正在使用分段布局"
+        } else if self.pairing_pending() {
             "核验尚未完成"
         } else if self.stopping.is_some() {
             "正在断开连接"
@@ -178,6 +180,9 @@ impl App {
     /// Badge of the peer screen; its text is the connection label of the context column.
     fn peer_badge(&self) -> (Badge, &'static str) {
         let label = self.peer_connection_label();
+        if self.routed_active {
+            return (Badge::Offline, label);
+        }
         let badge = if self.pairing_pending() {
             Badge::Pending
         } else if self.stopping.is_some() {
@@ -279,7 +284,7 @@ impl App {
             devices.line_segment([shown_local.center(), shown_peer.center()], stroke);
         }
         let head = if self.activity_tick_active() {
-            motion::spinner_head_at(now)
+            motion::spinner_head_for(ui.ctx(), now)
         } else {
             0
         };
@@ -383,19 +388,17 @@ impl App {
             self.context_primary(ui);
         });
         ui.add_space(gap);
-        // Not connected capabilities stay labelled (decision 2); the page explains them.
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("文件 · 剪贴板 未接通").small().weak());
-            if ui.small_button("说明").clicked() {
-                self.navigate_to(Page::Transfers);
-            }
-        });
+        if ui.small_button("文件与剪贴板").clicked() {
+            self.navigate_to(Page::Transfers);
+        }
         self.details_drawer(ui, gap, margin);
     }
 
     /// Name of the selected device and the switch of the details drawer.
     fn context_header(&mut self, ui: &mut egui::Ui) {
-        let name = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+        let name = if self.routed_active {
+            "分段键鼠".to_owned()
+        } else if self.workspace_peer_selected && self.config.fingerprint.is_some() {
             self.config.peer_name.clone()
         } else {
             desktop_ui::local_device_name().to_owned()
@@ -427,7 +430,12 @@ impl App {
     fn context_rows(&mut self, ui: &mut egui::Ui) {
         let registered = self.config.fingerprint.is_some();
         let running = self.child.is_some();
-        let (value, tone) = self.connection_short();
+        let (value, tone) = if self.routed_active {
+            let view = self.workspace_view();
+            (view.short, view.tone)
+        } else {
+            self.connection_short()
+        };
         let stop_width = if running {
             canvas_button_width(ui, Some(STOP_WORD))
         } else {
@@ -471,13 +479,15 @@ impl App {
             },
             |_| (),
         );
-        let allowed = self.config.allow;
+        let allowed = !self.routed_active && self.config.allow;
         let (value, tone) = if allowed {
             ("已允许", Tone::Accent)
         } else {
             ("关闭", Tone::Neutral)
         };
-        let full = if allowed {
+        let full = if self.routed_active {
+            "分段会话只发送键鼠。"
+        } else if allowed {
             "本机接收控制：已允许。另一台的接收许可由它单独设置。"
         } else {
             "本机接收控制：默认关闭。另一台的接收许可由它单独设置。"
@@ -496,7 +506,7 @@ impl App {
             |ui| {
                 let id = context_control_id("receive-settings");
                 let icon = Icon::Arrow(Direction::Right);
-                let shown = ui.add_enabled_ui(registered, |ui| {
+                let shown = ui.add_enabled_ui(registered && !self.routed_active, |ui| {
                     canvas_button(ui, id, icon, "设置本机接收控制", None, false)
                 });
                 shown.inner.clicked()
@@ -611,10 +621,25 @@ impl App {
                         && !self.resource_check_mode
                         && !self.quit_check_mode
                         && self.layout_report.is_none();
-                    self.display_inventory.ui(ui, enabled, &self.wake_ui);
+                    let can_choose = enabled
+                        && self.layout_editable()
+                        && self.active_mode != Some(SessionMode::Native)
+                        && self.pending_start != Some(SessionMode::Native);
+                    self.display_inventory
+                        .ui(ui, enabled, can_choose, &self.wake_ui);
+                    if enabled {
+                        let mut editor = std::mem::take(&mut self.route_plan);
+                        editor.ui(self, ui);
+                        self.route_plan = editor;
+                    }
                 }
                 ui.separator();
                 self.connection_details(ui);
+                if open {
+                    let mut profiles = std::mem::take(&mut self.layout_profiles);
+                    profiles.ui(self, ui);
+                    self.layout_profiles = profiles;
+                }
             });
         });
     }
@@ -1183,7 +1208,8 @@ fn draw_workspace_device(
     let label_height = node.height() * 0.26;
     let image_area =
         egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
-    let aspect = visual_assets::device_aspect(kind);
+    let artwork = visual_assets::device_art(ui.ctx(), kind);
+    let aspect = artwork.as_ref().map_or(4.0 / 3.0, |asset| asset.aspect);
     let illustration_scale = match kind {
         visual_assets::DeviceKind::Laptop => 0.70,
         visual_assets::DeviceKind::Desktop => 1.0,
@@ -1219,11 +1245,11 @@ fn draw_workspace_device(
         let wash = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 18);
         painter.rect_filled(selected_frame.expand(5.0), 8.0, tokens::faded(wash, ring));
     }
-    if let Some(texture) = visual_assets::device_texture(ui.ctx(), kind) {
+    if let Some(artwork) = artwork {
         painter.image(
-            texture.id(),
+            artwork.texture.id(),
             image_rect,
-            visual_assets::device_uv(kind),
+            artwork.uv,
             egui::Color32::WHITE,
         );
     } else {
@@ -1340,7 +1366,7 @@ mod tests {
                     "键鼠",
                     "接收控制",
                     "本机权限",
-                    "文件 · 剪贴板 未接通",
+                    "文件与剪贴板",
                     "两台主屏的相对方向；另一端需设置相反方向。",
                 ]
                 .into_iter()
@@ -2118,8 +2144,9 @@ mod tests {
             (Page::GestureRules, "规则与应用"),
             (Page::Shortcuts, "返回"),
             (Page::Displays, "返回"),
-            (Page::Transfers, "说明"),
+            (Page::Transfers, "文件与剪贴板"),
             (Page::Clipboard, "剪贴板"),
+            (Page::Audio, "音频"),
             (Page::Transfers, "文件传输"),
             (Page::Displays, "返回"),
             (Page::Settings, "设置"),
@@ -2140,7 +2167,7 @@ mod tests {
                 })
                 .collect();
             output.drop_without_applying_deltas();
-            let at = at.context("navigation entry absent")?;
+            let at = at.with_context(|| format!("navigation entry absent: {label}"))?;
             for control in safety_controls {
                 let center = control.context("fixed safety control absent")?;
                 assert!(
@@ -2152,6 +2179,7 @@ mod tests {
             click(&mut app, &ctx, at);
             assert!(app.page == page && !app.native_confirmation && app.screen_drag.is_none());
             assert!(app.child.is_none() && !app.worker_permissions.needs_poll());
+            assert!(!app.data_job_active());
             assert!(!app.config.native && !app.config.allow && !app.pairing_open);
         }
         app.native_confirmation = true;

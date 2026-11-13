@@ -2582,3 +2582,539 @@ Windows 库级 worker 接回现有原生捕获和当前预分配队列。规则�
 创建捕获或授予权限。加入原始 DPI 绑定、未退休序列阻止准入覆盖、
 失焦／权限／停止回收及对应软件回归。产品入口仍保持关闭；本机 OS
 动作与短右键实际效果留到集中验收。
+
+## 2026-11-12 数据协作草稿验证
+
+PR156 审阅提交为 `2e5b28c84ea18d97bb22579c086994dca1421b4c`。
+Actions 实际检出的合成提交为 `3dcb1d8bcc0198aad428c72d5b6dfaf90857aec2`，
+两者的源码树均为 `9bddd35c9a1946e3b008b0375123cbdac19acc47`。
+该次 Windows、macOS、Ubuntu 格式检查、严格 Clippy、locked 工作区
+测试、构建和平台冒烟已通过。最低 Rust、依赖审计、固定上游资格及 macOS/Ubuntu 资源检查通过。
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43102482924) ·
+[固定上游资格](https://github.com/ForceMind/Linko/actions/runs/43102483061) ·
+[资源报告](https://github.com/ForceMind/Linko/actions/runs/43102482967)
+
+已读 Ubuntu 用例日志。两端回环覆盖文本独立许可、本机确认后导入、
+停止使待导入票据失效、文件分块准入、逐条同意、拒绝不写盘、完整文件
+提交、重新连接恢复、停止保留暂存、节流和只读历史。PNG 用例覆盖
+尺寸／大小边界、坏帧、动画拒绝、像素保留与移除文本元数据。图片目前
+仅有校验库，尚无图片网络或系统剪贴板入口。
+
+| 采样场景 | 平均 CPU | 峰值 RSS | 预热后最大增长 |
+| --- | ---: | ---: | ---: |
+| macOS 空身份空闲 180 秒 | 1.150% | 109.188 MiB | 0.281 MiB |
+| macOS 已有身份空闲 180 秒 | 0.539% | 109.188 MiB | 0 MiB |
+| Ubuntu 空身份空闲 180 秒 | 0.000% | 146.027 MiB | 0 MiB |
+| Ubuntu 已有身份空闲 180 秒 | 0.000% | 146.098 MiB | 0 MiB |
+| macOS 普通窗口仅通信约 30 秒 | 2.223% | 111.250 MiB | — |
+| Ubuntu 普通窗口仅通信约 30 秒 | 3.334% | 149.242 MiB | — |
+| macOS 隐藏窗口仅通信约 30 秒 | 0.433% | 118.156 MiB | — |
+
+空闲报告保留 RSS 512 MiB 与预热后增长 64 MiB。0.000% 表示采样
+精度内未跨过进程 CPU 时间计数刻度。与上述同口径 macOS 普通窗口
+仅通信基线相比，CPU 高约 1.459 个百分点，峰值 RSS 低 7.828 MiB。
+三次仅通信进程检查均确认回收 worker。这里记录短时、单次 runner
+观测，未测原生输入或文件传输期间的延迟和资源。
+
+该次 [Windows 包](https://github.com/ForceMind/Linko/actions/runs/43102482924/artifacts/13892823980)
+和 [macOS 包](https://github.com/ForceMind/Linko/actions/runs/43102482924/artifacts/13892734026)
+已由 CI 产出。真实 Windows/macOS 系统剪贴板、局域网文件、混合 DPI、
+大文件并行键鼠延迟及 #3/C06 仍待最终同源候选的统一验收。
+
+### F15 设备插图资源对照
+
+审阅提交 `b0fa5ba` 将解码像素移交给纹理管理器，应用只保留每个
+GUI 上下文的纹理句柄、裁剪坐标和比例。GitHub Actions 的三平台
+回归通过，确认纹理复用和画布几何。
+
+| 空闲 180 秒 | 调整前平均 CPU / 峰值 RSS | 调整后平均 CPU / 峰值 RSS |
+| --- | ---: | ---: |
+| macOS 空身份 | 0.961% / 108.969 MiB | 1.116% / 115.734 MiB |
+| macOS 已有身份 | 0.572% / 108.734 MiB | 0.505% / 109.781 MiB |
+| Ubuntu 空身份 | 0.000% / 148.531 MiB | 0.000% / 141.926 MiB |
+| Ubuntu 已有身份 | 0.000% / 149.168 MiB | 0.000% / 142.223 MiB |
+
+两平台预热后增长不超过 0.266 MiB，原 512 MiB／64 MiB 门槛保留。
+Ubuntu 本次峰值低约 6.6–6.9 MiB，macOS 空身份本次峰值较高。
+这些是独立 runner 的短时观察，纹理驱动和启动峰值仍计入 RSS。
+[调整前报告](https://github.com/ForceMind/Linko/actions/runs/43102956952) ·
+[调整后报告](https://github.com/ForceMind/Linko/actions/runs/43110989149) ·
+[工作区 CI](https://github.com/ForceMind/Linko/actions/runs/43110989136)
+
+## 2026-11-12 集成草稿的同源包证据
+
+PR180 审阅提交 `7916b5e4eada6fe8580eb164fd4943ba0cb83b12` 的
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43113699213)
+通过。读出两个便携 ZIP 的 `BUILD_SOURCE.json`，同为
+`2026.11.12-0640`，实际检出 `f359802b2bd47f80c7690756bf4e4946b4c229b2`，
+源码树 `9f0e81bf3fc04197ef4e1136f2e5acbc2c40dc89` 与审阅提交一致。
+两份内层 ZIP SHA-256 均与各自同名摘要一致。
+[Windows](https://github.com/ForceMind/Linko/actions/runs/43113699213/artifacts/13898495834) ·
+[macOS](https://github.com/ForceMind/Linko/actions/runs/43113699213/artifacts/13898306373)
+
+随后加入音频协议、F15 与便携回滚的集成提交 `cfdeb3e` 的
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43116253905)
+通过。便携回滚在 runner 隔离目录验证。实际系统音频、原生拖放、
+多设备路由、安装和 #3/C06 按最终候选记录。
+
+### 集成版本 2026.11.12-0900
+
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43131489508) 的审阅
+提交为 `81a5f6253ba70731a3ce6449c92aea342f9907d1`。已读取两份便携包，
+`BUILD_SOURCE.json` 的实际检出为 `52d6b7174fdc941c351c0b040abee3c4c3fccbe7`，
+源码树为 `5a222668e12c899db706f201e6f0015fc2cb3b3e`，与审阅提交树一致。
+内层 ZIP 的实算 SHA-256 分别等于各自摘要。
+
+| 包 | SHA-256 |
+| --- | --- |
+| [Windows x64](https://github.com/ForceMind/Linko/actions/runs/43131489508/artifacts/13905499578) | `11c609e7e61e247690a69c7901191c392ed90307950152e62ea9556c9492c9f7` |
+| [macOS arm64](https://github.com/ForceMind/Linko/actions/runs/43131489508/artifacts/13906522740) | `e3326478b8f18bf461fc8d0b8fc36455522f83ebf11053add3e32162707ead83` |
+
+此记录用于阶段证据，统一验收以最后冻结的匹配包为准。
+
+### F16 中文字重资源对照
+
+基线 `d4c872b` 使用同一静态字体字节及 400、550、650 三个实例，试验
+`2bb9e9f` 采用 400 和 600 两个实例。两份 180 秒资源报告均通过原有
+512 MiB 峰值和 64 MiB 增长门槛。表内为峰值 RSS（MiB）。
+
+| 平台和配置 | 三个实例 | 两个实例 |
+| --- | ---: | ---: |
+| macOS 空身份 | 107.797 | 113.297 |
+| macOS 已有身份 | 107.844 | 107.578 |
+| Ubuntu 空身份 | 140.844 | 140.406 |
+| Ubuntu 已有身份 | 140.582 | 140.227 |
+
+隔离截图核对了首页、添加电脑、设置和滚动后的手势实验页。紧凑窗口的标题、
+配对操作和返回入口完整可见。各平台这次短测的变化方向不一致，候选保留原有三个
+字重及完整中文字库，真实长时字体资源仍需观察。
+[基线资源](https://github.com/ForceMind/Linko/actions/runs/43123212220) ·
+[试验资源](https://github.com/ForceMind/Linko/actions/runs/43123965980) ·
+[试验截图及 CI](https://github.com/ForceMind/Linko/actions/runs/43123965950)
+
+### 原生捕获模块拆分
+
+F14 将配对账本和 `HookState` 先后移入独立模块。两次分别通过
+[账本 CI](https://github.com/ForceMind/Linko/actions/runs/43112553592)和
+[`HookState` CI](https://github.com/ForceMind/Linko/actions/runs/43138743507)。
+原生逻辑通过现有配对、恢复和平台回归。F19 的系统显示与光标查询成本及 F20 的
+macOS 循环唤醒成本仍需真实输入测量。
+
+### 集成 `244fad7` 资源复核
+
+[两平台资源检查](https://github.com/ForceMind/Linko/actions/runs/43139144851)通过。
+180 秒空身份／已有身份峰值 RSS 分别为 macOS 108.641／108.625 MiB、
+Ubuntu 140.281／140.262 MiB，观测到的最大暖机后增长为 240 KiB。
+门槛沿用峰值 512 MiB、增长 64 MiB。
+
+macOS 可见窗口的 NoNative 仅通信约 30 秒，GUI 平均 CPU 1.232%、峰值 RSS
+110.344 MiB。原始对照为 0.764%、119.078 MiB。本次报告仅代表隔离短测。
+
+### 减少界面动效
+
+[三平台 CI 与隔离截图](https://github.com/ForceMind/Linko/actions/runs/43139145128)
+通过。标准和紧凑设置页都可见“减少界面动效”。现有回归对比默认与开启减少动效后
+的添加电脑、启动确认、停止协同和布局修改，操作结果一致。设置保存在桌面偏好中。
+真实 Windows/macOS 外观与键盘可访问性留到集中验收。
+
+### Windows CLI 启动栈
+
+[Windows 无设备探测](https://github.com/ForceMind/Linko/actions/runs/43146799475/job/130946399000)
+在 `--version` 复现调试版主线程栈溢出。此前配对测试卡在子进程进入监听前。
+解析命令后按实际子命令分配 Future，副屏确认只在显式启用时分配，原生恢复与原测试期限保留。
+[Windows 启动与配对回归](https://github.com/ForceMind/Linko/actions/runs/43148511574/job/130951925339)
+通过 `--version` 和 `cargo test --workspace --locked` 的实际配对子进程用例。
+副屏独立分支的回移版 `9371022` 也通过[完整 CI](https://github.com/ForceMind/Linko/actions/runs/43151157745)。
+
+### 集成 `6debc15` 的同源包与资源复核
+
+[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43149399517)及
+[两平台资源检查](https://github.com/ForceMind/Linko/actions/runs/43149399520)通过。
+下载了 `2026.11.12-1136` 的 Windows amd64 和 macOS arm64 包。两个包的来源清单
+均指向审阅提交 `6debc15` 和检出树 `bb506705c7798c9f5b86b768914d9cad05c67a29`。
+两个内层 ZIP 的 SHA-256 分别与各自发布的校验文件一致。
+
+180 秒空身份／已有身份峰值 RSS 分别为 macOS 107.891／107.672 MiB、
+Ubuntu 142.734／142.047 MiB。观测到的最大暖机后增长为 304 KiB。
+峰值门槛 512 MiB，增长门槛 64 MiB。macOS 可见窗口的 NoNative 仅通信约 30.13 秒，
+GUI 平均 CPU 1.626%、峰值 RSS 109.531 MiB。原始对照为 0.764%、119.078 MiB。
+这些数值来自隔离 CI 短测。
+
+### 显示器变化与键盘取消
+
+本机布局变化或现有布局无法核对时，当前原生会话进入原有释放和恢复流程。
+布局的增删、主屏变更、位置、缩放和旋转回归已通过
+[安全退出 CI](https://github.com/ForceMind/Linko/actions/runs/43152806734)。
+已启用自动重连的主屏会话只在清理确认后重连原有证书所绑定的电脑，开始新的捕获前
+重新核对布局。再次自动跨边前要求光标先离开切换边，沿两块本机屏幕的共用边移动不算离开。
+显式副屏需要重新确认。[主屏重建 CI](https://github.com/ForceMind/Linko/actions/runs/43154571778)
+覆盖重连条件、共用边和边缘重新武装，热插拔仍待实际设备验证。
+
+安全确认窗和旧版添加向导支持 Esc 取消，未提交的键鼠确认随窗口清除。
+关闭恢复详情保留恢复阻止状态，`Ctrl+Alt+Esc` 继续执行紧急停止。
+配对面板继续使用原有取消流程。[键盘取消 CI](https://github.com/ForceMind/Linko/actions/runs/43153704868)
+
+### 集成 `8a3d32c` 的两端包与资源复核
+
+`2026.11.12-1226` 的 Windows amd64 和 macOS arm64 产物均已下载核验。两包的
+来源清单对应审阅提交 `8a3d32c` 和检出树 `cf312014ba831f7a667b9c55c6e16a6f81fb9789`，
+内层 ZIP SHA-256 与各自校验文件一致。[三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43154782953)
+
+180 秒空身份／已有身份峰值 RSS 分别为 macOS 107.891／107.750 MiB、
+Ubuntu 141.801／141.832 MiB。最大暖机后增长 272 KiB，门槛仍为 512 MiB 和 64 MiB。
+macOS 约 30 秒的可见窗口 NoNative 测量为平均 CPU 1.398%、峰值 RSS 109.406 MiB，
+原始对照为 0.764%、119.078 MiB。[两平台资源检查](https://github.com/ForceMind/Linko/actions/runs/43154782934)
+
+### 分段发送与接收确认
+
+`probe-route` 按当前屏幕快照和版本化分段布局选择唯一证书，使用 v5 可靠流核对该电脑。
+三身份回环覆盖相邻分段、共用边屏蔽、旧快照、错误证书、离线目标和重叠配置。
+[分段认证探测 CI](https://github.com/ForceMind/Linko/actions/runs/43158320271)
+
+原生双机与串行监听在正常结束且确认本机输入已恢复时，使用同一 QUIC 连接发出正常
+关闭回执。隔离回环检查恢复成功、恢复未确认、异常和仅诊断状态对应的关闭说明。
+[原生清理确认 CI](https://github.com/ForceMind/Linko/actions/runs/43159083704)
+
+原生 `--remote-entry-edge` 独立选择另一台的进入边，支持正交出入边。自动回程沿进入边，
+本机恢复仍沿本机出边。默认四边保持既有位移。[独立进出边 CI](https://github.com/ForceMind/Linko/actions/runs/43159714722)
+
+`connect-routes --native` 使用同一个原生捕获生命周期，按当前外沿分段逐次连接固定
+证书。目标能力在确认租约时发布，回程归还到原出发显示器。普通关闭、超时或不匹配的
+回执会阻止继续发送。分段角点同时匹配两条路由时保留本机控制。
+[捕获 CI](https://github.com/ForceMind/Linko/actions/runs/43163016016)覆盖能力替换和既有捕获代次。
+[发送 CI](https://github.com/ForceMind/Linko/actions/runs/43164449827)的三身份隔离回环检查
+释放报文、两种可靠流结束顺序、损坏帧和同连接回执。该回环使用模拟的恢复终态。
+物理三机切换、混合 DPI、真实按键归属、屏幕热插拔及缺失回执时的设备行为由 #3/C06 验收。
+
+分段发送可按目标请求接收端已选副屏。预留绑定到当前输入连接、固定证书、租约、方向和
+位置。拒绝时保持本机控制。隔离回环检查确认后发送接管请求以及拒绝时无请求。
+[分段副屏 CI](https://github.com/ForceMind/Linko/actions/runs/43167517220)
+
+桌面编辑器可维护多个核验过的目标、选本机屏幕、分别设置两端边沿范围，并导出 CLI
+布局文件。新增回归覆盖重叠拒绝、导出保留已有文件、证书替换拒绝及固定指纹保留。
+[分段编辑 CI](https://github.com/ForceMind/Linko/actions/runs/43170772848)
+桌面分段发送沿用权限确认、停止与恢复终态。工作进程在捕获前重新核对确认过的草稿、
+本机身份和每台目标的证书指纹。回归覆盖草稿替换拒绝、启动前停止和分段待机呈现。
+[工作进程草稿](https://github.com/ForceMind/Linko/pull/258) · [桌面启动草稿](https://github.com/ForceMind/Linko/pull/259)
+Windows/macOS 实际编辑、物理切换和副屏定位待验收。
+
+### 本机光标定位与拖尾
+
+Windows/macOS 常规设置提供「定位光标」和默认关闭的「光标拖尾」。定位环保持 900 毫秒，
+拖尾只保留最近 300 毫秒、最多 10 个采样。减少动效时使用静态定位。远控、恢复、隐藏
+窗口时停止绘制。覆盖层通过现有平台接口读取本机光标，采样在 GUI 工作线程执行。
+[光标草稿](https://github.com/ForceMind/Linko/pull/260)的回归覆盖默认值、过期、旧视口失效、
+负坐标换算与非激活穿透配置。真机检查混合 DPI、光标跨屏、点击穿透、透明效果和焦点。
+
+### 本机分段布局投影
+
+从分段编辑器打开独立投影窗口，按真实本机几何绘制屏幕与出边范围。拖动结束只调整
+内存预览中的本机出边、屏幕和范围。保存前再次读取屏幕，核对原草稿版本并走既有
+冲突校验与存储锁。取消或关闭投影会丢弃预览。
+[投影草稿](https://github.com/ForceMind/Linko/pull/261)的回归覆盖共享边、重叠、角点、负坐标、
+草稿与屏幕变化，以及模拟鼠标事件下的拖动。真实投影位置和混合 DPI 留到集中验收。
+
+### 剪贴板接收后的本机拖放与 Xorg 恢复回执
+
+在剪贴板接收页选择「导入并准备拖放」后，成功导入的文字或 PNG 可从该页拖入本机应用。
+离开页面、准备期间失焦、配对变化、进入键鼠会话或 60 秒到期会撤下待拖内容。
+三平台 CI 覆盖文字和 PNG 回环、剪贴板变化、停止，以及 Windows/macOS 的原生适配器构建
+和 GUI 状态回归。实际应用投递和从源应用按住后跨屏仍是独立验收及开发项。
+[剪贴板本机拖放 CI](https://github.com/ForceMind/Linko/actions/runs/43204727378)
+
+Xorg 接收端确认本机清理后，沿用固定证书连接上的 v5 恢复回执。隔离 Xvfb 使用真实
+回环连接覆盖申请、授权、左键按下、心跳、正常释放和协议错误结束。协议错误时不报告恢复确认。
+真实 Xorg 设备仍待验收。
+[Xorg 隔离回执测试](https://github.com/ForceMind/Linko/actions/runs/43205863741/job/131140727017)
+
+### Xorg 主动指针发送
+
+显式启动 `send-x11` 后，只有从屏幕内部用相对指针向指定外沿推动，且固定证书
+的接收端确认 v5 租约，才会限制本机指针并开始发送。回到接收端的进入边会提交回程
+位置，缺少续期、连接结束或本机活动会释放指针。一次命令执行一次会话。
+
+固定证书回环覆盖授权前无接管、发出相对移动和同连接的恢复回执。隔离 Xvfb 覆盖
+发送与接收所有者互斥、合成移动不会触发发送、失去续期后解除限制、右键按下与抬起
+均交回本机。实际双机跨边、热插拔和不同鼠标留到集中验收。
+[Xorg 主动发送 CI](https://github.com/ForceMind/Linko/actions/runs/43212585535/job/131163680796)
+
+### Xorg 鼠标按钮与双轴滚轮发送
+
+`send-x11` 可分别开启三个标准鼠标按钮和双轴滚轮。接收端许可与发送端选择均匹配，
+且 XInput2 原始事件能和当前冻结的本机按钮对应时，才在现有 v5 可靠流发送对应输入。
+滚轮的每个有效步只提交一次。停止发送时若仍按住已经截获的按钮，原所有者等到抬起
+再归还本机指针。
+
+固定证书回环覆盖按钮按下、滚轮、按钮抬起、回程位置和恢复回执的顺序。Xvfb 覆盖
+合成事件仍走本机、已截获右键的抬起由原所有者收尾，以及随后新的右键操作正常到达
+本机。物理鼠标、驱动产生的滚轮和双机接管待集中验收。
+[Xorg 按钮和滚轮 CI](https://github.com/ForceMind/Linko/actions/runs/43218395557/job/131183401615)
+
+### Xorg 键盘发送
+
+`send-x11 --allow-keyboard-capture` 在现有 v5 租约中发送双方支持的 XKB 物理键位。
+键盘沿用当前鼠标发送所有者。XKB 物理键位表变化会停止转发，已经截获的按下仍由
+原所有者收尾。长按中的重复按下由源端消化，Ctrl+Alt+Esc 结束远程发送。
+
+固定证书回环覆盖修饰键可靠投递、按住修饰键经过回程边、抬起后提交回程位置。
+隔离 Xvfb 覆盖合成来源拒绝、按住键时的重复判定、紧急组合键决策、修饰键释放及
+归还后新键对到达本机。真实布局切换、长按、锁定键、紧急恢复和双机接管待统一验收。
+[Xorg 键盘发送 CI](https://github.com/ForceMind/Linko/actions/runs/43226579990/job/131211201534)
+
+### Wayland 指针接收
+
+`listen-wayland` 请求 RemoteDesktop 指针访问，并在合成器提供的 EIS 区域内接收
+固定证书来源的 v5 指针租约。按钮和双轴滚轮分别开启。系统撤权、设备或区域拓扑
+变化及租约结束会停止提交。正常清理释放本会话提交的按钮，并在 EIS 往返确认后报告恢复。
+
+CI 覆盖本地命令许可、区域歧义、按钮释放计划、滚轮方向和幅度、固定证书回环与模拟
+portal 撤权。真实 RemoteDesktop 对话框、EIS 设备交付、区域映射、撤权后的实际恢复
+留到合成器验收。
+[Wayland 指针接收 CI](https://github.com/ForceMind/Linko/actions/runs/43234093393/job/131236722896)
+
+### Wayland 键盘接收
+
+`listen-wayland --allow-keyboard` 随指针租约显式申请键盘许可。只有合成器
+给出已就绪的键盘设备才声明受支持的 HID 物理键位。设备变更使当前租约结束。
+正常清理仅释放本会话提交的按下，EIS 确认往返后再向发送端回报恢复。
+
+CI 覆盖有限且互不重叠的 evdev 键码、键盘设备选择、未获授权时拒绝、固定证书
+回环中的修饰键对及释放账本。实际合成器的设备授权、输入布局和按键释放待验收。
+[Wayland 键盘接收 CI](https://github.com/ForceMind/Linko/actions/runs/43239484644/job/131255702553)
+
+### Wayland 主动发送
+
+`send-wayland` 请求系统 InputCapture，在合成器暴露的边沿建立屏障，并只发送
+与该次门户激活编号一致、在固定证书 v5 租约下接纳的完整 EIS 帧。按钮、键盘和
+离散滚轮分别选择。回程、屏幕变化、撤权或断线结束此次捕获。屏幕变化后通过下一次
+显式启动取得新区域。
+
+CI 覆盖有符号区域和共享边屏蔽、无效激活与过时帧、修饰键对、滚轮步进及固定证书
+回环回程。真实合成器上的许可、屏障、回程、撤权和多屏变化留到统一验收。
+Wayland 接收端的物理输入自动接管待开发。
+[Wayland 主动发送 CI](https://github.com/ForceMind/Linko/actions/runs/43246056361/job/131278878302)
+
+### 源应用边沿文件投递
+
+Windows 和 macOS 文件页可显式开启一次边沿发送。源应用把单个文件放到接收条后，
+Linko 重新检查配对身份、地址和屏幕布局，再通过现有文件连接发起请求。接收端仍需
+对该文件单独确认。切出文件页、最小化、布局或配对变化、停止和超时都会撤回接收条。
+
+Windows 和 macOS CI 覆盖暴露边沿、负坐标、绝对路径、单文件、单次投递及授权失效。
+实际 Finder／Explorer 拖放、屏幕缩放和目标应用行为待统一验收。按住同一个拖动跨机
+进入目标应用仍待开发。
+[边沿文件投递 CI](https://github.com/ForceMind/Linko/actions/runs/43253654318)
+
+### Wayland 发送集成候选资源数据
+
+提交 `e84f8af` 的 macOS 和 Ubuntu 两种 180 秒空闲场景通过 512 MiB 峰值与 64 MiB
+增长门槛。macOS 的最大峰值为 108.75 MiB，预热后最大增长 0.22 MiB。Ubuntu 的
+最大峰值为 142.82 MiB，采样未观察到预热后增长。
+
+macOS 普通窗口 NoNative 仅通信约 30.09 秒，GUI 平均单核 CPU 为 0.997%，峰值
+RSS 为 110.609 MiB。对照同类基线 0.764% 和 119.078 MiB，本次 CPU 高约 0.233 个
+百分点，峰值 RSS 低 8.469 MiB。数据来自隔离 CI 单次短测。
+[资源作业](https://github.com/ForceMind/Linko/actions/runs/43247295714)
+
+### 边沿投递集成候选资源数据
+
+提交 `fb2d4d8` 的 Windows、macOS 与 Linux 包均来自同一检出树 `486bc79`，版本
+`2026.11.13-0015`。CI 校验了包内来源、路径、架构及 SHA-256。macOS 和 Ubuntu
+空闲场景的最大峰值 RSS 为 108.188 和 142.188 MiB，最大预热后增长为 0.234 MiB。
+峰值和增长门槛分别为 512 MiB 和 64 MiB。macOS 普通窗口 NoNative 仅通信 30.13 秒
+测得 GUI 平均单核 CPU 为 1.294%，峰值 RSS 为 109.938 MiB。与 0.764%、119.078 MiB
+基线相比，CPU 高约 0.530 个百分点，峰值 RSS 低 9.140 MiB。保留为单次短测数据。
+[三平台打包](https://github.com/ForceMind/Linko/actions/runs/43256660925) ·
+[资源作业](https://github.com/ForceMind/Linko/actions/runs/43256660418)
+
+### macOS 窗口内触控板检测
+
+在手势实验页显式开启检测并将指针留在画布内，可观察窗口收到的缩放、旋转和横纵向
+触控表面滚动。只保留事件类型，失焦、离开实验页、停止检测或开始设备会话即清除。
+Windows 和 Ubuntu CI 已通过事件分类回归，macOS 已通过发布构建和资源作业。关闭
+条件在集成提交 `674001c` 的 macOS 专项回归通过。真实触控板、阶段及跨机注入留待
+进一步验证。
+[窗口内检测 CI](https://github.com/ForceMind/Linko/actions/runs/43254784908) ·
+[macOS 集成回归](https://github.com/ForceMind/Linko/actions/runs/43260951906/job/131331773043)
+
+版本 `2026.11.13-0038` 的三平台包来自同一检出树 `aef2590`，来源和 SHA-256 已核对。
+macOS 和 Ubuntu 的 180 秒空闲峰值 RSS 分别为 108.891 和 142.441 MiB，最大暖机后
+增长 0.281 MiB。门槛为 512 MiB 和 64 MiB。macOS 普通窗口 NoNative 仅通信 30.03 秒
+测得平均单核 CPU 1.532%、峰值 RSS 110.750 MiB。同口径基线为 0.764%、119.078 MiB。
+[三平台打包](https://github.com/ForceMind/Linko/actions/runs/43260951906) ·
+[资源作业](https://github.com/ForceMind/Linko/actions/runs/43260952631)
+
+### macOS 接收文件的本机文件承诺
+
+从文件页选择拖出已校验文件副本后，AppKit 在放置结束后调用操作队列写入目标 URL。
+复制工作器从保留的接收句柄逐块核对内容，写入临时文件，再原子添加目标文件。成功
+回执要求原生放置和写入均完成。已有目标文件和接收原件均保留。文件引用入口可用于
+兼容只接收文件 URL 的目标应用。
+
+macOS 和 Ubuntu 工作区回归覆盖目标发布、同名竞争、取消清理和源文件变化。Finder、
+其他目标应用、慢写入、目标文件系统支持及放置结果留到集中验收。
+[文件承诺 CI](https://github.com/ForceMind/Linko/actions/runs/43262386201)
+
+### Windows 接收文件的 OLE 内容流
+
+Windows 文件页可把已校验接收文件拖出为只读文件流，也可拖出本机文件引用。OLE
+允许放置后才开放内容。文件读取交给工作器，从保留的接收句柄按分块摘要核对。
+取消、超时、读取失败和拖放返回会撤销旧流，复制状态需要 OLE 回执与完整读取。
+Windows 和 macOS 的文件入口均在启动原生拖放前重读本机身份与已登记证书，并与
+准备时的双方指纹比较。配对配置不变时，替换实际身份或证书也会使旧准备失效。
+
+Windows runner 的 COM 回归覆盖文件描述、放下前拒绝、复制到流末尾和撤销后的
+保留流。工作区回归核对跨分块读取、越界及源文件变化。Explorer 和其他真实目标应用
+的同步读取、异步兼容性及原文件安全留到集中验收。
+[Windows 专项 CI](https://github.com/ForceMind/Linko/actions/runs/43271043775/job/131367320326)
+
+### 实际便携包升级与回滚
+
+独立草稿 `ecfaf1e` 在 Windows 和 Ubuntu runner 使用 `2026.11.13-0054` 成品作为
+旧版，验证 `2026.11.13-0140` 成品的暂存、激活、入口回读和 worker 启动。修改旧版
+暂存文件后拒绝回滚并保留当前选择，恢复原文件后可回到旧版并启动同包 worker。
+macOS 及最新候选的结果以各自同源 CI 作业为准，实际安装、系统授权和用户环境更新
+继续由集中验收记录。
+[Windows 更新演练](https://github.com/ForceMind/Linko/actions/runs/43271896015/job/131380707452) ·
+[Ubuntu 更新演练](https://github.com/ForceMind/Linko/actions/runs/43271896015/job/131380707631)
+
+集成提交 `28b1ab3` 的三平台真实成品已验证从 `2026.11.13-0200` 切换到
+`2026.11.13-0204`，拒绝篡改旧版并恢复原版。macOS 与 Ubuntu 的 180 秒空闲峰值 RSS
+分别为 99.312 和 142.383 MiB，最大预热后增长为 0.234 MiB。峰值和增长门槛仍为
+512 MiB 和 64 MiB。macOS 同口径 NoNative 普通窗口约 30.17 秒的平均单核 CPU 为
+1.094%，峰值 RSS 为 101.250 MiB，基线为 0.764% 和 119.078 MiB。
+[成品更新](https://github.com/ForceMind/Linko/actions/runs/43276115573) ·
+[资源复验](https://github.com/ForceMind/Linko/actions/runs/43276115619)
+
+### 文件拖放票据
+
+原生文件复制准备使用已认证文件连接的本机随机值、发送端证书摘要及传输编号。
+文件校验成功后签发票据，关联本次操作和准备时的显示器布局。离开文件页、准备期间
+失焦、布局变化或停止会结束准备。提交和回执时复查本机身份、配对证书及布局，无法
+确认结果时要求核对目标应用后再准备。
+
+草稿的工作区回归覆盖真实互认证文件传输、布局变化、旧回执和明确撤销。Windows 和
+macOS 均保留文件引用与文件副本入口。持续跨机传递持键仍待和 v5 输入租约联动。
+[文件票据 CI](https://github.com/ForceMind/Linko/actions/runs/43285201166)
+
+### 文件与 v5 输入租约的关联
+
+真实互认证回环完成文件校验、接收端一次性预约，以及原有 v5 `Acquire/Granted`。
+另一条文件连接即使复用传输编号、另一条 v5 连接即使证书相同，都无法取得预约。
+错误租约不能领取，正确租约成功领取后同一票据无法再次领取。
+
+此轮验证覆盖传输层和本机票据，捕获 worker、源应用持键接棒和目标窗口的真实交付
+仍需接线。普通文件、布局协商和 v5 输入保持原有格式。
+[文件租约回归](https://github.com/ForceMind/Linko/actions/runs/43296870742)
+
+### 接收 worker 的文件预约
+
+已获本机输入许可的桌面 worker 可在继承的私有管道登记文件预约。GUI 可保留已准备
+的文件句柄，worker 使用本次会话代次和请求号核对用途受限的预约证明。只有原有 v5
+授权成功的匹配租约回报领取。预约被撤销、拒绝、过期或换连接后不能领取。私有回报
+不会进入 GUI 诊断记录。
+
+三平台 CI 使用真实互认证文件传输、预约连接和 NoNative v5 会话，验证匹配租约领取、
+本机撤销后普通输入仍可独立授予、旧代次请求拒绝以及诊断隔离。
+[接收 worker 回归](https://github.com/ForceMind/Linko/actions/runs/43306299990)
+
+### 接收文件页的一次性接棒批准
+
+Windows 和 macOS 文件页可为已校验文件准备一次跨机接收。本机在原生键鼠开启前批准
+文件，然后走既有键鼠确认。文件句柄保留在 GUI，继承管道只向当前 worker 登记原文件
+接收地址和一次性证明。端口以匹配的 worker 回执为准。撤销、失焦、离开文件页、布局
+变化、工作进程更换和输入归还后，GUI 清除本次准备及已匹配的旧回执。
+
+CI 覆盖本机批准门槛、真实私有管道写入、旧回执和输入归还。此阶段的领取状态用于确认
+接收端预约。源端持键跨屏和目标应用的原生复制仍需接线及真机验收。
+[文件页专项 CI](https://github.com/ForceMind/Linko/actions/runs/43314382239)
+
+### 发送 worker 的持键文件预约
+
+本机私有管道可登记已认证发送的文件。边缘位置、预约与现有原生捕获中的同一次左键
+按住绑定。发送 worker 先取得接收 worker 对当前文件及 v5 租约的领取证明，再提交
+本机捕获并走原有可靠流转发左键按下和释放。本机系统仍收到原物理左键的释放。
+
+三平台工作区测试覆盖实际互认证预约。接收端撤销后，即使普通 v5 输入获得授权，
+发送端也拿不到领取证明。Windows 与 macOS 合成捕获测试覆盖松开再按的旧票据、
+其他物理输入中断，以及原始释放同时到达本机和接棒队列。发送 GUI 发起和目标应用
+启动原生拖放仍待接线，持续双机拖放待真机验收。
+[发送 worker CI](https://github.com/ForceMind/Linko/actions/runs/43321263472)
+
+### 接收文件页确认就绪
+
+匹配现有 v5 租约后，接收 worker 保留文件领取证明并通知本机文件页。文件页检查当前
+配对、布局、焦点、独立批准、文件票据和租约，再用继承管道确认就绪。worker 核对
+会话、请求及仍有效的租约后才发出证明。撤销、提前释放或过期会收回未发出的证明。
+
+三平台工作区测试覆盖真实互认证传输和预约连接、错误和重复确认、匹配前后撤销、
+释放及过期。Windows 和 macOS 回归还通过实际子进程管道核对就绪命令及租约失效。
+本批接通界面就绪确认。发送界面和接收端启动目标应用原生拖放仍待开发。
+[接收就绪 CI](https://github.com/ForceMind/Linko/actions/runs/43326268972)
+
+### 发送文件页发起一次持键接棒
+
+Windows 和 macOS 文件页可显式发送并准备一次跨机拖动。仅已认证接收端提交的文件
+才保留一次性回执。当前原生键鼠 worker 确认会话后，本机用户在文件页按住拖动入口，
+worker 核对仍按住的原始左键、当前配对和已准备文件，再预约现有 v5 租约。按键提前
+松开、过期、离页、停止或撤销都会结束准备。发送页的释放回执表示输入已转发，
+目标应用交付仍须由接收端确认。
+
+三平台工作区测试覆盖真实已校验文件回执。Windows 和 macOS 测试通过实际子进程管道
+核对显式按住后才登记一次、拒绝旧会话及匹配释放。接收端启动目标应用原生拖放仍待
+接线，双机物理拖放留待集中验收。
+[发送文件页 CI](https://github.com/ForceMind/Linko/actions/runs/43332715847)
+
+### 接收 worker 的原生拖放输入顺序
+
+接收 worker 可为当前文件租约接受本机界面指定的起点。首个左键按下送到本机起点。
+界面确认原生会话启动前，拖动位移不会应用。正常左键释放先通知接收界面，收到
+同一租约的确认后才经现有注入路径提交。提前松开、撤销、租约失效和超时交由恢复
+路径处理。落点和文件接棒状态仅用于现有继承管道和 worker 内部状态。
+
+三平台工作区测试使用实际互认证文件与预约连接及 NoNative v5 会话验证错租约、
+启动确认、释放确认、提前松开和撤销。接收界面的窗口定位、原生会话启动和正常放下
+时的数据开放仍需接入 OLE 和 AppKit，并在真机验收。
+
+[接收输入回归](https://github.com/ForceMind/Linko/actions/runs/43336893687)
+
+### 接收端原生文件拖放
+
+Windows 和 macOS 可从本机文件页已批准的拖放区域启动复制会话。接收页须保持在
+所选接收屏幕，拖放起点须完整可见。接收端用当前租约确认按下、启动和正常释放。
+Windows 的 OLE 文件流和 macOS 的文件承诺写入以正常释放回执为准。提前松开、
+会话撤销和输入恢复不会开放文件内容。源文件与已校验的接收副本保留。
+
+CI 验证互认证预约、租约、真实子进程管道、OLE 内容流的正常释放门槛，以及
+Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交接、失焦恢复和 DPI
+须使用双机候选验收。先在接收端文件页准备跨机接收并露出拖放起点，再在发送端
+按住拖向切换边沿。确认可进入 Explorer 或 Finder、释放完成复制，重复时分别验证
+提前松开、撤销、断网和本机接管。文本、PNG 和任意源应用的持续跨机拖动仍待接入。
+
+[原生拖放 CI](https://github.com/ForceMind/Linko/actions/runs/43342750606)
+
+## 集中验收清单
+
+当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
+审阅提交 `d4c872b` 的 [三平台 CI](https://github.com/ForceMind/Linko/actions/runs/43123212190) 已通过，包含 F13、F22、macOS 小数滚轮、多证书通信诊断和两端系统音频 CLI。随后增加了 IPv6 配对发现、X11 键位以及本机复制拖放适配器；更新后的集成提交使用各自的 Actions 检查。
+
+| 范围 | 已验证的证据 | 集中验收与开发缺口 |
+| --- | --- | --- |
+| 双向键鼠与恢复 | 运动、滚轮、按键映射和恢复回归覆盖于集成 CI；[macOS 小数滚轮 SDK 核对](https://github.com/ForceMind/Linko/actions/runs/43112306563) | 先跑 Mac→Windows，再跑 Windows→Mac。四边、回程、按键及修饰键、长按与拖拽、物理接管、滚轮、光标隐藏、睡眠、断网、退出和撤权均待真机。F03、F07 和 F12 需要两端诊断才能定位。 |
+| 配对、发现、权限和后台 | [IPv6 短码配对发现](https://github.com/ForceMind/Linko/actions/runs/43121334625)；[隔离 X11 窗口与流程](https://github.com/ForceMind/Linko/actions/runs/43123212190/artifacts/13901353937) | Windows/macOS 实际配对提示、IPv6 多网卡与作用域、关闭到托盘、从托盘停止、输入权限变化和键盘可访问性待验。 |
+| 本机手势 | [Windows 受控库工作器](https://github.com/ForceMind/Linko/actions/runs/43091867388)；隔离窗口录制、预览与规则回归；[macOS 窗口内检测候选](https://github.com/ForceMind/Linko/pull/271) | 触控板事件类型待真实设备确认。G1 全局捕获和动作保持关闭。G2 保留设计，远程动作和脚本执行不在本次候选能力内。 |
+| 剪贴板与文件 | [双工作器文本及文件回归](https://github.com/ForceMind/Linko/actions/runs/43102482924)；[显式 PNG 导入和系统后端](https://github.com/ForceMind/Linko/actions/runs/43107244245) | 双向测试文本、PNG、同意／拒绝、撤权和外部剪贴板变化；文件测试续传、取消、历史、同名文件及文件负载下的键鼠。 |
+| 多台电脑、多屏与 Linux | [多证书串行原生监听](https://github.com/ForceMind/Linko/actions/runs/43136235340)、[副屏预留](https://github.com/ForceMind/Linko/actions/runs/43125086927)、[Xorg 指针、键钮和双轴滚轮接收](https://github.com/ForceMind/Linko/actions/runs/43138051348)通过三平台 CI。[Xvfb 指针、键钮释放及滚轮按钮对](https://github.com/ForceMind/Linko/actions/runs/43138051348/job/130918045948)已验隔离合成。 | [主屏方向档案](https://github.com/ForceMind/Linko/actions/runs/43131249465)及[本机副屏选择](https://github.com/ForceMind/Linko/actions/runs/43137143430)通过 CI。[外沿分段发送](https://github.com/ForceMind/Linko/pull/254)可用[桌面导出的布局](https://github.com/ForceMind/Linko/pull/257)和[按目标选用的副屏预留](https://github.com/ForceMind/Linko/pull/256)。物理分段切换、副屏定位和热插拔待验收。本机光标定位与拖尾待实际混合 DPI、透明和焦点验收。本机布局投影待实际焦点与屏幕位置验收。Xorg 指针、键盘、鼠标按钮和双轴滚轮主动发送已有隔离验证。Wayland 键鼠收发待真实合成器验收，接收端物理接管和完整触摸板手势仍待开发。 |
+| 原生拖放 | [Windows 适配器](https://github.com/ForceMind/Linko/actions/runs/43121324256)、[macOS 适配器](https://github.com/ForceMind/Linko/actions/runs/43121330845)与[文件页本机复制拖放](https://github.com/ForceMind/Linko/actions/runs/43131249334)通过 CI。Windows [源应用边沿文件投递回归](https://github.com/ForceMind/Linko/actions/runs/43253654318/job/131305962814)已通过。 | Finder、Explorer 的边沿文件投递待真机验收。源应用按住后连续跨机进入目标应用的文字、PNG 和文件拖放仍待开发。实际验证复制、取消、失焦和原文件安全。 |
+| 系统音频 | [Windows WASAPI 与 macOS ScreenCaptureKit](https://github.com/ForceMind/Linko/actions/runs/43119118577)完成编译和会话回归；`d4c872b` 的集成已复验 | [桌面独立授权](https://github.com/ForceMind/Linko/actions/runs/43125086706)和[本机输出选择](https://github.com/ForceMind/Linko/actions/runs/43127954327)已通过各自的三平台 CI。[四来源播放和队列隔离](https://github.com/ForceMind/Linko/actions/runs/43135410348)及[两端独立麦克风 CLI](https://github.com/ForceMind/Linko/actions/runs/43132393131)也通过三平台 CI。真实设备、录制提示、断线静音、输出切换及持续音质待验；[桌面麦克风入口](https://github.com/ForceMind/Linko/actions/runs/43137144867)通过三平台 CI，虚拟音频设备仍待开发与授权。 |
+| 便携包、安装和回滚 | [同源与校验](https://github.com/ForceMind/Linko/actions/runs/43110809035)；[隔离暂存、切换和回滚](https://github.com/ForceMind/Linko/actions/runs/43110821243) | 最终统一候选须核对两端包的版本、检出树与 SHA-256。真实安装、升级、回滚及长期资源观察待验。正式签名、公证、开机启动、系统服务、官网部署和发布按项目授权处理。 |
+
+### 物理回报
+
+- 在同一个最终候选版本记录 Windows 与 macOS 的系统版本、应用版本、屏幕排列和 DPI、输入设备接入方式。#3/C06 的蓝牙、USB 和 DPI 分别由实际设备确认。
+- Mac→Windows 记录跨屏后光标是否移动、点击和滚动是否生效、Mac 光标是否隐藏、普通返回与紧急停止，以及是否出现 `native receive service: Timeout`。Windows→Mac 用同样步骤测量，方向分开记录。
+- 每次故障带回两端对应时段的 `KVM-DIAG/5` 数值摘要和原始错误行。优先对齐跨屏提交、移动收发、滚轮来源与注入阶段，保持按键、剪贴板和文件内容在本机。
+- 先跑基础双向键鼠、恢复和权限，再跑数据与音频。多机和多屏以 [CLI 说明](CLI.md) 和最终候选实际公开的入口为准。按开发计划记录双向 500 次切换、关键恢复场景 100 轮、8 小时预览与 24 小时正式候选耐久的执行范围。
+
+F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMind/Linko/pull/125)待决定。
+#3/C06 与历史故障 #10 保留待验证状态。Linux Xvfb、模拟输入、编译通过和 SDK 核对仅作为各自范围的证据。

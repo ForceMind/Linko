@@ -3,6 +3,7 @@ use anyhow::ensure;
 use std::{cell::RefCell, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::*,
+    Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO},
     System::Threading::GetCurrentThreadId,
     UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
@@ -501,6 +502,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                                 width: GetSystemMetrics(SM_CXSCREEN) as f64,
                                 height: GetSystemMetrics(SM_CYSCREEN) as f64,
                                 route,
+                                primary: s.gate.primary_for_position(route),
                             }
                         };
                         s.movement(event, route)
@@ -713,6 +715,52 @@ pub(super) fn receive_pointer(
     input.Anonymous.mi.dy = (y * 65535.0).round() as i32;
     submit_inputs(&[input])
 }
+pub(super) fn receive_on_display(
+    expected: display_layout::Display,
+    desktop: display_layout::Bounds,
+    placement: display_layout::Placement,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    let handle = expected.id.0 as usize as HMONITOR;
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..MONITORINFO::default()
+    };
+    // SAFETY: monitor information is written into a live struct on the
+    // existing DPI-aware worker. Stale handles fail the documented query.
+    if unsafe { GetMonitorInfoW(handle, &mut info) } == 0 {
+        return Err(NativeFailure::TargetLost);
+    }
+    let rect = info.rcMonitor;
+    let actual = display_layout::Bounds {
+        left: f64::from(rect.left),
+        top: f64::from(rect.top),
+        right: f64::from(rect.right),
+        bottom: f64::from(rect.bottom),
+    };
+    // SAFETY: these read only documented metrics, in the same DPI context.
+    let current_desktop = unsafe {
+        let left = f64::from(GetSystemMetrics(SM_XVIRTUALSCREEN));
+        let top = f64::from(GetSystemMetrics(SM_YVIRTUALSCREEN));
+        display_layout::Bounds {
+            left,
+            top,
+            right: left + f64::from(GetSystemMetrics(SM_CXVIRTUALSCREEN)),
+            bottom: top + f64::from(GetSystemMetrics(SM_CYVIRTUALSCREEN)),
+        }
+    };
+    if actual != expected.bounds || current_desktop != desktop {
+        return Err(NativeFailure::TargetLost);
+    }
+    let mut input = mouse_packet(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        0,
+    );
+    input.Anonymous.mi.dx = placement.virtual_absolute[0];
+    input.Anonymous.mi.dy = placement.virtual_absolute[1];
+    submit_inputs(&[input])
+}
+
 // Set-1 physical scan positions; E0 distinguishes keypad/navigation and modifiers.
 const KEYS: &[(u16, u16, bool)] = &[
     (0x04, 0x1e, false),
@@ -808,6 +856,18 @@ const KEYS: &[(u16, u16, bool)] = &[
     (0x62, 0x52, false),
     (0x63, 0x53, false),
     (0x64, 0x56, false),
+    (0x68, 0x64, false),
+    (0x69, 0x65, false),
+    (0x6a, 0x66, false),
+    (0x6b, 0x67, false),
+    (0x6c, 0x68, false),
+    (0x6d, 0x69, false),
+    (0x6e, 0x6a, false),
+    (0x6f, 0x6b, false),
+    (0x70, 0x6c, false),
+    (0x71, 0x6d, false),
+    (0x72, 0x6e, false),
+    (0x73, 0x76, false),
     (0xe0, 0x1d, false),
     (0xe1, 0x2a, false),
     (0xe2, 0x38, false),
@@ -828,6 +888,17 @@ fn from_scan(scan: u16, extended: bool) -> Option<u16> {
         .find(|k| k.1 == scan && k.2 == extended)
         .map(|k| k.0)
 }
+fn captured_usage(vk: u16, scan: u16, extended: bool) -> Option<u16> {
+    if vk == VK_PAUSE || vk == VK_SNAPSHOT {
+        None
+    } else if vk == VK_NUMLOCK {
+        Some(0x53)
+    } else {
+        // Scan 0x76 is also documented for the Japanese LANG5 usage.
+        from_scan(scan, extended).filter(|usage| *usage != 0x73 || vk == VK_F24)
+    }
+}
+
 const STARTUP_VK: u16 = 0x4000;
 #[cfg(test)]
 fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: bool) -> bool {
@@ -842,13 +913,7 @@ fn physical_key_routed(
     down: bool,
     route: CaptureRoute,
 ) -> bool {
-    let usage = if vk == VK_PAUSE || vk == VK_SNAPSHOT {
-        None
-    } else if vk == VK_NUMLOCK {
-        Some(0x53)
-    } else {
-        from_scan(scan, extended)
-    };
+    let usage = captured_usage(vk, scan, extended);
     if let Some(broker) = s.local_gestures.as_mut() {
         broker.clear_startup_key(STARTUP_VK | vk);
         // HookState's G1 branches use only the broker's fixed key bitset.
@@ -1101,6 +1166,27 @@ mod tests {
         assert_eq!(from_scan(0x1d, false), Some(0xe0));
         assert_eq!(from_scan(0x1d, true), Some(0xe4));
     }
+    #[test]
+    fn extended_function_keys_keep_scan_identity_and_balanced_release() {
+        let scans = [
+            0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x76,
+        ];
+        assert_eq!(captured_usage(VK_F24, 0x76, false), Some(0x73));
+        assert_eq!(captured_usage(VK_KANA, 0x76, false), None);
+        for (usage, scan) in (0x68..=0x73).zip(scans) {
+            assert_eq!(to_scan(usage), Some((scan, false)));
+            assert_eq!(from_scan(scan, false), Some(usage));
+            for down in [true, false] {
+                let (packets, count) = input_packets(Input::Key { usage, down }).unwrap();
+                assert_eq!(count, 1);
+                // SAFETY: the test supplied a keyboard input.
+                let key = unsafe { packets[0].Anonymous.ki };
+                assert_eq!(key.wScan, scan);
+                assert_eq!(key.dwFlags & KEYEVENTF_KEYUP != 0, !down);
+            }
+        }
+    }
+
     #[test]
     fn startup_side_button_hold_blocks_receiving_until_its_local_up() {
         for (button, vk) in [(4, VK_XBUTTON1), (5, VK_XBUTTON2)] {

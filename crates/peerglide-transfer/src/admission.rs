@@ -64,6 +64,33 @@ pub struct Inventory {
     pub terminal_records: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryState {
+    Reserved,
+    Staged,
+    PublicationUnconfirmed,
+}
+
+/// Local metadata from a user-selected receive directory. Never sent to a peer.
+pub struct HistoryEntry {
+    pub id: [u8; 16],
+    pub name: Option<String>,
+    pub size: u64,
+    pub state: HistoryState,
+}
+
+#[derive(Default)]
+pub struct History {
+    pub inventory: Inventory,
+    pub entries: Vec<HistoryEntry>,
+}
+
+struct Retained {
+    record: Reservation,
+    name: String,
+    state: HistoryState,
+}
+
 pub(crate) struct Ledger {
     root: PathBuf,
     lock: File,
@@ -89,28 +116,96 @@ fn bounded_read(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+fn open_lock(root: &Path, write: bool) -> io::Result<Option<File>> {
+    let path = root.join(".peerglide-manager.lock");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(invalid("invalid receive root lock"));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound && !write => return Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(write)
+        .create(write)
+        .truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock = options.open(path)?;
+    let locked = if write {
+        lock.try_lock()
+    } else {
+        lock.try_lock_shared()
+    };
+    locked.map_err(|_| invalid("receive root already managed"))?;
+    Ok(Some(lock))
+}
+
+/// Inspect a receive directory without creating locks, migrating data or
+/// inferring successful publication from the pre-publication marker.
+pub fn receive_history(root: &Path) -> io::Result<History> {
+    require_dir(root)?;
+    let root = fs::canonicalize(root)?;
+    let Some(lock) = open_lock(&root, false)? else {
+        return Ok(History::default());
+    };
+    let (ledger, retained) = Ledger::scan(&root, lock)?;
+    let combined = ledger.combined(&retained)?;
+    let reserved_bytes = combined.values().map(|record| record.bytes).sum();
+    let reservations = combined.len();
+    let mut details = BTreeMap::new();
+    for entry in retained {
+        details.insert(entry.record.key()?, entry);
+    }
+    let entries = combined
+        .into_iter()
+        .map(|(key, record)| {
+            let (name, state) = details
+                .remove(&key)
+                .map_or((None, HistoryState::Reserved), |entry| {
+                    (Some(entry.name), entry.state)
+                });
+            HistoryEntry {
+                id: record.binding.transfer_id,
+                size: record.bytes,
+                name,
+                state,
+            }
+        })
+        .collect();
+    Ok(History {
+        inventory: Inventory {
+            reserved_bytes,
+            reservations,
+            ..ledger.inventory
+        },
+        entries,
+    })
+}
+
 impl Ledger {
     pub(crate) fn open(root: &Path) -> io::Result<Self> {
         require_dir(root)?;
-        let path = root.join(".peerglide-manager.lock");
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) if !metadata.file_type().is_file() => {
-                return Err(invalid("invalid receive root lock"))
+        let lock = open_lock(root, true)?.ok_or_else(|| invalid("receive lock unavailable"))?;
+        let (mut ledger, retained) = Self::scan(root, lock)?;
+        // Validate the full inventory before persisting any legacy migration.
+        ledger.combined(&retained)?;
+        for entry in retained {
+            if !ledger.reservations.contains_key(&entry.record.key()?) {
+                ledger.persist(entry.record)?;
             }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
         }
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let lock = options.open(path)?;
-        lock.try_lock()
-            .map_err(|_| invalid("receive root already managed"))?;
+        Ok(ledger)
+    }
+
+    fn scan(root: &Path, lock: File) -> io::Result<(Self, Vec<Retained>)> {
         let mut ledger = Self {
             root: root.to_owned(),
             lock,
@@ -189,12 +284,24 @@ impl Ledger {
                 if legacy.len() >= super::manager::MAX_ATTEMPTS {
                     return Err(invalid("retained transfer limit"));
                 }
-                legacy.push(record);
+                legacy.push(Retained {
+                    record,
+                    name: receipt.manifest.name().to_owned(),
+                    state: if terminal_present {
+                        HistoryState::PublicationUnconfirmed
+                    } else {
+                        HistoryState::Staged
+                    },
+                });
             }
         }
-        // Validate the full inventory before persisting any legacy migration.
-        let mut combined = ledger.reservations.clone();
-        for record in &legacy {
+        Ok((ledger, legacy))
+    }
+
+    fn combined(&self, retained: &[Retained]) -> io::Result<BTreeMap<Digest, Reservation>> {
+        let mut combined = self.reservations.clone();
+        for entry in retained {
+            let record = &entry.record;
             if let Some(previous) = combined.insert(record.key()?, record.clone()) {
                 if previous != *record {
                     return Err(invalid("conflicting retained reservation"));
@@ -204,12 +311,7 @@ impl Ledger {
         if combined.len() > super::manager::MAX_ATTEMPTS {
             return Err(invalid("reservation limit"));
         }
-        for record in legacy {
-            if !ledger.reservations.contains_key(&record.key()?) {
-                ledger.persist(record)?;
-            }
-        }
-        Ok(ledger)
+        Ok(combined)
     }
 
     fn insert(&mut self, record: Reservation) -> io::Result<()> {

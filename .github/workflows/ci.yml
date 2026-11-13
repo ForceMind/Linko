@@ -25,6 +25,9 @@ jobs:
         run: cargo check -p peerglide-desktop --all-targets --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo build --workspace --locked
+      - name: Windows CLI startup before pairing tests
+        if: runner.os == 'Windows'
+        run: .\target\debug\peerglide.exe --version
       - run: cargo test --workspace --locked
       - name: Synthetic gesture corpus metrics (not human acceptance)
         run: cargo test -p peerglide-gestures --test corpus --locked -- --nocapture
@@ -72,10 +75,37 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 10
         run: bash tools/install_ci_gui_linux_deps.sh
+      - name: X11 pointer ownership on isolated Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" env LINKO_TEST_ISOLATED_X11=1 cargo test -p peerglide-platform --locked x11_activity::tests::isolated_xvfb_pointer_moves_only_after_local_admission -- --ignored --exact
+      - name: X11 authenticated recovery receipt on isolated Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" env LINKO_TEST_ISOLATED_X11=1 cargo test -p peerglide-desktop --locked x11_receive::tests::authenticated_release_confirms_x11_recovery_only_after_cleanup -- --ignored --exact
+      - name: X11 source pointer watchdog on isolated Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" env LINKO_TEST_ISOLATED_X11=1 cargo test -p peerglide-desktop --locked session::x11_source::tests::xorg_source_watchdog_releases_the_native_pointer_owner -- --ignored --exact
+      - name: X11 source button pair recovery on isolated Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" env LINKO_TEST_ISOLATED_X11=1 cargo test -p peerglide-platform --locked x11_activity::source::tests::xorg_drains_a_consumed_pair_without_replaying_its_release -- --ignored --exact
+      - name: X11 source keyboard recovery on isolated Linux display
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1024x768x24" env LINKO_TEST_ISOLATED_X11=1 cargo test -p peerglide-platform --locked x11_activity::source::keyboard::tests::xorg_keyboard_retires_captured_modifiers_and_restores_local_keys -- --ignored --exact
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: xvfb-run -a -s "-screen 0 1600x1000x24" python tools/gui_smoke.py
+        run: |
+          xvfb_log="$RUNNER_TEMP/linko-xvfb.log"
+          if ! xvfb-run -a -e "$xvfb_log" -s "-screen 0 1600x1000x24" python tools/gui_smoke.py; then
+            if [ -f "$xvfb_log" ]; then
+              tail -30 "$xvfb_log"
+            fi
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         if: always() && runner.os == 'Linux'
         with:
@@ -83,6 +113,12 @@ jobs:
           path: dist/peerglide-*.png
           if-no-files-found: error
       - run: python tools/package.py
+        env:
+          LINKO_REVIEW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify portable package source, checksum and executable architecture
+        run: python tools/verify_portable_package.py
+        env:
+          LINKO_REVIEW_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Verify extracted macOS identity and tamper rejection
         if: runner.os == 'macOS'
         run: python tools/verify_macos_package.py
@@ -91,6 +127,32 @@ jobs:
           name: linko-prototype-${{ matrix.os }}
           path: dist/*
           if-no-files-found: error
+
+  portable-update:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: build
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linko-prototype-${{ matrix.os }}
+          path: ${{ runner.temp }}/linko-current-portable
+      - name: Rehearse portable update and rollback with CI packages
+        run: python tools/verify_packaged_update.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINKO_REVIEW_HEAD: ${{ github.event.pull_request.head.sha }}
+          LINKO_PACKAGE_ARTIFACT: linko-prototype-${{ matrix.os }}
+          LINKO_CURRENT_PACKAGE_DIR: ${{ runner.temp }}/linko-current-portable
 
   dependency-audit:
     runs-on: ubuntu-latest

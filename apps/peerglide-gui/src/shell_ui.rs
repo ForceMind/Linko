@@ -117,7 +117,14 @@ impl App {
             Vec2::splat(tokens::ICON_SMALL),
         );
         let spinning = view.is_waiting() && self.activity_tick_active();
-        paint_capsule_glyph(&painter, glyph, ink, view.tone, spinning, now);
+        paint_capsule_glyph(
+            &painter,
+            glyph,
+            ink,
+            view.tone,
+            spinning,
+            motion::spinner_head_for(ui.ctx(), now),
+        );
         let text = egui::pos2(
             glyph.right() + tokens::SPACE_SM,
             rect.center().y - galley.size().y / 2.0,
@@ -232,7 +239,7 @@ pub(super) fn view_key(page: Page) -> u8 {
     match page {
         Page::Devices | Page::Displays => 0,
         Page::Home => 1,
-        Page::Transfers | Page::Clipboard => 2,
+        Page::Transfers | Page::Clipboard | Page::Audio => 2,
         Page::Shortcuts => 3,
         Page::Settings => 4,
         Page::GestureLab | Page::GestureRules => 5,
@@ -414,10 +421,10 @@ fn paint_capsule_glyph(
     ink: egui::Color32,
     tone: Tone,
     spinning: bool,
-    now: f64,
+    spinner_head: usize,
 ) {
     if spinning {
-        icons::paint_spinner(painter, rect, ink, motion::spinner_head_at(now));
+        icons::paint_spinner(painter, rect, ink, spinner_head);
         return;
     }
     match tone {

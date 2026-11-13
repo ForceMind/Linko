@@ -15,6 +15,7 @@ impl App {
     }
     pub(super) fn layout_editable(&self) -> bool {
         self.writable()
+            && !self.routed_active
             && self.stopping.is_none()
             && self.layout_request.is_none()
             && (self.child.is_none()
@@ -71,18 +72,6 @@ impl App {
             None => "尚未开启键鼠会话",
         }
     }
-    fn unavailable(ui: &mut egui::Ui, title: &str, sentences: &[&str]) {
-        egui::Frame::group(ui.style())
-            .inner_margin(18.0)
-            .show(ui, |ui| {
-                ui.strong(title);
-                ui.add_space(7.0);
-                for sentence in sentences {
-                    ui.label(*sentence);
-                }
-                ui.weak("功能准备好后，会在这里提供独立的授权与操作入口。");
-            });
-    }
     pub(super) fn open_setup(&mut self) {
         self.peer_wait_expired = false;
         self.native_confirmation = false;
@@ -100,6 +89,7 @@ impl App {
         self.screen_drag = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
+            self.pending_routed = None;
             self.dialog = None;
         }
         self.wizard_name = self.config.peer_name.clone();
@@ -125,6 +115,7 @@ impl App {
                 && self.instance_lock.is_some()
                 && self.config_store.is_some(),
             running: self.child.is_some(),
+            routed: self.routed_active,
             connected: self.connected,
             failed: self.last_failure,
             stopping: self.stopping.is_some(),
@@ -152,6 +143,17 @@ impl App {
             && self.dialog.is_none()
             && (self.child.is_none() || self.active_mode == Some(SessionMode::Communication))
     }
+    pub(super) fn routed_start_available(&self) -> bool {
+        cfg!(any(windows, target_os = "macos"))
+            && self.native_exit_protected()
+            && self.idle_writable()
+            && !self.recovery_blocked
+            && !self.enrollment_blocked
+            && !self.pairing_pending()
+            && !self.close_requested
+            && !self.exit_confirmed
+            && self.wizard.is_none()
+    }
     pub(super) fn workspace_action(&mut self, action: desktop_state::Action) {
         match action {
             desktop_state::Action::CheckPermissions if self.native_start_available() => {
@@ -161,6 +163,7 @@ impl App {
             desktop_state::Action::AddDevice if self.idle_writable() => self.open_setup(),
             desktop_state::Action::StartInput if self.native_start_available() => {
                 self.native_confirmation = false;
+                self.pending_routed = None;
                 self.dialog = Some(Dialog::NativeStart);
             }
             desktop_state::Action::Connect if self.idle_writable() => {
@@ -363,8 +366,10 @@ impl App {
         ui.add_space(16.0);
         ui.separator();
         ui.strong("更多协作方式");
-        ui.label("文字、图片和文件尚未接通，当前不会读取或同步这些内容。");
-        ui.weak("后续逐项开放，并分别询问你的同意，不包含在键鼠许可里。");
+        ui.label("文件和剪贴板共享需要两端各自确认。");
+        if ui.button("打开文件与剪贴板").clicked() {
+            self.navigate_to(Page::Transfers);
+        }
     }
     fn mouse(&mut self, ui: &mut egui::Ui) {
         if self.recording_mode {
@@ -459,13 +464,18 @@ impl App {
     fn collaboration(&mut self, ui: &mut egui::Ui) {
         self.collaboration_tab = if self.page == Page::Clipboard {
             CollaborationTab::Clipboard
+        } else if self.page == Page::Audio {
+            CollaborationTab::Audio
         } else {
             CollaborationTab::Files
         };
         self.subpage_header(ui, "文件与剪贴板", Page::Displays);
         ui.horizontal(|ui| {
-            for (page, label) in [(Page::Transfers, "文件传输"), (Page::Clipboard, "剪贴板")]
-            {
+            for (page, label) in [
+                (Page::Transfers, "文件传输"),
+                (Page::Clipboard, "剪贴板"),
+                (Page::Audio, "音频"),
+            ] {
                 if ui.selectable_label(self.page == page, label).clicked() {
                     self.navigate_to(page);
                 }
@@ -480,31 +490,33 @@ impl App {
             },
         );
         ui.add_space(14.0);
-        desktop_style::card(ui).show(ui, |ui| {
-            desktop_style::pill(ui, "尚未接通", desktop_style::Tone::Neutral);
-            ui.add_space(12.0);
-            match self.collaboration_tab {
-                CollaborationTab::Clipboard => Self::unavailable(
-                    ui,
-                    "系统剪贴板尚未接通",
-                    &[
-                        "目前不会读取、写入或共享系统剪贴板。",
-                        "后续按设备、方向和手动／自动方式分别授权。",
-                    ],
-                ),
-                CollaborationTab::Files => Self::unavailable(
-                    ui,
-                    "文件发送与接收尚未接通",
-                    &[
-                        "当前不会读取或传送文件，也未提供原生跨屏拖拽。",
-                        "不会展示模拟传输进度。",
-                    ],
-                ),
+        desktop_style::card(ui).show(ui, |ui| match self.collaboration_tab {
+            CollaborationTab::Clipboard => {
+                #[cfg(any(windows, target_os = "macos"))]
+                {
+                    let mut clipboard = std::mem::take(&mut self.clipboard_panel);
+                    clipboard.ui(self, ui);
+                    self.clipboard_panel = clipboard;
+                }
+                #[cfg(not(any(windows, target_os = "macos")))]
+                ui.strong("当前平台暂不支持系统剪贴板共享");
+            }
+            CollaborationTab::Audio => {
+                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                {
+                    let mut audio = std::mem::take(&mut self.audio_panel);
+                    audio.ui(self, ui);
+                    self.audio_panel = audio;
+                }
+                #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
+                ui.strong("系统音频共享目前可在 Windows 和 macOS 使用");
+            }
+            CollaborationTab::Files => {
+                let mut files = std::mem::take(&mut self.file_panel);
+                files.ui(self, ui);
+                self.file_panel = files;
             }
         });
-        ui.add_space(18.0);
-        ui.weak("连接成功不包含内容共享许可。");
-        ui.weak("离线数据模块不是已可用的系统共享功能。");
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.subpage_header(ui, "设置", Page::Displays);
@@ -562,6 +574,40 @@ impl App {
                             ui.weak("简体中文");
                         });
                     });
+                    ui.add_enabled_ui(self.writable() && self.desktop_store.is_some(), |ui| {
+                        let mut preferences = self.desktop_preferences;
+                        if ui
+                            .checkbox(&mut preferences.reduce_motion, "减少界面动效")
+                            .changed()
+                        {
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            self.feedback(result, "已保存界面动效偏好。");
+                        }
+                        if cursor_overlay::SUPPORTED
+                            && ui
+                                .add_enabled(
+                                    !self.desktop_preferences.reduce_motion,
+                                    egui::Checkbox::new(&mut preferences.cursor_trail, "光标拖尾"),
+                                )
+                                .changed()
+                        {
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            if result.is_ok() {
+                                self.cursor_overlay.reenable();
+                            }
+                            self.feedback(result, "已保存光标拖尾偏好。");
+                        }
+                    });
+                    if cursor_overlay::SUPPORTED
+                        && ui
+                            .add_enabled(
+                                self.cursor_overlay_available(),
+                                egui::Button::new("定位光标"),
+                            )
+                            .clicked()
+                    {
+                        self.cursor_overlay.locate(Instant::now());
+                    }
                     ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                         if ui
                             .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
@@ -997,7 +1043,12 @@ impl App {
             580.0f32.min((viewport.width() - 48.0).max(1.0)),
             540.0f32.min((viewport.height() - 48.0).max(1.0)),
         );
-        egui::Window::new("开启键鼠协同")
+        let title = if self.pending_routed.is_some() {
+            "开启分段键鼠"
+        } else {
+            "开启键鼠协同"
+        };
+        egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -1007,6 +1058,7 @@ impl App {
             .show(ctx, |ui| self.native_start_contents(ui));
         if !open {
             self.native_confirmation = false;
+            self.pending_routed = None;
             self.dialog = None;
         }
     }
@@ -1014,6 +1066,7 @@ impl App {
     fn native_start_contents(&mut self, ui: &mut egui::Ui) {
         const HEADER_HEIGHT: f32 = 112.0;
         const FOOTER_HEIGHT: f32 = 104.0;
+        let routed = self.pending_routed.is_some();
         let permission_idle =
             self.child.is_none() || self.active_mode == Some(SessionMode::Communication);
         ui.allocate_ui_with_layout(
@@ -1037,11 +1090,15 @@ impl App {
             .show(ui, |ui| {
                 self.worker_permissions.native_start_details(ui);
                 ui.separator();
-                let points = native_start_points(
-                    self.config.allow,
-                    !self.config.listen && !self.config.reconnect,
-                    self.child.is_some(),
-                );
+                let points = if routed {
+                    routed_start_points()
+                } else {
+                    native_start_points(
+                        self.config.allow,
+                        !self.config.listen && !self.config.reconnect,
+                        self.child.is_some(),
+                    )
+                };
                 for point in points {
                     safety_point(ui, point);
                 }
@@ -1081,17 +1138,20 @@ impl App {
                                 == worker_permissions::Readiness::Ready
                             && self.native_confirmation
                             && self.stopping.is_none()
-                            && !self.recovery_blocked;
+                            && !self.recovery_blocked
+                            && (!routed
+                                || self.pending_routed.is_some() && self.routed_start_available());
                         let start = ui
                             .add_enabled(ready, egui::Button::new("确认并开启键鼠"))
                             .clicked();
-                        let diagnose = ui
-                            .add_enabled(
-                                ready && self.child.is_none(),
-                                egui::Button::new("开启并诊断"),
-                            )
-                            .on_hover_text("统计本机输入链路 120 秒，可复制不含输入内容的摘要")
-                            .clicked();
+                        let diagnose = !routed
+                            && ui
+                                .add_enabled(
+                                    ready && self.child.is_none(),
+                                    egui::Button::new("开启并诊断"),
+                                )
+                                .on_hover_text("统计本机输入链路 120 秒，可复制不含输入内容的摘要")
+                                .clicked();
                         if start || diagnose {
                             let result = if diagnose {
                                 self.request_native_with_diagnostics(true)
@@ -1241,6 +1301,7 @@ impl App {
         self.screen_drag = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
+            self.pending_routed = None;
             self.dialog = None;
         }
     }
@@ -1276,6 +1337,19 @@ impl App {
         }) {
             self.stop();
             self.gesture_lab.cancel();
+        } else if (self.dialog.is_some() || self.wizard.is_some())
+            && ctx.input_mut(|input| {
+                input.modifiers == egui::Modifiers::NONE
+                    && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            })
+        {
+            if self.dialog.take().is_some() {
+                self.native_confirmation = false;
+                self.pending_routed = None;
+            } else {
+                self.wizard = None;
+            }
+            self.screen_drag = None;
         }
         let window_width = ctx.viewport_rect().width();
         // The title bar spans the window, so the safety controls never move with the sidebar.
@@ -1353,7 +1427,7 @@ impl App {
                         Page::Displays => self.devices(ui),
                         Page::Settings => self.settings(ui, &ctx),
                         Page::GestureLab | Page::GestureRules => self.mouse(ui),
-                        Page::Transfers | Page::Clipboard => self.collaboration(ui),
+                        Page::Transfers | Page::Clipboard | Page::Audio => self.collaboration(ui),
                         Page::Shortcuts => self.shortcuts(ui),
                     });
             });
@@ -1742,6 +1816,39 @@ pub(super) fn native_start_points(
     points
 }
 
+fn routed_start_points() -> Vec<SafetyPoint> {
+    vec![
+        SafetyPoint {
+            icon: Icon::Keyboard,
+            text: "本次开启真实原生键鼠发送。",
+        },
+        SafetyPoint {
+            icon: Icon::Link,
+            text: "按已确认的分段布局选择核验过的目标。",
+        },
+        SafetyPoint {
+            icon: Icon::Lock,
+            text: "各目标电脑单独决定是否接收。",
+        },
+        SafetyPoint {
+            icon: Icon::Recover,
+            text: "上一台确认清理后才可切到下一台。",
+        },
+        SafetyPoint {
+            icon: Icon::Keyboard,
+            text: "Ctrl+Alt+Right 返回本机。",
+        },
+        SafetyPoint {
+            icon: Icon::Recover,
+            text: "Ctrl+Alt+Esc 停止并恢复。",
+        },
+        SafetyPoint {
+            icon: Icon::Warning,
+            text: "多机键鼠、DPI 与恢复仍待真机验收。",
+        },
+    ]
+}
+
 static REVOKE_POINTS: [SafetyPoint; 2] = [
     SafetyPoint {
         icon: Icon::Stop,
@@ -2107,6 +2214,84 @@ pub(super) mod safety_dialog_tests {
             ..Default::default()
         };
         ctx.run_ui(input, run)
+    }
+
+    fn press_escape(app: &mut App, ctx: &egui::Context, modifiers: egui::Modifiers) {
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |root| app.desktop(root))
+            .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn escape_dismisses_safety_dialog_without_closing_pairing_or_releasing_recovery() -> Result<()>
+    {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.pairing_panel.open("测试电脑", "");
+        app.dialog = Some(Dialog::NativeStart);
+        app.native_confirmation = true;
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.dialog.is_none() && !app.native_confirmation && app.pairing_open);
+        assert!(app.child.is_none() && app.pending_start.is_none());
+
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(!app.pairing_open);
+        app.recovery_blocked = true;
+        app.dialog = Some(Dialog::Recovery);
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.dialog.is_none() && app.recovery_blocked && !app.exit_confirmed);
+
+        app.wizard = Some(SetupStep::Identity);
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.wizard.is_none());
+        assert!(app.config == before && !app.dir.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn emergency_escape_stops_pending_input_instead_of_dismissing_dialog() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.dialog = Some(Dialog::Recovery);
+        app.recovery_blocked = true;
+        app.pending_start = Some(SessionMode::Native);
+        let emergency = egui::Modifiers {
+            ctrl: true,
+            alt: true,
+            ..egui::Modifiers::NONE
+        };
+        press_escape(&mut app, &ctx, emergency);
+        assert!(app.pending_start.is_none() && app.recovery_blocked);
+        assert_eq!(app.dialog, Some(Dialog::Recovery));
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
 
     #[test]

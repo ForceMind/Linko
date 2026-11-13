@@ -21,6 +21,7 @@ struct HintRow {
 
 impl HintRow {
     /// Opacity: rises while entering and falls while leaving.
+    #[cfg(test)]
     fn alpha(&self, now: f64) -> f32 {
         match &self.leave {
             Some(leave) => 1.0 - motion::cubic_out(leave.progress(now)),
@@ -31,15 +32,25 @@ impl HintRow {
     /// Opacity at egui time. Asks for frames only while the row is still moving.
     fn tick(&self, ctx: &egui::Context) -> f32 {
         let shot = self.leave.unwrap_or(self.enter);
-        shot.tick(ctx);
-        self.alpha(ctx.input(|input| input.time))
+        let opacity = motion::cubic_out(shot.tick(ctx));
+        if self.leave.is_some() {
+            1.0 - opacity
+        } else {
+            opacity
+        }
     }
 }
 
 /// Matches rows to the addresses listed now. New addresses enter, missing ones start to
 /// leave, returning ones enter again, and rows that finished leaving are dropped.
 fn sync_rows(rows: &mut Vec<HintRow>, current: &[SocketAddr], now: f64, secs: f32) {
-    rows.retain(|row| row.leave.is_none_or(|leave| leave.is_active(now)));
+    rows.retain(|row| {
+        if secs == 0.0 {
+            current.contains(&row.address)
+        } else {
+            row.leave.is_none_or(|leave| leave.is_active(now))
+        }
+    });
     for row in rows.iter_mut() {
         let listed = current.contains(&row.address);
         if listed && row.leave.is_some() {
@@ -88,7 +99,12 @@ fn search_spinner(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let now = ui.input(|input| input.time);
     let ink = tokens::muted_color(ui.visuals().dark_mode);
-    icons::paint_spinner(ui.painter(), rect, ink, motion::spinner_head_at(now));
+    icons::paint_spinner(
+        ui.painter(),
+        rect,
+        ink,
+        motion::spinner_head_for(ui.ctx(), now),
+    );
 }
 
 /// Only invalidates an old publication; these counters never authorize a peer.
@@ -97,6 +113,7 @@ pub(super) struct Offer {
     pub generation: u64,
     pub attempts_remaining: u8,
     pub port: u16,
+    pub ipv6: bool,
 }
 
 #[derive(Default)]
@@ -195,7 +212,12 @@ impl Panel {
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("本机身份不可用"))?;
                     self.start(own.clone())?;
-                    self.handle.as_mut().unwrap().advertise(fp, offer.port)?;
+                    let handle = self.handle.as_mut().unwrap();
+                    if offer.ipv6 {
+                        handle.advertise_pairing_ipv6(fp, offer.port)?;
+                    } else {
+                        handle.advertise(fp, offer.port)?;
+                    }
                     self.published = Some(offer);
                     Ok(())
                 })();
@@ -223,10 +245,10 @@ impl Panel {
                 if let Some(handle) = &self.handle {
                     let current = listed(&handle.table);
                     let now = ui.input(|input| input.time);
-                    let secs = tokens::LIST_PRESENCE_SECS;
+                    let secs = motion::duration(ui.ctx(), tokens::LIST_PRESENCE_SECS);
                     sync_rows(&mut self.rows, &current, now, secs);
                     if current.is_empty() {
-                        ui.label("还没找到？可直接填写另一台显示的 IPv4 地址");
+                        ui.label("还没找到？可直接填写另一台显示的 IP 地址");
                     }
                     let rows = &self.rows;
                     egui::ScrollArea::vertical()

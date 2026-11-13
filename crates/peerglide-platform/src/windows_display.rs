@@ -27,10 +27,10 @@ use windows_sys::{
 
 const MAX_DISPLAYS: usize = 64;
 
-struct PhysicalContext(DPI_AWARENESS_CONTEXT);
+pub(super) struct PhysicalContext(DPI_AWARENESS_CONTEXT);
 
 impl PhysicalContext {
-    fn enter() -> Result<Self> {
+    pub(super) fn enter() -> Result<Self> {
         // SAFETY: the predefined context changes only this calling thread.
         let previous =
             unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
