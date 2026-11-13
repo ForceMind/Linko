@@ -286,16 +286,15 @@ impl Sender {
 }
 
 impl Receiver {
-    /// Supply the local clipboard revision before reading an incoming text
-    /// frame. File-only consumers may omit it.
+    /// Supply the local clipboard revision before reading an incoming text frame.
     pub async fn read(&mut self, clipboard_revision: Option<u64>) -> Result<AdmittedFrame> {
         let policy = &self.policy;
         let (frame, permit) = self
             .frames
             .read_checked(|header| {
                 ensure!(
-                    !matches!(header.kind(), Kind::TextReceived | Kind::TextResult),
-                    "use the clipboard response reader"
+                    header.kind() == Kind::Text,
+                    "use the file or clipboard response reader"
                 );
                 let capability = inbound(header.kind());
                 ensure!(
@@ -309,6 +308,34 @@ impl Receiver {
             frame,
             permit,
             clipboard_revision,
+            acknowledged: false,
+        })
+    }
+
+    /// Read only the file kinds valid in the current transfer phase. Admission
+    /// happens before a body allocation. The owner must still check the ID and
+    /// its per-offer acceptance before disk I/O.
+    pub async fn read_file(
+        &mut self,
+        expected: &[Kind],
+        timeout: Duration,
+    ) -> Result<AdmittedFrame> {
+        let policy = &self.policy;
+        let (frame, permit) = self
+            .frames
+            .read_checked_before(timeout, |header| {
+                let kind = header.kind();
+                ensure!(
+                    is_file(kind) && expected.contains(&kind),
+                    "unexpected frame for the current file transfer phase"
+                );
+                policy.check(|session, now| session.authorize(inbound(kind), now))
+            })
+            .await?;
+        Ok(AdmittedFrame {
+            frame,
+            permit,
+            clipboard_revision: None,
             acknowledged: false,
         })
     }
@@ -362,13 +389,17 @@ impl Receiver {
 }
 
 fn is_file(kind: Kind) -> bool {
-    matches!(kind, Kind::Offer | Kind::Chunk | Kind::Cancel)
+    matches!(
+        kind,
+        Kind::Offer | Kind::Chunk | Kind::Cancel | Kind::FileAccepted | Kind::FileResult
+    )
 }
 
 fn outbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextSend,
         Kind::TextReceived | Kind::TextResult => Capability::TextReceive,
+        Kind::FileAccepted | Kind::FileResult => Capability::FileReceive,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileSend,
     }
 }
@@ -377,6 +408,7 @@ fn inbound(kind: Kind) -> Capability {
     match kind {
         Kind::Text => Capability::TextReceive,
         Kind::TextReceived | Kind::TextResult => Capability::TextSend,
+        Kind::FileAccepted | Kind::FileResult => Capability::FileSend,
         Kind::Offer | Kind::Chunk | Kind::Cancel => Capability::FileReceive,
     }
 }

@@ -32,6 +32,14 @@ pub enum Frame {
         sequence: u64,
         outcome: TextOutcome,
     },
+    FileAccepted {
+        id: [u8; 16],
+        next_chunk: u32,
+    },
+    FileResult {
+        id: [u8; 16],
+        outcome: FileOutcome,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +65,27 @@ impl TextOutcome {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FileOutcome {
+    Committed = 1,
+    Declined = 2,
+    Failed = 3,
+    Unknown = 4,
+}
+
+impl FileOutcome {
+    fn parse(byte: u8) -> io::Result<Self> {
+        match byte {
+            1 => Ok(Self::Committed),
+            2 => Ok(Self::Declined),
+            3 => Ok(Self::Failed),
+            4 => Ok(Self::Unknown),
+            _ => Err(invalid()),
+        }
+    }
+}
+
 fn invalid() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, "invalid data frame")
 }
@@ -70,6 +99,8 @@ pub enum Kind {
     Cancel = 4,
     TextReceived = 5,
     TextResult = 6,
+    FileAccepted = 7,
+    FileResult = 8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +121,8 @@ impl Header {
             4 => Kind::Cancel,
             5 => Kind::TextReceived,
             6 => Kind::TextResult,
+            7 => Kind::FileAccepted,
+            8 => Kind::FileResult,
             _ => return Err(invalid()),
         };
         let body_bytes =
@@ -117,14 +150,18 @@ fn valid_length(kind: Kind, len: usize) -> bool {
         Kind::Cancel => len == 16,
         Kind::TextReceived => len == 8,
         Kind::TextResult => len == 9,
+        Kind::FileAccepted => len == 20,
+        Kind::FileResult => len == 17,
     }
 }
 
 fn valid_text(text: &str) -> bool {
     !text.is_empty() && text.len() <= MAX_TEXT_BYTES && !text.contains('\0')
 }
+const MAX_CHUNKS: u64 = MAX_FILE_BYTES.div_ceil(CHUNK_BYTES as u64);
+
 fn valid_index(index: u32) -> bool {
-    (index as u64) < MAX_FILE_BYTES.div_ceil(CHUNK_BYTES as u64)
+    u64::from(index) < MAX_CHUNKS
 }
 
 impl Frame {
@@ -136,6 +173,8 @@ impl Frame {
             Self::Cancel { .. } => Kind::Cancel,
             Self::TextReceived { .. } => Kind::TextReceived,
             Self::TextResult { .. } => Kind::TextResult,
+            Self::FileAccepted { .. } => Kind::FileAccepted,
+            Self::FileResult { .. } => Kind::FileResult,
         }
     }
 
@@ -213,6 +252,20 @@ impl Frame {
                     outcome: TextOutcome::parse(body[8])?,
                 })
             }
+            Kind::FileAccepted => {
+                let next_chunk = u32::from_le_bytes(body[16..20].try_into().map_err(|_| invalid())?);
+                if u64::from(next_chunk) > MAX_CHUNKS {
+                    return Err(invalid());
+                }
+                Ok(Self::FileAccepted {
+                    id: body[..16].try_into().map_err(|_| invalid())?,
+                    next_chunk,
+                })
+            }
+            Kind::FileResult => Ok(Self::FileResult {
+                id: body[..16].try_into().map_err(|_| invalid())?,
+                outcome: FileOutcome::parse(body[16])?,
+            }),
         }
     }
 
@@ -262,6 +315,21 @@ impl Frame {
                 body.push(*outcome as u8);
                 body
             }
+            Self::FileAccepted { id, next_chunk } => {
+                if u64::from(*next_chunk) > MAX_CHUNKS {
+                    return Err(invalid());
+                }
+                let mut body = Vec::with_capacity(20);
+                body.extend_from_slice(id);
+                body.extend_from_slice(&next_chunk.to_le_bytes());
+                body
+            }
+            Self::FileResult { id, outcome } => {
+                let mut body = Vec::with_capacity(17);
+                body.extend_from_slice(id);
+                body.push(*outcome as u8);
+                body
+            }
         };
         if !valid_length(kind, body.len()) {
             return Err(invalid());
@@ -285,6 +353,42 @@ mod tests {
         let mut bytes = Vec::new();
         frame.write(&mut bytes).unwrap();
         bytes
+    }
+
+    #[test]
+    fn file_responses_have_exact_bounds_and_distinct_meanings() {
+        let id = [42; 16];
+        let last = MAX_CHUNKS as u32;
+        let accepted = Frame::FileAccepted {
+            id,
+            next_chunk: last,
+        };
+        let bytes = encoded(&accepted);
+        assert_eq!(bytes.len(), HEADER_BYTES + 20);
+        assert!(matches!(
+            Frame::read(bytes.as_slice()).unwrap(),
+            Frame::FileAccepted { id: received, next_chunk } if received == id && next_chunk == last
+        ));
+        let mut invalid_offset = bytes;
+        invalid_offset[HEADER_BYTES + 16..].copy_from_slice(&(last + 1).to_le_bytes());
+        assert!(Frame::read(invalid_offset.as_slice()).is_err());
+        assert!(Frame::FileAccepted {
+            id,
+            next_chunk: last + 1,
+        }
+        .write(Vec::new())
+        .is_err());
+        let mut declined = encoded(&Frame::FileResult {
+            id,
+            outcome: FileOutcome::Declined,
+        });
+        assert_eq!(declined.len(), HEADER_BYTES + 17);
+        assert!(matches!(
+            Frame::read(declined.as_slice()).unwrap(),
+            Frame::FileResult { id: received, outcome: FileOutcome::Declined } if received == id
+        ));
+        declined[HEADER_BYTES + 16] = 0xff;
+        assert!(Frame::read(declined.as_slice()).is_err());
     }
 
     struct Fragmented(Cursor<Vec<u8>>);

@@ -1,25 +1,35 @@
 # Isolated data framing v1
 
-codec::Frame reads/writes Unicode text, a file manifest offer, a bounded file
-chunk, cancellation or a clipboard receipt. Fixed 12-byte PGD1 header, closed kind/flags/reserved
-fields and per-kind body limits are checked before allocating a body. Invalid,
-unknown, truncated or oversized frames terminate the stream. Never resynchronize
-by scanning for magic in payloads. Writer validates before emitting any bytes;
-partial I/O failure is uncertain and must not trigger blind retries.
-The validated header exposes a bounded kind and length to the transport. The
-reader can reject a direction or exhausted budget before allocating or reading
-the body. An async adapter can use the same header and exact-body decoder.
+The 12-byte PGD1 header carries a closed kind, reserved bytes and body length.
+The codec checks these fields and the per-kind length before reading a body.
+The QUIC adapter then checks the negotiated capability, current phase, local
+direction permission and connection byte budget before allocating the body.
+Malformed or interrupted frames close the connection.
 
-The codec uses Read/Write and handles fragmented/back-to-back frames. Tests cover
-header-only oversize rejection, truncation at each byte, bad UTF-8/sequence/index,
-flags, maximum-size chunks and a real codec-to-authorized-manager-to-disk flow.
+| Payload | Purpose |
+| --- | --- |
+| Text | A bounded UTF-8 snapshot with a nonzero sequence |
+| TextReceived | An admitted sequence waiting for a local clipboard decision |
+| TextResult | The receiver's local import result for that exact sequence |
+| Offer | A random transfer ID and bounded file manifest |
+| FileAccepted | The matching transfer ID and first requested chunk index |
+| Chunk | The matching transfer ID, index and bounded data |
+| Cancel | Cancellation of the matching in-flight transfer |
+| FileResult | Terminal committed, declined, failed or uncertain outcome for the matching ID |
 
-This is an OFFLINE codec, not an activated network protocol or v5 negotiation.
-Do not send it to the input stream or accept it automatically on existing peers.
-A future ADR must define an independently negotiated authenticated data stream,
-deadlines, concurrency/session-byte limits, bounded queues/backpressure, transfer
-responses and per-offer UI before enabling it. TLS identity/session binding comes
-from the connection, never from a Frame. Receiving an Offer is not local consent.
-Cancellation must be bound to that authenticated session's known transfer ID.
-Input v5/ALPN remains unchanged. Real QUIC scheduling and cross-host tests remain
-open; synchronous hashing/disk/framing must stay off the input callback/runtime.
+The data endpoint uses pinned mutual TLS and the separate `peerglide-data/1`
+ALPN. Input v5 and its ALPN are unchanged. TLS identity and local consent come
+from the authenticated session. Receiving an offer alone neither opens a file
+nor grants permission. The receiving controller still matches the transfer ID
+and obtains explicit per-offer approval before it admits a chunk body or writes
+to disk. A sender may use the accepted offset only if it fits the manifest for
+that exact offer. Acceptance does not imply file publication.
+
+A clipboard receipt indicates that the peer has a pending text snapshot. An
+import result reports the local clipboard outcome separately. Neither allows
+the peer to request system actions. Clipboard or file bytes stay out of logs.
+
+Tests exercise bounded framing, fragmented and back-to-back input, wrong
+direction and phase, and codec-to-storage behavior. File wire responses are a
+foundation for the receiver and sender owners. Cross-host clipboard and file
+acceptance require the matching application candidate and physical verification.
