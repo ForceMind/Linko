@@ -555,9 +555,11 @@ mod native {
                             _ => anyhow::bail!("文件拖放回执顺序无效"),
                         };
                     }
-                    Phase::TargetDown(_, session, _, _) | Phase::TargetDrop(_, session, _, _)
+                    Phase::TargetDown(_, session, lease, _)
+                    | Phase::TargetDrop(_, session, lease, _)
                         if event.session == *session && event.request == self.request =>
                     {
+                        ensure!(event.lease == Some(*lease), "文件拖放租约已失效");
                         anyhow::bail!("文件拖放已结束");
                     }
                     _ => (),
