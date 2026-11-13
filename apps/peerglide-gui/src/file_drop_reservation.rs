@@ -956,9 +956,14 @@ mod native {
                 commands.matches("fixture fd prepare-target 3 5 8").count(),
                 0
             );
-            assert_eq!(commands.matches("fixture fd target-started 3 5 9").count(), 1);
             assert_eq!(
-                commands.matches("fixture fd target-drop-ready 3 5 9").count(),
+                commands.matches("fixture fd target-started 3 5 9").count(),
+                1
+            );
+            assert_eq!(
+                commands
+                    .matches("fixture fd target-drop-ready 3 5 9")
+                    .count(),
                 1
             );
             assert_eq!(commands.matches("fixture fd cancel 3 5").count(), 0);
