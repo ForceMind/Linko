@@ -850,9 +850,8 @@ impl Export {
                     }
                 },
             );
-            if ui.button("撤回文件预约").clicked() {
-                self.stop(app);
-            } else if self.handoff_area(app, ui).is_err() && self.handoff_active() {
+            let cancelled = ui.button("撤回文件预约").clicked();
+            if cancelled || self.handoff_area(app, ui).is_err() {
                 self.stop(app);
             }
             return;
