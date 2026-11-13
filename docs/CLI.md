@@ -64,7 +64,8 @@ UAC/secure desktop. Keep OS security protections enabled.
 ## 从一台可信电脑播放音频
 
 Windows 和 macOS 提供显式播放入口。指定已线下核对的音频源证书，
-可选本机输出和应用音量。会话通过独立音频连接校验身份，Ctrl+C、
+可用 `peerglide audio-output-devices` 查看本机输出编号或 UID，再通过
+`--device` 选择。应用音量只影响该播放流。会话通过独立音频连接校验身份，Ctrl+C、
 断线或无音频超时会停止。此入口只接收音频，系统采集由单独命令和
 本机许可控制。
 
