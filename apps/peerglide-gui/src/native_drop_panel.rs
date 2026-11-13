@@ -716,9 +716,11 @@ impl Export {
             anyhow::bail!("没有本机拖放批准");
         };
         let source = self.source.as_ref().context("没有已接收文件")?;
+        let pin = source.pin.clone();
+        let file = source.file.clone();
         let ticket = handoff.attempt.ticket;
         let result = (|| -> Result<()> {
-            source.pin.recheck(app)?;
+            pin.recheck(app)?;
             handoff.attempt.scope.verify_layout()?;
             let path = handoff.file.take().context("文件接棒已启动")?;
             let remaining = handoff
@@ -759,7 +761,7 @@ impl Export {
                     })
                 };
                 handoff.drag = Some(Drag::start_handoff_promise(
-                    source.file.name(),
+                    file.name(),
                     remaining,
                     press,
                     write,
@@ -773,7 +775,7 @@ impl Export {
                     super::file_drop_reservation::WindowsDelivery::open(&handoff.reservation, app)?;
                 let mut reader = path.into_verified_reader();
                 let result = drag_handoff_file(
-                    source.file.name(),
+                    file.name(),
                     reader.size(),
                     remaining,
                     move |offset, output| reader.read_at(offset, output),
