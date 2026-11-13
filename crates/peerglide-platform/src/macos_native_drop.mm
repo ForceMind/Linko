@@ -1,5 +1,6 @@
 // A copy-only AppKit drag from prepared local content.
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 
 #include <atomic>
 #include <chrono>
@@ -138,7 +139,8 @@ static bool can_write_promise(void* owner) {
 }
 @end
 
-static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* source, void** owner) {
+static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* source,
+                          void** owner, NSEvent* origin = nil) {
     if (!owner || !data || !source || ![NSThread isMainThread]) {
         return -1;
     }
@@ -148,7 +150,7 @@ static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* s
     }
     NSWindow* window = NSApp.keyWindow;
     NSView* view = window.contentView;
-    NSEvent* event = NSApp.currentEvent;
+    NSEvent* event = origin ?: NSApp.currentEvent;
     if (!view || !event || event.window != window || event.type != NSEventTypeLeftMouseDown) {
         return -3;
     }
@@ -192,7 +194,7 @@ extern "C" int32_t linko_macos_copy_drag_start(
 
 extern "C" int32_t linko_macos_file_promise_start(
     const uint8_t* name, size_t bytes, uint32_t millis, void* context, WritePromise write,
-    DropPromise destroy, void** owner) {
+    DropPromise destroy, void** owner, void* origin) {
     if (!name || bytes == 0 || bytes > 200 || millis == 0 || millis > 60'000 || !context || !write
         || !destroy || ![NSThread isMainThread]) {
         if (context && destroy) {
@@ -216,7 +218,24 @@ extern "C" int32_t linko_macos_file_promise_start(
                                                                        delegate:source];
     // The provider keeps its delegate alive through the post-drop write request.
     data.userInfo = source;
-    return start_drag(data, source, owner);
+    return start_drag(data, source, owner, (__bridge NSEvent*)origin);
+}
+
+extern "C" void* linko_macos_file_drag_press() {
+    if (![NSThread isMainThread]) {
+        return nullptr;
+    }
+    NSEvent* event = NSApp.currentEvent;
+    if (!event || !event.window || event.window != NSApp.keyWindow
+        || event.type != NSEventTypeLeftMouseDown || !event.CGEvent
+        || CGEventGetIntegerValueField(event.CGEvent, kCGEventSourceUserData) != 0x50474c44) {
+        return nullptr;
+    }
+    return (__bridge_retained void*)event;
+}
+
+extern "C" void linko_macos_file_drag_press_release(void* press) {
+    (void)CFBridgingRelease(press);
 }
 
 static int32_t start_content_drag(

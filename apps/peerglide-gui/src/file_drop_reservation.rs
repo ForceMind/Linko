@@ -78,7 +78,7 @@ mod native {
     use super::super::{data_access::Pin, App, SessionMode, WorkerSnapshot};
     use super::Reply;
     use anyhow::{ensure, Context, Result};
-    use peerglide_protocol::file_drop_ipc::{Command, State};
+    use peerglide_protocol::file_drop_ipc::{Command, EntryPoint, State};
     use std::{
         io::Write,
         net::SocketAddr,
@@ -176,7 +176,12 @@ mod native {
         Armed(Link, u32),
         Matched(Link, u32, u64, u64),
         AwaitingClaim(Link, u32, u64, u64, Instant),
-        Claimed(Link, u32, u64),
+        Claimed(Link, u32, u64, u64),
+        TargetDown(Link, u32, u64, u64),
+        TargetDragging(Link, u32, u64, u64),
+        TargetDrop(Link, u32, u64, u64),
+        TargetReleasing(Link, u32, u64, u64),
+        TargetReleased,
     }
 
     pub(crate) enum Status {
@@ -243,7 +248,12 @@ mod native {
                     Direction::Receive(bind) => Status::Listening(bind.port()),
                     Direction::Send(_) => Status::SourceArmed,
                 },
-                Phase::Claimed(..) => Status::Matched,
+                Phase::Claimed(..)
+                | Phase::TargetDown(..)
+                | Phase::TargetDragging(..)
+                | Phase::TargetDrop(..)
+                | Phase::TargetReleasing(..)
+                | Phase::TargetReleased => Status::Matched,
                 Phase::Press(..) => Status::Press,
                 Phase::SourceCommitted(..) => Status::SourceCommitted,
                 Phase::SourceReleased => Status::SourceReleased,
@@ -309,6 +319,7 @@ mod native {
             app: &mut App,
             pin: &Pin,
             lease: u64,
+            entry: EntryPoint,
             now: Instant,
         ) -> Result<()> {
             let Phase::Matched(link, session, matched, fence) = &self.phase else {
@@ -325,14 +336,55 @@ mod native {
             pin.recheck(app)?;
             link.send(
                 app,
-                Command::Ready {
+                Command::PrepareTarget {
                     session: *session,
                     request: self.request,
                     lease,
+                    entry,
                 },
             )?;
             self.phase =
                 Phase::AwaitingClaim(link.clone(), *session, lease, *fence, now + REPLY_TIMEOUT);
+            Ok(())
+        }
+
+        pub(crate) fn target_position_frozen(&self) -> bool {
+            matches!(
+                self.phase,
+                Phase::AwaitingClaim(..) | Phase::Claimed(..) | Phase::TargetDown(..)
+            )
+        }
+
+        pub(crate) fn target_down(&self) -> bool {
+            matches!(self.phase, Phase::TargetDown(..))
+        }
+
+        #[cfg(target_os = "macos")]
+        pub(crate) fn target_drop(&self) -> bool {
+            matches!(self.phase, Phase::TargetDrop(..))
+        }
+
+        pub(crate) fn target_released(&self) -> bool {
+            matches!(self.phase, Phase::TargetReleased)
+        }
+
+        #[cfg(target_os = "macos")]
+        pub(crate) fn target_started(&mut self, app: &mut App) -> Result<()> {
+            let Phase::TargetDown(link, session, lease, fence) = &self.phase else {
+                anyhow::bail!("没有当前文件接棒的鼠标按下");
+            };
+            link.send(app, Command::TargetStarted { session: *session, request: self.request, lease: *lease })?;
+            self.phase = Phase::TargetDragging(link.clone(), *session, *lease, *fence);
+            Ok(())
+        }
+
+        #[cfg(target_os = "macos")]
+        pub(crate) fn target_drop_ready(&mut self, app: &mut App) -> Result<()> {
+            let Phase::TargetDrop(link, session, lease, fence) = &self.phase else {
+                anyhow::bail!("没有当前文件接棒的正常释放");
+            };
+            link.send(app, Command::TargetDropReady { session: *session, request: self.request, lease: *lease })?;
+            self.phase = Phase::TargetReleasing(link.clone(), *session, *lease, *fence);
             Ok(())
         }
 
@@ -369,7 +421,7 @@ mod native {
             }
 
             let link = match &self.phase {
-                Phase::SourceReleased => return Ok(()),
+                Phase::SourceReleased | Phase::TargetReleased => return Ok(()),
                 Phase::AwaitingWorker(_) => unreachable!("worker wait handled above"),
                 Phase::Inspecting(link, _)
                 | Phase::Press(link, _)
@@ -378,7 +430,11 @@ mod native {
                 | Phase::Armed(link, _)
                 | Phase::Matched(link, ..)
                 | Phase::AwaitingClaim(link, ..)
-                | Phase::Claimed(link, ..) => link.clone(),
+                | Phase::Claimed(link, ..)
+                | Phase::TargetDown(link, ..)
+                | Phase::TargetDragging(link, ..)
+                | Phase::TargetDrop(link, ..)
+                | Phase::TargetReleasing(link, ..) => link.clone(),
             };
             ensure!(link.current(app), "文件接棒会话已变化");
             let (lease_fence, events) = link
@@ -390,9 +446,16 @@ mod native {
                 .context("文件接棒回执已失效")?;
             if let Phase::Matched(_, _, _, original_fence)
             | Phase::AwaitingClaim(_, _, _, original_fence, _)
-            | Phase::Claimed(_, _, original_fence) = self.phase
+            | Phase::Claimed(_, _, _, original_fence)
+            | Phase::TargetDown(_, _, _, original_fence)
+            | Phase::TargetDragging(_, _, _, original_fence)
+            | Phase::TargetDrop(_, _, _, original_fence) = self.phase
             {
                 ensure!(lease_fence == original_fence, "已匹配的输入租约已结束");
+            }
+            if let Phase::TargetReleasing(_, session, lease, fence) = self.phase {
+                self.accept_target_release(session, lease, fence, lease_fence, &events)?;
+                return Ok(());
             }
             for Reply {
                 event,
@@ -458,7 +521,22 @@ mod native {
                                 && event_fence == lease_fence,
                             "文件接棒就绪确认已失效"
                         );
-                        self.phase = Phase::Claimed(link.clone(), *session, lease_fence);
+                        self.phase = Phase::Claimed(link.clone(), *session, *lease, lease_fence);
+                    }
+                    Phase::Claimed(_, session, lease, _) | Phase::TargetDragging(_, session, lease, _)
+                        if event.session == *session && event.request == self.request =>
+                    {
+                        ensure!(event.lease == Some(*lease) && event_fence == lease_fence, "文件拖放租约已失效");
+                        self.phase = match (&self.phase, event.state) {
+                            (Phase::Claimed(..), State::TargetDown) => Phase::TargetDown(link.clone(), *session, *lease, lease_fence),
+                            (Phase::TargetDragging(..), State::TargetDrop) => Phase::TargetDrop(link.clone(), *session, *lease, lease_fence),
+                            _ => anyhow::bail!("文件拖放回执顺序无效"),
+                        };
+                    }
+                    Phase::TargetDown(_, session, _, _) | Phase::TargetDrop(_, session, _, _)
+                        if event.session == *session && event.request == self.request =>
+                    {
+                        anyhow::bail!("文件拖放已结束");
                     }
                     _ => (),
                 }
@@ -472,13 +550,41 @@ mod native {
             Ok(())
         }
 
+        fn accept_target_release(
+            &mut self,
+            session: u32,
+            lease: u64,
+            fence: u64,
+            current_fence: u64,
+            events: &std::collections::VecDeque<Reply>,
+        ) -> Result<()> {
+            if let Some(reply) = events.iter().find(|reply| {
+                reply.event.session == session && reply.event.request == self.request
+            }) {
+                ensure!(
+                    reply.event.state == State::TargetReleased
+                        && reply.event.lease == Some(lease)
+                        && reply.lease_fence == fence,
+                    "文件释放未确认"
+                );
+                self.phase = Phase::TargetReleased;
+            } else {
+                ensure!(current_fence == fence, "输入租约已结束");
+            }
+            Ok(())
+        }
+
         pub(crate) fn cancel(self, app: &mut App) {
             if let Phase::Registering(link, session, _)
             | Phase::Armed(link, session)
             | Phase::SourceCommitted(link, session, _)
             | Phase::Matched(link, session, _, _)
             | Phase::AwaitingClaim(link, session, _, _, _)
-            | Phase::Claimed(link, session, _) = self.phase
+            | Phase::Claimed(link, session, _, _)
+            | Phase::TargetDown(link, session, _, _)
+            | Phase::TargetDragging(link, session, _, _)
+            | Phase::TargetDrop(link, session, _, _)
+            | Phase::TargetReleasing(link, session, _, _) = self.phase
             {
                 let _ = link.send(
                     app,
@@ -487,6 +593,109 @@ mod native {
                         request: self.request,
                     },
                 );
+            }
+        }
+    }
+
+    #[cfg(all(windows, target_env = "msvc"))]
+    pub(crate) struct WindowsDelivery {
+        signal: Arc<std::sync::atomic::AtomicU8>,
+        started: std::sync::mpsc::SyncSender<()>,
+        owner: Option<std::thread::JoinHandle<Option<std::process::ChildStdin>>>,
+    }
+
+    #[cfg(all(windows, target_env = "msvc"))]
+    impl WindowsDelivery {
+        pub(crate) fn open(reservation: &Reservation, app: &mut App) -> Result<Self> {
+            let Phase::TargetDown(link, session, lease, fence) = &reservation.phase else {
+                anyhow::bail!("没有当前文件接棒的鼠标按下");
+            };
+            ensure!(link.current(app), "文件接棒会话已变化");
+            let (link, session, lease, fence) = (link.clone(), *session, *lease, *fence);
+            let mut reservation = Reservation {
+                proof: None, request: reservation.request, direction: reservation.direction,
+                expires: reservation.expires, phase: Phase::TargetDown(link.clone(), session, lease, fence),
+            };
+            let pipe = app.child.as_mut().and_then(|child| child.stdin.take())
+                .context("工作进程控制通道不可用")?;
+            let signal = Arc::new(std::sync::atomic::AtomicU8::new(0));
+            let shared = signal.clone();
+            let (started, start) = std::sync::mpsc::sync_channel(1);
+            let owner = std::thread::Builder::new().name("linko-ole-drop-control".into()).spawn(move || {
+                let mut pipe = pipe;
+                let mut send = |command: Command| -> Result<()> {
+                    writeln!(pipe, "{}", command.line())?;
+                    pipe.flush()?;
+                    Ok(())
+                };
+                let result = (|| -> Result<()> {
+                    start.recv_timeout(Duration::from_millis(600))?;
+                    ensure!(shared.load(Ordering::Acquire) == 0, "拖放已取消");
+                    send(Command::TargetStarted { session, request: reservation.request, lease })?;
+                    reservation.phase = Phase::TargetDragging(link.clone(), session, lease, fence);
+                    while shared.load(Ordering::Acquire) == 0 && Instant::now() < reservation.expires {
+                        let (current, events) = link.worker.7.lock().ok()
+                            .and_then(|mut inbox| inbox.take(link.epoch))
+                            .context("工作进程已退出")?;
+                        ensure!(!link.worker.2.load(Ordering::Acquire) && !link.worker.3.load(Ordering::Acquire), "工作进程已退出");
+                        if matches!(reservation.phase, Phase::TargetReleasing(..)) {
+                            reservation.accept_target_release(session, lease, fence, current, &events)?;
+                            if reservation.target_released() {
+                                shared.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire).ok();
+                                return Ok(());
+                            }
+                        } else {
+                            ensure!(current == fence, "输入租约已结束");
+                            for reply in events {
+                                if reply.event.session != session || reply.event.request != reservation.request {
+                                    continue;
+                                }
+                                ensure!(reply.event.state == State::TargetDrop && reply.event.lease == Some(lease)
+                                    && reply.lease_fence == fence, "文件拖放已结束");
+                                reservation.phase = Phase::TargetDrop(link.clone(), session, lease, fence);
+                                send(Command::TargetDropReady { session, request: reservation.request, lease })?;
+                                reservation.phase = Phase::TargetReleasing(link.clone(), session, lease, fence);
+                            }
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    anyhow::bail!("文件拖放已结束");
+                })();
+                if result.is_err() {
+                    shared.store(2, Ordering::Release);
+                    if send(Command::Cancel { session, request: reservation.request }).is_err() {
+                        return None;
+                    }
+                }
+                Some(pipe)
+            })?;
+            Ok(Self { signal, started, owner: Some(owner) })
+        }
+
+        pub(crate) fn native_check(&self, phase: u8) -> bool {
+            match phase {
+                0 => self.started.try_send(()).is_ok(),
+                1 => self.signal.load(Ordering::Acquire) != 2,
+                2 => {
+                    // The native loop may receive Up before stdout is parsed.
+                    let deadline = Instant::now() + Duration::from_millis(250);
+                    while self.signal.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                    self.signal.load(Ordering::Acquire) == 1
+                }
+                _ => false,
+            }
+        }
+
+        pub(crate) fn finish(mut self, app: &mut App) {
+            if self.signal.load(Ordering::Acquire) != 1 {
+                self.signal.store(2, Ordering::Release);
+            }
+            // Wake a control owner that is still waiting for OLE initialization.
+            let _ = self.started.try_send(());
+            if let Some(child) = app.child.as_mut() {
+                child.stdin = self.owner.take().and_then(|owner| owner.join().ok()).flatten();
             }
         }
     }
@@ -569,9 +778,10 @@ mod native {
                 .publish(Event::new(3, 5, State::Matched, Some(9)));
             reservation.tick(&mut app, &pin, now)?;
             assert_eq!(reservation.pending_lease(), Some(9));
-            assert!(reservation.confirm_ready(&mut app, &pin, 8, now).is_err());
-            reservation.confirm_ready(&mut app, &pin, 9, now)?;
-            assert!(reservation.confirm_ready(&mut app, &pin, 9, now).is_err());
+            let entry = EntryPoint::new(0.5, 0.5).unwrap();
+            assert!(reservation.confirm_ready(&mut app, &pin, 8, entry, now).is_err());
+            reservation.confirm_ready(&mut app, &pin, 9, entry, now)?;
+            assert!(reservation.confirm_ready(&mut app, &pin, 9, entry, now).is_err());
             worker
                 .7
                 .lock()
@@ -589,8 +799,8 @@ mod native {
             let commands = String::from_utf8(output.stdout)?;
             assert_eq!(commands.matches("fixture fd inspect").count(), 1);
             assert_eq!(commands.matches("fixture fd arm 3 5 ").count(), 1);
-            assert_eq!(commands.matches("fixture fd ready 3 5 9").count(), 1);
-            assert_eq!(commands.matches("fixture fd ready 3 5 8").count(), 0);
+            assert_eq!(commands.matches("fixture fd prepare-target 3 5 9 500000 500000").count(), 1);
+            assert_eq!(commands.matches("fixture fd prepare-target 3 5 8").count(), 0);
             assert_eq!(commands.matches("fixture fd cancel 3 5").count(), 1);
             drop(app);
             fixture.close()
@@ -683,6 +893,8 @@ mod native {
 
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 pub(super) use native::{next_request, Reservation, Status};
+#[cfg(all(windows, target_env = "msvc"))]
+pub(super) use native::WindowsDelivery;
 
 #[cfg(test)]
 mod tests {

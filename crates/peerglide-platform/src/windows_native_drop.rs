@@ -14,6 +14,8 @@ const READ_PIECE: usize = 64 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
 type ReadDropFile = extern "C" fn(*mut c_void, u64, *mut u8, usize) -> bool;
 type ReleaseDropFile = extern "C" fn(*mut c_void);
+type CheckDrag = extern "C" fn(*const c_void, u8) -> bool;
+type DragControl<'a> = &'a dyn Fn(u8) -> bool;
 
 extern "C" {
     fn linko_windows_copy_drag(path: *const u16, units: usize, millis: u32) -> i32;
@@ -25,6 +27,8 @@ extern "C" {
         owner: *mut c_void,
         read: ReadDropFile,
         release: ReleaseDropFile,
+        control: *const c_void,
+        check: Option<CheckDrag>,
     ) -> i32;
     fn linko_windows_copy_drag_text(text: *const u16, units: usize, millis: u32) -> i32;
     fn linko_windows_copy_drag_png(png: *const u8, bytes: usize, millis: u32) -> i32;
@@ -42,7 +46,29 @@ pub fn drag_verified_file(
     name: &str,
     bytes: u64,
     remaining: Duration,
+    read: impl FnMut(u64, &mut [u8]) -> Result<()> + Send + 'static,
+) -> Result<Outcome> {
+    verified_file_drag(name, bytes, remaining, read, None)
+}
+
+/// OLE owns the UI loop. Check the local handoff at startup, while active,
+/// and again before admitting the content stream for a completed release.
+pub fn drag_handoff_file(
+    name: &str,
+    bytes: u64,
+    remaining: Duration,
+    read: impl FnMut(u64, &mut [u8]) -> Result<()> + Send + 'static,
+    control: DragControl<'_>,
+) -> Result<Outcome> {
+    verified_file_drag(name, bytes, remaining, read, Some(control))
+}
+
+fn verified_file_drag(
+    name: &str,
+    bytes: u64,
+    remaining: Duration,
     mut read: impl FnMut(u64, &mut [u8]) -> Result<()> + Send + 'static,
+    control: Option<DragControl<'_>>,
 ) -> Result<Outcome> {
     ensure!(
         peerglide_transfer::valid_name(name),
@@ -78,8 +104,19 @@ pub fn drag_verified_file(
             owner,
             request_file_piece,
             release_file_reader,
+            (&control as *const Option<DragControl<'_>>).cast(),
+            control.map(|_| check_handoff as CheckDrag),
         )
     })
+}
+
+extern "C" fn check_handoff(control: *const c_void, phase: u8) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: OLE uses the borrowed callback on the same thread and only
+        // during the synchronous native call.
+        unsafe { &*control.cast::<Option<DragControl<'_>>>() }
+            .is_some_and(|check| check(phase))
+    })).unwrap_or(false)
 }
 
 extern "C" fn request_file_piece(

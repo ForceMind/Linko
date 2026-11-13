@@ -21,6 +21,8 @@ bool expired(ULONGLONG deadline) {
 #include "windows_file_drop_stream.h"
 
 namespace {
+using CheckDrag = bool (*)(const void*, uint8_t);
+
 class DataObject final : public IDataObject {
 public:
     DataObject(HGLOBAL data, CLIPFORMAT format, ULONGLONG deadline,
@@ -147,8 +149,9 @@ private:
 
 class DropSource final : public IDropSource {
 public:
-    explicit DropSource(ULONGLONG deadline, VirtualFile* file = nullptr)
-        : deadline_(deadline), file_(file) {}
+    explicit DropSource(ULONGLONG deadline, VirtualFile* file = nullptr,
+                        const void* control = nullptr, CheckDrag check = nullptr)
+        : deadline_(deadline), file_(file), control_(control), check_(check) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** result) override {
         if (!result) {
@@ -176,13 +179,14 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override {
-        if (escape || expired(deadline_)) {
+        const bool held = (keys & MK_LBUTTON) != 0;
+        if (escape || expired(deadline_) || (check_ && !check_(control_, held ? 1 : 2))) {
             if (file_) {
                 file_->close();
             }
             return DRAGDROP_S_CANCEL;
         }
-        if (keys & MK_LBUTTON) {
+        if (held) {
             return S_OK;
         }
         if (file_) {
@@ -199,6 +203,8 @@ private:
     volatile LONG refs_ = 1;
     ULONGLONG deadline_;
     ComPtr<VirtualFile> file_;
+    const void* control_;
+    CheckDrag check_;
 };
 
 struct OleScope {
@@ -211,7 +217,8 @@ struct OleScope {
 };
 // Takes ownership of allocation, including on cancellation or initialization failure.
 int32_t start_drag(HGLOBAL allocation, CLIPFORMAT format, ULONGLONG deadline,
-                   VirtualFile* file = nullptr, CLIPFORMAT stream_format = 0) {
+                   VirtualFile* file = nullptr, CLIPFORMAT stream_format = 0,
+                   const void* control = nullptr, CheckDrag check = nullptr) {
     if (expired(deadline) || !(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
         GlobalFree(allocation);
         return 0;
@@ -228,11 +235,14 @@ int32_t start_drag(HGLOBAL allocation, CLIPFORMAT format, ULONGLONG deadline,
         return E_OUTOFMEMORY;
     }
     ComPtr<IDropSource> source;
-    source.Attach(new (std::nothrow) DropSource(deadline, file));
+    source.Attach(new (std::nothrow) DropSource(deadline, file, control, check));
     if (!source) {
         return E_OUTOFMEMORY;
     }
 
+    if (check && !check(control, 0)) {
+        return 0;
+    }
     DWORD effect = DROPEFFECT_NONE;
     const auto result = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
     const bool verified = !file || file->close();
@@ -289,7 +299,7 @@ HGLOBAL file_descriptor(const uint16_t* name, size_t units, uint64_t bytes) {
 
 extern "C" int32_t linko_windows_verified_file_drag(
     const uint16_t* name, size_t units, uint64_t bytes, uint32_t millis, void* owner,
-    ReadDropFile read, ReleaseDropFile release) {
+    ReadDropFile read, ReleaseDropFile release, const void* control, CheckDrag check) {
     if (!name || units == 0 || units >= MAX_PATH || millis == 0 || millis > 60'000 || !owner
         || !read || !release) {
         if (owner && release) {
@@ -310,7 +320,7 @@ extern "C" int32_t linko_windows_verified_file_drag(
         return E_FAIL;
     }
     HGLOBAL allocation = file_descriptor(name, units, bytes);
-    return allocation ? start_drag(allocation, descriptor_format, deadline, file.Get(), stream_format)
+    return allocation ? start_drag(allocation, descriptor_format, deadline, file.Get(), stream_format, control, check)
                       : E_OUTOFMEMORY;
 }
 

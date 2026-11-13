@@ -235,6 +235,7 @@ pub enum State {
     SourceReleased,
     TargetDown,
     TargetDrop,
+    TargetReleased,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,7 +292,8 @@ impl Event {
                     | State::SourceCommitted
                     | State::SourceReleased
                     | State::TargetDown
-                    | State::TargetDrop => {
+                    | State::TargetDrop
+                    | State::TargetReleased => {
                         event.lease.is_some_and(|lease| lease != 0) && event.port.is_none()
                     }
                     State::Armed => {

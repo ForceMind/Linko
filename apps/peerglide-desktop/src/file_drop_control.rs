@@ -569,7 +569,11 @@ impl Scope<'_> {
                 return None;
             }
             let target = active.target.take()?;
-            (!dropped).then(|| self.event(target.request, State::Rejected))
+            Some(if dropped {
+                Event::new(self.session, target.request, State::TargetReleased, Some(lease))
+            } else {
+                self.event(target.request, State::Rejected)
+            })
         })
         .flatten()
     }
