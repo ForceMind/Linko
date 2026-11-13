@@ -114,9 +114,9 @@ extern "C" fn check_handoff(control: *const c_void, phase: u8) -> bool {
     catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: OLE uses the borrowed callback on the same thread and only
         // during the synchronous native call.
-        unsafe { &*control.cast::<Option<DragControl<'_>>>() }
-            .is_some_and(|check| check(phase))
-    })).unwrap_or(false)
+        unsafe { &*control.cast::<Option<DragControl<'_>>>() }.is_some_and(|check| check(phase))
+    }))
+    .unwrap_or(false)
 }
 
 extern "C" fn request_file_piece(

@@ -2912,7 +2912,12 @@ mod tests {
                         controller.submit(confirm(lease));
                         assert_eq!(
                             observed.recv().await,
-                            Some(Event::new(session, request, State::TargetReleased, Some(lease)))
+                            Some(Event::new(
+                                session,
+                                request,
+                                State::TargetReleased,
+                                Some(lease)
+                            ))
                         );
                         // Confirmed Up removes the drop state. The later ordinary
                         // v5 Release will not reject or repeat this file drop.

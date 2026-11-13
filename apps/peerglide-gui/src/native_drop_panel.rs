@@ -313,6 +313,9 @@ impl Export {
         let source = self.source.as_ref().context("没有已接收文件")?;
         handoff.reservation.tick(app, &source.pin, now)?;
         if let Some(lease) = handoff.reservation.pending_lease() {
+            let Some(entry) = handoff.entry else {
+                return Ok(());
+            };
             handoff.attempt.scope.verify_layout()?;
             self.admission
                 .file_ready(
@@ -325,7 +328,7 @@ impl Export {
                 .map_err(admission_error)?;
             handoff
                 .reservation
-                .confirm_ready(app, &source.pin, lease, handoff.entry.context("拖放起点尚未显示")?, now)?;
+                .confirm_ready(app, &source.pin, lease, entry, now)?;
         }
         #[cfg(target_os = "macos")]
         {
@@ -340,7 +343,9 @@ impl Export {
             if let Some(outcome) = handoff.drag.as_ref().and_then(|drag| drag.outcome()) {
                 use peerglide_platform::macos_native_drop::Outcome;
                 let outcome = match outcome {
-                    Outcome::Copied if handoff.reservation.target_released() => NativeOutcome::Copied,
+                    Outcome::Copied if handoff.reservation.target_released() => {
+                        NativeOutcome::Copied
+                    }
                     Outcome::Copied | Outcome::Unknown => NativeOutcome::Unknown,
                     Outcome::Cancelled => NativeOutcome::Cancelled,
                 };
@@ -582,7 +587,10 @@ impl Export {
         let current = super::data_access::ready(app)
             && app.page == Page::Transfers
             && app.config.allow
-            && self.source.as_ref().is_some_and(|source| source.pin.recheck(app).is_ok())
+            && self
+                .source
+                .as_ref()
+                .is_some_and(|source| source.pin.recheck(app).is_ok())
             && attempt.scope.verify_layout().is_ok();
         self.report_outcome(attempt, current, outcome);
     }
@@ -612,7 +620,9 @@ impl Export {
     }
 
     fn handoff_area(&mut self, app: &mut App, ui: &mut egui::Ui) -> Result<()> {
-        let State::Handoff(handoff) = &mut self.state else { return Ok(()); };
+        let State::Handoff(handoff) = &mut self.state else {
+            return Ok(());
+        };
         if handoff.file.is_none() {
             ui.label("正在接收跨机拖动。");
             return Ok(());
@@ -624,28 +634,45 @@ impl Export {
         let global = position.map(|origin| origin + rect.center().to_vec2());
         let origin = app.display_inventory.receive_origin()?;
         let layout = &handoff.attempt.scope.layout;
-        let display = layout.displays().iter().find(|display| match origin {
-            Some((x, y)) => (display.bounds.left, display.bounds.top) == (x, y),
-            None => display.id == layout.primary(),
-        }).context("找不到接收显示器")?;
+        let display = layout
+            .displays()
+            .iter()
+            .find(|display| match origin {
+                Some((x, y)) => (display.bounds.left, display.bounds.top) == (x, y),
+                None => display.id == layout.primary(),
+            })
+            .context("找不到接收显示器")?;
         let entry = global.filter(|_| fully_visible).and_then(|point| {
-            let scale = if cfg!(windows) { ui.ctx().pixels_per_point() } else { ui.ctx().zoom_factor() };
+            let scale = if cfg!(windows) {
+                ui.ctx().pixels_per_point()
+            } else {
+                ui.ctx().zoom_factor()
+            };
             let bounds = display.bounds;
             EntryPoint::new(
                 (f64::from(point.x * scale) - bounds.left) / (bounds.right - bounds.left - 1.0),
                 (f64::from(point.y * scale) - bounds.top) / (bounds.bottom - bounds.top - 1.0),
             )
         });
+        if entry.is_none() {
+            ui.label("请将文件页的拖放起点完整显示在接收屏幕上。");
+        }
         if handoff.entry != entry || handoff.region != Some(rect) {
-            ensure!(!handoff.reservation.target_position_frozen(), "文件拖放起点已移动");
+            ensure!(
+                !handoff.reservation.target_position_frozen(),
+                "文件拖放起点已移动"
+            );
             handoff.entry = entry;
             handoff.region = Some(rect);
             handoff.pressed = false;
         }
-        if region.hovered() && ui.input(|input| {
-            input.focused && input.pointer.button_pressed(egui::PointerButton::Primary)
-                && input.pointer.primary_down()
-        }) {
+        if region.hovered()
+            && ui.input(|input| {
+                input.focused
+                    && input.pointer.button_pressed(egui::PointerButton::Primary)
+                    && input.pointer.primary_down()
+            })
+        {
             #[cfg(target_os = "macos")]
             {
                 handoff.press = peerglide_platform::macos_native_drop::HandoffPress::current();
@@ -659,13 +686,26 @@ impl Export {
         if !ui.input(|input| input.pointer.primary_down()) {
             handoff.pressed = false;
             #[cfg(target_os = "macos")]
-            { handoff.press = None; }
+            {
+                handoff.press = None;
+            }
         }
         if handoff.reservation.target_down() && handoff.pressed && entry.is_some() {
-            let local_cursor = peerglide_platform::cursor_position().and_then(|point| {
-                super::cursor_overlay::points(point, cfg!(windows), ui.ctx().pixels_per_point(), ui.ctx().zoom_factor())
-            }).zip(position).map(|(point, origin)| point - origin.to_vec2());
-            ensure!(local_cursor.is_some_and(|point| rect.contains(point)), "鼠标没有落在本机接棒区域");
+            let local_cursor = peerglide_platform::cursor_position()
+                .and_then(|point| {
+                    super::cursor_overlay::points(
+                        point,
+                        cfg!(windows),
+                        ui.ctx().pixels_per_point(),
+                        ui.ctx().zoom_factor(),
+                    )
+                })
+                .zip(position)
+                .map(|(point, origin)| point - origin.to_vec2());
+            ensure!(
+                local_cursor.is_some_and(|point| rect.contains(point)),
+                "鼠标没有落在本机接棒区域"
+            );
             self.begin_handoff_drag(app)?;
         }
         Ok(())
@@ -681,17 +721,33 @@ impl Export {
             source.pin.recheck(app)?;
             handoff.attempt.scope.verify_layout()?;
             let path = handoff.file.take().context("文件接棒已启动")?;
-            let remaining = handoff.attempt.expires.saturating_duration_since(Instant::now());
-            self.admission.submit(ticket, handoff.attempt.scope.context, now_ms(), true, Effect::Copy)
+            let remaining = handoff
+                .attempt
+                .expires
+                .saturating_duration_since(Instant::now());
+            self.admission
+                .submit(
+                    ticket,
+                    handoff.attempt.scope.context,
+                    now_ms(),
+                    true,
+                    Effect::Copy,
+                )
                 .map_err(admission_error)?;
             #[cfg(target_os = "macos")]
             {
                 use peerglide_platform::macos_native_drop::Drag;
-                let press = handoff.press.take().context("接收窗口没有收到对应的鼠标按下")?;
+                let press = handoff
+                    .press
+                    .take()
+                    .context("接收窗口没有收到对应的鼠标按下")?;
                 let delivery = handoff.delivery.clone();
                 let write = move |destination: &std::path::Path, allowed: &dyn Fn() -> bool| {
                     let deadline = Instant::now() + Duration::from_millis(350);
-                    while allowed() && delivery.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+                    while allowed()
+                        && delivery.load(Ordering::Acquire) == 0
+                        && Instant::now() < deadline
+                    {
                         std::thread::sleep(Duration::from_millis(2));
                     }
                     path.copy_to_drop_destination(destination, || {
@@ -702,13 +758,19 @@ impl Export {
                         }
                     })
                 };
-                handoff.drag = Some(Drag::start_handoff_promise(source.file.name(), remaining, press, write)?);
+                handoff.drag = Some(Drag::start_handoff_promise(
+                    source.file.name(),
+                    remaining,
+                    press,
+                    write,
+                )?);
                 handoff.reservation.target_started(app)?;
             }
             #[cfg(all(windows, target_env = "msvc"))]
             {
                 use peerglide_platform::windows_native_drop::{drag_handoff_file, Outcome};
-                let control = super::file_drop_reservation::WindowsDelivery::open(&handoff.reservation, app)?;
+                let control =
+                    super::file_drop_reservation::WindowsDelivery::open(&handoff.reservation, app)?;
                 let mut reader = path.into_verified_reader();
                 let result = drag_handoff_file(
                     source.file.name(),
@@ -759,33 +821,33 @@ impl Export {
                 egui::vec2(ui.available_width(), 56.0),
                 egui::Layout::top_down(egui::Align::LEFT),
                 |ui| match handoff.reservation.status() {
-                Status::WaitingForWorker => {
-                    ui.label("在本机开启键鼠协同后，将登记本次文件接棒。");
-                    if ui
-                        .add_enabled(
-                            app.native_start_available(),
-                            egui::Button::new("开启键鼠协同"),
-                        )
-                        .clicked()
-                    {
-                        app.workspace_action(super::desktop_state::Action::StartInput);
+                    Status::WaitingForWorker => {
+                        ui.label("在本机开启键鼠协同后，将登记本次文件接棒。");
+                        if ui
+                            .add_enabled(
+                                app.native_start_available(),
+                                egui::Button::new("开启键鼠协同"),
+                            )
+                            .clicked()
+                        {
+                            app.workspace_action(super::desktop_state::Action::StartInput);
+                        }
                     }
-                }
-                Status::Confirming => {
-                    ui.label("正在等待工作进程确认文件接棒。");
-                }
-                Status::Listening(port) => {
-                    ui.label(format!("本机 UDP {port} 已预约，等待已配对电脑。"));
-                }
-                Status::Matched => {
-                    ui.label("文件预约已确认当前输入租约。");
-                }
-                Status::Press
-                | Status::SourceArmed
-                | Status::SourceCommitted
-                | Status::SourceReleased => {
-                    unreachable!("source reservation in the receive panel");
-                }
+                    Status::Confirming => {
+                        ui.label("正在等待工作进程确认文件接棒。");
+                    }
+                    Status::Listening(port) => {
+                        ui.label(format!("本机 UDP {port} 已预约，等待已配对电脑。"));
+                    }
+                    Status::Matched => {
+                        ui.label("文件预约已确认当前输入租约。");
+                    }
+                    Status::Press
+                    | Status::SourceArmed
+                    | Status::SourceCommitted
+                    | Status::SourceReleased => {
+                        unreachable!("source reservation in the receive panel");
+                    }
                 },
             );
             if ui.button("撤回文件预约").clicked() {

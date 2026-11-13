@@ -364,10 +364,20 @@ extern "C" int32_t linko_windows_file_stream_regression() {
         GlobalFree(descriptor);
         return 4;
     }
+    bool released = false;
+    const auto check = [](const void* control, uint8_t phase) {
+        return phase != 2 || *static_cast<const bool*>(control);
+    };
     ComPtr<IDropSource> source;
-    source.Attach(new (std::nothrow) DropSource(deadline, file.Get()));
+    source.Attach(new (std::nothrow) DropSource(deadline, file.Get(), &released, check));
     if (!source) {
         return 5;
+    }
+    // A recovery Up cancels and closes the file without granting its stream.
+    ComPtr<IDropSource> unconfirmed;
+    unconfirmed.Attach(new (std::nothrow) DropSource(deadline, nullptr, &released, check));
+    if (!unconfirmed || unconfirmed->QueryContinueDrag(FALSE, 0) != DRAGDROP_S_CANCEL) {
+        return 13;
     }
     FORMATETC metadata{descriptor_format, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
     STGMEDIUM medium{};
@@ -391,6 +401,7 @@ extern "C" int32_t linko_windows_file_stream_regression() {
         data->GetData(&content, &medium) != STG_E_ACCESSDENIED || fixture.reads != 0) {
         return 8;
     }
+    released = true;
     if (source->QueryContinueDrag(FALSE, 0) != DRAGDROP_S_DROP ||
         FAILED(data->GetData(&content, &medium))) {
         return 9;
