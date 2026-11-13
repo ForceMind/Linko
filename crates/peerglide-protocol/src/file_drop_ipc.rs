@@ -4,6 +4,26 @@ use std::net::SocketAddr;
 
 pub const MAX_LIFETIME_MS: u32 = 60_000;
 pub const PROOF_HEX: usize = 160;
+const POINT_SCALE: u32 = 1_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntryPoint([u32; 2]);
+
+impl EntryPoint {
+    pub fn new(x: f64, y: f64) -> Option<Self> {
+        [x, y]
+            .into_iter()
+            .all(|value| (0.0..=1.0).contains(&value))
+            .then(|| Self([x, y].map(|value| (value * f64::from(POINT_SCALE)).round() as u32)))
+    }
+
+    pub fn coordinates(self) -> (f64, f64) {
+        let [x, y] = self
+            .0
+            .map(|value| f64::from(value) / f64::from(POINT_SCALE));
+        (x, y)
+    }
+}
 
 // This value may carry a short-lived proof. Do not derive Debug or use it in
 // diagnostics. The worker receives it only through the bounded private stdin.
@@ -24,6 +44,22 @@ pub enum Command {
         proof: String,
     },
     Ready {
+        session: u32,
+        request: u32,
+        lease: u64,
+    },
+    PrepareTarget {
+        session: u32,
+        request: u32,
+        lease: u64,
+        entry: EntryPoint,
+    },
+    TargetStarted {
+        session: u32,
+        request: u32,
+        lease: u64,
+    },
+    TargetDropReady {
         session: u32,
         request: u32,
         lease: u64,
@@ -82,6 +118,32 @@ impl Command {
                 request: identifier(fields.next()?)?,
                 lease: hex_id(fields.next()?, 16)?,
             },
+            "prepare-target" => {
+                let session = identifier(fields.next()?)?;
+                let request = identifier(fields.next()?)?;
+                let lease = hex_id(fields.next()?, 16)?;
+                let x: u32 = fields.next()?.parse().ok()?;
+                let y: u32 = fields.next()?.parse().ok()?;
+                if x > POINT_SCALE || y > POINT_SCALE {
+                    return None;
+                }
+                Self::PrepareTarget {
+                    session,
+                    request,
+                    lease,
+                    entry: EntryPoint([x, y]),
+                }
+            }
+            "target-started" => Self::TargetStarted {
+                session: identifier(fields.next()?)?,
+                request: identifier(fields.next()?)?,
+                lease: hex_id(fields.next()?, 16)?,
+            },
+            "target-drop-ready" => Self::TargetDropReady {
+                session: identifier(fields.next()?)?,
+                request: identifier(fields.next()?)?,
+                lease: hex_id(fields.next()?, 16)?,
+            },
             "cancel" => Self::Cancel {
                 session: identifier(fields.next()?)?,
                 request: identifier(fields.next()?)?,
@@ -115,6 +177,29 @@ impl Command {
                 request,
                 lease,
             } => format!("fd ready {session:x} {request:x} {lease:x}"),
+            Self::PrepareTarget {
+                session,
+                request,
+                lease,
+                entry,
+            } => {
+                let [x, y] = entry.0;
+                format!("fd prepare-target {session:x} {request:x} {lease:x} {x} {y}")
+            }
+            Self::TargetStarted {
+                session,
+                request,
+                lease,
+            } => {
+                format!("fd target-started {session:x} {request:x} {lease:x}")
+            }
+            Self::TargetDropReady {
+                session,
+                request,
+                lease,
+            } => {
+                format!("fd target-drop-ready {session:x} {request:x} {lease:x}")
+            }
             Self::Cancel { session, request } => format!("fd cancel {session:x} {request:x}"),
         }
     }
@@ -148,6 +233,8 @@ pub enum State {
     SourceArmed,
     SourceCommitted,
     SourceReleased,
+    TargetDown,
+    TargetDrop,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,7 +289,9 @@ impl Event {
                     State::Matched
                     | State::Claimed
                     | State::SourceCommitted
-                    | State::SourceReleased => {
+                    | State::SourceReleased
+                    | State::TargetDown
+                    | State::TargetDrop => {
                         event.lease.is_some_and(|lease| lease != 0) && event.port.is_none()
                     }
                     State::Armed => {
@@ -260,6 +349,26 @@ mod tests {
         assert!(Command::parse("fd ready 1 2 0").is_none());
         assert!(Command::parse("fd ready 1 2 10000000000000000").is_none());
         assert!(Command::parse("fd ready 1 2 AB").is_none());
+    }
+
+    #[test]
+    fn target_entry_is_local_bounded_and_lease_scoped() {
+        let entry = EntryPoint::new(0.25, 0.75).unwrap();
+        let command = Command::PrepareTarget {
+            session: 1,
+            request: 2,
+            lease: 3,
+            entry,
+        };
+        assert!(matches!(
+            Command::parse(&command.line()),
+            Some(Command::PrepareTarget { session: 1, request: 2, lease: 3, entry: decoded })
+                if decoded == entry
+        ));
+        assert_eq!(entry.coordinates(), (0.25, 0.75));
+        assert!(EntryPoint::new(f64::NAN, 0.0).is_none());
+        assert!(Command::parse("fd prepare-target 1 2 3 0 1000001").is_none());
+        assert!(Command::parse("fd target-started 1 2 0").is_none());
     }
 
     #[test]
