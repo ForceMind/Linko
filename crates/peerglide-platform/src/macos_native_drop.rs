@@ -30,7 +30,10 @@ extern "C" {
         write: NativePromiseWriter,
         destroy: extern "C" fn(*mut c_void),
         owner: *mut *mut c_void,
+        origin: *mut c_void,
     ) -> i32;
+    fn linko_macos_file_drag_press() -> *mut c_void;
+    fn linko_macos_file_drag_press_release(press: *mut c_void);
     fn linko_macos_copy_drag_text(
         text: *const u8,
         bytes: usize,
@@ -44,6 +47,7 @@ extern "C" {
         owner: *mut *mut c_void,
     ) -> i32;
     fn linko_macos_copy_drag_outcome(owner: *mut c_void) -> i32;
+    fn linko_macos_copy_drag_started(owner: *mut c_void) -> bool;
     fn linko_macos_copy_drag_cancel(owner: *mut c_void);
     fn linko_macos_copy_drag_release(owner: *mut c_void);
 }
@@ -53,6 +57,24 @@ pub enum Outcome {
     Copied,
     Cancelled,
     Unknown,
+}
+
+/// Retains the actual, tagged AppKit mouse-down from the receiving window.
+pub struct HandoffPress(*mut c_void);
+
+impl HandoffPress {
+    pub fn current() -> Option<Self> {
+        // SAFETY: the bridge checks the main thread before accessing AppKit.
+        let press = unsafe { linko_macos_file_drag_press() };
+        (!press.is_null()).then(|| Self(press))
+    }
+}
+
+impl Drop for HandoffPress {
+    fn drop(&mut self) {
+        // SAFETY: this handle owns one retain and is not transferable.
+        unsafe { linko_macos_file_drag_press_release(self.0) };
+    }
 }
 
 pub struct Drag {
@@ -86,6 +108,24 @@ impl Drag {
         remaining: Duration,
         write: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<()> + Send + 'static,
     ) -> Result<Self> {
+        Self::file_promise(name, remaining, write, null_mut())
+    }
+
+    pub fn start_handoff_promise(
+        name: &str,
+        remaining: Duration,
+        press: HandoffPress,
+        write: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<()> + Send + 'static,
+    ) -> Result<Self> {
+        Self::file_promise(name, remaining, write, press.0)
+    }
+
+    fn file_promise(
+        name: &str,
+        remaining: Duration,
+        write: impl FnOnce(&Path, &dyn Fn() -> bool) -> Result<()> + Send + 'static,
+        origin: *mut c_void,
+    ) -> Result<Self> {
         ensure!(
             peerglide_transfer::valid_name(name),
             "invalid native drop name"
@@ -105,6 +145,7 @@ impl Drag {
                     write_promise,
                     drop_promise,
                     owner,
+                    origin,
                 )
             }
         })
@@ -137,6 +178,11 @@ impl Drag {
             "macOS native copy drag could not start ({result})"
         );
         Ok(Self { owner })
+    }
+
+    pub fn started(&self) -> bool {
+        // SAFETY: the owner remains retained for the lifetime of the drag.
+        unsafe { linko_macos_copy_drag_started(self.owner) }
     }
 
     pub fn outcome(&self) -> Option<Outcome> {
