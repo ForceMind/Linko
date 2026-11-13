@@ -1275,7 +1275,7 @@ fn draw_workspace_device(
         let labels = painter.with_clip_rect(node);
         let title = labels.layout_no_wrap(
             name.chars().take(24).collect(),
-            egui::FontId::new(15.0, egui::FontFamily::Name("linko-semibold".into())),
+            egui::FontId::new(15.0, egui::FontFamily::Name("linko-emphasis".into())),
             ui.visuals().text_color(),
         );
         let title_rect = egui::Align2::CENTER_TOP.anchor_size(

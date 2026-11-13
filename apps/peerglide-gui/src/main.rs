@@ -100,11 +100,7 @@ struct Options {
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     let fallback = fonts.families[&egui::FontFamily::Proportional].clone();
-    for (name, weight) in [
-        ("noto-sans-sc", 400.0),
-        ("linko-semibold", 550.0),
-        ("linko-heading", 650.0),
-    ] {
+    for (name, weight) in [("noto-sans-sc", 400.0), ("linko-emphasis", 600.0)] {
         let mut data =
             egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansSC.ttf"));
         // Reuse the same licensed variable font bytes with real weight axes;
