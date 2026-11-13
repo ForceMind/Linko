@@ -52,7 +52,7 @@ impl Panel {
         }
     }
 
-    fn receive_origin(&self) -> anyhow::Result<Option<(f64, f64)>> {
+    pub(super) fn receive_origin(&self) -> anyhow::Result<Option<(f64, f64)>> {
         let Some(selected) = self.receive_display else {
             return Ok(None);
         };

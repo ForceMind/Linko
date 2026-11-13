@@ -1,5 +1,6 @@
 // A copy-only AppKit drag from prepared local content.
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CoreGraphics.h>
 
 #include <atomic>
 #include <chrono>
@@ -16,6 +17,7 @@ using DropPromise = void (*)(void*);
 @public
     std::atomic<int32_t> outcome;
     std::atomic<bool> allowed;
+    std::atomic<bool> started;
     std::atomic<bool> promise_requested;
     std::atomic<int32_t> promise_outcome;
     Clock::time_point deadline;
@@ -46,6 +48,7 @@ static bool can_write_promise(void* owner) {
     if (self) {
         outcome.store(0, std::memory_order_relaxed);
         allowed.store(false, std::memory_order_relaxed);
+        started.store(false, std::memory_order_relaxed);
         promise_requested.store(false, std::memory_order_relaxed);
         promise_outcome.store(0, std::memory_order_relaxed);
     }
@@ -82,6 +85,12 @@ static bool can_write_promise(void* owner) {
     (void)session;
     (void)context;
     return [self offerAvailable] ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession*)session willBeginAtPoint:(NSPoint)point {
+    (void)session;
+    (void)point;
+    started.store(true, std::memory_order_release);
 }
 
 - (void)draggingSession:(NSDraggingSession*)session endedAtPoint:(NSPoint)point
@@ -138,7 +147,8 @@ static bool can_write_promise(void* owner) {
 }
 @end
 
-static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* source, void** owner) {
+static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* source,
+                          void** owner, NSEvent* origin = nil) {
     if (!owner || !data || !source || ![NSThread isMainThread]) {
         return -1;
     }
@@ -148,7 +158,7 @@ static int32_t start_drag(id<NSPasteboardWriting> data, LinkoNativeCopySource* s
     }
     NSWindow* window = NSApp.keyWindow;
     NSView* view = window.contentView;
-    NSEvent* event = NSApp.currentEvent;
+    NSEvent* event = origin ?: NSApp.currentEvent;
     if (!view || !event || event.window != window || event.type != NSEventTypeLeftMouseDown) {
         return -3;
     }
@@ -192,7 +202,7 @@ extern "C" int32_t linko_macos_copy_drag_start(
 
 extern "C" int32_t linko_macos_file_promise_start(
     const uint8_t* name, size_t bytes, uint32_t millis, void* context, WritePromise write,
-    DropPromise destroy, void** owner) {
+    DropPromise destroy, void** owner, void* origin) {
     if (!name || bytes == 0 || bytes > 200 || millis == 0 || millis > 60'000 || !context || !write
         || !destroy || ![NSThread isMainThread]) {
         if (context && destroy) {
@@ -216,7 +226,24 @@ extern "C" int32_t linko_macos_file_promise_start(
                                                                        delegate:source];
     // The provider keeps its delegate alive through the post-drop write request.
     data.userInfo = source;
-    return start_drag(data, source, owner);
+    return start_drag(data, source, owner, (__bridge NSEvent*)origin);
+}
+
+extern "C" void* linko_macos_file_drag_press() {
+    if (![NSThread isMainThread]) {
+        return nullptr;
+    }
+    NSEvent* event = NSApp.currentEvent;
+    if (!event || !event.window || event.window != NSApp.keyWindow
+        || event.type != NSEventTypeLeftMouseDown || !event.CGEvent
+        || CGEventGetIntegerValueField(event.CGEvent, kCGEventSourceUserData) != 0x50474c44) {
+        return nullptr;
+    }
+    return (__bridge_retained void*)event;
+}
+
+extern "C" void linko_macos_file_drag_press_release(void* press) {
+    (void)CFBridgingRelease(press);
 }
 
 static int32_t start_content_drag(
@@ -265,6 +292,11 @@ extern "C" int32_t linko_macos_copy_drag_outcome(void* owner) {
         return source->promise_outcome.load(std::memory_order_acquire);
     }
     return operation;
+}
+
+extern "C" bool linko_macos_copy_drag_started(void* owner) {
+    auto* source = (__bridge LinkoNativeCopySource*)owner;
+    return source && source->started.load(std::memory_order_acquire);
 }
 
 extern "C" void linko_macos_copy_drag_cancel(void* owner) {
