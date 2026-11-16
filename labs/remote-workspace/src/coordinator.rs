@@ -12,7 +12,7 @@ use crate::handoff::{Command, Handoff, State};
 use crate::media::{LatestFrame, RawFrame, MAX_FRAME_BYTES, MAX_QUEUE_AGE_MS};
 use crate::routing::{InputRouter, InputTicket, Placement, PointerSample, ReleaseRequest};
 use crate::session::{ContentCheck, ControlScope, FrameStamp, SessionGate, SurfaceKind};
-use crate::{advance, Error, SurfaceKey};
+use crate::{advance, Binding, Error, SurfaceKey};
 
 pub const MAX_SURFACES: usize = 16;
 
@@ -172,8 +172,16 @@ impl Coordinator {
         self.surfaces.get_mut(&view).ok_or(Error::StaleTarget)
     }
 
+    fn cancel_active_handoff(&mut self) {
+        if let Some(view) = self.active.take() {
+            if let Some(s) = self.surfaces.get_mut(&view) {
+                s.cancel_handoff();
+            }
+        }
+    }
+
     fn stop_input(&mut self) -> Option<ReleaseRequest> {
-        self.active = None;
+        self.cancel_active_handoff();
         self.input.stop()
     }
 
@@ -185,7 +193,7 @@ impl Coordinator {
 
     fn sync_input(&mut self) {
         if self.input.pending_release().is_some() {
-            self.active = None;
+            self.cancel_active_handoff();
         }
     }
 
@@ -424,7 +432,9 @@ impl Coordinator {
     ) -> Result<SurfaceKey, Error> {
         self.poll(now)?;
         let s = self.surfaces.get(&view).ok_or(Error::StaleTarget)?;
-        let result = self.input.authorize(ticket, &s.gate, s.placement, sequence, now);
+        let result = self
+            .input
+            .authorize(ticket, &s.gate, s.placement, sequence, now);
         self.sync_input();
         result
     }
@@ -487,13 +497,19 @@ impl Coordinator {
         timeout: u64,
     ) -> Result<HandoffToken, Error> {
         self.poll(now)?;
+        if self.input.pending_release().is_some() {
+            return Err(Error::ReleasePending);
+        }
         let attempt = self.next_attempt.checked_add(1).ok_or(Error::Capacity)?;
         let s = self.surface_mut(view)?;
         if !s.parking_allowed {
             return Err(Error::PermissionDenied);
         }
         s.gate.can_control(now)?;
-        if s.handoff.as_ref().is_some_and(|(_, h)| h.state() != State::Local) {
+        if s.handoff
+            .as_ref()
+            .is_some_and(|(_, h)| h.state() != State::Local)
+        {
             return Err(Error::InvalidState);
         }
         let h = Handoff::begin(s.gate.key(), attempt, bounds, now, timeout)?;
@@ -543,7 +559,9 @@ impl Coordinator {
     /// Remains available after consent revocation or terminal connection closure.
     pub fn acknowledge_restored(&mut self, token: HandoffToken, now: u64) -> Result<(), Error> {
         self.clock(now)?;
-        self.surface_mut(token.view)?.transaction(token)?.acknowledge_restored(token.attempt)
+        self.surface_mut(token.view)?
+            .transaction(token)?
+            .acknowledge_restored(token.attempt)
     }
 
     /// Terminal for this handle. A fault never silently restarts capture/control.
@@ -562,6 +580,33 @@ impl Coordinator {
         Ok(())
     }
 
+    /// A transport/worker fault may affect several windows on one connection.
+    /// Close every matching live view, not merely the currently selected panel.
+    /// Unrelated authenticated bindings and their recovery obligations are retained.
+    pub fn close_binding(
+        &mut self,
+        binding: Binding,
+        fault: Fault,
+        now: u64,
+    ) -> Result<usize, Error> {
+        self.clock(now)?;
+        binding.validate()?;
+        if binding.viewer != self.viewer {
+            return Err(Error::InvalidIdentity);
+        }
+        let views: Vec<_> = self
+            .surfaces
+            .iter()
+            .filter(|(_, s)| s.connected && s.gate.key().binding == binding)
+            .map(|(view, _)| *view)
+            .collect();
+        let count = views.len();
+        for view in views {
+            self.close(view, fault, now)?;
+        }
+        Ok(count)
+    }
+
     /// Closing a view cannot discard an outstanding native recovery obligation.
     pub fn retire(&mut self, view: ViewId, now: u64) -> Result<(), Error> {
         self.poll(now)?;
@@ -569,10 +614,17 @@ impl Coordinator {
         if s.connected {
             return Err(Error::InvalidState);
         }
-        if self.input.pending_release().is_some_and(|r| r.target() == s.gate.key()) {
+        if self
+            .input
+            .pending_release()
+            .is_some_and(|r| r.target() == s.gate.key())
+        {
             return Err(Error::ReleasePending);
         }
-        if s.handoff.as_ref().is_some_and(|(_, h)| h.state() != State::Local) {
+        if s.handoff
+            .as_ref()
+            .is_some_and(|(_, h)| h.state() != State::Local)
+        {
             return Err(Error::InvalidState);
         }
         self.surfaces.remove(&view);
@@ -587,7 +639,15 @@ impl Coordinator {
                 s.clear_media();
                 s.parking_allowed = false;
             }
-            if s.presenting.is_some_and(|p| now - p.received_at >= MAX_QUEUE_AGE_MS) {
+            if s.queued_at
+                .is_some_and(|received| now - received >= MAX_QUEUE_AGE_MS)
+            {
+                s.frames.clear();
+                s.queued_at = None;
+            }
+            if s.presenting
+                .is_some_and(|p| now - p.received_at >= MAX_QUEUE_AGE_MS)
+            {
                 s.presenting = None;
             }
             if let Some((_, h)) = &mut s.handoff {
@@ -595,6 +655,7 @@ impl Coordinator {
                 let _ = h.revalidate(&s.gate, now);
             }
             if self.active == Some(*view) && self.input.poll(&s.gate, now).is_err() {
+                s.cancel_handoff();
                 self.active = None;
             }
         }
@@ -613,7 +674,10 @@ impl Coordinator {
             viewing_allowed: s.gate.can_view(now).is_ok(),
             control_policy_ready: s.gate.can_control(now).is_ok(),
             input_active: self.active == Some(view),
-            release_pending: self.input.pending_release().is_some_and(|r| r.target() == s.gate.key()),
+            release_pending: self
+                .input
+                .pending_release()
+                .is_some_and(|r| r.target() == s.gate.key()),
             frame_queued: s.frames.has_frame(),
             presentation_pending: s.presenting.is_some(),
             handoff: s.handoff.as_ref().map(|(_, h)| h.state()),
