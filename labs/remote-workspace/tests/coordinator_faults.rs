@@ -209,7 +209,10 @@ fn repeated_focus_preserves_replay_watermark() {
     c.authorize_input(v, t, 7, 1).unwrap();
     let same = c.focus(v, 1).unwrap();
     assert_eq!(t, same);
-    assert_eq!(c.authorize_input(v, same, 7, 1), Err(Error::InvalidSequence));
+    assert_eq!(
+        c.authorize_input(v, same, 7, 1),
+        Err(Error::InvalidSequence)
+    );
     assert!(c.authorize_input(v, same, 8, 1).is_ok());
 }
 
@@ -223,7 +226,10 @@ fn old_release_ack_cannot_clear_a_new_cleanup_barrier() {
     c.focus(v, 1).unwrap();
     let current = c.blur(1).unwrap().unwrap();
     assert_ne!(old, current);
-    assert_eq!(c.acknowledge_release(old, 1), Err(Error::WrongAcknowledgement));
+    assert_eq!(
+        c.acknowledge_release(old, 1),
+        Err(Error::WrongAcknowledgement)
+    );
     assert_eq!(c.pending_release(), Some(current));
 }
 
@@ -278,7 +284,10 @@ fn invalid_geometry_is_rejected_without_losing_a_good_route() {
     let mut geometry = spec(1).geometry;
     geometry.pixels.width = 0;
     geometry.revision = 2;
-    assert_eq!(c.revise_geometry(v, geometry, 2), Err(Error::InvalidGeometry));
+    assert_eq!(
+        c.revise_geometry(v, geometry, 2),
+        Err(Error::InvalidGeometry)
+    );
     assert!(c.authorize_input(v, t, 1, 2).is_ok());
 }
 
@@ -364,13 +373,19 @@ fn all_fault_categories_are_terminal_and_preserve_release_obligations() {
 fn default_mirror_mode_never_requests_source_parking() {
     let mut c = coordinator();
     let v = live(&mut c, 1);
-    assert_eq!(c.begin_handoff(v, bounds(), 1, 100), Err(Error::PermissionDenied));
+    assert_eq!(
+        c.begin_handoff(v, bounds(), 1, 100),
+        Err(Error::PermissionDenied)
+    );
     assert_eq!(c.window_intent(v, 1).unwrap(), None);
     c.allow_parking(v, true, 1).unwrap();
     let token = c.begin_handoff(v, bounds(), 1, 100).unwrap();
     assert_eq!(c.window_intent(v, 1).unwrap(), None);
     c.destination_ready(token, 2).unwrap();
-    assert_eq!(c.window_intent(v, 2).unwrap().unwrap().command, Command::HideSource);
+    assert_eq!(
+        c.window_intent(v, 2).unwrap().unwrap().command,
+        Command::HideSource
+    );
 }
 
 #[test]
@@ -414,10 +429,16 @@ fn hide_request_timeout_retains_restore_and_rejects_late_hidden_ack() {
     let token = c.begin_handoff(v, bounds(), 0, 10).unwrap();
     c.destination_ready(token, 1).unwrap();
     c.poll(10).unwrap();
-    assert_eq!(c.snapshot(v, 10).unwrap().handoff, Some(State::RestoreRequested));
+    assert_eq!(
+        c.snapshot(v, 10).unwrap().handoff,
+        Some(State::RestoreRequested)
+    );
     assert!(c.acknowledge_hidden(token, 10).is_err());
     c.poll(5000).unwrap();
-    assert_eq!(c.snapshot(v, 5000).unwrap().handoff, Some(State::RestoreRequested));
+    assert_eq!(
+        c.snapshot(v, 5000).unwrap().handoff,
+        Some(State::RestoreRequested)
+    );
     c.acknowledge_restored(token, 5000).unwrap();
     assert_eq!(c.snapshot(v, 5000).unwrap().handoff, Some(State::Local));
 }
@@ -431,9 +452,15 @@ fn old_handoff_token_cannot_acknowledge_a_new_attempt() {
     c.cancel_handoff(old, 1).unwrap();
     let new = c.begin_handoff(v, bounds(), 1, 100).unwrap();
     assert_ne!(old, new);
-    assert_eq!(c.destination_ready(old, 1), Err(Error::WrongAcknowledgement));
+    assert_eq!(
+        c.destination_ready(old, 1),
+        Err(Error::WrongAcknowledgement)
+    );
     c.destination_ready(new, 1).unwrap();
-    assert_eq!(c.acknowledge_hidden(old, 1), Err(Error::WrongAcknowledgement));
+    assert_eq!(
+        c.acknowledge_hidden(old, 1),
+        Err(Error::WrongAcknowledgement)
+    );
     c.acknowledge_hidden(new, 1).unwrap();
 }
 
@@ -445,13 +472,19 @@ fn reconsent_cancels_pending_hide_and_resets_parking_permission() {
     let token = c.begin_handoff(v, bounds(), 0, 100).unwrap();
     c.destination_ready(token, 1).unwrap();
     c.grant_view(v, 2, 100).unwrap();
-    assert_eq!(c.snapshot(v, 2).unwrap().handoff, Some(State::RestoreRequested));
+    assert_eq!(
+        c.snapshot(v, 2).unwrap().handoff,
+        Some(State::RestoreRequested)
+    );
     assert!(c.acknowledge_hidden(token, 2).is_err());
     c.acknowledge_restored(token, 2).unwrap();
     c.grant_control(v, ControlScope::WholeDesktop, 2, 100)
         .unwrap();
     present(&mut c, v, 1, 2);
-    assert_eq!(c.begin_handoff(v, bounds(), 2, 10), Err(Error::PermissionDenied));
+    assert_eq!(
+        c.begin_handoff(v, bounds(), 2, 10),
+        Err(Error::PermissionDenied)
+    );
 }
 
 #[test]
@@ -484,7 +517,10 @@ fn callbacks_for_retired_views_cannot_target_replacements() {
     replacement.key.binding.nonce = [2; 16];
     let new = c.register(replacement, 2).unwrap();
     c.grant_view(new, 2, 100).unwrap();
-    assert_eq!(c.acknowledge_presentation(old.ticket, 2), Err(Error::StaleTarget));
+    assert_eq!(
+        c.acknowledge_presentation(old.ticket, 2),
+        Err(Error::StaleTarget)
+    );
     assert!(!c.snapshot(new, 2).unwrap().presentation_pending);
     assert!(!c.snapshot(new, 2).unwrap().control_policy_ready);
 }
@@ -517,4 +553,107 @@ fn one_hundred_consent_cycles_leave_no_model_frames_or_active_route() {
         assert!(!s.frame_queued && !s.presentation_pending && !s.input_active);
         assert!(!s.release_pending && !s.viewing_allowed);
     }
+}
+
+#[test]
+fn connection_fault_closes_all_and_only_matching_views() {
+    let mut c = coordinator();
+    let a = live(&mut c, 1);
+    let mut second = spec(1);
+    second.key.object = 2;
+    let other_window = c.register(second, 0).unwrap();
+    c.grant_view(other_window, 0, 100).unwrap();
+    let b = live(&mut c, 2);
+    c.focus(a, 1).unwrap();
+    let binding = spec(1).key.binding;
+    assert_eq!(c.close_binding(binding, Fault::ConnectionLost, 2), Ok(2));
+    assert!(!c.snapshot(a, 2).unwrap().connected);
+    assert!(!c.snapshot(other_window, 2).unwrap().connected);
+    assert!(c.snapshot(b, 2).unwrap().viewing_allowed);
+    assert!(c.pending_release().is_some());
+    assert_eq!(c.close_binding(binding, Fault::ConnectionLost, 2), Ok(0));
+}
+
+#[test]
+fn connection_fault_does_not_interrupt_unrelated_active_input() {
+    let mut c = coordinator();
+    let a = live(&mut c, 1);
+    let b = live(&mut c, 2);
+    let t = c.focus(b, 1).unwrap();
+    c.close_binding(spec(1).key.binding, Fault::MediaWorkerExited, 2)
+        .unwrap();
+    assert!(!c.snapshot(a, 2).unwrap().connected);
+    assert!(c.snapshot(b, 2).unwrap().input_active);
+    assert!(c.pending_release().is_none());
+    assert!(c.authorize_input(b, t, 1, 2).is_ok());
+}
+
+#[test]
+fn idle_watchdog_discards_aged_queued_pixels() {
+    let mut c = coordinator();
+    let v = live(&mut c, 1);
+    let frame = raw(&c, v, 2);
+    c.receive(v, frame, 1).unwrap();
+    c.poll(2000).unwrap();
+    assert!(c.snapshot(v, 2000).unwrap().frame_queued);
+    c.poll(2001).unwrap();
+    assert!(!c.snapshot(v, 2001).unwrap().frame_queued);
+    assert!(c.take_for_present(v, 2001).unwrap().is_none());
+}
+
+#[test]
+fn losing_focus_cancels_source_parking_without_claiming_recovery() {
+    for switch in [false, true] {
+        let mut c = coordinator();
+        let a = live(&mut c, 1);
+        let b = live(&mut c, 2);
+        c.focus(a, 0).unwrap();
+        c.allow_parking(a, true, 0).unwrap();
+        let token = c.begin_handoff(a, bounds(), 0, 100).unwrap();
+        c.destination_ready(token, 0).unwrap();
+        c.acknowledge_hidden(token, 0).unwrap();
+        if switch {
+            assert_eq!(c.focus(b, 1), Err(Error::ReleasePending));
+        } else {
+            c.blur(1).unwrap();
+        }
+        assert_eq!(
+            c.snapshot(a, 1).unwrap().handoff,
+            Some(State::RestoreRequested)
+        );
+        assert_eq!(
+            c.window_intent(a, 1).unwrap().unwrap().command,
+            Command::RestoreSource(bounds())
+        );
+        assert!(c.pending_release().is_some());
+    }
+}
+
+#[test]
+fn pending_release_blocks_new_window_parking() {
+    let mut c = coordinator();
+    let v = live(&mut c, 1);
+    c.focus(v, 0).unwrap();
+    let release = c.blur(1).unwrap().unwrap();
+    c.allow_parking(v, true, 1).unwrap();
+    assert_eq!(
+        c.begin_handoff(v, bounds(), 1, 100),
+        Err(Error::ReleasePending)
+    );
+    c.acknowledge_release(release, 1).unwrap();
+    assert!(c.begin_handoff(v, bounds(), 1, 100).is_ok());
+}
+
+#[test]
+fn duplicate_and_oversized_registration_do_not_consume_slots() {
+    let mut c = Coordinator::new([255; 32], 2).unwrap();
+    c.register(spec(1), 0).unwrap();
+    assert_eq!(c.register(spec(1), 0), Err(Error::InvalidState));
+    let mut huge = spec(2);
+    huge.geometry.pixels = PixelSize {
+        width: 16_384,
+        height: 16_384,
+    };
+    assert_eq!(c.register(huge, 0), Err(Error::Capacity));
+    assert!(c.register(spec(2), 0).is_ok());
 }
