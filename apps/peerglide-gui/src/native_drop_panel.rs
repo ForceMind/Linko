@@ -75,13 +75,108 @@ struct Attempt {
     next_layout_check: Instant,
 }
 
-struct Handoff {
-    file: Option<PreparedDropPath>,
-    entry: Option<EntryPoint>,
-    region: Option<egui::Rect>,
+#[derive(Default)]
+pub(super) struct HandoffRegion {
+    pub(super) entry: Option<EntryPoint>,
+    rect: Option<egui::Rect>,
     pressed: bool,
     #[cfg(target_os = "macos")]
-    press: Option<peerglide_platform::macos_native_drop::HandoffPress>,
+    pub(super) press: Option<peerglide_platform::macos_native_drop::HandoffPress>,
+}
+
+impl HandoffRegion {
+    pub(super) fn ui(
+        &mut self,
+        app: &App,
+        ui: &mut egui::Ui,
+        layout: &Layout,
+        reservation: &Reservation,
+        label: &str,
+    ) -> Result<bool> {
+        let region = ui.add(egui::Label::new(label).sense(egui::Sense::hover()));
+        let rect = region.rect;
+        let fully_visible = ui.clip_rect().contains_rect(rect);
+        let position = ui.input(|input| input.viewport().inner_rect.map(|rect| rect.min));
+        let global = position.map(|origin| origin + rect.center().to_vec2());
+        let origin = app.display_inventory.receive_origin()?;
+        let display = layout
+            .displays()
+            .iter()
+            .find(|display| match origin {
+                Some((x, y)) => (display.bounds.left, display.bounds.top) == (x, y),
+                None => display.id == layout.primary(),
+            })
+            .context("找不到接收显示器")?;
+        let entry = global.filter(|_| fully_visible).and_then(|point| {
+            let scale = if cfg!(windows) {
+                ui.ctx().pixels_per_point()
+            } else {
+                ui.ctx().zoom_factor()
+            };
+            let bounds = display.bounds;
+            EntryPoint::new(
+                (f64::from(point.x * scale) - bounds.left) / (bounds.right - bounds.left - 1.0),
+                (f64::from(point.y * scale) - bounds.top) / (bounds.bottom - bounds.top - 1.0),
+            )
+        });
+        if entry.is_none() {
+            ui.label("请将拖放起点完整显示在接收屏幕上。");
+        }
+        if self.entry != entry || self.rect != Some(rect) {
+            ensure!(!reservation.target_position_frozen(), "拖放起点已移动");
+            self.entry = entry;
+            self.rect = Some(rect);
+            self.pressed = false;
+        }
+        if region.hovered()
+            && ui.input(|input| {
+                input.focused
+                    && input.pointer.button_pressed(egui::PointerButton::Primary)
+                    && input.pointer.primary_down()
+            })
+        {
+            #[cfg(target_os = "macos")]
+            {
+                self.press = peerglide_platform::macos_native_drop::HandoffPress::current();
+                self.pressed = self.press.is_some();
+            }
+            #[cfg(all(windows, target_env = "msvc"))]
+            {
+                self.pressed = true;
+            }
+        }
+        if !ui.input(|input| input.pointer.primary_down()) {
+            self.pressed = false;
+            #[cfg(target_os = "macos")]
+            {
+                self.press = None;
+            }
+        }
+        if reservation.target_down() && self.pressed && entry.is_some() {
+            let local_cursor = peerglide_platform::cursor_position()
+                .and_then(|point| {
+                    super::cursor_overlay::points(
+                        point,
+                        cfg!(windows),
+                        ui.ctx().pixels_per_point(),
+                        ui.ctx().zoom_factor(),
+                    )
+                })
+                .zip(position)
+                .map(|(point, origin)| point - origin.to_vec2());
+            ensure!(
+                local_cursor.is_some_and(|point| rect.contains(point)),
+                "鼠标没有落在本机接棒区域"
+            );
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
+struct Handoff {
+    file: Option<PreparedDropPath>,
+    region: HandoffRegion,
     #[cfg(target_os = "macos")]
     drag: Option<peerglide_platform::macos_native_drop::Drag>,
     #[cfg(target_os = "macos")]
@@ -313,7 +408,7 @@ impl Export {
         let source = self.source.as_ref().context("没有已接收文件")?;
         handoff.reservation.tick(app, &source.pin, now)?;
         if let Some(lease) = handoff.reservation.pending_lease() {
-            let Some(entry) = handoff.entry else {
+            let Some(entry) = handoff.region.entry else {
                 return Ok(());
             };
             handoff.attempt.scope.verify_layout()?;
@@ -391,11 +486,7 @@ impl Export {
                 .min(Instant::now() + Duration::from_millis(u64::from(lifetime_ms)));
             Ok(Handoff {
                 file: Some(claim.file),
-                entry: None,
-                region: None,
-                pressed: false,
-                #[cfg(target_os = "macos")]
-                press: None,
+                region: HandoffRegion::default(),
                 #[cfg(target_os = "macos")]
                 drag: None,
                 #[cfg(target_os = "macos")]
@@ -632,85 +723,13 @@ impl Export {
             ui.label("正在接收跨机拖动。");
             return Ok(());
         }
-        let region = ui.add(egui::Label::new("跨机文件拖放起点").sense(egui::Sense::hover()));
-        let rect = region.rect;
-        let fully_visible = ui.clip_rect().contains_rect(rect);
-        let position = ui.input(|input| input.viewport().inner_rect.map(|rect| rect.min));
-        let global = position.map(|origin| origin + rect.center().to_vec2());
-        let origin = app.display_inventory.receive_origin()?;
-        let layout = &handoff.attempt.scope.layout;
-        let display = layout
-            .displays()
-            .iter()
-            .find(|display| match origin {
-                Some((x, y)) => (display.bounds.left, display.bounds.top) == (x, y),
-                None => display.id == layout.primary(),
-            })
-            .context("找不到接收显示器")?;
-        let entry = global.filter(|_| fully_visible).and_then(|point| {
-            let scale = if cfg!(windows) {
-                ui.ctx().pixels_per_point()
-            } else {
-                ui.ctx().zoom_factor()
-            };
-            let bounds = display.bounds;
-            EntryPoint::new(
-                (f64::from(point.x * scale) - bounds.left) / (bounds.right - bounds.left - 1.0),
-                (f64::from(point.y * scale) - bounds.top) / (bounds.bottom - bounds.top - 1.0),
-            )
-        });
-        if entry.is_none() {
-            ui.label("请将文件页的拖放起点完整显示在接收屏幕上。");
-        }
-        if handoff.entry != entry || handoff.region != Some(rect) {
-            ensure!(
-                !handoff.reservation.target_position_frozen(),
-                "文件拖放起点已移动"
-            );
-            handoff.entry = entry;
-            handoff.region = Some(rect);
-            handoff.pressed = false;
-        }
-        if region.hovered()
-            && ui.input(|input| {
-                input.focused
-                    && input.pointer.button_pressed(egui::PointerButton::Primary)
-                    && input.pointer.primary_down()
-            })
-        {
-            #[cfg(target_os = "macos")]
-            {
-                handoff.press = peerglide_platform::macos_native_drop::HandoffPress::current();
-                handoff.pressed = handoff.press.is_some();
-            }
-            #[cfg(all(windows, target_env = "msvc"))]
-            {
-                handoff.pressed = true;
-            }
-        }
-        if !ui.input(|input| input.pointer.primary_down()) {
-            handoff.pressed = false;
-            #[cfg(target_os = "macos")]
-            {
-                handoff.press = None;
-            }
-        }
-        if handoff.reservation.target_down() && handoff.pressed && entry.is_some() {
-            let local_cursor = peerglide_platform::cursor_position()
-                .and_then(|point| {
-                    super::cursor_overlay::points(
-                        point,
-                        cfg!(windows),
-                        ui.ctx().pixels_per_point(),
-                        ui.ctx().zoom_factor(),
-                    )
-                })
-                .zip(position)
-                .map(|(point, origin)| point - origin.to_vec2());
-            ensure!(
-                local_cursor.is_some_and(|point| rect.contains(point)),
-                "鼠标没有落在本机接棒区域"
-            );
+        if handoff.region.ui(
+            app,
+            ui,
+            &handoff.attempt.scope.layout,
+            &handoff.reservation,
+            "跨机文件拖放起点",
+        )? {
             self.begin_handoff_drag(app)?;
         }
         Ok(())
@@ -745,6 +764,7 @@ impl Export {
             {
                 use peerglide_platform::macos_native_drop::Drag;
                 let press = handoff
+                    .region
                     .press
                     .take()
                     .context("接收窗口没有收到对应的鼠标按下")?;
@@ -776,7 +796,7 @@ impl Export {
             {
                 use peerglide_platform::windows_native_drop::{drag_handoff_file, Outcome};
                 let control =
-                    super::file_drop_reservation::WindowsDelivery::open(&handoff.reservation, app)?;
+                    super::file_drop_reservation::NativeDelivery::open(&handoff.reservation, app)?;
                 let mut reader = path.into_verified_reader();
                 let result = drag_handoff_file(
                     file.name(),

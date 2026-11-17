@@ -10,7 +10,7 @@ use transport::clipboard_worker::{
 };
 
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-use super::clipboard_drop;
+use super::{clipboard_drop, clipboard_handoff};
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 use transport::clipboard_worker::DragPayload;
 
@@ -32,6 +32,10 @@ struct Active {
     for_drop: bool,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     drag_payload: Option<DragPayload>,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    address: std::net::SocketAddr,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    sending: bool,
     stopping: bool,
 }
 
@@ -46,6 +50,10 @@ pub(super) struct Panel {
     local_outcome: Option<TextOutcome>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     drag_offer: Option<clipboard_drop::Offer>,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    prepared_handoff: Option<clipboard_handoff::Prepared>,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    handoff: Option<clipboard_handoff::Handoff>,
 }
 
 impl Default for Panel {
@@ -61,6 +69,10 @@ impl Default for Panel {
             local_outcome: None,
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             drag_offer: None,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            prepared_handoff: None,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            handoff: None,
         }
     }
 }
@@ -68,13 +80,25 @@ impl Default for Panel {
 impl Panel {
     pub(super) fn is_active(&self) -> bool {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        if self.drag_offer.is_some() {
+        if self.drag_offer.is_some() || self.prepared_handoff.is_some() || self.handoff.is_some() {
             return true;
         }
         self.active.is_some()
     }
 
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    pub(super) fn cancel_handoff(&mut self, app: &mut App) {
+        if let Some(handoff) = self.handoff.take() {
+            handoff.cancel(app);
+            self.notice = "本次跨机复制拖放已取消。".into();
+        }
+    }
+
     pub(super) fn stop(&mut self) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.prepared_handoff.take().is_some() {
+            self.notice = "已撤下本次复制拖放。".into();
+        }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if self.drag_offer.take().is_some() {
             self.notice = "已撤下本次复制拖放。".into();
@@ -91,7 +115,22 @@ impl Panel {
         }
     }
 
-    pub(super) fn tick(&mut self, app: &App, _ctx: &egui::Context) {
+    pub(super) fn tick(&mut self, app: &mut App, _ctx: &egui::Context) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        {
+            if let Some(handoff) = self.handoff.as_mut() {
+                let result = handoff.tick(app, _ctx);
+                self.finish_handoff(app, result);
+            }
+            if self
+                .prepared_handoff
+                .as_ref()
+                .is_some_and(|ready| !ready.current(app, _ctx))
+            {
+                self.prepared_handoff = None;
+                self.notice = "本次复制拖放准备已失效。".into();
+            }
+        }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if let Some(notice) = self
             .drag_offer
@@ -166,10 +205,22 @@ impl Panel {
                     }
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if outcome == TextOutcome::Submitted {
-                        self.drag_offer = active
-                            .drag_payload
-                            .take()
-                            .map(|payload| clipboard_drop::Offer::new(active.pin.clone(), payload));
+                        let payload = active.drag_payload.take();
+                        if let Some(receipt) = copy_receipt {
+                            if !active.sending && payload.is_none() {
+                                self.notice = "本次复制拖放准备已失效。".into();
+                                return;
+                            }
+                            self.prepared_handoff = Some(clipboard_handoff::Prepared {
+                                pin: active.pin.clone(),
+                                address: active.address,
+                                receipt,
+                                payload,
+                            });
+                        } else if let Some(payload) = payload {
+                            self.drag_offer =
+                                Some(clipboard_drop::Offer::new(active.pin.clone(), payload));
+                        }
                     }
                     outcome_label(outcome, active.for_drop).into()
                 }
@@ -204,13 +255,15 @@ impl Panel {
         let for_drop = self.for_drop;
         let (pin, identity, peer) = Pin::load(app)?;
         let wake = app.wake_ui.clone();
-        let job = if send {
-            let target = data_access::send_address(&self.target, &app.config.address, PORT)?;
-            let payload = self.local_payload()?;
-            clipboard_worker::send(target, identity, peer, payload, for_drop, wake)
+        let address = if send {
+            data_access::send_address(&self.target, &app.config.address, PORT)?
         } else {
-            let bind =
-                data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?;
+            data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?
+        };
+        let job = if send {
+            let payload = self.local_payload()?;
+            clipboard_worker::send(address, identity, peer, payload, for_drop, wake)
+        } else {
             let revision = if for_drop {
                 None
             } else {
@@ -220,7 +273,7 @@ impl Panel {
                         .context("无法确认本机剪贴板当前版本")?,
                 )
             };
-            clipboard_worker::receive(bind, identity, peer, revision, self.mode, wake)
+            clipboard_worker::receive(address, identity, peer, revision, self.mode, wake)
         }
         .context("无法启动剪贴板后台任务")?;
         self.active = Some(Active {
@@ -230,6 +283,10 @@ impl Panel {
             for_drop,
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             drag_payload: None,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            address,
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            sending: send,
             stopping: false,
         });
         self.notice = match (send, for_drop) {
@@ -305,7 +362,11 @@ impl Panel {
             .context("无法向发送端报告处理结果")
     }
 
-    pub(super) fn ui(&mut self, app: &App, ui: &mut egui::Ui) {
+    pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.handoff_ui(app, ui) {
+            return;
+        }
         ui.add_enabled_ui(self.active.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.mode, Mode::Text, "纯文本");
@@ -405,13 +466,82 @@ impl Panel {
     }
 }
 
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+impl Panel {
+    fn finish_handoff(&mut self, app: &mut App, result: Result<Option<&'static str>>) {
+        let notice = match result {
+            Ok(Some(notice)) => Some(notice.to_owned()),
+            Ok(None) => None,
+            Err(error) => Some(error.to_string()),
+        };
+        if let Some(notice) = notice {
+            self.cancel_handoff(app);
+            self.notice = notice;
+        }
+    }
+
+    fn handoff_ui(&mut self, app: &mut App, ui: &mut egui::Ui) -> bool {
+        if self.handoff.is_some() {
+            if ui.button("取消跨机拖动").clicked() {
+                self.cancel_handoff(app);
+                return true;
+            }
+            if let Some(handoff) = self.handoff.as_mut() {
+                let result = handoff.ui(app, ui);
+                self.finish_handoff(app, result);
+            }
+            return true;
+        }
+        let Some(ready) = &self.prepared_handoff else {
+            return false;
+        };
+        if self.active.is_some() {
+            ui.label("正在结束本次数据连接。");
+            return true;
+        }
+        let receiving = ready.payload.is_some();
+        let label = if receiving {
+            "准备跨机接收"
+        } else {
+            "准备跨机拖出"
+        };
+        let can_start = app.child.is_none() && (!receiving || app.config.allow);
+        if ui
+            .add_enabled(can_start, egui::Button::new(label))
+            .clicked()
+        {
+            let prepared = self.prepared_handoff.take().expect("current preparation");
+            match clipboard_handoff::Handoff::new(prepared, app, ui.ctx()) {
+                Ok(handoff) => self.handoff = Some(handoff),
+                Err(error) => self.notice = error.to_string(),
+            }
+        } else if receiving && ui.button("准备本机拖放").clicked() {
+            if let Some(prepared) = self.prepared_handoff.take() {
+                self.drag_offer = prepared
+                    .payload
+                    .map(|payload| clipboard_drop::Offer::new(prepared.pin, payload));
+            }
+        } else if ui.button("取消准备").clicked() {
+            self.prepared_handoff = None;
+            self.notice = "已撤下本次复制拖放。".into();
+        }
+        if !can_start {
+            ui.label("请先结束当前会话。接收端还需在设置中允许键鼠接收。");
+        }
+        if !self.notice.is_empty() {
+            ui.label(&self.notice);
+        }
+        true
+    }
+}
+
 fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Decision> {
     if for_drop {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if ui
             .add_enabled(
                 clipboard_drop::eligible(_app, ui.ctx()) && clipboard_drop::focused(ui.ctx()),
-                egui::Button::new("准备本机拖放"),
+                egui::Button::new("同意准备拖放"),
             )
             .clicked()
         {

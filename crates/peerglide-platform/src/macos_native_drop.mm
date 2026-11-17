@@ -78,7 +78,9 @@ static bool can_write_promise(void* owner) {
     provideDataForType:(NSPasteboardType)type {
     (void)pasteboard;
     if (![self offerAvailable]
-        || (copy_context && (!check_copy(copy_context) || ![self offerAvailable]))) {
+        || (copy_context && ((started.load(std::memory_order_acquire)
+                             && ([NSEvent pressedMouseButtons] & 1) != 0)
+                            || !check_copy(copy_context) || ![self offerAvailable]))) {
         return;
     }
     BOOL provided = NO;

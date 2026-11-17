@@ -214,12 +214,16 @@ mod native {
             target: SocketAddr,
             expires: Instant,
         ) -> Self {
-            Self::with_direction(
-                receipt.into_local_worker(),
-                request,
-                Direction::Send(target),
-                expires,
-            )
+            Self::source_proof(receipt.into_local_worker(), request, target, expires)
+        }
+
+        pub(crate) fn source_proof(
+            proof: String,
+            request: u32,
+            target: SocketAddr,
+            expires: Instant,
+        ) -> Self {
+            Self::with_direction(proof, request, Direction::Send(target), expires)
         }
 
         fn with_direction(
@@ -622,15 +626,14 @@ mod native {
         }
     }
 
-    #[cfg(all(windows, target_env = "msvc"))]
-    pub(crate) struct WindowsDelivery {
+    pub(crate) struct NativeDelivery {
         signal: Arc<std::sync::atomic::AtomicU8>,
         started: std::sync::mpsc::SyncSender<()>,
         owner: Option<std::thread::JoinHandle<Option<std::process::ChildStdin>>>,
+        worker: Arc<WorkerSnapshot>,
     }
 
-    #[cfg(all(windows, target_env = "msvc"))]
-    impl WindowsDelivery {
+    impl NativeDelivery {
         pub(crate) fn open(reservation: &Reservation, app: &mut App) -> Result<Self> {
             let Phase::TargetDown(link, session, lease, fence) = &reservation.phase else {
                 anyhow::bail!("没有当前文件接棒的鼠标按下");
@@ -651,9 +654,10 @@ mod native {
                 .context("工作进程控制通道不可用")?;
             let signal = Arc::new(std::sync::atomic::AtomicU8::new(0));
             let shared = signal.clone();
+            let worker = link.worker.clone();
             let (started, start) = std::sync::mpsc::sync_channel(1);
             let owner = std::thread::Builder::new()
-                .name("linko-ole-drop-control".into())
+                .name("linko-native-drop-control".into())
                 .spawn(move || {
                     let mut pipe = pipe;
                     let mut send = |command: Command| -> Result<()> {
@@ -742,6 +746,7 @@ mod native {
                 signal,
                 started,
                 owner: Some(owner),
+                worker,
             })
         }
 
@@ -749,32 +754,58 @@ mod native {
             match phase {
                 0 => self.started.try_send(()).is_ok(),
                 1 => self.signal.load(Ordering::Acquire) != 2,
-                2 => {
-                    // The native loop may receive Up before stdout is parsed.
-                    let deadline = Instant::now() + Duration::from_millis(250);
-                    while self.signal.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
-                        std::thread::sleep(Duration::from_millis(2));
-                    }
-                    self.signal.load(Ordering::Acquire) == 1
-                }
+                2 => wait_release(&self.signal),
                 _ => false,
             }
         }
 
-        pub(crate) fn finish(mut self, app: &mut App) {
-            if self.signal.load(Ordering::Acquire) != 1 {
-                self.signal.store(2, Ordering::Release);
-            }
-            // Wake a control owner that is still waiting for OLE initialization.
+        #[cfg(target_os = "macos")]
+        pub(crate) fn content_gate(&self) -> impl Fn() -> bool + Send + Sync + 'static {
+            let signal = self.signal.clone();
+            move || wait_release(&signal)
+        }
+
+        fn cancel_wait(&self) {
+            let _ = self
+                .signal
+                .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire);
             let _ = self.started.try_send(());
-            if let Some(child) = app.child.as_mut() {
-                child.stdin = self
-                    .owner
-                    .take()
-                    .and_then(|owner| owner.join().ok())
-                    .flatten();
+        }
+
+        pub(crate) fn finish(mut self, app: &mut App) {
+            self.cancel_wait();
+            let pipe = self
+                .owner
+                .take()
+                .and_then(|owner| owner.join().ok())
+                .flatten();
+            if app
+                .worker_state
+                .as_ref()
+                .is_some_and(|worker| Arc::ptr_eq(worker, &self.worker))
+            {
+                if let Some(child) = app.child.as_mut().filter(|child| child.stdin.is_none()) {
+                    child.stdin = pipe;
+                }
             }
         }
+    }
+
+    impl Drop for NativeDelivery {
+        fn drop(&mut self) {
+            if self.owner.is_some() {
+                self.cancel_wait();
+            }
+        }
+    }
+
+    fn wait_release(signal: &std::sync::atomic::AtomicU8) -> bool {
+        // The OS can observe Up before the control owner parses stdout.
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while signal.load(Ordering::Acquire) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        signal.load(Ordering::Acquire) == 1
     }
 
     #[cfg(test)]
@@ -899,7 +930,7 @@ mod native {
             }
             #[cfg(all(windows, target_env = "msvc"))]
             let consumed = {
-                let delivery = WindowsDelivery::open(&reservation, &mut app)?;
+                let delivery = NativeDelivery::open(&reservation, &mut app)?;
                 assert!(delivery.native_check(0));
                 worker
                     .7
@@ -1058,8 +1089,8 @@ mod native {
     }
 }
 
-#[cfg(all(windows, target_env = "msvc"))]
-pub(super) use native::WindowsDelivery;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+pub(super) use native::NativeDelivery;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 pub(super) use native::{next_request, Reservation, Status};
 
