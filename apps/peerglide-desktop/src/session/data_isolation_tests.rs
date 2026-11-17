@@ -179,7 +179,9 @@ async fn authenticated_input_and_data_workers_keep_independent_consent_and_stop(
         result
     };
     let client = async {
-        let connection = left.connect(right.local_addr()?, "peerglide.local")?.await?;
+        let connection = left
+            .connect(right.local_addr()?, "peerglide.local")?
+            .await?;
         let (mut tx, mut rx) = connection.open_bi().await?;
         live_input(&mut tx, &mut rx).await?;
 
