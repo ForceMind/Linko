@@ -536,6 +536,7 @@ pub(super) async fn run_with_diagnostics(
     let mut next_lease = 0u64;
     let mut sequence = 0u64;
     let mut motion_outbox = MotionOutbox::new(tokio::time::Instant::now());
+    let mut last_received_motion = None;
     let mut position = (0.5, 0.5);
     let mut local_return = (0.5, 0.5);
     let mut size = (1920.0, 1080.0);
@@ -921,7 +922,18 @@ pub(super) async fn run_with_diagnostics(
                             Ok(false)=>{},
                         }
                         if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
-                        input_status.checked(result)?;
+                        let submitted = input_status.checked(result)?;
+                        if let Some(point) = last_received_motion.filter(|point| {
+                            submitted
+                                && !target_down
+                                && recovery.receiver.can_restore_motion_after(*point, cursor, now_ms())
+                                && c.close_reason().is_none()
+                                && !session_stopping(&stop)
+                        }) {
+                            let restored = recovery.pointer(point.x, point.y).await;
+                            if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
+                            input_status.checked(restored)?;
+                        }
                     },
                     Message::Release { lease, cursor }=>{
                         if pending.is_some_and(|request|request.lease==lease){pending=None;edge_gate.require_interior();input_status.reporter.switch(super::WorkerSwitchState::Idle);}
@@ -948,7 +960,8 @@ pub(super) async fn run_with_diagnostics(
                         Some(scope) => scope.target_motion(m),
                         None => Some(m),
                     };
-                    let result=if let Some(point) = point.filter(|point| recovery.receiver.accepts(point.lease,now_ms())) {
+                    let point = point.filter(|point| recovery.receiver.accepts(point.lease,now_ms()));
+                    let result=if let Some(point) = point {
                         recovery.pointer(point.x,point.y).await
                     } else {
                         Ok(false)
@@ -959,7 +972,9 @@ pub(super) async fn run_with_diagnostics(
                         Err(_)=>Count::PointerFailed,
                     });
                     if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
-                    input_status.checked(result)?;
+                    if input_status.checked(result)? {
+                        last_received_motion = point;
+                    }
                 }
             },
             e=input.recv(),if native=>{
