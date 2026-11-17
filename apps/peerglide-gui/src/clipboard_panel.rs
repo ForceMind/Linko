@@ -149,8 +149,21 @@ impl Panel {
                     active.pending = Some(pending);
                     notice
                 }
-                Event::Finished(outcome) => {
+                Event::Finished {
+                    outcome,
+                    copy_receipt,
+                } => {
                     active.pending = None;
+                    if active.for_drop
+                        && outcome == TextOutcome::Submitted
+                        && !copy_receipt
+                            .as_ref()
+                            .is_some_and(|receipt| active.pin.matches_copy(receipt))
+                    {
+                        self.stop();
+                        self.notice = "本次拖放的配对回执已失效。".into();
+                        return;
+                    }
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if outcome == TextOutcome::Submitted {
                         self.drag_offer = active
