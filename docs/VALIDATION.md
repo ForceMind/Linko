@@ -3125,6 +3125,25 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
 
+核心功能验收候选 `49ffbc5`（`2026.11.17-1950`，北京时间）通过 11 项 GitHub Actions 检查。
+三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-1906` 升级，
+启动新包 worker，拒绝篡改的回滚包并恢复原包。
+[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44077688638) ·
+[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44077688638/artifacts/14326337504) ·
+[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44077688638/artifacts/14326123485) ·
+[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44077688638/artifacts/14325753349)
+
+三平台工作区回归覆盖 IPv4／IPv6 上的副屏认证预约与输入租约、本地布局保存和读取 IPv6
+接口编号、剪贴板发送端停止后撤下待确认请求，以及文件停止或断开后从已核验部分续传。
+macOS 与 Ubuntu 的 180 秒空闲检查均通过 512 MiB 峰值、64 MiB 暖机后增长门槛。
+[PR302](https://github.com/ForceMind/Linko/pull/302) ·
+[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44077688669) ·
+[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44077688640)
+
+用同一版 Windows 和 macOS 便携包按下方顺序测双向键鼠、文本与 PNG、文件接收和续传。
+跨屏点击、滚轮、Mac 光标隐藏、`native receive service: Timeout` 及蓝牙、USB、混合 DPI
+仍由真实双机验收确认。每个方向分别保留两端的 `KVM-DIAG/5` 摘要。
+
 候选 `b581714`（`2026.11.17-1613`）通过 11 项 GitHub Actions 检查。三端从 `1549` 隔离升级，
 启动新包 worker，拒绝被篡改的回滚包并恢复原包。该候选覆盖剪贴板断开撤下确认、文件在
 配额入账后停止仍可续传、监督者退出时丢弃未分发输入，以及乱序点击后的光标位置恢复。
