@@ -32,7 +32,7 @@ pub enum Request {
         prepare_handoff: bool,
     },
     Receive {
-        bind: SocketAddr,
+        bind: data::ReceiveBind,
         budget: u64,
     },
 }
@@ -45,7 +45,10 @@ pub enum Event {
         outcome: FileOutcome,
         handoff: Option<(SocketAddr, crate::file_drop_link::SentReceipt)>,
     },
-    Received(ReceiveResult),
+    Received {
+        result: ReceiveResult,
+        bind: SocketAddr,
+    },
     Stopped,
     Failed,
 }
@@ -266,8 +269,9 @@ async fn run(
             })
         }
         Request::Receive { bind, budget } => {
-            let endpoint = data::endpoint(bind, &identity, &pinned_peer)?;
-            status.post(Event::Listening(endpoint.local_addr()?))?;
+            let endpoint = bind.endpoint(&identity, &pinned_peer)?;
+            let bound = endpoint.local_addr()?;
+            status.post(Event::Listening(bound))?;
             let connection = tokio::time::timeout(LISTEN_TIMEOUT, async {
                 let incoming = endpoint.accept().await.context("file listener closed")?;
                 Ok::<_, anyhow::Error>(incoming.await?)
@@ -291,7 +295,10 @@ async fn run(
                 Some(finalization),
             )
             .await?;
-            Ok(Event::Received(result))
+            Ok(Event::Received {
+                result,
+                bind: bind.reservation_address(bound, connection.remote_address()),
+            })
         }
     }
 }
@@ -356,22 +363,30 @@ mod tests {
 
     #[test]
     fn independent_jobs_publish_local_progress_and_receipts() -> Result<()> {
-        loopback(false, "127.0.0.1:0".parse()?, false)
+        loopback(false, "127.0.0.1:0".parse()?, false, false)
     }
 
     #[test]
     fn file_workers_publish_verified_contents_over_ipv6() -> Result<()> {
-        loopback(false, "[::1]:0".parse()?, false)
+        loopback(false, "[::1]:0".parse()?, false, false)
     }
 
     #[test]
     fn file_worker_connects_to_a_mapped_ipv4_target() -> Result<()> {
-        loopback(false, "127.0.0.1:0".parse()?, true)
+        loopback(false, "127.0.0.1:0".parse()?, true, false)
+    }
+
+    #[test]
+    fn default_file_listener_publishes_on_either_family() -> Result<()> {
+        for address in ["127.0.0.1:0", "[::1]:0"] {
+            loopback(false, address.parse()?, false, true)?;
+        }
+        Ok(())
     }
 
     #[test]
     fn stopping_a_pending_offer_leaves_the_selected_directory_untouched() -> Result<()> {
-        loopback(true, "127.0.0.1:0".parse()?, false)
+        loopback(true, "127.0.0.1:0".parse()?, false, false)
     }
 
     struct FilePeer {
@@ -458,7 +473,7 @@ mod tests {
         let sender = Identity::generate()?;
         let receiver = Identity::generate()?;
         let peer_pin = receiver.certificate.clone();
-        let bind = "127.0.0.1:0".parse()?;
+        let bind = data::ReceiveBind::Explicit("127.0.0.1:0".parse()?);
         let mut job = start(
             Request::Receive { bind, budget: 1024 },
             receiver,
@@ -481,7 +496,7 @@ mod tests {
 
         // Keep the peer alive so only local stop can end the receipt wait.
         job.stop();
-        let Event::Received(result) =
+        let Event::Received { result, .. } =
             tokio::time::timeout(Duration::from_secs(2), next_async(&mut job)).await??
         else {
             anyhow::bail!("worker lost the file publication result");
@@ -512,7 +527,7 @@ mod tests {
             let start_receiver = || {
                 start(
                     Request::Receive {
-                        bind: "127.0.0.1:0".parse()?,
+                        bind: data::ReceiveBind::Explicit("127.0.0.1:0".parse()?),
                         budget: bytes.len() as u64,
                     },
                     Identity::load(&receiver_dir)?,
@@ -569,11 +584,14 @@ mod tests {
             peer.connection.close(0u8.into(), b"resumed file observed");
             assert!(matches!(
                 next_async(&mut resumed).await?,
-                Event::Received(ReceiveResult {
-                    outcome: FileOutcome::Committed,
-                    report_queued: true,
-                    file: Some(_),
-                })
+                Event::Received {
+                    result: ReceiveResult {
+                        outcome: FileOutcome::Committed,
+                        report_queued: true,
+                        file: Some(_),
+                    },
+                    ..
+                }
             ));
             assert_eq!(fs::read(destination.join("shared.bin"))?, bytes);
         }
@@ -593,7 +611,7 @@ mod tests {
         .context("file worker did not report its next state")
     }
 
-    fn loopback(stop: bool, bind: SocketAddr, mapped: bool) -> Result<()> {
+    fn loopback(stop: bool, dial: SocketAddr, mapped: bool, automatic: bool) -> Result<()> {
         let fixture = Fixture::new()?;
         let source = fixture.0.join("shared.bin");
         let destination = fixture.0.join("received");
@@ -605,18 +623,24 @@ mod tests {
         let left_pin = left.certificate.clone();
         let right_pin = right.certificate.clone();
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let bind = if automatic {
+            data::ReceiveBind::Automatic(0)
+        } else {
+            data::ReceiveBind::Explicit(dial)
+        };
         let mut receiver = start(
             Request::Receive { bind, budget: 1024 },
             right,
             left_pin,
             wake.clone(),
         )?;
-        let Event::Listening(target) = next(&mut receiver)? else {
+        let Event::Listening(bound) = next(&mut receiver)? else {
             anyhow::bail!("receiver did not listen");
         };
-        let target = match (target, mapped) {
+        let address = SocketAddr::new(dial.ip(), bound.port());
+        let target = match (address, mapped) {
             (SocketAddr::V4(v4), true) => (v4.ip().to_ipv6_mapped(), v4.port()).into(),
-            _ => target,
+            _ => address,
         };
         let mut sender = start(
             Request::Send {
@@ -663,14 +687,25 @@ mod tests {
                 handoff: Some(_),
             }
         ));
-        assert!(matches!(
-            next(&mut receiver)?,
-            Event::Received(ReceiveResult {
-                outcome: FileOutcome::Committed,
-                report_queued: true,
-                ..
-            })
-        ));
+        let Event::Received {
+            result:
+                ReceiveResult {
+                    outcome: FileOutcome::Committed,
+                    report_queued: true,
+                    ..
+                },
+            bind,
+        } = next(&mut receiver)?
+        else {
+            anyhow::bail!("receiver did not publish the verified file");
+        };
+        assert_eq!(bind.port(), address.port());
+        assert_eq!(bind.is_ipv4(), address.is_ipv4());
+        if automatic {
+            assert!(bind.ip().is_unspecified());
+        } else {
+            assert_eq!(bind, address);
+        }
         let progress = receiver.progress().context("missing verified progress")?;
         assert!(progress.verified_locally);
         assert_eq!(progress.bytes, progress.total);

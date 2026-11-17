@@ -3,10 +3,13 @@ use super::data_frames::{FrameReceiver, FrameSender};
 pub use super::data_session::{
     AdmittedFrame, AdmittedImage, ClipboardCompletion, Consent, ImageCompletion, Receiver, Sender,
 };
-use super::{endpoint_alpn, verify_peer, Identity};
+use super::{endpoint_alpn, endpoint_alpn_dual_stack, verify_peer, Identity};
 use anyhow::{ensure, Context, Result};
 use quinn::{crypto::rustls::HandshakeData, Connection, Endpoint, RecvStream, SendStream};
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    time::Duration,
+};
 
 pub(super) const ALPN: &[u8] = b"peerglide-data/1";
 const MAGIC: &[u8; 4] = b"PGDH";
@@ -106,13 +109,43 @@ enum Side {
     Listener,
 }
 
+/// A one-shot receive bind. Automatic mode prefers one dual-stack socket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiveBind {
+    Explicit(SocketAddr),
+    Automatic(u16),
+}
+
+impl ReceiveBind {
+    pub(super) fn endpoint(self, local: &Identity, pinned_peer: &[u8]) -> Result<Endpoint> {
+        ensure!(
+            local.certificate.as_slice() != pinned_peer,
+            "data peer must have a distinct identity"
+        );
+        match self {
+            Self::Explicit(address) => endpoint_alpn(address, local, pinned_peer, ALPN),
+            Self::Automatic(port) => endpoint_alpn_dual_stack(port, local, pinned_peer, ALPN),
+        }
+    }
+
+    /// Follow-up copy reservations bind the same port on the connection's family.
+    pub(super) fn reservation_address(self, bound: SocketAddr, remote: SocketAddr) -> SocketAddr {
+        match self {
+            Self::Explicit(_) => bound,
+            Self::Automatic(_) => {
+                if peerglide_protocol::peer_destination(remote).is_some_and(|addr| addr.is_ipv4()) {
+                    (Ipv4Addr::UNSPECIFIED, bound.port()).into()
+                } else {
+                    (Ipv6Addr::UNSPECIFIED, bound.port()).into()
+                }
+            }
+        }
+    }
+}
+
 /// Opens an endpoint with a data ALPN only, independently of the input endpoint.
 pub fn endpoint(address: SocketAddr, local: &Identity, pinned_peer: &[u8]) -> Result<Endpoint> {
-    ensure!(
-        local.certificate.as_slice() != pinned_peer,
-        "data peer must have a distinct identity"
-    );
-    endpoint_alpn(address, local, pinned_peer, ALPN)
+    ReceiveBind::Explicit(address).endpoint(local, pinned_peer)
 }
 
 pub async fn open(

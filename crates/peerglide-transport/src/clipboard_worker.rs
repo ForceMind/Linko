@@ -83,6 +83,7 @@ pub enum Event {
     Finished {
         outcome: TextOutcome,
         copy_receipt: Option<ClipboardReceipt>,
+        receive_bind: Option<SocketAddr>,
     },
     Stopped,
     Failed(String),
@@ -296,7 +297,7 @@ enum Operation {
         for_drop: bool,
     },
     Receive {
-        bind: SocketAddr,
+        bind: data::ReceiveBind,
         revision: Option<u64>,
         mode: Mode,
         decision: oneshot::Receiver<Completion>,
@@ -328,7 +329,7 @@ pub fn send(
 /// A revision selects ordinary clipboard import. With no revision, only
 /// explicitly negotiated in-memory copy preparation is allowed.
 pub fn receive(
-    bind: SocketAddr,
+    bind: data::ReceiveBind,
     identity: Identity,
     pinned_peer: Vec<u8>,
     revision: Option<u64>,
@@ -422,7 +423,7 @@ async fn run(
     pinned_peer: Vec<u8>,
     events: &Events,
 ) -> Result<()> {
-    let (outcome, copy_receipt) = match operation {
+    let (outcome, copy_receipt, receive_bind) = match operation {
         Operation::Send {
             target,
             payload,
@@ -473,7 +474,7 @@ async fn run(
             } else {
                 None
             };
-            (outcome, receipt)
+            (outcome, receipt, None)
         }
         Operation::Receive {
             bind,
@@ -481,8 +482,9 @@ async fn run(
             mode,
             decision,
         } => {
-            let endpoint = data::endpoint(bind, &identity, &pinned_peer)?;
-            events.post(Event::Listening(endpoint.local_addr()?))?;
+            let endpoint = bind.endpoint(&identity, &pinned_peer)?;
+            let bound = endpoint.local_addr()?;
+            events.post(Event::Listening(bound))?;
             let connection = OwnedConnection(
                 tokio::time::timeout(LISTEN_TIMEOUT, async {
                     let incoming = endpoint
@@ -553,12 +555,14 @@ async fn run(
             // terminal result and closes. This does not retry any OS effect.
             let _ = tokio::time::timeout(Duration::from_secs(5), connection.0.closed()).await;
             drop(completion.consent);
-            (outcome, receipt)
+            let receive_bind = bind.reservation_address(bound, connection.0.remote_address());
+            (outcome, receipt, Some(receive_bind))
         }
     };
     events.post(Event::Finished {
         outcome,
         copy_receipt,
+        receive_bind,
     })
 }
 
@@ -677,22 +681,38 @@ mod tests {
     #[test]
     fn explicit_clipboard_workers_import_text_and_png_over_ipv6() -> Result<()> {
         let bind = "[::1]:0".parse()?;
-        loopback_at(Mode::Text, Decision::Import, bind, false)?;
-        loopback_at(Mode::Image, Decision::Import, bind, false)
+        loopback_at(Mode::Text, Decision::Import, bind, false, false)?;
+        loopback_at(Mode::Image, Decision::Import, bind, false, false)
     }
 
     #[test]
     fn clipboard_worker_imports_from_a_mapped_ipv4_target() -> Result<()> {
         let bind = "127.0.0.1:0".parse()?;
-        loopback_at(Mode::Text, Decision::Import, bind, true)?;
-        loopback_at(Mode::Image, Decision::Import, bind, true)
+        loopback_at(Mode::Text, Decision::Import, bind, true, false)?;
+        loopback_at(Mode::Image, Decision::Import, bind, true, false)
+    }
+
+    #[test]
+    fn default_clipboard_listener_imports_text_and_png_on_either_family() -> Result<()> {
+        for address in ["127.0.0.1:0", "[::1]:0"] {
+            let address = address.parse()?;
+            loopback_at(Mode::Text, Decision::Import, address, false, true)?;
+            loopback_at(Mode::Image, Decision::Import, address, false, true)?;
+        }
+        Ok(())
     }
 
     fn loopback(mode: Mode, decision: Decision) -> Result<()> {
-        loopback_at(mode, decision, "127.0.0.1:0".parse()?, false)
+        loopback_at(mode, decision, "127.0.0.1:0".parse()?, false, false)
     }
 
-    fn loopback_at(mode: Mode, decision: Decision, bind: SocketAddr, mapped: bool) -> Result<()> {
+    fn loopback_at(
+        mode: Mode,
+        decision: Decision,
+        dial: SocketAddr,
+        mapped: bool,
+        automatic: bool,
+    ) -> Result<()> {
         let source = Identity::generate()?;
         let destination = Identity::generate()?;
         let lease_fixture = (decision == Decision::ReceiveDrop)
@@ -715,6 +735,11 @@ mod tests {
         );
         let receive_for_drop = drop_session || decision == Decision::ImportToDrop;
         let send_for_drop = drop_session || decision == Decision::DropToImport;
+        let bind = if automatic {
+            data::ReceiveBind::Automatic(0)
+        } else {
+            data::ReceiveBind::Explicit(dial)
+        };
         let mut receiving = receive(
             bind,
             destination,
@@ -723,8 +748,7 @@ mod tests {
             mode,
             wake.clone(),
         )?;
-        let Event::Listening(address) = receiving.events.recv_timeout(Duration::from_secs(5))?
-        else {
+        let Event::Listening(bound) = receiving.events.recv_timeout(Duration::from_secs(5))? else {
             anyhow::bail!("expected clipboard listener readiness");
         };
         let payload = match mode {
@@ -738,6 +762,7 @@ mod tests {
                 origin: Origin::Local,
             },
         };
+        let address = SocketAddr::new(dial.ip(), bound.port());
         let target = match (address, mapped) {
             (SocketAddr::V4(v4), true) => (v4.ip().to_ipv6_mapped(), v4.port()).into(),
             _ => address,
@@ -849,8 +874,17 @@ mod tests {
             assert!(backend.text.is_empty());
             assert_eq!(backend.images, 0);
         }
-        let sender = finished(&sending, expected)?;
-        let receiver = finished(&receiving, expected)?;
+        let (sender, send_bind) = finished(&sending, expected)?;
+        let (receiver, receive_bind) = finished(&receiving, expected)?;
+        assert!(send_bind.is_none());
+        let receive_bind = receive_bind.context("missing clipboard reservation address")?;
+        assert_eq!(receive_bind.port(), address.port());
+        assert_eq!(receive_bind.is_ipv4(), address.is_ipv4());
+        if automatic {
+            assert!(receive_bind.ip().is_unspecified());
+        } else {
+            assert_eq!(receive_bind, address);
+        }
         match (lease_fixture, sender, receiver) {
             (Some(fixture), Some(sender), Some(receiver)) => fixture.verify(sender, receiver)?,
             (None, None, None) => (),
@@ -859,16 +893,20 @@ mod tests {
         Ok(())
     }
 
-    fn finished(job: &Job, expected: TextOutcome) -> Result<Option<ClipboardReceipt>> {
+    fn finished(
+        job: &Job,
+        expected: TextOutcome,
+    ) -> Result<(Option<ClipboardReceipt>, Option<SocketAddr>)> {
         let Event::Finished {
             outcome,
             copy_receipt,
+            receive_bind,
         } = job.events.recv_timeout(Duration::from_secs(8))?
         else {
             anyhow::bail!("clipboard completion was not received");
         };
         assert_eq!(outcome, expected);
-        Ok(copy_receipt)
+        Ok((copy_receipt, receive_bind))
     }
 
     struct LeaseFixture {
