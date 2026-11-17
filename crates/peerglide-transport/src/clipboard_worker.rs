@@ -77,9 +77,10 @@ enum PendingFrame {
 pub struct PendingClipboard {
     consent: data::Consent,
     frame: PendingFrame,
+    for_drop: bool,
 }
 
-/// Validated content from an explicitly submitted local clipboard import.
+/// Validated content from an explicitly accepted clipboard import or copy preparation.
 pub enum DragPayload {
     Text(String),
     Png(Vec<u8>),
@@ -119,6 +120,10 @@ impl PendingClipboard {
     }
 
     pub fn import(mut self, backend: &mut (impl Backend + ImageBackend)) -> Result<Completion> {
+        ensure!(
+            !self.for_drop,
+            "copy preparation cannot write the system clipboard"
+        );
         let result = match self.frame {
             PendingFrame::Text(frame) => {
                 CompletedFrame::Text(self.consent.apply_text(frame, backend)?)
@@ -144,6 +149,30 @@ impl PendingClipboard {
         };
         let completion = self.import(&mut capture)?;
         Ok((completion, capture.payload))
+    }
+
+    pub fn prepare_drop(mut self) -> Result<(Completion, DragPayload)> {
+        ensure!(
+            self.for_drop,
+            "the peer did not agree to prepare a copy drag"
+        );
+        let (result, payload) = match self.frame {
+            PendingFrame::Text(frame) => {
+                let (result, text) = self.consent.take_text_for_drop(frame)?;
+                (CompletedFrame::Text(result), DragPayload::Text(text))
+            }
+            PendingFrame::Image(frame) => {
+                let (result, png) = self.consent.take_image_for_drop(frame)?;
+                (CompletedFrame::Image(result), DragPayload::Png(png))
+            }
+        };
+        Ok((
+            Completion {
+                consent: self.consent,
+                result,
+            },
+            payload,
+        ))
     }
 
     pub fn decline(mut self) -> Result<Completion> {
@@ -245,10 +274,11 @@ enum Operation {
     Send {
         target: SocketAddr,
         payload: LocalPayload,
+        for_drop: bool,
     },
     Receive {
         bind: SocketAddr,
-        revision: u64,
+        revision: Option<u64>,
         mode: Mode,
         decision: oneshot::Receiver<Completion>,
     },
@@ -259,10 +289,15 @@ pub fn send(
     identity: Identity,
     pinned_peer: Vec<u8>,
     payload: LocalPayload,
+    for_drop: bool,
     wake: Wake,
 ) -> Result<Job> {
     spawn(
-        Operation::Send { target, payload },
+        Operation::Send {
+            target,
+            payload,
+            for_drop,
+        },
         identity,
         pinned_peer,
         None,
@@ -270,11 +305,13 @@ pub fn send(
     )
 }
 
+/// A revision selects ordinary clipboard import. With no revision, only
+/// explicitly negotiated in-memory copy preparation is allowed.
 pub fn receive(
     bind: SocketAddr,
     identity: Identity,
     pinned_peer: Vec<u8>,
-    revision: u64,
+    revision: Option<u64>,
     mode: Mode,
     wake: Wake,
 ) -> Result<Job> {
@@ -366,7 +403,11 @@ async fn run(
     events: &Events,
 ) -> Result<()> {
     let outcome = match operation {
-        Operation::Send { target, payload } => {
+        Operation::Send {
+            target,
+            payload,
+            for_drop,
+        } => {
             let (mode, payload) = payload.prepare().await?;
             let bind = match target.ip() {
                 IpAddr::V4(_) => SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
@@ -379,7 +420,11 @@ async fn run(
                     .await
                     .context("clipboard connection timed out")??,
             );
-            let stream = data::open(&connection.0, &pinned_peer, mode.capabilities()).await?;
+            let stream = if for_drop {
+                data::open_for_drop(&connection.0, &pinned_peer, mode.capabilities()).await?
+            } else {
+                data::open(&connection.0, &pinned_peer, mode.capabilities()).await?
+            };
             let (mut consent, mut send, mut receive) =
                 stream.into_session(mode.budget(), CONTROL_BYTES)?;
             consent.grant(mode.permissions(true), GRANT_MS)?;
@@ -418,19 +463,35 @@ async fn run(
                 .await
                 .context("clipboard listener timed out")??,
             );
-            let stream = data::accept(&connection.0, &pinned_peer, mode.capabilities()).await?;
+            let for_drop = revision.is_none();
+            let stream = if for_drop {
+                data::accept_for_drop(&connection.0, &pinned_peer, mode.capabilities()).await?
+            } else {
+                data::accept(&connection.0, &pinned_peer, mode.capabilities()).await?
+            };
             let (mut consent, mut send, mut receive) =
                 stream.into_session(CONTROL_BYTES, mode.budget())?;
             consent.grant(mode.permissions(false), GRANT_MS)?;
-            let frame = match mode {
-                Mode::Text => {
-                    let mut frame = receive.read(Some(revision)).await?;
+            let frame = match (mode, revision) {
+                (Mode::Text, revision) => {
+                    let mut frame = if revision.is_some() {
+                        receive.read(revision).await?
+                    } else {
+                        receive.read_text_for_drop().await?
+                    };
                     send.acknowledge_text(&mut frame).await?;
                     PendingFrame::Text(frame)
                 }
-                Mode::Image => PendingFrame::Image(receive.read_image(revision).await?),
+                (Mode::Image, Some(revision)) => {
+                    PendingFrame::Image(receive.read_image(revision).await?)
+                }
+                (Mode::Image, None) => PendingFrame::Image(receive.read_image_for_drop().await?),
             };
-            events.post(Event::Pending(PendingClipboard { consent, frame }))?;
+            events.post(Event::Pending(PendingClipboard {
+                consent,
+                frame,
+                for_drop,
+            }))?;
             let completion = tokio::time::timeout(DECISION_TIMEOUT, decision)
                 .await
                 .context("clipboard import decision timed out")??;
@@ -513,12 +574,41 @@ mod tests {
         loopback(Mode::Image, Decision::ClipboardChanged)
     }
 
+    #[test]
+    fn direct_copy_preparation_never_changes_the_system_clipboard() -> Result<()> {
+        loopback(Mode::Text, Decision::ReceiveDrop)?;
+        loopback(Mode::Image, Decision::ReceiveDrop)
+    }
+
+    #[test]
+    fn mismatched_copy_negotiation_closes_before_payload_admission() -> Result<()> {
+        loopback(Mode::Text, Decision::DropToImport)?;
+        loopback(Mode::Image, Decision::ImportToDrop)
+    }
+
+    #[test]
+    fn stopping_a_copy_session_invalidates_its_pending_payload() -> Result<()> {
+        loopback(Mode::Text, Decision::StopDrop)?;
+        loopback(Mode::Image, Decision::StopDrop)
+    }
+
+    #[test]
+    fn declining_copy_preparation_reports_no_payload_effect() -> Result<()> {
+        loopback(Mode::Text, Decision::DeclineDrop)?;
+        loopback(Mode::Image, Decision::DeclineDrop)
+    }
+
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Decision {
         Import,
         PrepareDrag,
         ClipboardChanged,
         Stop,
+        ReceiveDrop,
+        StopDrop,
+        DeclineDrop,
+        DropToImport,
+        ImportToDrop,
     }
 
     fn loopback(mode: Mode, decision: Decision) -> Result<()> {
@@ -532,11 +622,17 @@ mod tests {
             text: String::new(),
             images: 0,
         };
+        let drop_session = matches!(
+            decision,
+            Decision::ReceiveDrop | Decision::StopDrop | Decision::DeclineDrop
+        );
+        let receive_for_drop = drop_session || decision == Decision::ImportToDrop;
+        let send_for_drop = drop_session || decision == Decision::DropToImport;
         let mut receiving = receive(
             "127.0.0.1:0".parse()?,
             destination,
             source_cert,
-            backend.revision,
+            (!receive_for_drop).then_some(backend.revision),
             mode,
             wake.clone(),
         )?;
@@ -555,7 +651,25 @@ mod tests {
                 origin: Origin::Local,
             },
         };
-        let sending = send(address, source, destination_cert, payload, wake)?;
+        let sending = send(
+            address,
+            source,
+            destination_cert,
+            payload,
+            send_for_drop,
+            wake,
+        )?;
+        if send_for_drop != receive_for_drop {
+            assert!(matches!(
+                receiving.events.recv_timeout(Duration::from_secs(5))?,
+                Event::Failed(_)
+            ));
+            assert!(matches!(
+                sending.events.recv_timeout(Duration::from_secs(5))?,
+                Event::Failed(_)
+            ));
+            return Ok(());
+        }
         let Event::Pending(pending) = receiving.events.recv_timeout(Duration::from_secs(8))? else {
             anyhow::bail!("expected an admitted clipboard frame");
         };
@@ -570,13 +684,17 @@ mod tests {
         );
         assert!(backend.text.is_empty());
         assert_eq!(backend.images, 0);
-        if decision == Decision::Stop {
+        if matches!(decision, Decision::Stop | Decision::StopDrop) {
             receiving.stop();
             assert!(matches!(
                 receiving.events.recv_timeout(Duration::from_secs(5))?,
                 Event::Stopped
             ));
-            assert!(pending.import_for_drag(&mut backend).is_err());
+            if receive_for_drop {
+                assert!(pending.prepare_drop().is_err());
+            } else {
+                assert!(pending.import_for_drag(&mut backend).is_err());
+            }
             assert!(backend.text.is_empty());
             assert_eq!(backend.images, 0);
             assert!(matches!(
@@ -585,14 +703,29 @@ mod tests {
             ));
             return Ok(());
         }
-        let expected = if decision == Decision::ClipboardChanged {
-            backend.revision += 1;
-            TextOutcome::Changed
-        } else {
-            TextOutcome::Submitted
+        let expected = match decision {
+            Decision::ClipboardChanged => {
+                backend.revision += 1;
+                TextOutcome::Changed
+            }
+            Decision::DeclineDrop => TextOutcome::Declined,
+            _ => TextOutcome::Submitted,
         };
         let completion = if decision == Decision::Import {
             pending.import(&mut backend)?
+        } else if decision == Decision::DeclineDrop {
+            pending.decline()?
+        } else if decision == Decision::ReceiveDrop {
+            let (completion, payload) = pending.prepare_drop()?;
+            match (mode, payload) {
+                (Mode::Text, DragPayload::Text(text)) => assert_eq!(text, "屏跃"),
+                (Mode::Image, DragPayload::Png(png)) => {
+                    assert_eq!(png, Image::normalize(&data::TEST_PNG)?.as_png());
+                }
+                _ => anyhow::bail!("unexpected direct copy drag payload"),
+            }
+            assert_eq!(backend.revision, 5);
+            completion
         } else {
             let (completion, payload) = pending.import_for_drag(&mut backend)?;
             match (decision, mode, payload) {
@@ -609,7 +742,7 @@ mod tests {
         };
         assert_eq!(completion.outcome(), expected);
         receiving.complete(completion)?;
-        if expected == TextOutcome::Submitted {
+        if expected == TextOutcome::Submitted && !receive_for_drop {
             match mode {
                 Mode::Text => assert_eq!(backend.text, "屏跃"),
                 Mode::Image => assert_eq!(backend.images, 1),

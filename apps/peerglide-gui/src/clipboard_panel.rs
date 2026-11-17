@@ -21,12 +21,15 @@ enum Decision {
     Decline,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     ImportForDrag,
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    PrepareDrop,
 }
 
 struct Active {
     pin: Pin,
     job: Job,
     pending: Option<PendingClipboard>,
+    for_drop: bool,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     drag_payload: Option<DragPayload>,
     stopping: bool,
@@ -36,6 +39,7 @@ pub(super) struct Panel {
     clipboard: Option<NativeClipboard>,
     active: Option<Active>,
     mode: Mode,
+    for_drop: bool,
     target: String,
     bind: String,
     notice: String,
@@ -50,6 +54,7 @@ impl Default for Panel {
             clipboard: None,
             active: None,
             mode: Mode::Text,
+            for_drop: false,
             target: String::new(),
             bind: format!("0.0.0.0:{PORT}"),
             notice: String::new(),
@@ -103,6 +108,12 @@ impl Panel {
         {
             self.stop();
         }
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if self.active.as_ref().is_some_and(|active| active.for_drop)
+            && (!clipboard_drop::eligible(app, _ctx) || !clipboard_drop::focused(_ctx))
+        {
+            self.stop();
+        }
         let Some(active) = self.active.as_mut() else {
             return;
         };
@@ -120,14 +131,20 @@ impl Panel {
                     "正在等待已配对电脑发送。请在发送端填写本机 IP 和 UDP 端口 {}。",
                     address.port()
                 ),
+                Event::PeerReceived if active.for_drop => {
+                    "另一台已收到文本，正在等对方决定是否准备拖放。".into()
+                }
                 Event::PeerReceived => "另一台已收到文本，正在等对方决定是否导入。".into(),
                 Event::WaitingForImageResult => "已提交图片，正在等待接收端回执。".into(),
                 Event::Pending(pending) => {
+                    let decision = if active.for_drop {
+                        "请选择准备拖放或拒绝。"
+                    } else {
+                        "请选择导入或拒绝。"
+                    };
                     let notice = pending.dimensions().map_or_else(
-                        || "已收到一条文本。请选择导入或拒绝。".into(),
-                        |(width, height)| {
-                            format!("已收到 {width} × {height} PNG。请选择导入或拒绝。")
-                        },
+                        || format!("已收到一条文本。{decision}"),
+                        |(width, height)| format!("已收到 {width} × {height} PNG。{decision}"),
                     );
                     active.pending = Some(pending);
                     notice
@@ -141,12 +158,12 @@ impl Panel {
                             .take()
                             .map(|payload| clipboard_drop::Offer::new(active.pin.clone(), payload));
                     }
-                    outcome_label(outcome).into()
+                    outcome_label(outcome, active.for_drop).into()
                 }
                 Event::Stopped => "本次剪贴板共享已停止。".into(),
                 Event::Failed(_) => {
                     active.pending = None;
-                    "剪贴板共享未完成。请检查内容格式、两端类型、地址和等待时间。".into()
+                    "共享未完成。请检查两端内容类型、用途、地址和等待时间。".into()
                 }
             };
         }
@@ -171,19 +188,25 @@ impl Panel {
         {
             self.drag_offer = None;
         }
+        let for_drop = self.for_drop;
         let (pin, identity, peer) = Pin::load(app)?;
         let wake = app.wake_ui.clone();
         let job = if send {
             let target = data_access::send_address(&self.target, &app.config.address, PORT)?;
             let payload = self.local_payload()?;
-            clipboard_worker::send(target, identity, peer, payload, wake)
+            clipboard_worker::send(target, identity, peer, payload, for_drop, wake)
         } else {
             let bind =
                 data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?;
-            let revision = self
-                .clipboard()?
-                .revision()
-                .context("无法确认本机剪贴板当前版本")?;
+            let revision = if for_drop {
+                None
+            } else {
+                Some(
+                    self.clipboard()?
+                        .revision()
+                        .context("无法确认本机剪贴板当前版本")?,
+                )
+            };
             clipboard_worker::receive(bind, identity, peer, revision, self.mode, wake)
         }
         .context("无法启动剪贴板后台任务")?;
@@ -191,15 +214,17 @@ impl Panel {
             pin,
             job,
             pending: None,
+            for_drop,
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             drag_payload: None,
             stopping: false,
         });
-        self.notice = if send {
-            "正在准备发送当前剪贴板内容。".into()
-        } else {
-            "正在准备等待本次共享。".into()
-        };
+        self.notice = match (send, for_drop) {
+            (true, true) => "正在发送当前剪贴板内容供另一台电脑拖放。",
+            (true, false) => "正在准备发送当前剪贴板内容。",
+            (false, _) => "正在准备等待本次共享。",
+        }
+        .into();
         Ok(())
     }
 
@@ -242,6 +267,12 @@ impl Panel {
             }
             Decision::Decline => pending.decline(),
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            Decision::PrepareDrop => {
+                let (completion, payload) = pending.prepare_drop()?;
+                active.drag_payload = Some(payload);
+                Ok(completion)
+            }
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             Decision::ImportForDrag => {
                 let (completion, payload) = pending
                     .import_for_drag(self.clipboard.as_mut().context("系统剪贴板不可用")?)
@@ -251,7 +282,9 @@ impl Panel {
             }
         }
         .context("本次导入授权已结束")?;
-        self.local_outcome = Some(completion.outcome());
+        if !active.for_drop {
+            self.local_outcome = Some(completion.outcome());
+        }
         self.notice = "正在向发送端报告处理结果。".into();
         active
             .job
@@ -265,15 +298,29 @@ impl Panel {
                 ui.selectable_value(&mut self.mode, Mode::Text, "纯文本");
                 ui.selectable_value(&mut self.mode, Mode::Image, "PNG 图片");
             });
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            ui.checkbox(&mut self.for_drop, "接收端准备拖放");
         });
-        ui.label("两端先选同一种内容，接收端再开启等待。");
-        ui.weak("发送前请确认当前复制的内容。导入需要在接收端再次确认。");
+        ui.label("两端选择相同内容类型和用途，接收端再开启等待。");
+        if self.for_drop {
+            ui.weak("接收端确认后可在本机拖放，系统剪贴板不会被写入。");
+        } else {
+            ui.weak("发送前请确认当前复制的内容。导入需要在接收端再次确认。");
+        }
         let send_label = match self.mode {
             Mode::Text => "发送当前纯文本",
             Mode::Image => "发送当前 PNG",
         };
         ui.add_space(8.0);
-        ui.add_enabled_ui(data_access::ready(app) && self.active.is_none(), |ui| {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        let drop_available =
+            clipboard_drop::eligible(app, ui.ctx()) && clipboard_drop::focused(ui.ctx());
+        #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
+        let drop_available = false;
+        let ready = data_access::ready(app)
+            && self.active.is_none()
+            && (!self.for_drop || drop_available);
+        ui.add_enabled_ui(ready, |ui| {
             let hint = data_access::saved_target(&app.config.address, PORT)
                 .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
             ui.label("接收端地址");
@@ -300,9 +347,10 @@ impl Panel {
         if let Some(active) = &self.active {
             let pending = active.pending.is_some() && !active.stopping;
             let can_stop = !active.stopping;
+            let for_drop = active.for_drop;
             ui.horizontal_wrapped(|ui| {
                 if pending {
-                    let decision = pending_decision(app, ui);
+                    let decision = pending_decision(app, ui, for_drop);
                     if let Some(decision) = decision {
                         if let Err(error) = self.decide(app, decision) {
                             self.stop();
@@ -334,7 +382,7 @@ impl Panel {
         }
         if let Some(label) = self
             .local_outcome
-            .map(outcome_label)
+            .map(|outcome| outcome_label(outcome, false))
             .filter(|label| self.notice != *label)
         {
             ui.label(label);
@@ -345,7 +393,20 @@ impl Panel {
     }
 }
 
-fn pending_decision(_app: &App, ui: &mut egui::Ui) -> Option<Decision> {
+fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Decision> {
+    if for_drop {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        if ui
+            .add_enabled(
+                clipboard_drop::eligible(_app, ui.ctx()) && clipboard_drop::focused(ui.ctx()),
+                egui::Button::new("准备本机拖放"),
+            )
+            .clicked()
+        {
+            return Some(Decision::PrepareDrop);
+        }
+        return ui.button("拒绝").clicked().then_some(Decision::Decline);
+    }
     let import = ui.button("导入到本机剪贴板").clicked();
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     let prepare_drag = ui
@@ -366,7 +427,16 @@ fn pending_decision(_app: &App, ui: &mut egui::Ui) -> Option<Decision> {
     decline.then_some(Decision::Decline)
 }
 
-fn outcome_label(outcome: TextOutcome) -> &'static str {
+fn outcome_label(outcome: TextOutcome, for_drop: bool) -> &'static str {
+    if for_drop {
+        return match outcome {
+            TextOutcome::Submitted => "接收端已同意准备本机拖放。",
+            TextOutcome::Declined => "接收端已拒绝准备拖放。",
+            TextOutcome::Changed | TextOutcome::Failed | TextOutcome::Unknown => {
+                "接收端未确认准备拖放。"
+            }
+        };
+    }
     match outcome {
         TextOutcome::Submitted => "已提交给接收端的系统剪贴板。",
         TextOutcome::Changed => "接收端的剪贴板已变化，本次内容未导入。",
