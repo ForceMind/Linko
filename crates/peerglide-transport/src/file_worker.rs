@@ -2,7 +2,7 @@
 pub use crate::file_transfer::{Decision, Offer, PreparedDropPath, ReceiveResult, ReceivedFile};
 use crate::{
     data,
-    file_transfer::{self, Cancellation, ReceiveOptions, Source},
+    file_transfer::{self, Cancellation, ReceiveFinalization, ReceiveOptions, Source},
     Identity,
 };
 use anyhow::{ensure, Context, Result};
@@ -11,7 +11,10 @@ use std::{
     io,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -152,10 +155,23 @@ pub fn start(
                     .enable_all()
                     .build()?;
                 runtime.block_on(async {
+                    let publishing = AtomicBool::new(false);
+                    let finalization = ReceiveFinalization {
+                        started: &publishing,
+                        stopped: stopped.clone(),
+                    };
+                    let job = run(request, identity, pinned_peer, decision, job_stop, &status, finalization);
+                    tokio::pin!(job);
                     tokio::select! {
                         biased;
-                        _ = stopped.wait_for(|stopped| *stopped) => Ok(Event::Stopped),
-                        result = run(request, identity, pinned_peer, decision, job_stop, &status) => result,
+                        _ = stopped.wait_for(|stopped| *stopped) => {
+                            if publishing.load(Ordering::Acquire) {
+                                job.await
+                            } else {
+                                Ok(Event::Stopped)
+                            }
+                        }
+                        result = &mut job => result,
                     }
                 })
                 // Drop the dedicated runtime before posting the terminal event.
@@ -198,6 +214,7 @@ async fn run(
     decision: oneshot::Receiver<Decision>,
     stop: Cancellation,
     status: &Status,
+    finalization: ReceiveFinalization<'_>,
 ) -> Result<Event> {
     match request {
         Request::Send {
@@ -244,7 +261,7 @@ async fn run(
                 Ok::<_, anyhow::Error>(incoming.await?)
             })
             .await??;
-            let result = file_transfer::receive(
+            let result = file_transfer::receive_with_finalization(
                 &connection,
                 &pinned_peer,
                 ReceiveOptions { budget, stop },
@@ -259,6 +276,7 @@ async fn run(
                         verified_locally: true,
                     });
                 },
+                Some(finalization),
             )
             .await?;
             Ok(Event::Received(result))
@@ -327,6 +345,87 @@ mod tests {
     #[test]
     fn stopping_a_pending_offer_leaves_the_selected_directory_untouched() -> Result<()> {
         loopback(true)
+    }
+
+    #[tokio::test]
+    async fn stopping_after_publication_preserves_the_verified_local_result() -> Result<()> {
+        use peerglide_transfer::{codec::{Frame, Kind}, data_policy::Permissions, Manifest};
+
+        let fixture = Fixture::new()?;
+        let source = fixture.0.join("shared.bin");
+        let destination = fixture.0.join("received");
+        let bytes = b"stopped after file publication";
+        fs::write(&source, bytes)?;
+        fs::create_dir(&destination)?;
+        let manifest = Manifest::from_file(&source)?;
+        let sender = Identity::generate()?;
+        let receiver = Identity::generate()?;
+        let peer_pin = receiver.certificate.clone();
+        let bind = "127.0.0.1:0".parse()?;
+        let mut job = start(
+            Request::Receive { bind, budget: 1024 },
+            receiver,
+            sender.certificate.clone(),
+            Arc::new(|| {}),
+        )?;
+        let Event::Listening(address) = next_async(&mut job).await? else {
+            anyhow::bail!("file listener did not start");
+        };
+        let endpoint = data::endpoint(bind, &sender, &peer_pin)?;
+        let connection = endpoint.connect(address, "peerglide.local")?.await?;
+        let stream = data::open(
+            &connection,
+            &peer_pin,
+            data::Capabilities { files: true, ..data::Capabilities::default() },
+        )
+        .await?;
+        let (mut consent, mut send, mut receive) = stream.into_session(4096, 4096)?;
+        consent.grant(Permissions { file_send: true, ..Permissions::default() }, 10_000)?;
+        let id = [7; 16];
+        send.write(&Frame::Offer { id, manifest }).await?;
+        let Event::Offer(offer) = next_async(&mut job).await? else {
+            anyhow::bail!("file approval did not arrive");
+        };
+        assert_eq!(offer.id, id);
+        job.decide(Decision::Accept {
+            directory: destination.clone(),
+            resume: false,
+        })?;
+        let accepted = receive
+            .read_file(&[Kind::FileAccepted], Duration::from_secs(5))
+            .await?;
+        assert!(matches!(consent.apply_received(accepted, Ok)?, Frame::FileAccepted { id: accepted_id, next_chunk: 0 } if accepted_id == id));
+        send.write(&Frame::Chunk { id, index: 0, bytes: bytes.to_vec() }).await?;
+        let result = receive
+            .read_file(&[Kind::FileResult], Duration::from_secs(5))
+            .await?;
+        assert!(matches!(consent.apply_received(result, Ok)?, Frame::FileResult { id: finished, outcome: FileOutcome::Committed } if finished == id));
+
+        // Keep the peer alive so only local stop can end the receipt wait.
+        job.stop();
+        let Event::Received(result) =
+            tokio::time::timeout(Duration::from_secs(2), next_async(&mut job)).await??
+        else {
+            anyhow::bail!("worker lost the file publication result");
+        };
+        assert_eq!(result.outcome, FileOutcome::Committed);
+        assert!(result.report_queued && result.file.is_some());
+        assert_eq!(fs::read(destination.join("shared.bin"))?, bytes);
+        connection.close(0u8.into(), b"local publication observed");
+        Ok(())
+    }
+
+    async fn next_async(job: &mut Job) -> Result<Event> {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(event) = job.poll() {
+                    return event;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .context("file worker did not report its next state")
     }
 
     fn loopback(stop: bool) -> Result<()> {
