@@ -6,6 +6,7 @@ use crate::{
     Identity,
 };
 use anyhow::{ensure, Context, Result};
+use peerglide_protocol::peer_destination;
 pub use peerglide_transfer::{codec::FileOutcome, History, HistoryState, MAX_FILE_BYTES};
 use std::{
     io,
@@ -129,11 +130,14 @@ impl Status {
 }
 
 pub fn start(
-    request: Request,
+    mut request: Request,
     identity: Identity,
     pinned_peer: Vec<u8>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<Job> {
+    if let Request::Send { target, .. } = &mut request {
+        *target = peer_destination(*target).context("invalid file transfer destination")?;
+    }
     let (tx, events) = mpsc::sync_channel(4);
     let (approve, decision) = oneshot::channel();
     let receive = matches!(request, Request::Receive { .. });
@@ -352,17 +356,22 @@ mod tests {
 
     #[test]
     fn independent_jobs_publish_local_progress_and_receipts() -> Result<()> {
-        loopback(false, "127.0.0.1:0".parse()?)
+        loopback(false, "127.0.0.1:0".parse()?, false)
     }
 
     #[test]
     fn file_workers_publish_verified_contents_over_ipv6() -> Result<()> {
-        loopback(false, "[::1]:0".parse()?)
+        loopback(false, "[::1]:0".parse()?, false)
+    }
+
+    #[test]
+    fn file_worker_connects_to_a_mapped_ipv4_target() -> Result<()> {
+        loopback(false, "127.0.0.1:0".parse()?, true)
     }
 
     #[test]
     fn stopping_a_pending_offer_leaves_the_selected_directory_untouched() -> Result<()> {
-        loopback(true, "127.0.0.1:0".parse()?)
+        loopback(true, "127.0.0.1:0".parse()?, false)
     }
 
     struct FilePeer {
@@ -584,7 +593,7 @@ mod tests {
         .context("file worker did not report its next state")
     }
 
-    fn loopback(stop: bool, bind: SocketAddr) -> Result<()> {
+    fn loopback(stop: bool, bind: SocketAddr, mapped: bool) -> Result<()> {
         let fixture = Fixture::new()?;
         let source = fixture.0.join("shared.bin");
         let destination = fixture.0.join("received");
@@ -604,6 +613,10 @@ mod tests {
         )?;
         let Event::Listening(target) = next(&mut receiver)? else {
             anyhow::bail!("receiver did not listen");
+        };
+        let target = match (target, mapped) {
+            (SocketAddr::V4(v4), true) => (v4.ip().to_ipv6_mapped(), v4.port()).into(),
+            _ => target,
         };
         let mut sender = start(
             Request::Send {
