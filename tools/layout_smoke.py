@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real private-pipe layout updates over an authenticated NoNative session.
 
-Fresh identities and loopback only. This does not validate physical screen edges.
+Fresh identities and loopback connections only. This does not validate physical screen edges.
 """
 import json
 import pathlib
@@ -43,8 +43,7 @@ def command(request, edge):
     return {"version": 1, "kind": "layout", "request": request, "edge": edge}
 
 
-def main():
-    binary = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/peerglide").resolve()
+def check_layout(binary, loopback):
     children = []
     with tempfile.TemporaryDirectory(prefix="linko-layout-") as work:
         root = pathlib.Path(work)
@@ -65,14 +64,15 @@ def main():
         try:
             listener, listener_log = launch([
                 "listen", "--identity", str(identities[0]), "--peer-cert",
-                str(identities[1] / "node.crt.der"), "--bind", "127.0.0.1:0",
+                str(identities[1] / "node.crt.der"), "--bind", "0.0.0.0:0",
+                "--listen-dual-stack",
             ], "listener")
-            pattern = r"Listening on (127\.0\.0\.1:\d+)"
+            pattern = r"Listening on \[::\]:(\d+)"
             wait_for(lambda: re.search(pattern, listener_log.read_text()), listener, listener_log)
-            address = re.search(pattern, listener_log.read_text())[1]
+            port = re.search(pattern, listener_log.read_text())[1]
             connector, connector_log = launch([
-                "connect", address, "--identity", str(identities[1]), "--peer-cert",
-                str(identities[0] / "node.crt.der"), "--bind", "127.0.0.1:0",
+                "connect", f"{loopback}:{port}", "--identity", str(identities[1]), "--peer-cert",
+                str(identities[0] / "node.crt.der"), "--bind", f"{loopback}:0",
             ], "connector")
             for child, log in [(listener, listener_log), (connector, connector_log)]:
                 wait_for(lambda: any(r.get("state") == "Authenticated" for r in records(log)),
@@ -81,7 +81,7 @@ def main():
                                 if line.startswith("LINKO-PEER-ADDRESS/1 ")]
                 if child is listener:
                     assert len(peer_records) == 1, peer_records
-                    assert re.fullmatch(r"LINKO-PEER-ADDRESS/1 127\.0\.0\.1:[1-9]\d{0,4}",
+                    assert re.fullmatch(rf"LINKO-PEER-ADDRESS/1 {re.escape(loopback)}:[1-9]\d{{0,4}}",
                                         peer_records[0]), peer_records
                 else:
                     assert not peer_records, peer_records
@@ -110,7 +110,7 @@ def main():
                 assert [r["state"] for r in actual if r.get("kind") == "input"] == [
                     "Disabled", "Disabled"], actual
                 assert any(r.get("terminal") is True for r in actual), actual
-            print("PASS: two authenticated workers apply all four local directions without reconnect;")
+            print(f"PASS: two authenticated workers on {loopback} apply all four local directions;")
             print("      bounded invalid commands drain, managed stop exits cleanly; no native input")
         finally:
             for child in children:
@@ -119,6 +119,12 @@ def main():
                     child.wait(timeout=5)
                 if child.stdin:
                     child.stdin.close()
+
+
+def main():
+    binary = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "target/release/peerglide").resolve()
+    for loopback in ("127.0.0.1", "[::1]"):
+        check_layout(binary, loopback)
 
 
 if __name__ == "__main__":

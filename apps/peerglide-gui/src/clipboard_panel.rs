@@ -64,7 +64,7 @@ impl Default for Panel {
             mode: Mode::Text,
             for_drop: false,
             target: String::new(),
-            bind: format!("0.0.0.0:{PORT}"),
+            bind: String::new(),
             notice: String::new(),
             local_outcome: None,
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -262,7 +262,7 @@ impl Panel {
         let address = if send {
             data_access::send_address(&self.target, data_access::default_target(app, PORT))?
         } else {
-            data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?
+            data_access::receive_address(&self.bind, data_access::default_bind(app, PORT))?
         };
         let job = if send {
             let payload = self.local_payload()?;
@@ -410,7 +410,10 @@ impl Panel {
             }
             ui.add_space(8.0);
             ui.label("本机监听地址");
-            ui.text_edit_singleline(&mut self.bind);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.bind)
+                    .hint_text(data_access::default_bind(app, PORT).to_string()),
+            );
             if ui.button("等待接收").clicked() {
                 self.local_outcome = None;
                 if let Err(error) = self.start(app, false) {

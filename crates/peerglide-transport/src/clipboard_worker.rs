@@ -672,7 +672,18 @@ mod tests {
         ImportToDrop,
     }
 
+    #[test]
+    fn explicit_clipboard_workers_import_text_and_png_over_ipv6() -> Result<()> {
+        let bind = "[::1]:0".parse()?;
+        loopback_at(Mode::Text, Decision::Import, bind)?;
+        loopback_at(Mode::Image, Decision::Import, bind)
+    }
+
     fn loopback(mode: Mode, decision: Decision) -> Result<()> {
+        loopback_at(mode, decision, "127.0.0.1:0".parse()?)
+    }
+
+    fn loopback_at(mode: Mode, decision: Decision, bind: SocketAddr) -> Result<()> {
         let source = Identity::generate()?;
         let destination = Identity::generate()?;
         let lease_fixture = (decision == Decision::ReceiveDrop)
@@ -696,7 +707,7 @@ mod tests {
         let receive_for_drop = drop_session || decision == Decision::ImportToDrop;
         let send_for_drop = drop_session || decision == Decision::DropToImport;
         let mut receiving = receive(
-            "127.0.0.1:0".parse()?,
+            bind,
             destination,
             source_cert,
             (!receive_for_drop).then_some(backend.revision),

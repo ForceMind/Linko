@@ -72,6 +72,7 @@ impl SourceHandoff {
     }
 }
 
+#[derive(Default)]
 pub(super) struct Panel {
     active: Option<Active>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -90,30 +91,6 @@ pub(super) struct Panel {
     notice: String,
     history_directory: String,
     history: Option<HistorySearch>,
-}
-
-impl Default for Panel {
-    fn default() -> Self {
-        Self {
-            active: None,
-            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-            export: super::native_drop_panel::Export::default(),
-            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-            sending_handoff: None,
-            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-            edge: None,
-            source: String::new(),
-            destination: String::new(),
-            target: String::new(),
-            bind: format!("0.0.0.0:{PORT}"),
-            resume: String::new(),
-            prepared_id: None,
-            progress: None,
-            notice: String::new(),
-            history_directory: String::new(),
-            history: None,
-        }
-    }
 }
 
 impl Panel {
@@ -263,8 +240,10 @@ impl Panel {
             }
         } else {
             Request::Receive {
-                bind: data_access::parse_address(&self.bind)
-                    .context("请填写本机监听地址和 UDP 端口")?,
+                bind: data_access::receive_address(
+                    &self.bind,
+                    data_access::default_bind(app, PORT),
+                )?,
                 budget: file_worker::MAX_FILE_BYTES,
             }
         };
@@ -544,7 +523,10 @@ impl Panel {
                 ui.add_space(8.0);
                 ui.strong("接收文件");
                 ui.label("本机监听地址");
-                ui.text_edit_singleline(&mut self.bind);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.bind)
+                        .hint_text(data_access::default_bind(app, PORT).to_string()),
+                );
                 if ui.button("等待文件请求").clicked() {
                     let result = self.start(app, false, false);
                     if let Err(error) = result {
