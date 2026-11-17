@@ -123,10 +123,7 @@ impl HandoffRegion {
             ui.label("请将拖放起点完整显示在接收屏幕上。");
         }
         if self.entry != entry || self.rect != Some(rect) {
-            ensure!(
-                !reservation.target_position_frozen(),
-                "拖放起点已移动"
-            );
+            ensure!(!reservation.target_position_frozen(), "拖放起点已移动");
             self.entry = entry;
             self.rect = Some(rect);
             self.pressed = false;

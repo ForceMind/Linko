@@ -122,7 +122,11 @@ impl Panel {
                 let result = handoff.tick(app, _ctx);
                 self.finish_handoff(app, result);
             }
-            if self.prepared_handoff.as_ref().is_some_and(|ready| !ready.current(app, _ctx)) {
+            if self
+                .prepared_handoff
+                .as_ref()
+                .is_some_and(|ready| !ready.current(app, _ctx))
+            {
                 self.prepared_handoff = None;
                 self.notice = "本次复制拖放准备已失效。".into();
             }
@@ -214,7 +218,8 @@ impl Panel {
                                 payload,
                             });
                         } else if let Some(payload) = payload {
-                            self.drag_offer = Some(clipboard_drop::Offer::new(active.pin.clone(), payload));
+                            self.drag_offer =
+                                Some(clipboard_drop::Offer::new(active.pin.clone(), payload));
                         }
                     }
                     outcome_label(outcome, active.for_drop).into()
@@ -495,9 +500,16 @@ impl Panel {
             return true;
         }
         let receiving = ready.payload.is_some();
-        let label = if receiving { "准备跨机接收" } else { "准备跨机拖出" };
+        let label = if receiving {
+            "准备跨机接收"
+        } else {
+            "准备跨机拖出"
+        };
         let can_start = app.child.is_none() && (!receiving || app.config.allow);
-        if ui.add_enabled(can_start, egui::Button::new(label)).clicked() {
+        if ui
+            .add_enabled(can_start, egui::Button::new(label))
+            .clicked()
+        {
             let prepared = self.prepared_handoff.take().expect("current preparation");
             match clipboard_handoff::Handoff::new(prepared, app, ui.ctx()) {
                 Ok(handoff) => self.handoff = Some(handoff),
@@ -505,7 +517,9 @@ impl Panel {
             }
         } else if receiving && ui.button("准备本机拖放").clicked() {
             if let Some(prepared) = self.prepared_handoff.take() {
-                self.drag_offer = prepared.payload.map(|payload| clipboard_drop::Offer::new(prepared.pin, payload));
+                self.drag_offer = prepared
+                    .payload
+                    .map(|payload| clipboard_drop::Offer::new(prepared.pin, payload));
             }
         } else if ui.button("取消准备").clicked() {
             self.prepared_handoff = None;

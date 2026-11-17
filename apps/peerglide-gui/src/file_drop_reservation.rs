@@ -766,14 +766,24 @@ mod native {
         }
 
         fn cancel_wait(&self) {
-            let _ = self.signal.compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire);
+            let _ = self
+                .signal
+                .compare_exchange(0, 2, Ordering::AcqRel, Ordering::Acquire);
             let _ = self.started.try_send(());
         }
 
         pub(crate) fn finish(mut self, app: &mut App) {
             self.cancel_wait();
-            let pipe = self.owner.take().and_then(|owner| owner.join().ok()).flatten();
-            if app.worker_state.as_ref().is_some_and(|worker| Arc::ptr_eq(worker, &self.worker)) {
+            let pipe = self
+                .owner
+                .take()
+                .and_then(|owner| owner.join().ok())
+                .flatten();
+            if app
+                .worker_state
+                .as_ref()
+                .is_some_and(|worker| Arc::ptr_eq(worker, &self.worker))
+            {
                 if let Some(child) = app.child.as_mut().filter(|child| child.stdin.is_none()) {
                     child.stdin = pipe;
                 }

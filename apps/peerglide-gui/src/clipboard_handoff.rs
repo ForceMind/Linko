@@ -67,10 +67,7 @@ impl Handoff {
         prepared.pin.recheck(app)?;
         ensure!(app.child.is_none(), "请先结束当前键鼠会话");
         let receiving = prepared.payload.is_some();
-        ensure!(
-            !receiving || app.config.allow,
-            "请先启用本机的键鼠接收许可"
-        );
+        ensure!(!receiving || app.config.allow, "请先启用本机的键鼠接收许可");
         let layout = read_display_layout().context("无法读取显示器布局")?;
         let (proof, expires) = prepared.receipt.into_local_worker()?;
         let request = next_request(app)?;
@@ -163,7 +160,8 @@ impl Handoff {
         {
             if let Some(entry) = region.entry {
                 self.verify_layout()?;
-                self.reservation.confirm_ready(app, &self.pin, lease, entry, now)?;
+                self.reservation
+                    .confirm_ready(app, &self.pin, lease, entry, now)?;
             }
         }
         Ok(None)
@@ -172,13 +170,8 @@ impl Handoff {
     pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) -> Result<Option<&'static str>> {
         match &mut self.stage {
             Stage::Waiting { region, .. } => {
-                if region.ui(
-                    app,
-                    ui,
-                    &self.layout,
-                    &self.reservation,
-                    "跨机内容拖放起点",
-                )? {
+                if region.ui(app, ui, &self.layout, &self.reservation, "跨机内容拖放起点")?
+                {
                     return self.begin_drag(app);
                 }
             }
@@ -194,18 +187,24 @@ impl Handoff {
             Status::WaitingForWorker => {
                 ui.label("请在两端分别开启键鼠协同。");
                 if ui
-                    .add_enabled(app.native_start_available(), egui::Button::new("开启键鼠协同"))
+                    .add_enabled(
+                        app.native_start_available(),
+                        egui::Button::new("开启键鼠协同"),
+                    )
                     .clicked()
                 {
                     app.workspace_action(desktop_state::Action::StartInput);
                 }
             }
             Status::Press => {
-                let drag = ui.add(egui::Button::new("按住并拖向切换边沿").sense(egui::Sense::drag()));
+                let drag =
+                    ui.add(egui::Button::new("按住并拖向切换边沿").sense(egui::Sense::drag()));
                 if drag.hovered()
-                    && ui.input(|input| input.focused
-                        && input.pointer.button_pressed(egui::PointerButton::Primary)
-                        && input.pointer.primary_down())
+                    && ui.input(|input| {
+                        input.focused
+                            && input.pointer.button_pressed(egui::PointerButton::Primary)
+                            && input.pointer.primary_down()
+                    })
                 {
                     self.verify_layout()?;
                     self.reservation.press(app, &self.pin, Instant::now())?;
@@ -232,13 +231,16 @@ impl Handoff {
         self.pin.recheck(app)?;
         self.verify_layout()?;
         let remaining = self.expires.saturating_duration_since(Instant::now());
-        let Stage::Waiting { payload, region } = std::mem::replace(&mut self.stage, Stage::Finished)
+        let Stage::Waiting { payload, region } =
+            std::mem::replace(&mut self.stage, Stage::Finished)
         else {
             anyhow::bail!("本次拖放已启动");
         };
         #[cfg(all(windows, target_env = "msvc"))]
         {
-            use peerglide_platform::windows_native_drop::{drag_handoff_png, drag_handoff_text, Outcome};
+            use peerglide_platform::windows_native_drop::{
+                drag_handoff_png, drag_handoff_text, Outcome,
+            };
             let _ = region;
             let delivery = NativeDelivery::open(&self.reservation, app)?;
             let check = |phase| delivery.native_check(phase);
