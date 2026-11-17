@@ -160,7 +160,15 @@ pub fn start(
                         started: &publishing,
                         stopped: stopped.clone(),
                     };
-                    let job = run(request, identity, pinned_peer, decision, job_stop, &status, finalization);
+                    let job = run(
+                        request,
+                        identity,
+                        pinned_peer,
+                        decision,
+                        job_stop,
+                        &status,
+                        finalization,
+                    );
                     tokio::pin!(job);
                     tokio::select! {
                         biased;
@@ -349,7 +357,11 @@ mod tests {
 
     #[tokio::test]
     async fn stopping_after_publication_preserves_the_verified_local_result() -> Result<()> {
-        use peerglide_transfer::{codec::{Frame, Kind}, data_policy::Permissions, Manifest};
+        use peerglide_transfer::{
+            codec::{Frame, Kind},
+            data_policy::Permissions,
+            Manifest,
+        };
 
         let fixture = Fixture::new()?;
         let source = fixture.0.join("shared.bin");
@@ -376,11 +388,20 @@ mod tests {
         let stream = data::open(
             &connection,
             &peer_pin,
-            data::Capabilities { files: true, ..data::Capabilities::default() },
+            data::Capabilities {
+                files: true,
+                ..data::Capabilities::default()
+            },
         )
         .await?;
         let (mut consent, mut send, mut receive) = stream.into_session(4096, 4096)?;
-        consent.grant(Permissions { file_send: true, ..Permissions::default() }, 10_000)?;
+        consent.grant(
+            Permissions {
+                file_send: true,
+                ..Permissions::default()
+            },
+            10_000,
+        )?;
         let id = [7; 16];
         send.write(&Frame::Offer { id, manifest }).await?;
         let Event::Offer(offer) = next_async(&mut job).await? else {
@@ -394,12 +415,21 @@ mod tests {
         let accepted = receive
             .read_file(&[Kind::FileAccepted], Duration::from_secs(5))
             .await?;
-        assert!(matches!(consent.apply_received(accepted, Ok)?, Frame::FileAccepted { id: accepted_id, next_chunk: 0 } if accepted_id == id));
-        send.write(&Frame::Chunk { id, index: 0, bytes: bytes.to_vec() }).await?;
+        assert!(
+            matches!(consent.apply_received(accepted, Ok)?, Frame::FileAccepted { id: accepted_id, next_chunk: 0 } if accepted_id == id)
+        );
+        send.write(&Frame::Chunk {
+            id,
+            index: 0,
+            bytes: bytes.to_vec(),
+        })
+        .await?;
         let result = receive
             .read_file(&[Kind::FileResult], Duration::from_secs(5))
             .await?;
-        assert!(matches!(consent.apply_received(result, Ok)?, Frame::FileResult { id: finished, outcome: FileOutcome::Committed } if finished == id));
+        assert!(
+            matches!(consent.apply_received(result, Ok)?, Frame::FileResult { id: finished, outcome: FileOutcome::Committed } if finished == id)
+        );
 
         // Keep the peer alive so only local stop can end the receipt wait.
         job.stop();
