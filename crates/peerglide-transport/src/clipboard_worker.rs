@@ -63,7 +63,7 @@ pub enum Event {
     Listening(SocketAddr),
     PeerReceived,
     WaitingForImageResult,
-    Pending(PendingClipboard),
+    Pending(Box<PendingClipboard>),
     Finished(TextOutcome),
     Stopped,
     Failed(String),
@@ -487,11 +487,11 @@ async fn run(
                 }
                 (Mode::Image, None) => PendingFrame::Image(receive.read_image_for_drop().await?),
             };
-            events.post(Event::Pending(PendingClipboard {
+            events.post(Event::Pending(Box::new(PendingClipboard {
                 consent,
                 frame,
                 for_drop,
-            }))?;
+            })))?;
             let completion = tokio::time::timeout(DECISION_TIMEOUT, decision)
                 .await
                 .context("clipboard import decision timed out")??;

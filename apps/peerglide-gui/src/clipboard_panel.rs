@@ -28,7 +28,7 @@ enum Decision {
 struct Active {
     pin: Pin,
     job: Job,
-    pending: Option<PendingClipboard>,
+    pending: Option<Box<PendingClipboard>>,
     for_drop: bool,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     drag_payload: Option<DragPayload>,
