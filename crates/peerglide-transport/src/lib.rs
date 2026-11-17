@@ -272,20 +272,24 @@ pub fn endpoint(addr: SocketAddr, identity: &Identity, peer: &[u8]) -> Result<En
 /// Prefer a single socket accepting IPv4 and IPv6. Hosts without dual-stack
 /// support keep the ordinary IPv4 listener.
 pub fn endpoint_dual_stack(port: u16, identity: &Identity, peer: &[u8]) -> Result<Endpoint> {
-    endpoint_with(
-        identity,
-        peer,
-        peerglide_protocol::ALPN,
-        |server| match dual_stack_socket(port) {
-            Ok(socket) => Endpoint::new(
-                quinn::EndpointConfig::default(),
-                Some(server),
-                socket,
-                Arc::new(quinn::TokioRuntime),
-            ),
-            Err(_) => Endpoint::server(server, (Ipv4Addr::UNSPECIFIED, port).into()),
-        },
-    )
+    endpoint_alpn_dual_stack(port, identity, peer, peerglide_protocol::ALPN)
+}
+
+fn endpoint_alpn_dual_stack(
+    port: u16,
+    identity: &Identity,
+    peer: &[u8],
+    alpn: &[u8],
+) -> Result<Endpoint> {
+    endpoint_with(identity, peer, alpn, |server| match dual_stack_socket(port) {
+        Ok(socket) => Endpoint::new(
+            quinn::EndpointConfig::default(),
+            Some(server),
+            socket,
+            Arc::new(quinn::TokioRuntime),
+        ),
+        Err(_) => Endpoint::server(server, (Ipv4Addr::UNSPECIFIED, port).into()),
+    })
 }
 
 fn dual_stack_socket(port: u16) -> io::Result<UdpSocket> {

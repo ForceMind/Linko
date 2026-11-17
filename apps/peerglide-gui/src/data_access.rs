@@ -2,7 +2,8 @@
 use super::{transport, App, Identity};
 use anyhow::{Context, Result};
 use peerglide_protocol::peer_destination;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use peerglide_transport::data::ReceiveBind;
+use std::net::{IpAddr, SocketAddr};
 
 pub(super) fn ready(app: &App) -> bool {
     app.writable()
@@ -100,22 +101,13 @@ pub(super) fn default_target(app: &App, port: u16) -> Option<SocketAddr> {
     })
 }
 
-pub(super) fn default_bind(app: &App, port: u16) -> SocketAddr {
-    if connected_peer(app)
-        .or_else(|| saved_target(&app.config.address, port))
-        .is_some_and(|address| address.is_ipv6())
-    {
-        (Ipv6Addr::UNSPECIFIED, port).into()
-    } else {
-        (Ipv4Addr::UNSPECIFIED, port).into()
-    }
-}
-
-pub(super) fn receive_address(text: &str, fallback: SocketAddr) -> Result<SocketAddr> {
+pub(super) fn receive_bind(text: &str, port: u16) -> Result<ReceiveBind> {
     if text.trim().is_empty() {
-        Ok(fallback)
+        Ok(ReceiveBind::Automatic(port))
     } else {
-        parse_address(text).context("请输入本机监听地址和 UDP 端口")
+        parse_address(text)
+            .map(ReceiveBind::Explicit)
+            .context("请输入本机监听地址和 UDP 端口")
     }
 }
 
@@ -191,16 +183,7 @@ mod tests {
             send_address("192.0.2.7:9000", default_target(&app, 24872))?,
             "192.0.2.7:9000".parse()?
         );
-        assert_eq!(
-            receive_address("", default_bind(&app, 24872))?,
-            "[::]:24872".parse()?
-        );
-        assert_eq!(
-            receive_address("127.0.0.1:9000", default_bind(&app, 24872))?,
-            "127.0.0.1:9000".parse()?
-        );
         app.config.address = "192.0.2.8:24870".into();
-        assert_eq!(default_bind(&app, 24872), "[::]:24872".parse()?);
         assert_eq!(
             default_target(&app, 24872),
             Some("192.0.2.8:24872".parse()?)
@@ -208,11 +191,26 @@ mod tests {
         app.config.address.clear();
         worker.publish(WorkerState::Disconnected);
         assert!(default_target(&app, 24872).is_none());
-        assert_eq!(default_bind(&app, 24872), "0.0.0.0:24872".parse()?);
         app.config.address = "[2001:db8::2]:24870".into();
-        assert_eq!(default_bind(&app, 24873), "[::]:24873".parse()?);
+        assert_eq!(
+            default_target(&app, 24873),
+            Some("[2001:db8::2]:24873".parse()?)
+        );
         drop(app);
         fixture.close()
+    }
+
+    #[test]
+    fn empty_receive_address_selects_automatic_and_explicit_binds_are_preserved() -> Result<()> {
+        assert_eq!(receive_bind(" ", 24872)?, ReceiveBind::Automatic(24872));
+        for address in ["127.0.0.1:9000", "[::]:24873", "[fe80::2%4]:24873"] {
+            assert_eq!(
+                receive_bind(address, 24872)?,
+                ReceiveBind::Explicit(address.parse()?)
+            );
+        }
+        assert!(receive_bind("[::]:0", 24872).is_err());
+        Ok(())
     }
 
     #[test]
