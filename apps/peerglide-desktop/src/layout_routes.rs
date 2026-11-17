@@ -10,6 +10,7 @@ use peerglide_platform::{
 #[cfg(any(windows, target_os = "macos", test))]
 use peerglide_protocol::InputCapabilities;
 use peerglide_protocol::{
+    peer_destination,
     route_plan::{Plan, VERSION as PLAN_VERSION},
     Edge,
 };
@@ -112,15 +113,14 @@ impl Routes {
         let mut peers = BTreeMap::new();
         let mut peer_ids = Vec::with_capacity(plan.peers.len());
         for spec in plan.peers {
-            ensure!(
-                spec.address.port() != 0 && !spec.address.ip().is_unspecified(),
-                "display route peer needs a destination address and port"
-            );
-            ensure!(
-                spec.secondary_layout
-                    .is_none_or(|address| address.port() != 0 && !address.ip().is_unspecified()),
-                "secondary layout needs a destination address and port"
-            );
+            let address = peer_destination(spec.address)
+                .context("display route peer needs a unicast destination; link-local IPv6 needs a local interface scope")?;
+            let secondary_layout = spec.secondary_layout
+                .map(|address| {
+                    peer_destination(address)
+                        .context("secondary layout needs a unicast destination; link-local IPv6 needs a local interface scope")
+                })
+                .transpose()?;
             let certificate = transport::read_certificate(&directory.join(spec.certificate))?;
             ensure!(
                 spec.fingerprint
@@ -139,9 +139,9 @@ impl Routes {
                     .insert(
                         id,
                         Peer {
-                            address: spec.address,
+                            address,
                             certificate,
-                            secondary_layout: spec.secondary_layout,
+                            secondary_layout,
                         }
                     )
                     .is_none(),

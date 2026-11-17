@@ -9,6 +9,7 @@ use peerglide_platform::{
     display_routes::{Link, Span, Table, Target, MAX_LINKS},
 };
 use peerglide_protocol::{
+    peer_destination,
     route_plan::{PeerSpec, Plan, RouteSpec, VERSION},
     Edge,
 };
@@ -501,8 +502,7 @@ fn text(ui: &mut egui::Ui, label: &str, value: &mut String, limit: usize) {
 
 fn destination(text: &str) -> Result<SocketAddr> {
     let address = data_access::parse_address(text).context("请填写单播地址和端口")?;
-    ensure!(!address.ip().is_unspecified(), "地址须指向目标电脑");
-    Ok(address)
+    peer_destination(address).context("请填写目标电脑的单播地址，链路本地 IPv6 地址须含本机接口编号")
 }
 
 fn verify_peer(peer: &PeerSpec, local: &[u8]) -> Result<()> {
