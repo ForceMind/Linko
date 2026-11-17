@@ -76,6 +76,7 @@ struct Outgoing {
     epoch: CaptureEpoch,
 }
 const MOTION_SEND_INTERVAL: Duration = Duration::from_millis(4);
+const FILE_RELEASE_WAIT_MS: u64 = 1_000;
 
 struct MotionOutbox {
     latest: Option<Motion>,
@@ -438,6 +439,7 @@ pub(super) async fn run_with_diagnostics(
     };
     let mut drop_route = None;
     let mut file_lease: Option<(u64, u32)> = None;
+    let mut file_release_deadline = None;
     let mut file_confirmation: Option<super::file_drop_control::SourceReservation> = None;
     // Publish connection readiness only after its private configuration queue
     // exists, so an immediate GUI edit cannot disappear during session startup.
@@ -574,11 +576,12 @@ pub(super) async fn run_with_diagnostics(
                 send(&mut tx, &Message::Release { lease, cursor: None }).await?;
             }
             if !acquiring && outgoing.is_none_or(|outgoing| outgoing.lease != lease) {
-                if scope.current(request) {
+                if file_release_deadline.is_none() && scope.current(request) {
                     input_status.reporter.file_drop(scope.event(request, FileDropState::Rejected));
                 }
                 scope.retire(request);
                 file_lease = None;
+                file_release_deadline = None;
                 file_confirmation = None;
             }
         }
@@ -611,10 +614,11 @@ pub(super) async fn run_with_diagnostics(
                     if let Some(event) = scope.end_target(lease, dropped) {
                         input_status.reporter.file_drop(event);
                     }
-                    if !dropped {
-                        input_status.release(&mut recovery).await?;
-                        send(&mut tx, &Message::Release { lease, cursor: None }).await?;
-                    }
+                    // End this copy's lease at the mapped drop position before
+                    // any ordinary pointer traffic can use unmapped coordinates.
+                    edge_gate.require_interior();
+                    input_status.release(&mut recovery).await?;
+                    send(&mut tx, &Message::Release { lease, cursor: None }).await?;
                 }
             }
         }
@@ -747,7 +751,12 @@ pub(super) async fn run_with_diagnostics(
                     input_status.release(&mut recovery).await?;
                 }
                 if let Some(Outgoing {lease,epoch})=outgoing {
-                    if now.saturating_sub(last_pong)>=1000 {
+                    if file_release_deadline.is_some_and(|deadline| now >= deadline) {
+                        input_status.restore(capture.as_ref())?;
+                        outgoing = None;
+                        edge_gate.require_interior();
+                        send(&mut tx, &Message::Release { lease, cursor: None }).await?;
+                    }else if now.saturating_sub(last_pong)>=1000 {
                         count(Count::PongTimeout);
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
@@ -966,6 +975,13 @@ pub(super) async fn run_with_diagnostics(
                     // request control of the peer in the same select iteration.
                     continue;
                 }
+                // Physical Up has been forwarded. Keep the lease alive for
+                // the target's local release check, but forward no further input.
+                if file_release_deadline.is_some()
+                    && matches!(e, Captured::Motion { .. } | Captured::Input { .. })
+                {
+                    continue;
+                }
                 match e {
                     Captured::Emergency|Captured::UnsupportedInput=>{
                         edge_gate.require_interior();
@@ -1108,8 +1124,7 @@ pub(super) async fn run_with_diagnostics(
                                             scope.session, request, FileDropState::SourceReleased, Some(lease),
                                         ));
                                     }
-                                    scope.retire(request);
-                                    file_lease = None;
+                                    file_release_deadline = Some(now_ms().saturating_add(FILE_RELEASE_WAIT_MS));
                                 }
                             }
                         }
@@ -2904,6 +2919,10 @@ mod tests {
                             lease,
                         };
                         controller.submit(confirm(lease + 1));
+                        send(&mut tx, &Message::Ping { lease }).await?;
+                        assert!(
+                            matches!(transport::receive(&mut rx).await?, Message::Pong { lease: active } if active == lease)
+                        );
                         assert!(
                             tokio::time::timeout(Duration::from_millis(30), observed.recv())
                                 .await
@@ -2918,12 +2937,6 @@ mod tests {
                                 State::TargetReleased,
                                 Some(lease)
                             ))
-                        );
-                        // Confirmed Up removes the drop state. The later ordinary
-                        // v5 Release will not reject or repeat this file drop.
-                        send(&mut tx, &Message::Ping { lease }).await?;
-                        assert!(
-                            matches!(transport::receive(&mut rx).await?, Message::Pong { lease: active } if active == lease)
                         );
                     }
                     FileDecision::TargetEarlyRelease => {
@@ -2941,11 +2954,9 @@ mod tests {
                     }
                     _ => unreachable!("not a native target fixture"),
                 }
-                if decision != FileDecision::TargetDrop {
-                    assert!(
-                        matches!(transport::receive(&mut rx).await?, Message::Release { lease: retired, .. } if retired == lease)
-                    );
-                }
+                assert!(
+                    matches!(transport::receive(&mut rx).await?, Message::Release { lease: retired, cursor: None } if retired == lease)
+                );
             }
             if decision == FileDecision::Ready {
                 admission
