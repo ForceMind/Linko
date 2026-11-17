@@ -296,8 +296,7 @@ mod causal_tests {
             ..latest
         };
         assert!(receiver.motion(latest, 1));
-        for (sequence, button, down) in [(1, 1, true), (2, 2, true), (3, 1, false), (4, 2, false)]
-        {
+        for (sequence, button, down) in [(1, 1, true), (2, 2, true), (3, 1, false), (4, 2, false)] {
             let cursor = Motion { sequence, ..anchor };
             assert!(receiver.anchor(cursor, sequence));
             assert!(receiver.input(1, Input::Button { button, down }, sequence));
