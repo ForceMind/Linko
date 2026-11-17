@@ -6,8 +6,10 @@
 #include <shlobj.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <new>
 
 using Microsoft::WRL::ComPtr;
@@ -26,9 +28,19 @@ using CheckDrag = bool (*)(const void*, uint8_t);
 class DataObject final : public IDataObject {
 public:
     DataObject(HGLOBAL data, CLIPFORMAT format, ULONGLONG deadline,
-               VirtualFile* file = nullptr, CLIPFORMAT stream_format = 0)
+               VirtualFile* file = nullptr, CLIPFORMAT stream_format = 0, bool guarded = false)
         : data_(data), format_(format), deadline_(deadline), file_(file),
-          stream_format_(stream_format) {}
+          stream_format_(stream_format), access_(guarded ? Access::Held : Access::Local) {}
+
+    void admit_content() {
+        auto expected = Access::Held;
+        access_.compare_exchange_strong(expected, Access::Admitted);
+    }
+
+    bool close_content() {
+        const auto previous = access_.exchange(Access::Closed);
+        return previous == Access::Local || previous == Access::Read;
+    }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** result) override {
         if (!result) {
@@ -77,6 +89,13 @@ public:
             medium->pstm = stream.Detach();
             return S_OK;
         }
+        auto access = access_.load();
+        if (access == Access::Admitted && access_.compare_exchange_strong(access, Access::Read)) {
+            access = Access::Read;
+        }
+        if (access != Access::Local && access != Access::Read) {
+            return STG_E_ACCESSDENIED;
+        }
         // The medium keeps this owner alive rather than transferring or copying
         // the same global handle. ReleaseStgMedium releases that owner.
         medium->tymed = TYMED_HGLOBAL;
@@ -91,7 +110,7 @@ public:
             return E_POINTER;
         }
         const bool stream = stream_request(request);
-        if (expired(deadline_) || (file_ && !file_->offering()) ||
+        if (expired(deadline_) || access_.load() == Access::Closed || (file_ && !file_->offering()) ||
             (!stream && request->cfFormat != format_)) {
             return DV_E_FORMATETC;
         }
@@ -135,6 +154,8 @@ public:
     HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
 
 private:
+    enum class Access { Local, Held, Admitted, Read, Closed };
+
     ~DataObject() { GlobalFree(data_); }
     bool stream_request(const FORMATETC* request) const {
         return file_ && request->cfFormat == stream_format_;
@@ -145,13 +166,15 @@ private:
     ULONGLONG deadline_;
     ComPtr<VirtualFile> file_;
     CLIPFORMAT stream_format_;
+    std::atomic<Access> access_;
 };
 
 class DropSource final : public IDropSource {
 public:
     explicit DropSource(ULONGLONG deadline, VirtualFile* file = nullptr,
-                        const void* control = nullptr, CheckDrag check = nullptr)
-        : deadline_(deadline), file_(file), control_(control), check_(check) {}
+                        const void* control = nullptr, CheckDrag check = nullptr,
+                        DataObject* content = nullptr)
+        : deadline_(deadline), file_(file), control_(control), check_(check), content_(content) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** result) override {
         if (!result) {
@@ -184,6 +207,9 @@ public:
             if (file_) {
                 file_->close();
             }
+            if (content_) {
+                content_->close_content();
+            }
             return DRAGDROP_S_CANCEL;
         }
         if (held) {
@@ -191,6 +217,9 @@ public:
         }
         if (file_) {
             file_->admit_drop();
+        }
+        if (content_) {
+            content_->admit_content();
         }
         return DRAGDROP_S_DROP;
     }
@@ -205,6 +234,7 @@ private:
     ComPtr<VirtualFile> file_;
     const void* control_;
     CheckDrag check_;
+    ComPtr<DataObject> content_;
 };
 
 struct OleScope {
@@ -228,14 +258,17 @@ int32_t start_drag(HGLOBAL allocation, CLIPFORMAT format, ULONGLONG deadline,
         GlobalFree(allocation);
         return ole.result;
     }
-    ComPtr<IDataObject> data;
-    data.Attach(new (std::nothrow) DataObject(allocation, format, deadline, file, stream_format));
+    const bool guarded_content = check && !file;
+    ComPtr<DataObject> data;
+    data.Attach(new (std::nothrow) DataObject(
+        allocation, format, deadline, file, stream_format, guarded_content));
     if (!data) {
         GlobalFree(allocation);
         return E_OUTOFMEMORY;
     }
     ComPtr<IDropSource> source;
-    source.Attach(new (std::nothrow) DropSource(deadline, file, control, check));
+    source.Attach(new (std::nothrow) DropSource(
+        deadline, file, control, check, guarded_content ? data.Get() : nullptr));
     if (!source) {
         return E_OUTOFMEMORY;
     }
@@ -245,18 +278,21 @@ int32_t start_drag(HGLOBAL allocation, CLIPFORMAT format, ULONGLONG deadline,
     }
     DWORD effect = DROPEFFECT_NONE;
     const auto result = DoDragDrop(data.Get(), source.Get(), DROPEFFECT_COPY, &effect);
-    const bool verified = !file || file->close();
+    const bool file_verified = !file || file->close();
+    const bool content_verified = !guarded_content || data->close_content();
     if (result == DRAGDROP_S_CANCEL) {
         return 0;
     }
-    if (result == DRAGDROP_S_DROP && effect == DROPEFFECT_COPY && verified && !expired(deadline)) {
+    if (result == DRAGDROP_S_DROP && effect == DROPEFFECT_COPY && file_verified && content_verified
+        && !expired(deadline)) {
         return 1;
     }
     return FAILED(result) ? result : 2;
 }
 
 int32_t start_content_drag(
-    const void* content, size_t bytes, size_t padding, CLIPFORMAT format, uint32_t millis) {
+    const void* content, size_t bytes, size_t padding, CLIPFORMAT format, uint32_t millis,
+    const void* control, CheckDrag check) {
     if (!content || !format || bytes == 0 || millis == 0 || millis > 60'000) {
         return E_INVALIDARG;
     }
@@ -272,7 +308,7 @@ int32_t start_content_drag(
     }
     std::memcpy(data, content, bytes);
     GlobalUnlock(allocation);
-    return start_drag(allocation, format, deadline);
+    return start_drag(allocation, format, deadline, nullptr, 0, control, check);
 }
 
 HGLOBAL file_descriptor(const uint16_t* name, size_t units, uint64_t bytes) {
@@ -458,17 +494,57 @@ extern "C" int32_t linko_windows_copy_drag(const uint16_t* path, size_t units, u
     return start_drag(allocation, CF_HDROP, deadline);
 }
 
-extern "C" int32_t linko_windows_copy_drag_text(const uint16_t* text, size_t units, uint32_t millis) {
+extern "C" int32_t linko_windows_copy_drag_text(
+    const uint16_t* text, size_t units, uint32_t millis, const void* control, CheckDrag check) {
     if (units > 1024 * 1024) {
         return E_INVALIDARG;
     }
-    return start_content_drag(text, units * sizeof(uint16_t), sizeof(uint16_t), CF_UNICODETEXT, millis);
+    return start_content_drag(
+        text, units * sizeof(uint16_t), sizeof(uint16_t), CF_UNICODETEXT, millis, control, check);
 }
 
-extern "C" int32_t linko_windows_copy_drag_png(const uint8_t* png, size_t bytes, uint32_t millis) {
+extern "C" int32_t linko_windows_copy_drag_png(
+    const uint8_t* png, size_t bytes, uint32_t millis, const void* control, CheckDrag check) {
     if (bytes > 4 * 1024 * 1024) {
         return E_INVALIDARG;
     }
     const auto format = static_cast<CLIPFORMAT>(RegisterClipboardFormatW(L"PNG"));
-    return start_content_drag(png, bytes, 0, format, millis);
+    return start_content_drag(png, bytes, 0, format, millis, control, check);
+}
+
+extern "C" int32_t linko_windows_guarded_copy_regression() {
+    FORMATETC format{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    const auto check = [](const void* owner, uint8_t phase) {
+        return phase == 1 || *static_cast<const bool*>(owner);
+    };
+    for (const bool approved : {false, true}) {
+        const auto deadline = GetTickCount64() + 10'000;
+        auto memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, 2);
+        if (!memory) {
+            return 1;
+        }
+        ComPtr<DataObject> data;
+        data.Attach(new DataObject(memory, CF_UNICODETEXT, deadline, nullptr, 0, true));
+        ComPtr<DropSource> source;
+        source.Attach(new DropSource(deadline, nullptr, &approved, check, data.Get()));
+        STGMEDIUM medium{};
+        if (data->QueryGetData(&format) != S_OK ||
+            source->QueryContinueDrag(false, MK_LBUTTON) != S_OK ||
+            data->GetData(&format, &medium) != STG_E_ACCESSDENIED) {
+            return 2;
+        }
+        const auto result = source->QueryContinueDrag(false, 0);
+        if (approved) {
+            if (result != DRAGDROP_S_DROP || data->GetData(&format, &medium) != S_OK) {
+                return 3;
+            }
+            ReleaseStgMedium(&medium);
+        } else if (result != DRAGDROP_S_CANCEL) {
+            return 4;
+        }
+        if (data->close_content() != approved || !FAILED(data->GetData(&format, &medium))) {
+            return 5;
+        }
+    }
+    return 0;
 }

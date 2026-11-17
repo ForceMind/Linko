@@ -10,7 +10,8 @@
 using Clock = std::chrono::steady_clock;
 using CanWritePromise = bool (*)(void*);
 using WritePromise = bool (*)(void*, const char*, void*, CanWritePromise);
-using DropPromise = void (*)(void*);
+using DropContext = void (*)(void*);
+using CheckContent = bool (*)(void*);
 
 @interface LinkoNativeCopySource
     : NSObject <NSDraggingSource, NSPasteboardItemDataProvider, NSFilePromiseProviderDelegate> {
@@ -28,7 +29,11 @@ using DropPromise = void (*)(void*);
     NSOperationQueue* promise_queue;
     void* promise_context;
     WritePromise write_promise;
-    DropPromise drop_promise;
+    DropContext drop_promise;
+    void* copy_context;
+    CheckContent check_copy;
+    DropContext drop_copy;
+    std::atomic<bool> copy_read;
 }
 - (BOOL)offerAvailable;
 @end
@@ -51,6 +56,7 @@ static bool can_write_promise(void* owner) {
         started.store(false, std::memory_order_relaxed);
         promise_requested.store(false, std::memory_order_relaxed);
         promise_outcome.store(0, std::memory_order_relaxed);
+        copy_read.store(false, std::memory_order_relaxed);
     }
     return self;
 }
@@ -58,6 +64,9 @@ static bool can_write_promise(void* owner) {
 - (void)dealloc {
     if (promise_context) {
         drop_promise(promise_context);
+    }
+    if (copy_context) {
+        drop_copy(copy_context);
     }
 }
 
@@ -68,15 +77,20 @@ static bool can_write_promise(void* owner) {
 - (void)pasteboard:(NSPasteboard*)pasteboard item:(NSPasteboardItem*)item
     provideDataForType:(NSPasteboardType)type {
     (void)pasteboard;
-    if (![self offerAvailable]) {
+    if (![self offerAvailable]
+        || (copy_context && (!check_copy(copy_context) || ![self offerAvailable]))) {
         return;
     }
+    BOOL provided = NO;
     if (text && [type isEqualToString:NSPasteboardTypeString]) {
-        [item setString:text forType:type];
+        provided = [item setString:text forType:type];
     } else if (png && [type isEqualToString:NSPasteboardTypePNG]) {
-        [item setData:png forType:type];
+        provided = [item setData:png forType:type];
     } else if (file_url && [type isEqualToString:NSPasteboardTypeFileURL]) {
         [item setString:file_url forType:type];
+    }
+    if (copy_context && provided) {
+        copy_read.store(true, std::memory_order_release);
     }
 }
 
@@ -98,7 +112,11 @@ static bool can_write_promise(void* owner) {
     (void)session;
     (void)point;
     const bool copy = operation == NSDragOperationCopy;
-    const bool accepted = [self offerAvailable];
+    const bool accepted = [self offerAvailable]
+        && (!copy_context || copy_read.load(std::memory_order_acquire));
+    if (copy_context) {
+        allowed.store(false, std::memory_order_release);
+    }
     const int32_t result = operation == NSDragOperationNone ? 2 : (copy && accepted ? 1 : 3);
     outcome.store(result, std::memory_order_release);
     if (active_drag == self) {
@@ -202,7 +220,7 @@ extern "C" int32_t linko_macos_copy_drag_start(
 
 extern "C" int32_t linko_macos_file_promise_start(
     const uint8_t* name, size_t bytes, uint32_t millis, void* context, WritePromise write,
-    DropPromise destroy, void** owner, void* origin) {
+    DropContext destroy, void** owner, void* origin) {
     if (!name || bytes == 0 || bytes > 200 || millis == 0 || millis > 60'000 || !context || !write
         || !destroy || ![NSThread isMainThread]) {
         if (context && destroy) {
@@ -246,40 +264,76 @@ extern "C" void linko_macos_file_drag_press_release(void* press) {
     (void)CFBridgingRelease(press);
 }
 
-static int32_t start_content_drag(
-    LinkoNativeCopySource* source, NSPasteboardType type, uint32_t millis, void** owner) {
-    if (millis == 0 || millis > 60'000) {
+extern "C" int32_t linko_macos_copy_drag_content(
+    const uint8_t* content, size_t bytes, bool is_png, uint32_t millis, void** owner,
+    void* origin, void* context, CheckContent check, DropContext destroy) {
+    if (!content || bytes == 0 || bytes > (is_png ? 4 : 1) * 1024 * 1024
+        || millis == 0 || millis > 60'000 || ![NSThread isMainThread]
+        || (context && (!origin || !check || !destroy))) {
+        if (context && destroy) {
+            destroy(context);
+        }
         return -1;
     }
+    LinkoNativeCopySource* source = [LinkoNativeCopySource new];
+    source->copy_context = context;
+    source->check_copy = check;
+    source->drop_copy = destroy;
+    const auto type = is_png ? NSPasteboardTypePNG : NSPasteboardTypeString;
+    if (is_png) {
+        source->png = [NSData dataWithBytes:content length:bytes];
+    } else {
+        source->text = [[NSString alloc] initWithBytes:content length:bytes
+                                              encoding:NSUTF8StringEncoding];
+        if (!source->text) {
+            return -1;
+        }
+    }
+
     source->deadline = Clock::now() + std::chrono::milliseconds(millis);
     NSPasteboardItem* item = [NSPasteboardItem new];
     if (![item setDataProvider:source forTypes:@[type]]) {
         return -1;
     }
-    return start_drag(item, source, owner);
+    return start_drag(item, source, owner, (__bridge NSEvent*)origin);
 }
 
-extern "C" int32_t linko_macos_copy_drag_text(
-    const uint8_t* text, size_t bytes, uint32_t millis, void** owner) {
-    if (!text || bytes == 0 || bytes > 1024 * 1024 || ![NSThread isMainThread]) {
-        return -1;
+extern "C" int32_t linko_macos_guarded_copy_regression() {
+    @autoreleasepool {
+        bool released = false;
+        LinkoNativeCopySource* source = [LinkoNativeCopySource new];
+        source->copy_context = &released;
+        source->check_copy = [](void* context) { return *static_cast<bool*>(context); };
+        source->drop_copy = [](void*) {};
+        source->text = @"copy";
+        source->deadline = Clock::now() + std::chrono::seconds(10);
+        source->allowed.store(true);
+        NSPasteboardItem* early = [NSPasteboardItem new];
+        [source pasteboard:nil item:early provideDataForType:NSPasteboardTypeString];
+        if ([early stringForType:NSPasteboardTypeString] || source->copy_read.load()) {
+            return 1;
+        }
+        released = true;
+        NSPasteboardItem* confirmed = [NSPasteboardItem new];
+        [source pasteboard:nil item:confirmed provideDataForType:NSPasteboardTypeString];
+        if (![[confirmed stringForType:NSPasteboardTypeString] isEqualToString:@"copy"]
+            || !source->copy_read.load()) {
+            return 2;
+        }
+        [source draggingSession:nil endedAtPoint:NSZeroPoint operation:NSDragOperationCopy];
+        if (source->outcome.load() != 1) {
+            return 3;
+        }
+        NSPasteboardItem* retired = [NSPasteboardItem new];
+        [source pasteboard:nil item:retired provideDataForType:NSPasteboardTypeString];
+        if ([retired stringForType:NSPasteboardTypeString]) {
+            return 4;
+        }
+        source->allowed.store(true);
+        source->deadline = Clock::now();
+        [source pasteboard:nil item:retired provideDataForType:NSPasteboardTypeString];
+        return [retired stringForType:NSPasteboardTypeString] ? 5 : 0;
     }
-    LinkoNativeCopySource* source = [LinkoNativeCopySource new];
-    source->text = [[NSString alloc] initWithBytes:text length:bytes encoding:NSUTF8StringEncoding];
-    if (!source->text) {
-        return -1;
-    }
-    return start_content_drag(source, NSPasteboardTypeString, millis, owner);
-}
-
-extern "C" int32_t linko_macos_copy_drag_png(
-    const uint8_t* png, size_t bytes, uint32_t millis, void** owner) {
-    if (!png || bytes == 0 || bytes > 4 * 1024 * 1024 || ![NSThread isMainThread]) {
-        return -1;
-    }
-    LinkoNativeCopySource* source = [LinkoNativeCopySource new];
-    source->png = [NSData dataWithBytes:png length:bytes];
-    return start_content_drag(source, NSPasteboardTypePNG, millis, owner);
 }
 
 extern "C" int32_t linko_macos_copy_drag_outcome(void* owner) {
