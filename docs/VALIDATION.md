@@ -3125,22 +3125,24 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
 
-核心功能验收候选 `6667ab7`（`2026.11.17-2218`，北京时间）通过 11 项 GitHub Actions 检查。
-三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-2112` 升级，
+核心功能验收候选 `3e3a620`（`2026.11.17-2326`，北京时间）通过 11 项 GitHub Actions 检查。
+三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-2218` 升级，
 启动新包 worker，拒绝篡改的回滚包并恢复原包。
-[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44101652981) ·
-[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44101652981/artifacts/14338000608) ·
-[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44101652981/artifacts/14337297467) ·
-[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44101652981/artifacts/14336763315)
+[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44114422538) ·
+[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44114422538/artifacts/14342797732) ·
+[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44114422538/artifacts/14342203609) ·
+[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44114422538/artifacts/14343685972)
 
-Windows、macOS、Ubuntu 的互认证回环都覆盖了默认监听经 IPv4 和 IPv6 接收文本、PNG 和文件、
-保留手填绑定，以及拖放预约按连接的地址族复用监听端口。macOS 与 Ubuntu 的空闲检查通过
-512 MiB 峰值和 64 MiB 暖机后增长门槛。此前的 `2112` 已验证文件仍在传输时的输入租约和
-停止释放。真实局域网中的双栈接收、拖放和输入延迟仍待双机验收。
-[PR306](https://github.com/ForceMind/Linko/pull/306) ·
+Windows、macOS、Ubuntu 的互认证回环均在默认监听上通过了 IPv4 与 IPv6 回归。
+错误证书握手先被拒绝，随后已配对的发送端完成文本、PNG 和文件传输，保留本机逐次决定。
+macOS 与 Ubuntu 的空闲检查通过 512 MiB 峰值和 64 MiB 暖机后增长门槛。
+`2218` 复验了手填绑定与拖放预约地址；`2112` 验证了文件传输期间的输入租约与停止释放。
+真实局域网中的双栈接收、拖放和输入延迟仍待双机验收。
+[PR307](https://github.com/ForceMind/Linko/pull/307) ·
+[2218 基线](https://github.com/ForceMind/Linko/actions/runs/44101652981) ·
 [2112 基线](https://github.com/ForceMind/Linko/actions/runs/44090494556) ·
-[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44101652916) ·
-[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44101652911)
+[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44114421852) ·
+[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44114421900)
 
 两端配对后，可以先关闭键鼠会话再测数据。接收端将本机监听地址留空，剪贴板点击「等待接收」，
 文件点击「等待文件请求」。发送端分别填写接收端的 IPv4 和 IPv6 地址，剪贴板默认 UDP 24872，
