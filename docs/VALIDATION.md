@@ -3125,6 +3125,14 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
 
+候选 `b581714`（`2026.11.17-1613`）通过 11 项 GitHub Actions 检查。三端从 `1549` 隔离升级，
+启动新包 worker，拒绝被篡改的回滚包并恢复原包。该候选覆盖剪贴板断开撤下确认、文件在
+配额入账后停止仍可续传、监督者退出时丢弃未分发输入，以及乱序点击后的光标位置恢复。
+[三端 CI](https://github.com/ForceMind/Linko/actions/runs/44044928424) ·
+[Windows 包](https://github.com/ForceMind/Linko/actions/runs/44044928424/artifacts/14311762232) ·
+[macOS 包](https://github.com/ForceMind/Linko/actions/runs/44044928424/artifacts/14312215770) ·
+[Linux 包](https://github.com/ForceMind/Linko/actions/runs/44044928424/artifacts/14312010684)
+
 提交 `75a6e42`（`2026.11.17-1421`）的 [Rust CI](https://github.com/ForceMind/Linko/actions/runs/44030627971)、
 [GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44030627963) 和
 [配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44030628013) 共 11 项检查通过。
@@ -3176,7 +3184,8 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 - 在同一个最终候选版本记录 Windows 与 macOS 的系统版本、应用版本、屏幕排列和 DPI、输入设备接入方式。#3/C06 的蓝牙、USB 和 DPI 分别由实际设备确认。
 - Mac→Windows 记录跨屏后光标是否移动、点击和滚动是否生效、Mac 光标是否隐藏、普通返回与紧急停止，以及是否出现 `native receive service: Timeout`。Windows→Mac 用同样步骤测量，方向分开记录。
-- 每次故障带回两端对应时段的 `KVM-DIAG/5` 数值摘要和原始错误行。优先对齐跨屏提交、移动收发、滚轮来源与注入阶段，保持按键、剪贴板和文件内容在本机。
+- 每个方向单独开一轮诊断。两端停止上一轮，打开「开启键鼠协同」，按界面检查键鼠权限并确认，再选「开启并诊断」。连接后立即完成预定动作，确保动作落在 120 秒采样内。先测 Mac 鼠标从屏内越向 Windows，越边后继续朝同一方向移动约 3 秒，记下 Windows 光标是否先跳到入口、是否继续移动，再测试回程。
+- 完成该轮后在两端停止键鼠协同，从「设置 → 诊断与资料 → 高级诊断」选择「复制本机输入诊断摘要」。下一轮启动前贴入本机验收记录。每个方向标明两行的机器和角色、动作时间及该轮原始错误行。若动作发生在 `expired` 摘要之后，新开一轮采样。按键、剪贴板和文件内容只留在本机。
 - 先跑基础双向键鼠、恢复和权限，再跑数据与音频。多机和多屏以 [CLI 说明](CLI.md) 和最终候选实际公开的入口为准。按开发计划记录双向 500 次切换、关键恢复场景 100 轮、8 小时预览与 24 小时正式候选耐久的执行范围。
 
 F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMind/Linko/pull/125)待决定。

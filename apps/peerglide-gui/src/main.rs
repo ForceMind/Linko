@@ -64,7 +64,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU16, Ordering},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -504,18 +504,27 @@ fn bounded_diagnostic(line: &str) -> String {
 fn read_worker_diagnostics(
     mut reader: impl BufRead,
     diagnostics: mpsc::SyncSender<String>,
+    summary: &Mutex<Option<String>>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) {
     loop {
+        let mut summary_updated = false;
         let line = match worker_output::read_line(&mut reader) {
-            Ok(Some(worker_output::Line::Text(line))) => bounded_diagnostic(&line),
+            Ok(Some(worker_output::Line::Text(line))) => {
+                summary_updated = peerglide_platform::input_diagnostics::is_summary(&line)
+                    && summary
+                        .lock()
+                        .map(|mut latest| *latest = Some(line.clone()))
+                        .is_ok();
+                bounded_diagnostic(&line)
+            }
             Ok(Some(worker_output::Line::Oversized)) => "工作进程诊断超过限制，已省略该行。".into(),
             Ok(Some(worker_output::Line::InvalidEncoding)) => {
                 "工作进程诊断编码无效，已省略该行。".into()
             }
             Ok(None) | Err(_) => break,
         };
-        if diagnostics.try_send(line).is_ok() {
+        if diagnostics.try_send(line).is_ok() || summary_updated {
             wake();
         }
     }
@@ -613,6 +622,7 @@ struct App {
     peer_wait_expired: bool,
     last_failure: bool,
     logs: VecDeque<String>,
+    input_summary: Arc<Mutex<Option<String>>>,
     stopping: Option<Instant>,
     pairing_panel: pairing_panel::Panel,
     pairing_open: bool,
@@ -763,6 +773,7 @@ impl App {
             peer_wait_expired: false,
             last_failure: false,
             logs: VecDeque::new(),
+            input_summary: Arc::default(),
             stopping: None,
             pairing_panel: pairing_panel::Panel::default(),
             pairing_open: false,
@@ -1120,8 +1131,10 @@ impl App {
             read_worker_output(BufReader::new(stdout), output_state, output_tx, output_wake);
         });
         let error_wake = self.wake_ui.clone();
+        let input_summary = Arc::default();
+        let error_summary = Arc::clone(&input_summary);
         std::thread::spawn(move || {
-            read_worker_diagnostics(BufReader::new(stderr), tx, error_wake);
+            read_worker_diagnostics(BufReader::new(stderr), tx, &error_summary, error_wake);
         });
         self.child = Some(child);
         self.layout_active = None;
@@ -1140,6 +1153,7 @@ impl App {
         });
         self.events = Some(rx);
         self.worker_state = Some(snapshot);
+        self.input_summary = input_summary;
         self.logs.clear();
         self.connected = false;
         self.stopping = None;
@@ -2515,6 +2529,7 @@ mod lifecycle_tests {
         read_worker_diagnostics(
             BufReader::with_capacity(13, std::io::Cursor::new(source)),
             tx,
+            &Mutex::default(),
             Arc::new(|| {}),
         );
         assert_eq!(rx.try_recv()?, "工作进程诊断超过限制，已省略该行。");
@@ -2526,6 +2541,56 @@ mod lifecycle_tests {
         ));
         Ok(())
     }
+    #[test]
+    fn latest_input_summary_survives_a_full_diagnostic_queue() -> Result<()> {
+        use peerglide_platform::input_diagnostics::{Count, InputDiagnostics, Phase};
+
+        let counters = InputDiagnostics::default();
+        let earlier = counters.snapshot(Phase::Sample).to_string();
+        counters.increment(Count::Captured);
+        let terminal = counters.snapshot(Phase::End).to_string();
+        let stderr = format!("normal line\n{earlier}\n{terminal}\n{earlier} invalid=1\n");
+        let (tx, rx) = mpsc::sync_channel(1);
+        let summary = Mutex::default();
+        read_worker_diagnostics(
+            std::io::Cursor::new(stderr),
+            tx,
+            &summary,
+            Arc::new(|| {}),
+        );
+        assert_eq!(rx.try_recv()?, "normal line");
+        assert_eq!(summary.into_inner().unwrap().as_deref(), Some(terminal.as_str()));
+        Ok(())
+    }
+
+    #[test]
+    fn new_session_does_not_inherit_the_previous_workers_input_summary() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let previous = Arc::clone(&app.input_summary);
+        *previous.lock().unwrap() = Some("previous worker summary".into());
+
+        let mut command = Command::new(std::env::current_exe()?);
+        command
+            .args([
+                "--exact",
+                "lifecycle_tests::managed_test_child",
+                "--nocapture",
+            ])
+            .env("PEERGLIDE_GUI_LIFECYCLE_HELPER", "1");
+        app.spawn_session(command, SessionMode::Communication, false)?;
+        // An earlier pipe reader may still hold its Arc when the next worker starts.
+        *previous.lock().unwrap() = Some("late previous worker summary".into());
+        let latest = app.input_summary.lock().unwrap().clone();
+
+        let mut child = app.child.take().unwrap();
+        drop(child.stdin.take());
+        assert!(child.wait()?.success());
+        assert_eq!(latest, None);
+        drop(app);
+        fixture.close()
+    }
+
     #[test]
     fn output_read_error_still_finishes_and_wakes_reaping() {
         struct ReadFailure;
