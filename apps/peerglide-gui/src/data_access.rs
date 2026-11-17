@@ -123,7 +123,9 @@ pub(super) fn send_address(text: &str, fallback: Option<SocketAddr>) -> Result<S
     let address = if text.trim().is_empty() {
         fallback.context("请输入接收端 IP 地址和 UDP 端口")?
     } else {
-        text.trim().parse().context("请输入接收端 IP 地址和 UDP 端口")?
+        text.trim()
+            .parse()
+            .context("请输入接收端 IP 地址和 UDP 端口")?
     };
     peer_destination(address)
         .context("请输入接收端单播地址和有效端口，链路本地 IPv6 地址须含本机接口编号")
