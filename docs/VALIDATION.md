@@ -3125,20 +3125,22 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
 
-核心功能验收候选 `49ffbc5`（`2026.11.17-1950`，北京时间）通过 11 项 GitHub Actions 检查。
-三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-1906` 升级，
+核心功能验收候选 `5e57659`（`2026.11.17-2036`，北京时间）通过 11 项 GitHub Actions 检查。
+三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-1950` 升级，
 启动新包 worker，拒绝篡改的回滚包并恢复原包。
-[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44077688638) ·
-[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44077688638/artifacts/14326337504) ·
-[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44077688638/artifacts/14326123485) ·
-[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44077688638/artifacts/14325753349)
+[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44084764028) ·
+[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44084764028/artifacts/14329816525) ·
+[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44084764028/artifacts/14327994654) ·
+[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44084764028/artifacts/14329651877)
 
-三平台工作区回归覆盖 IPv4／IPv6 上的副屏认证预约与输入租约、本地布局保存和读取 IPv6
-接口编号、剪贴板发送端停止后撤下待确认请求，以及文件停止或断开后从已核验部分续传。
-macOS 与 Ubuntu 的 180 秒空闲检查均通过 512 MiB 峰值、64 MiB 暖机后增长门槛。
-[PR302](https://github.com/ForceMind/Linko/pull/302) ·
-[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44077688669) ·
-[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44077688640)
+三平台回归覆盖剪贴板和文件发送地址校验，通过认证回环验证 IPv4 映射地址发送文本、PNG
+和文件，并保留 IPv6 链路本地地址的接口编号。基线 `49ffbc5` 还复验了副屏认证预约与输入
+租约、剪贴板发送端停止后撤下待确认请求，以及文件停止或断开后从已核验部分续传。
+macOS 与 Ubuntu 的 `2036` 空闲检查均通过 512 MiB 峰值和 64 MiB 暖机后增长门槛。
+[PR304](https://github.com/ForceMind/Linko/pull/304) ·
+[1950 基线](https://github.com/ForceMind/Linko/actions/runs/44077688638) ·
+[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44084764103) ·
+[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44084764139)
 
 用同一版 Windows 和 macOS 便携包按下方顺序测双向键鼠、文本与 PNG、文件接收和续传。
 跨屏点击、滚轮、Mac 光标隐藏、`native receive service: Timeout` 及蓝牙、USB、混合 DPI
