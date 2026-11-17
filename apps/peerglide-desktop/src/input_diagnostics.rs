@@ -3,8 +3,51 @@ use peerglide_platform::input_diagnostics::{InputDiagnostics, Phase, Snapshot};
 use std::os::fd::AsFd;
 #[cfg(windows)]
 use std::os::windows::io::AsHandle;
-use std::{io::Write, sync::Arc, time::Duration};
-use tokio::sync::oneshot;
+use std::{collections::VecDeque, io::Write, sync::Arc, time::Duration};
+use tokio::{sync::oneshot, time::Instant};
+
+const MAX_PENDING_HEARTBEATS: usize = 8;
+
+/// Replies use the ordered v5 stream and carry their lease, so match them in
+/// send order. If the queue ever overflows, discard that lease's timings.
+pub(super) struct HeartbeatTiming {
+    lease: u64,
+    sent: VecDeque<Instant>,
+    overflowed: bool,
+}
+
+impl HeartbeatTiming {
+    pub fn new() -> Self {
+        Self {
+            lease: 0,
+            sent: VecDeque::with_capacity(MAX_PENDING_HEARTBEATS),
+            overflowed: false,
+        }
+    }
+
+    pub fn sent(&mut self, lease: u64, time: Instant) {
+        if self.lease != lease {
+            self.lease = lease;
+            self.sent.clear();
+            self.overflowed = false;
+        }
+        if self.sent.len() == MAX_PENDING_HEARTBEATS {
+            self.overflowed = true;
+        }
+        if !self.overflowed {
+            self.sent.push_back(time);
+        }
+    }
+
+    pub fn acknowledged(&mut self, lease: u64, time: Instant) -> Option<Duration> {
+        if self.lease != lease || self.overflowed {
+            return None;
+        }
+        self.sent
+            .pop_front()
+            .map(|sent| time.saturating_duration_since(sent))
+    }
+}
 
 pub(super) struct DiagnosticWindow {
     pub counters: Arc<InputDiagnostics>,
@@ -36,7 +79,7 @@ impl DiagnosticWindow {
                 }
                 let _ = drained.send(());
             })?;
-        let started = tokio::time::Instant::now();
+        let started = Instant::now();
         tokio::spawn(async move {
             let interval = Duration::from_secs(1);
             let mut tick = tokio::time::interval_at(started + interval, interval);
@@ -68,5 +111,40 @@ impl DiagnosticWindow {
         // Native cleanup has already finished. A blocked output reader can
         // discard diagnostics but cannot delay recovery or keep the worker alive.
         let _ = tokio::time::timeout(Duration::from_millis(200), self.written).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_timings_match_in_order_and_discard_retired_leases() {
+        let mut timing = HeartbeatTiming::new();
+        let start = Instant::now();
+        let after = |ms| start + Duration::from_millis(ms);
+        timing.sent(1, start);
+        timing.sent(1, after(10));
+        assert_eq!(timing.acknowledged(2, after(11)), None);
+        assert_eq!(
+            timing.acknowledged(1, after(20)),
+            Some(Duration::from_millis(20))
+        );
+        assert_eq!(
+            timing.acknowledged(1, after(25)),
+            Some(Duration::from_millis(15))
+        );
+        assert_eq!(timing.acknowledged(1, after(25)), None);
+
+        for _ in 0..=MAX_PENDING_HEARTBEATS {
+            timing.sent(1, after(30));
+        }
+        assert_eq!(timing.acknowledged(1, after(40)), None);
+        timing.sent(2, after(50));
+        assert_eq!(timing.acknowledged(1, after(60)), None);
+        assert_eq!(
+            timing.acknowledged(2, after(65)),
+            Some(Duration::from_millis(15))
+        );
     }
 }

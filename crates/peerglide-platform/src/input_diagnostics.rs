@@ -1,6 +1,7 @@
 //! Session-local aggregate observations. No input payload leaves the owner.
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::{sync::Mutex, time::Duration};
 
 #[derive(Clone, Copy)]
 pub enum Count {
@@ -78,6 +79,7 @@ pub enum Count {
 /// Longest line the worker, the GUI log and the copy action accept. The
 /// largest possible summary (every counter at u32::MAX) must fit below it.
 pub const MAX_SUMMARY_BYTES: usize = 1600;
+const MAX_HEARTBEAT_SAMPLES: usize = 1024;
 
 const KEYS: [&str; Count::MotionCoalesced as usize + 1] = [
     "cap",
@@ -154,6 +156,7 @@ const KEYS: [&str; Count::MotionCoalesced as usize + 1] = [
 pub struct InputDiagnostics {
     stopped: AtomicBool,
     counts: [AtomicU32; KEYS.len()],
+    heartbeat_rtt_us: Mutex<Vec<u32>>,
     #[cfg(windows)]
     next_cursor_sample: std::sync::atomic::AtomicU64,
 }
@@ -164,6 +167,7 @@ impl Default for InputDiagnostics {
         Self {
             stopped: AtomicBool::new(false),
             counts: std::array::from_fn(|_| AtomicU32::new(0)),
+            heartbeat_rtt_us: Mutex::new(Vec::with_capacity(MAX_HEARTBEAT_SAMPLES)),
             #[cfg(windows)]
             next_cursor_sample: std::sync::atomic::AtomicU64::new(0),
         }
@@ -195,10 +199,33 @@ impl InputDiagnostics {
         self.stopped.store(true, Relaxed);
     }
 
+    /// Called by the session worker for acknowledged heartbeats, outside native callbacks.
+    pub fn record_heartbeat_rtt(&self, duration: Duration) {
+        if !self.active() {
+            return;
+        }
+        let Ok(mut samples) = self.heartbeat_rtt_us.try_lock() else {
+            return;
+        };
+        if samples.len() < MAX_HEARTBEAT_SAMPLES {
+            samples.push(u32::try_from(duration.as_micros()).unwrap_or(u32::MAX));
+        }
+    }
+
     pub fn snapshot(&self, phase: Phase) -> Snapshot {
+        let mut samples = self
+            .heartbeat_rtt_us
+            .lock()
+            .map(|samples| samples.clone())
+            .unwrap_or_default();
+        samples.sort_unstable();
+        let rank = (samples.len() * 95).div_ceil(100);
+        let heartbeat_p95_us = samples.get(rank.saturating_sub(1)).copied().unwrap_or(0);
         Snapshot {
             phase,
             counts: std::array::from_fn(|i| self.counts[i].load(Relaxed)),
+            heartbeat_samples: samples.len(),
+            heartbeat_p95_us,
         }
     }
 }
@@ -213,6 +240,8 @@ pub enum Phase {
 pub struct Snapshot {
     phase: Phase,
     counts: [u32; KEYS.len()],
+    heartbeat_samples: usize,
+    heartbeat_p95_us: u32,
 }
 
 impl fmt::Display for Snapshot {
@@ -226,7 +255,11 @@ impl fmt::Display for Snapshot {
         for (key, value) in KEYS.iter().zip(self.counts) {
             write!(f, " {key}={value}")?;
         }
-        Ok(())
+        write!(
+            f,
+            " hb_rtt_n={} hb_rtt_p95_us={}",
+            self.heartbeat_samples, self.heartbeat_p95_us
+        )
     }
 }
 
@@ -250,12 +283,35 @@ pub fn is_summary(line: &str) -> bool {
         && KEYS[coalesced..]
             .iter()
             .all(|key| fields.next().is_none_or(|field| matches_counter(field, key)))
-        && fields.next().is_none()
+        && match fields.next() {
+            None => true,
+            Some(count) => {
+                matches_counter(count, "hb_rtt_n")
+                    && fields
+                        .next()
+                        .is_some_and(|field| matches_counter(field, "hb_rtt_p95_us"))
+                    && fields.next().is_none()
+            }
+        }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heartbeat_percentile_uses_the_nearest_rank_and_ends_with_diagnostics() {
+        let diagnostics = InputDiagnostics::default();
+        for micros in (1..=100).rev() {
+            diagnostics.record_heartbeat_rtt(Duration::from_micros(micros));
+        }
+        diagnostics.stop();
+        diagnostics.record_heartbeat_rtt(Duration::from_secs(10));
+        let snapshot = diagnostics.snapshot(Phase::End);
+        assert_eq!(snapshot.heartbeat_samples, 100);
+        assert_eq!(snapshot.heartbeat_p95_us, 95);
+        assert!(is_summary(&snapshot.to_string()));
+    }
 
     #[test]
     fn stopped_counters_and_maximum_report_fit_the_gui_copy_boundary() {
@@ -267,11 +323,17 @@ mod tests {
         let summary = Snapshot {
             phase: Phase::Expired,
             counts: [u32::MAX; KEYS.len()],
+            heartbeat_samples: MAX_HEARTBEAT_SAMPLES,
+            heartbeat_p95_us: u32::MAX,
         }
         .to_string();
         assert!(summary.len() <= MAX_SUMMARY_BYTES);
         assert!(is_summary(&summary));
-        let (receive_only, _) = summary.rsplit_once(' ').unwrap();
+        let (missing_percentile, _) = summary.rsplit_once(' ').unwrap();
+        assert!(!is_summary(missing_percentile));
+        let (without_latency, _) = missing_percentile.rsplit_once(' ').unwrap();
+        assert!(is_summary(without_latency));
+        let (receive_only, _) = without_latency.rsplit_once(' ').unwrap();
         assert!(is_summary(receive_only));
         let (legacy, _) = receive_only.rsplit_once(' ').unwrap();
         assert!(is_summary(legacy));
