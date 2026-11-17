@@ -272,11 +272,7 @@ async fn run(
             let endpoint = bind.endpoint(&identity, &pinned_peer)?;
             let bound = endpoint.local_addr()?;
             status.post(Event::Listening(bound))?;
-            let connection = tokio::time::timeout(LISTEN_TIMEOUT, async {
-                let incoming = endpoint.accept().await.context("file listener closed")?;
-                Ok::<_, anyhow::Error>(incoming.await?)
-            })
-            .await??;
+            let connection = data::accept_pinned(&endpoint, &pinned_peer, LISTEN_TIMEOUT).await?;
             let result = file_transfer::receive_with_finalization(
                 &connection,
                 &pinned_peer,
@@ -377,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn default_file_listener_publishes_on_either_family() -> Result<()> {
+    fn default_file_listener_accepts_only_the_paired_peer_on_either_family() -> Result<()> {
         for address in ["127.0.0.1:0", "[::1]:0"] {
             loopback(false, address.parse()?, false, true)?;
         }
@@ -638,6 +634,9 @@ mod tests {
             anyhow::bail!("receiver did not listen");
         };
         let address = SocketAddr::new(dial.ip(), bound.port());
+        if automatic {
+            data::attempt_untrusted_handshake(address, &right_pin)?;
+        }
         let target = match (address, mapped) {
             (SocketAddr::V4(v4), true) => (v4.ip().to_ipv6_mapped(), v4.port()).into(),
             _ => address,
