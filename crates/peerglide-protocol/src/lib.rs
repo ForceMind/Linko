@@ -30,7 +30,7 @@ pub fn peer_destination(address: SocketAddr) -> Option<SocketAddr> {
         && !address.ip().is_unspecified()
         && !address.ip().is_multicast()
         && address.ip() != IpAddr::V4(Ipv4Addr::BROADCAST))
-        .then_some(address)
+    .then_some(address)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
