@@ -2766,7 +2766,8 @@ mod tests {
 
         let a = Identity::generate()?;
         let b = Identity::generate()?;
-        let (receipt, file) = test_file_transfer(&a, &b).await?;
+        let (receipt, file) =
+            test_file_transfer(&a, &b, b"one file reservation", |_| {}).await?;
         let prepared = file.received.prepare_drop(|| Ok(()))?;
         let origin = file.received.drop_origin();
         let context = DropContext {
@@ -3093,6 +3094,8 @@ mod tests {
     async fn test_file_transfer(
         a: &Identity,
         b: &Identity,
+        contents: &[u8],
+        mut verified: impl FnMut(u64),
     ) -> Result<(transport::file_drop_link::SentReceipt, FileFixture)> {
         use transport::file_transfer::{self, Cancellation, Decision, ReceiveOptions, Source};
         let directory =
@@ -3101,7 +3104,7 @@ mod tests {
         let cleanup = TestFileDirectory(directory.clone());
         let path = directory.join("source.txt");
         let target = directory.join("target");
-        std::fs::write(&path, b"one file reservation")?;
+        std::fs::write(&path, contents)?;
         std::fs::create_dir(&target)?;
         let bind = "127.0.0.1:0".parse()?;
         let sender = transport::data::endpoint(bind, a, &b.certificate)?;
@@ -3137,7 +3140,7 @@ mod tests {
                 &receive,
                 &a.certificate,
                 ReceiveOptions {
-                    budget: 1024 * 1024,
+                    budget: (contents.len() as u64).max(1024 * 1024),
                     stop: Cancellation::default()
                 },
                 |_| async {
@@ -3146,7 +3149,7 @@ mod tests {
                         resume: false,
                     })
                 },
-                |_| {},
+                |progress| verified(progress.verified_bytes),
             ),
         )?;
         let received = result.file.context("missing verified file")?;
@@ -3161,10 +3164,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cooperative_stop_releases_a_real_session_before_return_without_native_input(
-    ) -> Result<()> {
+    async fn cooperative_stop_releases_input_while_a_verified_file_transfer_is_active() -> Result<()>
+    {
         let a = Identity::generate()?;
         let b = Identity::generate()?;
+        let contents = vec![0x5a; 8 * 1024 * 1024];
+        let file_size = contents.len() as u64;
+        let (file_progress, mut verified_bytes) = tokio::sync::watch::channel(0);
+        let transfer = test_file_transfer(&a, &b, &contents, move |bytes| {
+            file_progress.send_replace(bytes);
+        });
         let ea = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
         let eb = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
         let (stop, stopped) = tokio::sync::watch::channel(false);
@@ -3205,6 +3214,8 @@ mod tests {
             let (mut tx, mut rx) = c.open_bi().await?;
             // Unsolicited refusals cannot invent a locally pending switch.
             send(&mut tx, &Message::Denied { lease: 42 }).await?;
+            let started = *verified_bytes.wait_for(|&bytes| bytes > 0).await?;
+            anyhow::ensure!(started < file_size, "file finished before input acquisition");
             send(
                 &mut tx,
                 &Message::Acquire {
@@ -3248,12 +3259,22 @@ mod tests {
                     cursor: None
                 }
             ));
+            anyhow::ensure!(
+                *verified_bytes.borrow() < file_size,
+                "file finished before cooperative input release"
+            );
             let _ = release_seen.send(());
             c.close(0u8.into(), b"release observed");
             Ok::<_, anyhow::Error>(())
         };
-        tokio::time::timeout(Duration::from_secs(8), async {
-            tokio::try_join!(server, client)
+        let input = async {
+            tokio::time::timeout(Duration::from_secs(8), async {
+                tokio::try_join!(server, client)
+            })
+            .await?
+        };
+        tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::try_join!(input, transfer)
         })
         .await??;
         Ok(())
