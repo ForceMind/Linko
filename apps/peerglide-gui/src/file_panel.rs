@@ -20,8 +20,14 @@ enum Approval {
 struct Active {
     pin: Pin,
     job: Job,
+    request: Request,
     offer: Option<Offer>,
     stopping: bool,
+}
+
+struct Paused {
+    pin: Pin,
+    request: Request,
 }
 
 enum HistoryQuery {
@@ -73,6 +79,7 @@ impl SourceHandoff {
 #[derive(Default)]
 pub(super) struct Panel {
     active: Option<Active>,
+    paused: Option<Paused>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     export: super::native_drop_panel::Export,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -101,6 +108,7 @@ impl Panel {
     }
 
     pub(super) fn stop(&mut self, _app: &mut App) {
+        self.paused = None;
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         {
             self.export.stop(_app);
@@ -113,6 +121,48 @@ impl Panel {
             active.stopping = true;
             self.notice = "正在停止文件传输。".into();
         }
+    }
+
+    fn can_pause(&self) -> bool {
+        self.active.as_ref().is_some_and(|active| {
+            !active.stopping
+                && !self.handoff_active()
+                && match active.request {
+                    Request::Send {
+                        prepare_handoff: false,
+                        ..
+                    } => self.prepared_id.is_some(),
+                    Request::Receive { .. } => true,
+                    _ => false,
+                }
+        })
+    }
+
+    fn pause(&mut self, app: &mut App) {
+        if !self.can_pause() {
+            return;
+        }
+        let Some(active) = &self.active else {
+            return;
+        };
+        let mut request = active.request.clone();
+        if let Request::Send { resume_id, .. } = &mut request {
+            *resume_id = self.prepared_id;
+        }
+        let paused = Paused {
+            pin: active.pin.clone(),
+            request,
+        };
+        self.stop(app);
+        self.paused = Some(paused);
+        self.notice = "正在暂停文件传输，已暂存的数据保留。".into();
+    }
+
+    fn resume_paused(&mut self, app: &mut App) -> Result<()> {
+        let paused = self.paused.as_ref().context("没有已暂停的文件任务")?;
+        let pin = paused.pin.clone();
+        let request = paused.request.clone();
+        self.start_job(app, request, Some(&pin))
     }
 
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -148,6 +198,14 @@ impl Panel {
         {
             self.stop(app);
         }
+        if self
+            .paused
+            .as_ref()
+            .is_some_and(|paused| !paused.pin.matches(app))
+        {
+            self.paused = None;
+            self.notice = "配对状态已变化，请重新选择文件传输。".into();
+        }
         let Some(active) = self.active.as_mut() else {
             return;
         };
@@ -159,6 +217,9 @@ impl Panel {
                     outcome,
                     handoff: _handoff,
                 } => {
+                    if matches!(outcome, FileOutcome::Committed | FileOutcome::Declined) {
+                        self.paused = None;
+                    }
                     let notice = outcome_label(outcome, false);
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if let Some((target, receipt)) = _handoff.filter(|_| {
@@ -178,6 +239,9 @@ impl Panel {
                     result,
                     bind: _bind,
                 } => {
+                    if result.outcome == FileOutcome::Committed {
+                        self.paused = None;
+                    }
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if !active.stopping && active.pin.matches(app) {
                         if let Some(file) = result.file {
@@ -191,6 +255,9 @@ impl Panel {
                     } else {
                         format!("{local} 未能把回执送入发送队列。")
                     }
+                }
+                Event::Stopped if self.paused.is_some() => {
+                    "文件传输已暂停。继续时接收端须重新同意恢复。".into()
                 }
                 Event::Stopped => "文件任务已停止。已暂存的数据保留。".into(),
                 _ if active.stopping => continue,
@@ -219,6 +286,9 @@ impl Panel {
                 self.notice = "文件任务已停止。请在接收端确认目录状态。".into();
             }
             self.active = None;
+            if self.paused.is_some() {
+                self.notice = "文件传输已暂停。继续时接收端须重新同意恢复。".into();
+            }
         }
     }
 
@@ -253,16 +323,18 @@ impl Panel {
             "设备配对状态已变化"
         );
         let sending = matches!(request, Request::Send { .. });
-        let job = file_worker::start(request, identity, peer, app.wake_ui.clone())
+        let job = file_worker::start(request.clone(), identity, peer, app.wake_ui.clone())
             .context("无法启动文件后台任务")?;
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.export.stop(app);
         self.active = Some(Active {
             pin,
             job,
+            request,
             offer: None,
             stopping: false,
         });
+        self.paused = None;
         self.progress = None;
         if sending {
             self.prepared_id = None;
@@ -538,6 +610,23 @@ impl Panel {
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.source_handoff_ui(app, ui);
+        if self.active.is_none() && self.paused.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .add_enabled(ready, egui::Button::new("继续已暂停的传输"))
+                    .clicked()
+                {
+                    if let Err(error) = self.resume_paused(app) {
+                        self.notice = error.to_string();
+                    }
+                }
+                if ui.button("结束暂停任务").clicked() {
+                    self.paused = None;
+                    self.notice = "已结束暂停任务，接收端已暂存的数据保留。".into();
+                }
+            });
+            ui.weak("接收端须重新等待请求并选择恢复。暂停记录在退出应用后清除。");
+        }
         if let Some(id) = self.prepared_id {
             ui.horizontal_wrapped(|ui| {
                 ui.label(format!("续传编号 {}", encode_id(id)));
@@ -635,6 +724,7 @@ impl Panel {
             return;
         };
         let stopping = active.stopping;
+        let can_pause = self.can_pause();
         if let Some(offer) = &active.offer {
             ui.separator();
             ui.label(format!("{} · {} 字节", offer.name, offer.size));
@@ -658,6 +748,12 @@ impl Panel {
                     }
                 }
             });
+        }
+        if ui
+            .add_enabled(can_pause, egui::Button::new("暂停文件传输"))
+            .clicked()
+        {
+            self.pause(app);
         }
         if ui
             .add_enabled(!stopping, egui::Button::new("停止文件任务"))
@@ -767,6 +863,67 @@ fn outcome_label(outcome: FileOutcome, receiving: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paused_sender_keeps_the_original_request_and_rechecks_pairing() -> Result<()> {
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        transport::Identity::create(&app.identity_dir())?;
+        let peer = transport::Identity::generate()?;
+        std::fs::write(app.dir.join("trusted-peer.crt.der"), &peer.certificate)?;
+        app.config.fingerprint = Some(peer.fingerprint());
+        let source = fixture.path.join("pause-source.bin");
+        std::fs::write(&source, b"pause and resume regression")?;
+        let target = "127.0.0.1:9".parse()?;
+        let mut panel = Panel::default();
+        panel.start_job(
+            &mut app,
+            Request::Send {
+                target,
+                source: source.clone(),
+                resume_id: None,
+                prepare_handoff: false,
+            },
+            None,
+        )?;
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while panel.prepared_id.is_none() {
+            panel.tick(&mut app, &ctx);
+            anyhow::ensure!(panel.active.is_some(), "sender ended before preparation");
+            anyhow::ensure!(std::time::Instant::now() < deadline, "preparation timed out");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let prepared_id = panel.prepared_id;
+        panel.pause(&mut app);
+        assert!(panel.paused.is_some());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while panel.active.is_some() {
+            panel.tick(&mut app, &ctx);
+            anyhow::ensure!(std::time::Instant::now() < deadline, "pause did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panel.source = "changed source field".into();
+        panel.resume = encode_id([99; 16]);
+        let paused = panel.paused.as_ref().context("pause record lost")?;
+        assert!(matches!(
+            &paused.request,
+            Request::Send {
+                target: saved_target,
+                source: saved_source,
+                resume_id,
+                prepare_handoff: false,
+            } if *saved_target == target && *saved_source == source && *resume_id == prepared_id
+        ));
+        app.config.fingerprint = Some(transport::Identity::generate()?.fingerprint());
+        assert!(panel.resume_paused(&mut app).is_err());
+        assert!(panel.paused.is_some() && panel.active.is_none());
+        panel.stop(&mut app);
+        assert!(panel.paused.is_none());
+        drop(panel);
+        drop(app);
+        fixture.close()
+    }
 
     #[test]
     fn resume_id_round_trips_and_rejects_unbounded_or_malformed_input() -> Result<()> {

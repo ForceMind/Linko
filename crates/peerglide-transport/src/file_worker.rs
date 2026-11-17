@@ -24,6 +24,7 @@ use tokio::sync::{oneshot, watch};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[derive(Clone)]
 pub enum Request {
     Send {
         target: SocketAddr,
