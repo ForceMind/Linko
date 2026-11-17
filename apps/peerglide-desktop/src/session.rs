@@ -53,6 +53,11 @@ pub(super) fn close_reason_after_recovery(
     }
 }
 
+fn session_stopping(stop: &tokio::sync::watch::Receiver<bool>) -> bool {
+    // A closed watch means the supervisor can no longer authorize input.
+    *stop.borrow() || stop.has_changed().is_err()
+}
+
 fn normal_close(c: &quinn::Connection) -> bool {
     matches!(c.close_reason(),Some(quinn::ConnectionError::ApplicationClosed(closed)) if closed.error_code==0u8.into())
 }
@@ -420,7 +425,7 @@ pub(super) async fn run_with_diagnostics(
         "invalid session capabilities"
     );
     let mut input_status = InputStatus::new(native, reporter);
-    if *stop.borrow() {
+    if session_stopping(&stop) {
         input_status.reporter.set(WorkerInputState::Disabled);
         return Ok(());
     }
@@ -497,9 +502,9 @@ pub(super) async fn run_with_diagnostics(
         },
         None => (None, None),
     };
-    let _native_stop = driver
-        .as_ref()
-        .map(|driver| super::NativeRecoveryRegistration::new(driver.control(), *stop.borrow()));
+    let _native_stop = driver.as_ref().map(|driver| {
+        super::NativeRecoveryRegistration::new(driver.control(), session_stopping(&stop))
+    });
     let (mtx, mut messages) = mpsc::channel(64);
     let invalid_frame = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader_invalid = invalid_frame.clone();
@@ -544,7 +549,7 @@ pub(super) async fn run_with_diagnostics(
     loop {
         // A timer only wakes this loop. Stop/closed ownership is checked before
         // every attempt, so an old Granted cannot activate after cancellation.
-        if *stop.borrow() || stop.has_changed().is_err() {return Ok(());}
+        if session_stopping(&stop) {return Ok(());}
         if let Some(closed)=c.close_reason() {
             return if invalid_frame.load(std::sync::atomic::Ordering::Acquire) {Err(transport::InvalidMessageFrame.into())} else {connection_end(closed)};
         }
@@ -677,7 +682,7 @@ pub(super) async fn run_with_diagnostics(
             _=super::stop_requested(&mut stop)=>return Ok(()),
             changed=&mut display_change,if native && cfg!(any(windows,target_os="macos"))=>return changed,
             _=tokio::time::sleep_until(motion_outbox.next_send),if motion_outbox.latest.is_some()=>{
-                if *stop.borrow() || stop.has_changed().is_err(){return Ok(());}
+                if session_stopping(&stop) {return Ok(());}
                 if let Some(m)=motion_outbox.take_due(tokio::time::Instant::now()){
                     // Recheck the lease and capture epoch after waiting. A queued
                     // position cannot outlive its capture ownership.
@@ -777,6 +782,7 @@ pub(super) async fn run_with_diagnostics(
                 if let (Some(cap),Some(current))=(&capture,outgoing){if !cap.gate.is_current(CaptureRoute::Remote(current.epoch)){input_status.restore(Some(cap))?;outgoing=None;send(&mut tx,&Message::Release { lease: current.lease, cursor: None }).await?;}}
             },
             m=messages.recv()=>{
+                if session_stopping(&stop) {return Ok(());}
                 let Some(m)=m else{return Ok(());};
                 let m=match m {
                     Ok(m)=>m,
@@ -803,7 +809,7 @@ pub(super) async fn run_with_diagnostics(
                         }
                         if granted {
                             let begin=recovery.begin_receive().await;
-                            if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
+                            if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                             granted=input_status.checked(begin)?;
                             if !granted{count(Count::DenyBegin);input_status.release(&mut recovery).await?;}
                         }
@@ -811,7 +817,7 @@ pub(super) async fn run_with_diagnostics(
                             edge_gate.require_interior();
                             position=entry_position(remote_edge.opposite(),along);
                             let placed=recovery.pointer(position.0,position.1).await;
-                            if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
+                            if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                             granted=input_status.checked(placed)?;
                             if !granted {count(Count::DenyPlacement);input_status.release(&mut recovery).await?;}
                         }
@@ -914,7 +920,7 @@ pub(super) async fn run_with_diagnostics(
                             Err(_)=>count(Count::ReliableFailed),
                             Ok(false)=>{},
                         }
-                        if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
+                        if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                         input_status.checked(result)?;
                     },
                     Message::Release { lease, cursor }=>{
@@ -935,7 +941,9 @@ pub(super) async fn run_with_diagnostics(
             },
             d=c.read_datagram()=>{
                 let d=match d {Ok(d)=>d,Err(_) if normal_close(&c)=>return Ok(()),Err(e)=>return Err(e.into())};
-                if let Some(m)=read_motion_batch(&c,&mut recovery.receiver,&d,&count).await {
+                let motion=read_motion_batch(&c,&mut recovery.receiver,&d,&stop,&count).await;
+                if session_stopping(&stop) {return Ok(());}
+                if let Some(m)=motion {
                     let point = match &drop_scope {
                         Some(scope) => scope.target_motion(m),
                         None => Some(m),
@@ -950,13 +958,14 @@ pub(super) async fn run_with_diagnostics(
                         Ok(false)=>Count::PointerRetired,
                         Err(_)=>Count::PointerFailed,
                     });
-                    if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
+                    if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                     input_status.checked(result)?;
                 }
             },
             e=input.recv(),if native=>{
+                if session_stopping(&stop) {return Ok(());}
                 let Some(e)=e else{
-                    if *stop.borrow() && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
+                    if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
                     bail!("native capture channel closed");
                 };
                 let motion=matches!(e,Captured::Motion{..});
@@ -1276,8 +1285,12 @@ async fn read_motion_batch(
     connection: &quinn::Connection,
     receiver: &mut Receiver,
     first: &[u8],
+    stop: &tokio::sync::watch::Receiver<bool>,
     count: &impl Fn(Count),
 ) -> Option<Motion> {
+    if session_stopping(stop) {
+        return None;
+    }
     let mut latest = None;
     observe_motion_datagram(receiver, &mut latest, first, now_ms(), count);
     for _ in 1..MOTION_RECEIVE_BATCH {
@@ -1290,7 +1303,7 @@ async fn read_motion_batch(
         let Some(datagram) = next else { break };
         observe_motion_datagram(receiver, &mut latest, &datagram, now_ms(), count);
     }
-    latest
+    latest.filter(|_| !session_stopping(stop))
 }
 
 fn observe_motion_datagram(
@@ -2076,6 +2089,58 @@ mod tests {
             .to_string();
         for field in ["rx=5", "decode=1", "lease=1", "replay=1", "rx_coalesced=1"] {
             assert!(summary.split_ascii_whitespace().any(|value| value == field));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_flight_motion_batch_is_discarded_when_its_supervisor_stops() -> Result<()> {
+        let a = Identity::generate()?;
+        let b = Identity::generate()?;
+        let source = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
+        let target = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
+        let connect = async {
+            let connection = source.connect(target.local_addr()?, "peerglide.local")?.await?;
+            Ok::<_, anyhow::Error>(connection)
+        };
+        let accept = async {
+            let connection = target.accept().await.context("missing input peer")?.await?;
+            Ok::<_, anyhow::Error>(connection)
+        };
+        let (client, server) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(connect, accept)
+        })
+        .await??;
+        let motion = Motion {
+            lease: 1,
+            sequence: 1,
+            x: 0.5,
+            y: 0.5,
+        };
+        for explicit_stop in [true, false] {
+            client.send_datagram(encode(&motion)?.into())?;
+            let first = tokio::time::timeout(Duration::from_secs(5), server.read_datagram())
+                .await??;
+            let mut receiver = Receiver::default();
+            assert!(receiver.acquire(motion.lease, now_ms(), true));
+            let (owner, stopped) = tokio::sync::watch::channel(false);
+            let owner = std::cell::RefCell::new(Some(owner));
+            let count = |kind| {
+                if matches!(kind, Count::Received) {
+                    if explicit_stop {
+                        owner.borrow().as_ref().unwrap().send_replace(true);
+                    } else {
+                        drop(owner.borrow_mut().take());
+                    }
+                }
+            };
+            assert!(!session_stopping(&stopped));
+            assert!(
+                read_motion_batch(&server, &mut receiver, &first, &stopped, &count)
+                    .await
+                    .is_none()
+            );
+            assert!(session_stopping(&stopped));
         }
         Ok(())
     }
