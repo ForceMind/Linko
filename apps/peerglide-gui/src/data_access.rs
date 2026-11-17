@@ -87,9 +87,20 @@ pub(super) fn saved_target(saved: &str, port: u16) -> Option<SocketAddr> {
     Some(address)
 }
 
-pub(super) fn send_address(text: &str, saved: &str, port: u16) -> Result<SocketAddr> {
+pub(super) fn default_target(app: &App, port: u16) -> Option<SocketAddr> {
+    saved_target(&app.config.address, port).or_else(|| {
+        if !app.connected || app.routed_active || app.stopping.is_some() {
+            return None;
+        }
+        let mut address = app.worker_state.as_ref()?.peer_address()?;
+        address.set_port(port);
+        Some(address)
+    })
+}
+
+pub(super) fn send_address(text: &str, fallback: Option<SocketAddr>) -> Result<SocketAddr> {
     let address = if text.trim().is_empty() {
-        saved_target(saved, port).context("请输入接收端 IP 地址和 UDP 端口")?
+        fallback.context("请输入接收端 IP 地址和 UDP 端口")?
     } else {
         parse_address(text).context("请输入接收端 IP 地址和 UDP 端口")?
     };
@@ -132,18 +143,56 @@ mod tests {
     }
 
     #[test]
+    fn listener_sends_to_the_current_peer_on_the_data_port_until_disconnect() -> Result<()> {
+        use peerglide_protocol::worker::WorkerState;
+        use std::sync::Arc;
+
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.config.listen = true;
+        app.config.address.clear();
+        app.connected = true;
+        let worker = Arc::new(super::super::WorkerSnapshot::default());
+        worker.set_peer_address(Some("[fe80::2%4]:53901".parse()?));
+        app.worker_state = Some(Arc::clone(&worker));
+
+        assert_eq!(
+            default_target(&app, 24872),
+            Some("[fe80::2%4]:24872".parse()?)
+        );
+        assert_eq!(
+            default_target(&app, 24873),
+            Some("[fe80::2%4]:24873".parse()?)
+        );
+        assert_eq!(
+            send_address("192.0.2.7:9000", default_target(&app, 24872))?,
+            "192.0.2.7:9000".parse()?
+        );
+        app.config.address = "192.0.2.8:24870".into();
+        assert_eq!(
+            default_target(&app, 24872),
+            Some("192.0.2.8:24872".parse()?)
+        );
+        app.config.address.clear();
+        worker.publish(WorkerState::Disconnected);
+        assert!(default_target(&app, 24872).is_none());
+        drop(app);
+        fixture.close()
+    }
+
+    #[test]
     fn explicit_target_and_saved_address_use_distinct_data_port_rules() -> Result<()> {
         assert_eq!(
-            send_address("", "[2001:db8::2]:24871", 24872)?,
+            send_address("", saved_target("[2001:db8::2]:24871", 24872))?,
             "[2001:db8::2]:24872".parse()?
         );
         assert_eq!(
-            send_address("192.0.2.1:9000", "invalid", 24872)?,
+            send_address("192.0.2.1:9000", None)?,
             "192.0.2.1:9000".parse()?
         );
-        assert!(send_address("", "0.0.0.0:24871", 24872).is_err());
-        assert!(send_address("[::]:24872", "", 24872).is_err());
-        assert!(send_address("224.0.0.1:24872", "", 24872).is_err());
+        assert!(send_address("", saved_target("0.0.0.0:24871", 24872)).is_err());
+        assert!(send_address("[::]:24872", None).is_err());
+        assert!(send_address("224.0.0.1:24872", None).is_err());
         Ok(())
     }
 }

@@ -25,8 +25,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use peerglide_platform::ReceiveControl;
 use peerglide_protocol::{
     worker::{
-        WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent,
-        WorkerSwitchState,
+        WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerPeerAddress, WorkerState,
+        WorkerSwitchEvent, WorkerSwitchState,
     },
     Edge, InputCapabilities, Message, VERSION,
 };
@@ -1346,6 +1346,11 @@ async fn run_inner(
         .input_diagnostics
         .then(input_diagnostics::DiagnosticWindow::start)
         .transpose()?;
+    if let Some(peer) =
+        WorkerPeerAddress::new(c.remote_address()).filter(|_| o.managed && address.is_none())
+    {
+        println!("{}", peer.line());
+    }
     let result = session::run_with_diagnostics(
         c.clone(),
         tx,
