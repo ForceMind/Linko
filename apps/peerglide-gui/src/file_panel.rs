@@ -263,7 +263,10 @@ impl Panel {
             }
         } else {
             Request::Receive {
-                bind: data_access::receive_address(&self.bind, data_access::default_bind(app, PORT))?,
+                bind: data_access::receive_address(
+                    &self.bind,
+                    data_access::default_bind(app, PORT),
+                )?,
                 budget: file_worker::MAX_FILE_BYTES,
             }
         };
@@ -543,7 +546,10 @@ impl Panel {
                 ui.add_space(8.0);
                 ui.strong("接收文件");
                 ui.label("本机监听地址");
-                ui.add(egui::TextEdit::singleline(&mut self.bind).hint_text(data_access::default_bind(app, PORT).to_string()));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.bind)
+                        .hint_text(data_access::default_bind(app, PORT).to_string()),
+                );
                 if ui.button("等待文件请求").clicked() {
                     let result = self.start(app, false, false);
                     if let Err(error) = result {

@@ -597,10 +597,7 @@ mod tests {
         let right_pin = right.certificate.clone();
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
         let mut receiver = start(
-            Request::Receive {
-                bind,
-                budget: 1024,
-            },
+            Request::Receive { bind, budget: 1024 },
             right,
             left_pin,
             wake.clone(),

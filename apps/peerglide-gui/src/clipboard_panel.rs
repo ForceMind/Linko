@@ -410,7 +410,10 @@ impl Panel {
             }
             ui.add_space(8.0);
             ui.label("本机监听地址");
-            ui.add(egui::TextEdit::singleline(&mut self.bind).hint_text(data_access::default_bind(app, PORT).to_string()));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.bind)
+                    .hint_text(data_access::default_bind(app, PORT).to_string()),
+            );
             if ui.button("等待接收").clicked() {
                 self.local_outcome = None;
                 if let Err(error) = self.start(app, false) {
