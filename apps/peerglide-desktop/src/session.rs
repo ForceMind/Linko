@@ -541,7 +541,8 @@ pub(super) async fn run_with_diagnostics(
     let mut local_return = (0.5, 0.5);
     let mut size = (1920.0, 1080.0);
     let mut last_pong = 0u64;
-    let mut heartbeat_timing = diagnostics.map(|_| super::input_diagnostics::HeartbeatTiming::new());
+    let mut heartbeat_timing =
+        diagnostics.map(|_| super::input_diagnostics::HeartbeatTiming::new());
     let mut edge_gate = session_edge_gate(rebuilding_display_layout);
     let mut hint_reported: Option<(Edge, Edge)> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(200));

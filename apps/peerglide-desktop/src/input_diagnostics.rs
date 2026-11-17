@@ -9,7 +9,7 @@ use tokio::{sync::oneshot, time::Instant};
 const MAX_PENDING_HEARTBEATS: usize = 8;
 
 /// Replies use the ordered v5 stream and carry their lease, so match them in
-/// send order. If the queue ever overflows, discard that lease's timings.
+/// send order. If the queue overflows, stop sampling that lease.
 pub(super) struct HeartbeatTiming {
     lease: u64,
     sent: VecDeque<Instant>,
