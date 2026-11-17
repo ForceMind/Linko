@@ -5,6 +5,7 @@ use crate::{
     Identity,
 };
 use anyhow::{ensure, Context, Result};
+use peerglide_protocol::peer_destination;
 use peerglide_transfer::{
     clipboard::{Backend, WriteResult, MAX_TEXT_BYTES},
     clipboard_image::{Image, ImageBackend, MAX_PNG_BYTES},
@@ -310,6 +311,7 @@ pub fn send(
     for_drop: bool,
     wake: Wake,
 ) -> Result<Job> {
+    let target = peer_destination(target).context("invalid clipboard destination")?;
     spawn(
         Operation::Send {
             target,
@@ -675,15 +677,22 @@ mod tests {
     #[test]
     fn explicit_clipboard_workers_import_text_and_png_over_ipv6() -> Result<()> {
         let bind = "[::1]:0".parse()?;
-        loopback_at(Mode::Text, Decision::Import, bind)?;
-        loopback_at(Mode::Image, Decision::Import, bind)
+        loopback_at(Mode::Text, Decision::Import, bind, false)?;
+        loopback_at(Mode::Image, Decision::Import, bind, false)
+    }
+
+    #[test]
+    fn clipboard_worker_imports_from_a_mapped_ipv4_target() -> Result<()> {
+        let bind = "127.0.0.1:0".parse()?;
+        loopback_at(Mode::Text, Decision::Import, bind, true)?;
+        loopback_at(Mode::Image, Decision::Import, bind, true)
     }
 
     fn loopback(mode: Mode, decision: Decision) -> Result<()> {
-        loopback_at(mode, decision, "127.0.0.1:0".parse()?)
+        loopback_at(mode, decision, "127.0.0.1:0".parse()?, false)
     }
 
-    fn loopback_at(mode: Mode, decision: Decision, bind: SocketAddr) -> Result<()> {
+    fn loopback_at(mode: Mode, decision: Decision, bind: SocketAddr, mapped: bool) -> Result<()> {
         let source = Identity::generate()?;
         let destination = Identity::generate()?;
         let lease_fixture = (decision == Decision::ReceiveDrop)
@@ -729,8 +738,12 @@ mod tests {
                 origin: Origin::Local,
             },
         };
+        let target = match (address, mapped) {
+            (SocketAddr::V4(v4), true) => (v4.ip().to_ipv6_mapped(), v4.port()).into(),
+            _ => address,
+        };
         let sending = send(
-            address,
+            target,
             source,
             destination_cert,
             payload,

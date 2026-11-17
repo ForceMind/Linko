@@ -1,6 +1,7 @@
 //! Local authorization and address checks shared by explicit data jobs.
 use super::{transport, App, Identity};
 use anyhow::{Context, Result};
+use peerglide_protocol::peer_destination;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 pub(super) fn ready(app: &App) -> bool {
@@ -79,10 +80,7 @@ fn is_broadcast(address: IpAddr) -> bool {
 }
 
 pub(super) fn saved_target(saved: &str, port: u16) -> Option<SocketAddr> {
-    let mut address = parse_address(saved).ok()?;
-    if address.ip().is_unspecified() {
-        return None;
-    }
+    let mut address = peer_destination(saved.trim().parse().ok()?)?;
     address.set_port(port);
     Some(address)
 }
@@ -125,10 +123,10 @@ pub(super) fn send_address(text: &str, fallback: Option<SocketAddr>) -> Result<S
     let address = if text.trim().is_empty() {
         fallback.context("请输入接收端 IP 地址和 UDP 端口")?
     } else {
-        parse_address(text).context("请输入接收端 IP 地址和 UDP 端口")?
+        text.trim().parse().context("请输入接收端 IP 地址和 UDP 端口")?
     };
-    anyhow::ensure!(!address.ip().is_unspecified(), "请输入接收端的实际 IP 地址");
-    Ok(address)
+    peer_destination(address)
+        .context("请输入接收端单播地址和有效端口，链路本地 IPv6 地址须含本机接口编号")
 }
 
 #[cfg(test)]
@@ -228,6 +226,22 @@ mod tests {
         assert!(send_address("", saved_target("0.0.0.0:24871", 24872)).is_err());
         assert!(send_address("[::]:24872", None).is_err());
         assert!(send_address("224.0.0.1:24872", None).is_err());
+        assert!(send_address("[::ffff:224.0.0.1]:24872", None).is_err());
+        assert!(send_address("[::ffff:0.0.0.0]:24872", None).is_err());
+        assert!(send_address("[fe80::2]:24872", None).is_err());
+        assert!(saved_target("[fe80::2]:24870", 24872).is_none());
+        assert_eq!(
+            send_address("[fe80::2%4]:24872", None)?,
+            "[fe80::2%4]:24872".parse()?
+        );
+        assert_eq!(
+            send_address("[::ffff:192.0.2.1]:24873", None)?,
+            "192.0.2.1:24873".parse()?
+        );
+        assert_eq!(
+            saved_target("[::ffff:192.0.2.1]:24870", 24873),
+            Some("192.0.2.1:24873".parse()?)
+        );
         Ok(())
     }
 }
