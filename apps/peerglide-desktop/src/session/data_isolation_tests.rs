@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use transport::Identity;
+use transport::{data::ReceiveBind, Identity};
 
 const FILE_BYTES: &[u8] = b"isolated file worker fixture";
 const TEXT: &str = "isolated clipboard worker fixture";
@@ -66,7 +66,7 @@ impl Pair {
         let (a_pin, b_pin) = (a.certificate.clone(), b.certificate.clone());
         let mut incoming = file::start(
             file::Request::Receive {
-                bind: loopback()?,
+                bind: ReceiveBind::Explicit(loopback()?),
                 budget: 1024,
             },
             b,
@@ -106,7 +106,7 @@ impl Pair {
         let b = Identity::load(&self.right)?;
         let (a_pin, b_pin) = (a.certificate.clone(), b.certificate.clone());
         let mut incoming = clip::receive(
-            loopback()?,
+            ReceiveBind::Explicit(loopback()?),
             b,
             a_pin,
             (!for_drop).then_some(11),
@@ -208,6 +208,7 @@ async fn authenticated_input_and_data_workers_keep_independent_consent_and_stop(
                 clip::Event::Finished {
                     outcome: clip::TextOutcome::Submitted,
                     copy_receipt: Some(_),
+                    ..
                 }
             ));
         }
@@ -239,6 +240,7 @@ async fn authenticated_input_and_data_workers_keep_independent_consent_and_stop(
                 clip::Event::Finished {
                     outcome: clip::TextOutcome::Declined,
                     copy_receipt: None,
+                    ..
                 }
             ));
         }
@@ -251,11 +253,14 @@ async fn authenticated_input_and_data_workers_keep_independent_consent_and_stop(
         ));
         assert!(matches!(
             next(|| file_rx.poll()).await?,
-            file::Event::Received(file::ReceiveResult {
-                outcome: file::FileOutcome::Committed,
-                report_queued: true,
+            file::Event::Received {
+                result: file::ReceiveResult {
+                    outcome: file::FileOutcome::Committed,
+                    report_queued: true,
+                    ..
+                },
                 ..
-            })
+            }
         ));
         assert_eq!(fs::read(destination.join("shared.txt"))?, FILE_BYTES);
         live_input(&mut tx, &mut rx).await?;
