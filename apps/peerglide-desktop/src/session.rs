@@ -541,6 +541,8 @@ pub(super) async fn run_with_diagnostics(
     let mut local_return = (0.5, 0.5);
     let mut size = (1920.0, 1080.0);
     let mut last_pong = 0u64;
+    let mut heartbeat_timing =
+        diagnostics.map(|_| super::input_diagnostics::HeartbeatTiming::new());
     let mut edge_gate = session_edge_gate(rebuilding_display_layout);
     let mut hint_reported: Option<(Edge, Edge)> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(200));
@@ -777,7 +779,12 @@ pub(super) async fn run_with_diagnostics(
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;
                         let cursor=Motion{lease,sequence,x:position.0,y:position.1};
                         send(&mut tx,&Message::Release{lease,cursor:Some(cursor)}).await?;
-                    }else{send(&mut tx,&Message::Ping{lease}).await?;}
+                    }else{
+                        if let (Some(timing), Some(diagnostics)) = (&mut heartbeat_timing, diagnostics) {
+                            if diagnostics.active() { timing.sent(lease, tokio::time::Instant::now()); }
+                        }
+                        send(&mut tx,&Message::Ping{lease}).await?;
+                    }
                 }
                 // A full native event queue disables capture in the callback. Reconcile protocol immediately.
                 if let (Some(cap),Some(current))=(&capture,outgoing){if !cap.gate.is_current(CaptureRoute::Remote(current.epoch)){input_status.restore(Some(cap))?;outgoing=None;send(&mut tx,&Message::Release { lease: current.lease, cursor: None }).await?;}}
@@ -947,7 +954,18 @@ pub(super) async fn run_with_diagnostics(
                         if outgoing.is_some_and(|current|current.lease==lease){count(Count::PeerRelease);outgoing=None;input_status.restore(capture.as_ref())?;}
                     },
                     Message::Ping{lease}=>{if lease==0 || recovery.heartbeat(lease,now){send(&mut tx,&Message::Pong{lease}).await?;}},
-                    Message::Pong{lease}=>{if outgoing.is_some_and(|current|current.lease==lease){count(Count::PongReceived);last_pong=now;if let Some(cap)=&capture{cap.gate.refresh();}}},
+                    Message::Pong{lease}=>{
+                        if outgoing.is_some_and(|current|current.lease==lease) {
+                            count(Count::PongReceived);
+                            last_pong=now;
+                            if let Some(cap)=&capture { cap.gate.refresh(); }
+                            if let (Some(timing), Some(diagnostics)) = (&mut heartbeat_timing, diagnostics) {
+                                if let Some(duration) = timing.acknowledged(lease, tokio::time::Instant::now()) {
+                                    diagnostics.record_heartbeat_rtt(duration);
+                                }
+                            }
+                        }
+                    },
                     Message::Hello{..}=>bail!("unexpected repeated handshake"),
                 }
             },
