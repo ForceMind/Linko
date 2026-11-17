@@ -317,9 +317,8 @@ impl Panel {
             clipboard_drop::eligible(app, ui.ctx()) && clipboard_drop::focused(ui.ctx());
         #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
         let drop_available = false;
-        let ready = data_access::ready(app)
-            && self.active.is_none()
-            && (!self.for_drop || drop_available);
+        let ready =
+            data_access::ready(app) && self.active.is_none() && (!self.for_drop || drop_available);
         ui.add_enabled_ui(ready, |ui| {
             let hint = data_access::saved_target(&app.config.address, PORT)
                 .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());

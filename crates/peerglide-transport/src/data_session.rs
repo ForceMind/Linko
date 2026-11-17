@@ -324,9 +324,8 @@ impl Consent {
     }
 
     fn validate_image(&self, admitted: &AdmittedImage) -> Result<()> {
-        self.policy.check(|session, now| {
-            session.validate(&admitted.permit, Capability::ImageReceive, now)
-        })
+        self.policy
+            .check(|session, now| session.validate(&admitted.permit, Capability::ImageReceive, now))
     }
 }
 
