@@ -352,12 +352,17 @@ mod tests {
 
     #[test]
     fn independent_jobs_publish_local_progress_and_receipts() -> Result<()> {
-        loopback(false)
+        loopback(false, "127.0.0.1:0".parse()?)
+    }
+
+    #[test]
+    fn file_workers_publish_verified_contents_over_ipv6() -> Result<()> {
+        loopback(false, "[::1]:0".parse()?)
     }
 
     #[test]
     fn stopping_a_pending_offer_leaves_the_selected_directory_untouched() -> Result<()> {
-        loopback(true)
+        loopback(true, "127.0.0.1:0".parse()?)
     }
 
     struct FilePeer {
@@ -579,7 +584,7 @@ mod tests {
         .context("file worker did not report its next state")
     }
 
-    fn loopback(stop: bool) -> Result<()> {
+    fn loopback(stop: bool, bind: SocketAddr) -> Result<()> {
         let fixture = Fixture::new()?;
         let source = fixture.0.join("shared.bin");
         let destination = fixture.0.join("received");
@@ -593,7 +598,7 @@ mod tests {
         let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
         let mut receiver = start(
             Request::Receive {
-                bind: "127.0.0.1:0".parse()?,
+                bind,
                 budget: 1024,
             },
             right,

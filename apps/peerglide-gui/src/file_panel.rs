@@ -105,7 +105,7 @@ impl Default for Panel {
             source: String::new(),
             destination: String::new(),
             target: String::new(),
-            bind: format!("0.0.0.0:{PORT}"),
+            bind: String::new(),
             resume: String::new(),
             prepared_id: None,
             progress: None,
@@ -263,8 +263,7 @@ impl Panel {
             }
         } else {
             Request::Receive {
-                bind: data_access::parse_address(&self.bind)
-                    .context("请填写本机监听地址和 UDP 端口")?,
+                bind: data_access::receive_address(&self.bind, data_access::default_bind(app, PORT))?,
                 budget: file_worker::MAX_FILE_BYTES,
             }
         };
@@ -544,7 +543,7 @@ impl Panel {
                 ui.add_space(8.0);
                 ui.strong("接收文件");
                 ui.label("本机监听地址");
-                ui.text_edit_singleline(&mut self.bind);
+                ui.add(egui::TextEdit::singleline(&mut self.bind).hint_text(data_access::default_bind(app, PORT).to_string()));
                 if ui.button("等待文件请求").clicked() {
                     let result = self.start(app, false, false);
                     if let Err(error) = result {
