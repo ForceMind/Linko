@@ -19,6 +19,14 @@ pub(super) struct Pin {
 }
 
 impl Pin {
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(super) fn matches_copy(
+        &self,
+        receipt: &transport::file_drop_link::ClipboardReceipt,
+    ) -> bool {
+        receipt.matches_peer(&self.peer)
+    }
+
     pub(super) fn matches(&self, app: &App) -> bool {
         ready(app) && app.config.fingerprint.as_deref() == Some(self.peer.as_str())
     }

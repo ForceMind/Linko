@@ -91,6 +91,10 @@ impl ClipboardCompletion {
     pub fn outcome(&self) -> TextOutcome {
         self.outcome
     }
+
+    pub(super) fn sequence(&self) -> u64 {
+        self.sequence
+    }
 }
 
 /// Validated pixels, bound to the original receive grant and local revision.
@@ -124,6 +128,10 @@ pub struct ImageCompletion {
 impl ImageCompletion {
     pub fn outcome(&self) -> ClipboardOutcome {
         self.outcome
+    }
+
+    pub(super) fn sequence(&self) -> u64 {
+        self.sequence
     }
 }
 
