@@ -165,7 +165,12 @@ impl Drag {
         admit: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<Self> {
         validate_text(text)?;
-        Self::content(text.as_bytes(), false, remaining, Some((press, Box::new(admit))))
+        Self::content(
+            text.as_bytes(),
+            false,
+            remaining,
+            Some((press, Box::new(admit))),
+        )
     }
 
     /// The caller supplies a PNG already normalized by the clipboard receive path.
