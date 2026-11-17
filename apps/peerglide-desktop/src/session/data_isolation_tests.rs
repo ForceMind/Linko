@@ -170,7 +170,8 @@ async fn authenticated_input_and_data_workers_keep_independent_consent_and_stop(
                 allow: false,
                 native: false,
                 edge: Edge::Right,
-                local: InputCapabilities::default(),
+                local: InputCapabilities::new(&[4], true, 1, true)
+                    .context("invalid input fixture capabilities")?,
                 peer: InputCapabilities::default(),
             },
         ))
