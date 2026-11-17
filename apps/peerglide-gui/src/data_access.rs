@@ -156,14 +156,23 @@ mod tests {
         worker.set_peer_address(Some("[fe80::2%4]:53901".parse()?));
         app.worker_state = Some(Arc::clone(&worker));
 
-        assert_eq!(default_target(&app, 24872), Some("[fe80::2%4]:24872".parse()?));
-        assert_eq!(default_target(&app, 24873), Some("[fe80::2%4]:24873".parse()?));
+        assert_eq!(
+            default_target(&app, 24872),
+            Some("[fe80::2%4]:24872".parse()?)
+        );
+        assert_eq!(
+            default_target(&app, 24873),
+            Some("[fe80::2%4]:24873".parse()?)
+        );
         assert_eq!(
             send_address("192.0.2.7:9000", default_target(&app, 24872))?,
             "192.0.2.7:9000".parse()?
         );
         app.config.address = "192.0.2.8:24870".into();
-        assert_eq!(default_target(&app, 24872), Some("192.0.2.8:24872".parse()?));
+        assert_eq!(
+            default_target(&app, 24872),
+            Some("192.0.2.8:24872".parse()?)
+        );
         app.config.address.clear();
         worker.publish(WorkerState::Disconnected);
         assert!(default_target(&app, 24872).is_none());

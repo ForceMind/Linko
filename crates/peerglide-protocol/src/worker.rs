@@ -44,7 +44,7 @@ impl WorkerPeerAddress {
             && !address.ip().is_unspecified()
             && !address.ip().is_multicast()
             && address.ip() != std::net::IpAddr::V4(Ipv4Addr::BROADCAST))
-            .then_some(Self(address))
+        .then_some(Self(address))
     }
 
     pub fn address(self) -> SocketAddr {
@@ -207,8 +207,17 @@ mod tests {
         assert_eq!(WorkerPeerAddress::parse(&peer.line()), Some(peer));
         let mapped = WorkerPeerAddress::new("[::ffff:192.0.2.4]:42000".parse().unwrap()).unwrap();
         assert_eq!(mapped.address(), "192.0.2.4:42000".parse().unwrap());
-        for invalid in ["[fe80::24]:24870", "0.0.0.0:24870", "224.0.0.1:24870", "255.255.255.255:24870", "192.0.2.4:0"] {
-            assert!(WorkerPeerAddress::parse(&format!("{}{}", WorkerPeerAddress::PREFIX, invalid)).is_none());
+        for invalid in [
+            "[fe80::24]:24870",
+            "0.0.0.0:24870",
+            "224.0.0.1:24870",
+            "255.255.255.255:24870",
+            "192.0.2.4:0",
+        ] {
+            assert!(
+                WorkerPeerAddress::parse(&format!("{}{}", WorkerPeerAddress::PREFIX, invalid))
+                    .is_none()
+            );
         }
         assert!(WorkerPeerAddress::parse(&format!("{}{}", peer.line(), "x".repeat(128))).is_none());
     }

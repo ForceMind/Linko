@@ -345,7 +345,6 @@ impl WorkerSnapshot {
         self.peer_address_slot().lock().ok().and_then(|slot| *slot)
     }
 
-
     fn publish_switch(&self, state: WorkerSwitchState) {
         let value = match state {
             WorkerSwitchState::Idle => 1,
@@ -487,7 +486,8 @@ fn read_worker_output(
             snapshot.publish(event.state);
         } else if line.starts_with(WorkerPeerAddress::PREFIX) {
             // This private endpoint record is never forwarded to the diagnostic log.
-            snapshot.set_peer_address(WorkerPeerAddress::parse(&line).map(WorkerPeerAddress::address));
+            snapshot
+                .set_peer_address(WorkerPeerAddress::parse(&line).map(WorkerPeerAddress::address));
         } else if let Some(event) = WorkerInputEvent::parse(&line) {
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
             if let Ok(mut inbox) = snapshot.7.lock() {
@@ -2452,7 +2452,11 @@ mod lifecycle_tests {
         let event = WorkerPeerAddress::new("192.0.2.7:45671".parse()?).unwrap();
         let disconnect = serde_json::to_string(&WorkerEvent::new(WorkerState::Disconnected))?;
         let (tx, rx) = mpsc::sync_channel(4);
-        let output = format!("{}\n{disconnect}\n{}invalid\nnotification\n", event.line(), WorkerPeerAddress::PREFIX);
+        let output = format!(
+            "{}\n{disconnect}\n{}invalid\nnotification\n",
+            event.line(),
+            WorkerPeerAddress::PREFIX
+        );
         read_worker_output(
             std::io::Cursor::new(output),
             Arc::clone(&snapshot),
@@ -2461,7 +2465,10 @@ mod lifecycle_tests {
         );
         assert!(snapshot.peer_address().is_none());
         assert_eq!(rx.try_recv()?, "notification");
-        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
         Ok(())
     }
 
