@@ -77,6 +77,14 @@ def main():
             for child, log in [(listener, listener_log), (connector, connector_log)]:
                 wait_for(lambda: any(r.get("state") == "Authenticated" for r in records(log)),
                          child, log)
+                peer_records = [line for line in log.read_text(encoding="utf-8").splitlines()
+                                if line.startswith("LINKO-PEER-ADDRESS/1 ")]
+                if child is listener:
+                    assert len(peer_records) == 1, peer_records
+                    assert re.fullmatch(r"LINKO-PEER-ADDRESS/1 127\.0\.0\.1:[1-9]\d{0,4}",
+                                        peer_records[0]), peer_records
+                else:
+                    assert not peer_records, peer_records
                 # Oversized/unknown input must drain without hiding the next command.
                 send(child, b"x" * 4096 + b'\n{"version":2,"kind":"layout"}\n')
                 expected = []
