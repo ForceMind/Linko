@@ -485,17 +485,8 @@ async fn run(
             let endpoint = bind.endpoint(&identity, &pinned_peer)?;
             let bound = endpoint.local_addr()?;
             events.post(Event::Listening(bound))?;
-            let connection = OwnedConnection(
-                tokio::time::timeout(LISTEN_TIMEOUT, async {
-                    let incoming = endpoint
-                        .accept()
-                        .await
-                        .context("clipboard listener closed")?;
-                    Ok::<_, anyhow::Error>(incoming.await?)
-                })
-                .await
-                .context("clipboard listener timed out")??,
-            );
+            let connection =
+                OwnedConnection(data::accept_pinned(&endpoint, &pinned_peer, LISTEN_TIMEOUT).await?);
             let for_drop = revision.is_none();
             let stream = if for_drop {
                 data::accept_for_drop(&connection.0, &pinned_peer, mode.capabilities()).await?
@@ -693,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn default_clipboard_listener_imports_text_and_png_on_either_family() -> Result<()> {
+    fn default_clipboard_listener_accepts_only_the_paired_peer_on_either_family() -> Result<()> {
         for address in ["127.0.0.1:0", "[::1]:0"] {
             let address = address.parse()?;
             loopback_at(Mode::Text, Decision::Import, address, false, true)?;
@@ -763,6 +754,9 @@ mod tests {
             },
         };
         let address = SocketAddr::new(dial.ip(), bound.port());
+        if automatic {
+            data::attempt_untrusted_handshake(address, &destination_cert)?;
+        }
         let target = match (address, mapped) {
             (SocketAddr::V4(v4), true) => (v4.ip().to_ipv6_mapped(), v4.port()).into(),
             _ => address,

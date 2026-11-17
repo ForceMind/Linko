@@ -19,6 +19,7 @@ const FILES: u8 = 2;
 const IMAGES: u8 = 4;
 const HELLO_BYTES: usize = 8;
 const CLIPBOARD_DROP: u8 = 1;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -146,6 +147,54 @@ impl ReceiveBind {
 /// Opens an endpoint with a data ALPN only, independently of the input endpoint.
 pub fn endpoint(address: SocketAddr, local: &Identity, pinned_peer: &[u8]) -> Result<Endpoint> {
     ReceiveBind::Explicit(address).endpoint(local, pinned_peer)
+}
+
+/// Admit the first authenticated peer within the same one-shot listen window.
+pub(super) async fn accept_pinned(
+    endpoint: &Endpoint,
+    pinned_peer: &[u8],
+    listen_timeout: Duration,
+) -> Result<Connection> {
+    tokio::time::timeout(listen_timeout, async {
+        loop {
+            let incoming = endpoint.accept().await.context("data listener closed")?;
+            if let Ok(Ok(connection)) = tokio::time::timeout(HANDSHAKE_TIMEOUT, incoming).await {
+                if verify_peer(&connection, pinned_peer).is_ok() {
+                    return Ok(connection);
+                }
+                connection.close(1u8.into(), b"data identity not enrolled");
+            }
+            // Keep the original deadline observable even if queued attempts fail immediately.
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("data listener timed out")?
+}
+
+#[cfg(test)]
+pub(super) fn attempt_untrusted_handshake(target: SocketAddr, server: &[u8]) -> Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(async {
+            let wrong = Identity::generate()?;
+            let bind = if target.is_ipv4() {
+                (Ipv4Addr::LOCALHOST, 0).into()
+            } else {
+                (Ipv6Addr::LOCALHOST, 0).into()
+            };
+            let client = endpoint(bind, &wrong, server)?;
+            let attempt = client.connect(target, "peerglide.local")?;
+            tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+                if let Ok(connection) = attempt.await {
+                    // The client may finish its side of the handshake before receiving the rejection.
+                    connection.closed().await;
+                }
+            })
+            .await
+            .context("untrusted data handshake was not rejected")
+        })
 }
 
 pub async fn open(
