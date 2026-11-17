@@ -2766,8 +2766,7 @@ mod tests {
 
         let a = Identity::generate()?;
         let b = Identity::generate()?;
-        let (receipt, file) =
-            test_file_transfer(&a, &b, b"one file reservation", |_| {}).await?;
+        let (receipt, file) = test_file_transfer(&a, &b, b"one file reservation", |_| {}).await?;
         let prepared = file.received.prepare_drop(|| Ok(()))?;
         let origin = file.received.drop_origin();
         let context = DropContext {
@@ -3215,7 +3214,10 @@ mod tests {
             // Unsolicited refusals cannot invent a locally pending switch.
             send(&mut tx, &Message::Denied { lease: 42 }).await?;
             let started = *verified_bytes.wait_for(|&bytes| bytes > 0).await?;
-            anyhow::ensure!(started < file_size, "file finished before input acquisition");
+            anyhow::ensure!(
+                started < file_size,
+                "file finished before input acquisition"
+            );
             send(
                 &mut tx,
                 &Message::Acquire {
