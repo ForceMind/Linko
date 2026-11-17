@@ -253,7 +253,7 @@ impl Panel {
         anyhow::ensure!(!self.edge_active(), "请先关闭边沿发送");
         let request = if sending {
             Request::Send {
-                target: data_access::send_address(&self.target, &app.config.address, PORT)?,
+                target: data_access::send_address(&self.target, data_access::default_target(app, PORT))?,
                 source: absolute_path(&self.source).context("请填写源文件的绝对路径")?,
                 resume_id: parse_id(&self.resume)?,
                 prepare_handoff,
@@ -316,7 +316,7 @@ impl Panel {
             "请先结束当前文件或拖放任务"
         );
         let (pin, _, _) = Pin::load(app)?;
-        let target = data_access::send_address(&self.target, &app.config.address, PORT)?;
+        let target = data_access::send_address(&self.target, data_access::default_target(app, PORT))?;
         self.edge = Some(super::file_edge_drop::Offer::arm(app, ctx, pin, target)?);
         self.notice = "把一个文件拖到屏幕边沿的接收条。".into();
         Ok(())
@@ -332,7 +332,7 @@ impl Panel {
         let unavailable = ctx.input(|input| {
             input.viewport().close_requested() || input.viewport().minimized == Some(true)
         });
-        let target = data_access::send_address(&self.target, &app.config.address, PORT);
+        let target = data_access::send_address(&self.target, data_access::default_target(app, PORT));
         if unavailable || !offer.current(app, now) || target.ok() != Some(offer.target) {
             self.edge = None;
             self.notice = "边沿发送许可已结束。".into();
@@ -501,7 +501,7 @@ impl Panel {
                     egui::TextEdit::singleline(&mut self.source)
                         .hint_text("源文件绝对路径，可拖入单个本机文件"),
                 );
-                let hint = data_access::saved_target(&app.config.address, PORT)
+                let hint = data_access::default_target(app, PORT)
                     .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
                 ui.label("接收端地址");
                 ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));

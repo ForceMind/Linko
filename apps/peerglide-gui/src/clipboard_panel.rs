@@ -260,7 +260,7 @@ impl Panel {
         let (pin, identity, peer) = Pin::load(app)?;
         let wake = app.wake_ui.clone();
         let address = if send {
-            data_access::send_address(&self.target, &app.config.address, PORT)?
+            data_access::send_address(&self.target, data_access::default_target(app, PORT))?
         } else {
             data_access::parse_address(&self.bind).context("请输入本机监听地址和 UDP 端口")?
         };
@@ -398,7 +398,7 @@ impl Panel {
         let ready =
             data_access::ready(app) && self.active.is_none() && (!self.for_drop || drop_available);
         ui.add_enabled_ui(ready, |ui| {
-            let hint = data_access::saved_target(&app.config.address, PORT)
+            let hint = data_access::default_target(app, PORT)
                 .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
             ui.label("接收端地址");
             ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));

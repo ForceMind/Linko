@@ -52,8 +52,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use eframe::egui::{self, RichText, Vec2};
 use peerglide_protocol::worker::{
-    WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerState, WorkerSwitchEvent,
-    WorkerSwitchState,
+    WorkerEvent, WorkerInputEvent, WorkerInputState, WorkerPeerAddress, WorkerState,
+    WorkerSwitchEvent, WorkerSwitchState,
 };
 use peerglide_transport::{self as transport, Identity};
 use serde::{Deserialize, Serialize};
@@ -321,8 +321,31 @@ struct WorkerSnapshot(
     std::sync::Mutex<Option<peerglide_protocol::layout_ipc::LayoutHint>>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
     std::sync::Mutex<file_drop_reservation::Inbox>,
+    Mutex<Option<std::net::SocketAddr>>,
 );
 impl WorkerSnapshot {
+    fn peer_address_slot(&self) -> &Mutex<Option<std::net::SocketAddr>> {
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+        let slot = &self.8;
+        #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos", test)))]
+        let slot = &self.7;
+        slot
+    }
+
+    fn set_peer_address(&self, address: Option<std::net::SocketAddr>) {
+        if let Ok(mut slot) = self.peer_address_slot().lock() {
+            *slot = address;
+        }
+    }
+
+    fn peer_address(&self) -> Option<std::net::SocketAddr> {
+        if self.2.load(Ordering::Acquire) || self.3.load(Ordering::Acquire) {
+            return None;
+        }
+        self.peer_address_slot().lock().ok().and_then(|slot| *slot)
+    }
+
+
     fn publish_switch(&self, state: WorkerSwitchState) {
         let value = match state {
             WorkerSwitchState::Idle => 1,
@@ -386,6 +409,7 @@ impl WorkerSnapshot {
                 | WorkerState::PeerWaitExpired
         ) {
             self.publish_switch(WorkerSwitchState::Idle);
+            self.set_peer_address(None);
         }
         let code = match state {
             WorkerState::Listening => 1,
@@ -461,6 +485,9 @@ fn read_worker_output(
                 inbox.connection(event.state);
             }
             snapshot.publish(event.state);
+        } else if line.starts_with(WorkerPeerAddress::PREFIX) {
+            // This private endpoint record is never forwarded to the diagnostic log.
+            snapshot.set_peer_address(WorkerPeerAddress::parse(&line).map(WorkerPeerAddress::address));
         } else if let Some(event) = WorkerInputEvent::parse(&line) {
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
             if let Ok(mut inbox) = snapshot.7.lock() {
@@ -2416,6 +2443,25 @@ mod lifecycle_tests {
         );
         assert_eq!(receive.try_recv()?, "regular diagnostic");
         assert!(receive.try_recv().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn worker_peer_address_is_local_only_and_expires_on_disconnect() -> Result<()> {
+        let snapshot = Arc::new(WorkerSnapshot::default());
+        let event = WorkerPeerAddress::new("192.0.2.7:45671".parse()?).unwrap();
+        let disconnect = serde_json::to_string(&WorkerEvent::new(WorkerState::Disconnected))?;
+        let (tx, rx) = mpsc::sync_channel(4);
+        let output = format!("{}\n{disconnect}\n{}invalid\nnotification\n", event.line(), WorkerPeerAddress::PREFIX);
+        read_worker_output(
+            std::io::Cursor::new(output),
+            Arc::clone(&snapshot),
+            tx,
+            Arc::new(|| {}),
+        );
+        assert!(snapshot.peer_address().is_none());
+        assert_eq!(rx.try_recv()?, "notification");
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
         Ok(())
     }
 

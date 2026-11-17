@@ -266,7 +266,7 @@ impl Panel {
                     Source::Microphone => &self.microphone_address,
                 };
                 let address =
-                    data_access::send_address(target, &app.config.address, self.source.port())?;
+                    data_access::send_address(target, data_access::saved_target(&app.config.address, self.source.port()))?;
                 command.arg(address.to_string());
                 match self.source {
                     Source::System => "系统音频发送任务运行中",
