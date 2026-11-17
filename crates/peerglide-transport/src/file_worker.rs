@@ -295,6 +295,11 @@ async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use peerglide_transfer::{
+        codec::{Frame, Kind},
+        data_policy::Permissions,
+        Manifest, CHUNK_BYTES,
+    };
     use std::{fs, time::Instant};
 
     struct Fixture(PathBuf);
@@ -355,14 +360,80 @@ mod tests {
         loopback(true)
     }
 
+    struct FilePeer {
+        _endpoint: quinn::Endpoint,
+        connection: quinn::Connection,
+        consent: data::Consent,
+        send: data::Sender,
+        receive: data::Receiver,
+    }
+
+    impl FilePeer {
+        async fn offer(
+            job: &mut Job,
+            identity: &Identity,
+            peer_pin: &[u8],
+            id: [u8; 16],
+            manifest: Manifest,
+        ) -> Result<Self> {
+            let Event::Listening(address) = next_async(job).await? else {
+                anyhow::bail!("file listener did not start");
+            };
+            let endpoint = data::endpoint("127.0.0.1:0".parse()?, identity, peer_pin)?;
+            let connection = endpoint.connect(address, "peerglide.local")?.await?;
+            let stream = data::open(
+                &connection,
+                peer_pin,
+                data::Capabilities {
+                    files: true,
+                    ..data::Capabilities::default()
+                },
+            )
+            .await?;
+            let (mut consent, mut send, receive) =
+                stream.into_session((2 * CHUNK_BYTES + 4096) as u64, 4096)?;
+            consent.grant(
+                Permissions {
+                    file_send: true,
+                    ..Permissions::default()
+                },
+                10_000,
+            )?;
+            send.write(&Frame::Offer { id, manifest }).await?;
+            let Event::Offer(offer) = next_async(job).await? else {
+                anyhow::bail!("file approval did not arrive");
+            };
+            assert_eq!(offer.id, id);
+            Ok(Self {
+                _endpoint: endpoint,
+                connection,
+                consent,
+                send,
+                receive,
+            })
+        }
+
+        async fn reply(&mut self, kind: Kind) -> Result<Frame> {
+            let admitted = self
+                .receive
+                .read_file(&[kind], Duration::from_secs(5))
+                .await?;
+            self.consent.apply_received(admitted, Ok)
+        }
+
+        async fn chunk(&mut self, id: [u8; 16], index: u32, bytes: &[u8]) -> Result<()> {
+            self.send
+                .write(&Frame::Chunk {
+                    id,
+                    index,
+                    bytes: bytes.to_vec(),
+                })
+                .await
+        }
+    }
+
     #[tokio::test]
     async fn stopping_after_publication_preserves_the_verified_local_result() -> Result<()> {
-        use peerglide_transfer::{
-            codec::{Frame, Kind},
-            data_policy::Permissions,
-            Manifest,
-        };
-
         let fixture = Fixture::new()?;
         let source = fixture.0.join("shared.bin");
         let destination = fixture.0.join("received");
@@ -380,55 +451,18 @@ mod tests {
             sender.certificate.clone(),
             Arc::new(|| {}),
         )?;
-        let Event::Listening(address) = next_async(&mut job).await? else {
-            anyhow::bail!("file listener did not start");
-        };
-        let endpoint = data::endpoint(bind, &sender, &peer_pin)?;
-        let connection = endpoint.connect(address, "peerglide.local")?.await?;
-        let stream = data::open(
-            &connection,
-            &peer_pin,
-            data::Capabilities {
-                files: true,
-                ..data::Capabilities::default()
-            },
-        )
-        .await?;
-        let (mut consent, mut send, mut receive) = stream.into_session(4096, 4096)?;
-        consent.grant(
-            Permissions {
-                file_send: true,
-                ..Permissions::default()
-            },
-            10_000,
-        )?;
         let id = [7; 16];
-        send.write(&Frame::Offer { id, manifest }).await?;
-        let Event::Offer(offer) = next_async(&mut job).await? else {
-            anyhow::bail!("file approval did not arrive");
-        };
-        assert_eq!(offer.id, id);
+        let mut peer = FilePeer::offer(&mut job, &sender, &peer_pin, id, manifest).await?;
         job.decide(Decision::Accept {
             directory: destination.clone(),
             resume: false,
         })?;
-        let accepted = receive
-            .read_file(&[Kind::FileAccepted], Duration::from_secs(5))
-            .await?;
         assert!(
-            matches!(consent.apply_received(accepted, Ok)?, Frame::FileAccepted { id: accepted_id, next_chunk: 0 } if accepted_id == id)
+            matches!(peer.reply(Kind::FileAccepted).await?, Frame::FileAccepted { id: accepted_id, next_chunk: 0 } if accepted_id == id)
         );
-        send.write(&Frame::Chunk {
-            id,
-            index: 0,
-            bytes: bytes.to_vec(),
-        })
-        .await?;
-        let result = receive
-            .read_file(&[Kind::FileResult], Duration::from_secs(5))
-            .await?;
+        peer.chunk(id, 0, bytes).await?;
         assert!(
-            matches!(consent.apply_received(result, Ok)?, Frame::FileResult { id: finished, outcome: FileOutcome::Committed } if finished == id)
+            matches!(peer.reply(Kind::FileResult).await?, Frame::FileResult { id: finished, outcome: FileOutcome::Committed } if finished == id)
         );
 
         // Keep the peer alive so only local stop can end the receipt wait.
@@ -441,7 +475,94 @@ mod tests {
         assert_eq!(result.outcome, FileOutcome::Committed);
         assert!(result.report_queued && result.file.is_some());
         assert_eq!(fs::read(destination.join("shared.bin"))?, bytes);
-        connection.close(0u8.into(), b"local publication observed");
+        peer.connection
+            .close(0u8.into(), b"local publication observed");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_stopped_or_disconnected_transfer_resumes_its_verified_wire_prefix() -> Result<()> {
+        for receive_stopped in [false, true] {
+            let fixture = Fixture::new()?;
+            let source = fixture.0.join("shared.bin");
+            let destination = fixture.0.join("received");
+            let receiver_dir = fixture.0.join("identity");
+            let mut bytes = vec![0x81; CHUNK_BYTES];
+            bytes.extend_from_slice(b"second chunk of the file");
+            fs::write(&source, &bytes)?;
+            fs::create_dir(&destination)?;
+            let manifest = Manifest::from_file(&source)?;
+            let sender = Identity::generate()?;
+            let peer_pin = Identity::create(&receiver_dir)?.certificate;
+            let id = [8; 16];
+            let start_receiver = || {
+                start(
+                    Request::Receive {
+                        bind: "127.0.0.1:0".parse()?,
+                        budget: bytes.len() as u64,
+                    },
+                    Identity::load(&receiver_dir)?,
+                    sender.certificate.clone(),
+                    Arc::new(|| {}),
+                )
+            };
+
+            let mut first = start_receiver()?;
+            let mut peer =
+                FilePeer::offer(&mut first, &sender, &peer_pin, id, manifest.clone()).await?;
+            first.decide(Decision::Accept {
+                directory: destination.clone(),
+                resume: false,
+            })?;
+            assert!(
+                matches!(peer.reply(Kind::FileAccepted).await?, Frame::FileAccepted { id: accepted_id, next_chunk: 0 } if accepted_id == id)
+            );
+            peer.chunk(id, 0, &bytes[..CHUNK_BYTES]).await?;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !first.progress().is_some_and(|progress| {
+                    progress.verified_locally && progress.bytes == CHUNK_BYTES as u64
+                }) {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await?;
+            if receive_stopped {
+                first.stop();
+            } else {
+                peer.connection
+                    .close(0u8.into(), b"initial file transfer interrupted");
+            }
+            assert!(matches!(
+                (receive_stopped, next_async(&mut first).await?),
+                (true, Event::Stopped) | (false, Event::Failed)
+            ));
+            drop(peer);
+            assert!(!destination.join("shared.bin").try_exists()?);
+
+            let mut resumed = start_receiver()?;
+            let mut peer = FilePeer::offer(&mut resumed, &sender, &peer_pin, id, manifest).await?;
+            resumed.decide(Decision::Accept {
+                directory: destination.clone(),
+                resume: true,
+            })?;
+            assert!(
+                matches!(peer.reply(Kind::FileAccepted).await?, Frame::FileAccepted { id: accepted_id, next_chunk: 1 } if accepted_id == id)
+            );
+            peer.chunk(id, 1, &bytes[CHUNK_BYTES..]).await?;
+            assert!(
+                matches!(peer.reply(Kind::FileResult).await?, Frame::FileResult { id: finished, outcome: FileOutcome::Committed } if finished == id)
+            );
+            peer.connection.close(0u8.into(), b"resumed file observed");
+            assert!(matches!(
+                next_async(&mut resumed).await?,
+                Event::Received(ReceiveResult {
+                    outcome: FileOutcome::Committed,
+                    report_queued: true,
+                    file: Some(_),
+                })
+            ));
+            assert_eq!(fs::read(destination.join("shared.bin"))?, bytes);
+        }
         Ok(())
     }
 
