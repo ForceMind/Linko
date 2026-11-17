@@ -186,7 +186,10 @@ impl ClipboardReceipt {
     /// Consume the proof for the inherited worker pipe. The remaining lifetime
     /// travels with it and cannot be extended by delaying local registration.
     pub fn into_local_worker(self) -> Result<(String, Instant)> {
-        ensure!(Instant::now() < self.expires, "clipboard copy proof expired");
+        ensure!(
+            Instant::now() < self.expires,
+            "clipboard copy proof expired"
+        );
         Ok((self.receipt.worker_token(), self.expires))
     }
 }

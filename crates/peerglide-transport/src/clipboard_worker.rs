@@ -854,7 +854,9 @@ mod tests {
         }
 
         fn verify(self, sent: ClipboardReceipt, received: ClipboardReceipt) -> Result<()> {
-            use crate::file_drop_link::{accept_worker, reserve_for_worker, SentReceipt, WorkerSlot};
+            use crate::file_drop_link::{
+                accept_worker, reserve_for_worker, SentReceipt, WorkerSlot,
+            };
             use std::time::Instant;
 
             const LEASE: u64 = 27;
@@ -863,8 +865,11 @@ mod tests {
             assert!(!sent.matches_peer(&crate::fingerprint(&self.sender_pin)));
             let (sent, _) = sent.into_local_worker()?;
             let (received, expires) = received.into_local_worker()?;
-            let remaining =
-                u32::try_from(expires.saturating_duration_since(Instant::now()).as_millis())?;
+            let remaining = u32::try_from(
+                expires
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
+            )?;
             let slot = WorkerSlot::from_local_arm(&received, remaining, &self.sender_pin)?;
 
             self.runtime.block_on(async {
@@ -885,10 +890,15 @@ mod tests {
                 let (side_out, side_in) = connect(&self.sidecar).await?;
                 let receipt = SentReceipt::from_local_worker(&sent, &self.receiver_pin)?;
                 let claim = async {
-                    let pending =
-                        reserve_for_worker(&side_out, &input_out, &self.receiver_pin, receipt, LEASE)
-                            .await?
-                            .context("approved clipboard copy was not reserved")?;
+                    let pending = reserve_for_worker(
+                        &side_out,
+                        &input_out,
+                        &self.receiver_pin,
+                        receipt,
+                        LEASE,
+                    )
+                    .await?
+                    .context("approved clipboard copy was not reserved")?;
                     assert!(slot
                         .begin_claim(&input_in, &self.sender_pin, LEASE + 1, true)?
                         .is_none());
@@ -912,10 +922,24 @@ mod tests {
         }
     }
 
-    async fn connect(pair: &(quinn::Endpoint, quinn::Endpoint)) -> Result<(Connection, Connection)> {
+    async fn connect(
+        pair: &(quinn::Endpoint, quinn::Endpoint),
+    ) -> Result<(Connection, Connection)> {
         tokio::try_join!(
-            async { Ok(pair.0.connect(pair.1.local_addr()?, "peerglide.local")?.await?) },
-            async { Ok(pair.1.accept().await.context("test listener closed")?.await?) },
+            async {
+                Ok(pair
+                    .0
+                    .connect(pair.1.local_addr()?, "peerglide.local")?
+                    .await?)
+            },
+            async {
+                Ok(pair
+                    .1
+                    .accept()
+                    .await
+                    .context("test listener closed")?
+                    .await?)
+            },
         )
     }
 }
