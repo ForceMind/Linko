@@ -3102,6 +3102,18 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 结束租约。真实应用接收复制、快速移回边沿和异常恢复仍需双机验收。
 [租约顺序回归](https://github.com/ForceMind/Linko/actions/runs/44016685341)
 
+### 剪贴板页的文本和 PNG 持键接棒
+
+两端选择相同格式并开启“接收端准备拖放”，经接收端再次同意后可选择本机拖放或跨机接棒。
+跨机接棒须经原有键鼠授权。一次性数据回执绑定配对、数据连接、内容类型、序号和实际输入租约。
+两端保持剪贴板页可见，接收端在所选屏幕上露出拖放起点。源端按住拖动入口越过边沿，再在
+支持该格式的目标应用中释放。接收端剪贴板保持原有内容。
+
+提交 `c5e8333` 的三平台严格 Clippy 与工作区测试已通过，覆盖互认证回执、错误连接和租约
+拒绝、提前读取以及匹配释放。真实目标应用的放置、提前松开、失焦及断线恢复留到双机验收。
+[桌面接棒 CI](https://github.com/ForceMind/Linko/actions/runs/44024651413) ·
+[双机操作步骤](ADR/0015-native-copy-drag.md#验证)
+
 ## 集中验收清单
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
@@ -3130,7 +3142,7 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 | 本机手势 | [Windows 受控库工作器](https://github.com/ForceMind/Linko/actions/runs/43091867388)；隔离窗口录制、预览与规则回归；[macOS 窗口内检测候选](https://github.com/ForceMind/Linko/pull/271) | 触控板事件类型待真实设备确认。G1 全局捕获和动作保持关闭。G2 保留设计，远程动作和脚本执行不在本次候选能力内。 |
 | 剪贴板与文件 | [双工作器文本及文件回归](https://github.com/ForceMind/Linko/actions/runs/43102482924)；[显式 PNG 导入和系统后端](https://github.com/ForceMind/Linko/actions/runs/43107244245) | 双向测试文本、PNG、同意／拒绝、撤权和外部剪贴板变化；文件测试续传、取消、历史、同名文件及文件负载下的键鼠。 |
 | 多台电脑、多屏与 Linux | [多证书串行原生监听](https://github.com/ForceMind/Linko/actions/runs/43136235340)、[副屏预留](https://github.com/ForceMind/Linko/actions/runs/43125086927)、[Xorg 指针、键钮和双轴滚轮接收](https://github.com/ForceMind/Linko/actions/runs/43138051348)通过三平台 CI。[Xvfb 指针、键钮释放及滚轮按钮对](https://github.com/ForceMind/Linko/actions/runs/43138051348/job/130918045948)已验隔离合成。 | [主屏方向档案](https://github.com/ForceMind/Linko/actions/runs/43131249465)及[本机副屏选择](https://github.com/ForceMind/Linko/actions/runs/43137143430)通过 CI。[外沿分段发送](https://github.com/ForceMind/Linko/pull/254)可用[桌面导出的布局](https://github.com/ForceMind/Linko/pull/257)和[按目标选用的副屏预留](https://github.com/ForceMind/Linko/pull/256)。物理分段切换、副屏定位和热插拔待验收。本机光标定位与拖尾待实际混合 DPI、透明和焦点验收。本机布局投影待实际焦点与屏幕位置验收。Xorg 指针、键盘、鼠标按钮和双轴滚轮主动发送已有隔离验证。Wayland 键鼠收发待真实合成器验收，接收端物理接管和完整触摸板手势仍待开发。 |
-| 原生拖放 | [Windows 适配器](https://github.com/ForceMind/Linko/actions/runs/43121324256)、[macOS 适配器](https://github.com/ForceMind/Linko/actions/runs/43121330845)与[文件页本机复制拖放](https://github.com/ForceMind/Linko/actions/runs/43131249334)通过 CI。Windows [源应用边沿文件投递回归](https://github.com/ForceMind/Linko/actions/runs/43253654318/job/131305962814)已通过。[Linko 文件页连续跨机复制](https://github.com/ForceMind/Linko/actions/runs/43342750606)已有 Windows 和 macOS 接线及会话回归。 | Finder、Explorer 的实际放置、取消、失焦和原文件安全待真机验收。文本、PNG 和任意源应用的连续跨机拖动仍待开发。 |
+| 原生拖放 | [Windows 适配器](https://github.com/ForceMind/Linko/actions/runs/43121324256)、[macOS 适配器](https://github.com/ForceMind/Linko/actions/runs/43121330845)与[文件页本机复制拖放](https://github.com/ForceMind/Linko/actions/runs/43131249334)通过 CI。Windows [源应用边沿文件投递回归](https://github.com/ForceMind/Linko/actions/runs/43253654318/job/131305962814)已通过。[Linko 文件页连续跨机复制](https://github.com/ForceMind/Linko/actions/runs/43342750606)已有 Windows 和 macOS 接线及会话回归。 | Linko 剪贴板页的文本和 PNG 已接入同一持键租约。Finder、Explorer 和支持相应格式的应用中的实际放置、取消、失焦和原件安全待真机验收。任意源应用的连续跨机拖动仍待开发。 |
 | 系统音频 | [Windows WASAPI 与 macOS ScreenCaptureKit](https://github.com/ForceMind/Linko/actions/runs/43119118577)完成编译和会话回归；`d4c872b` 的集成已复验 | [桌面独立授权](https://github.com/ForceMind/Linko/actions/runs/43125086706)和[本机输出选择](https://github.com/ForceMind/Linko/actions/runs/43127954327)已通过各自的三平台 CI。[四来源播放和队列隔离](https://github.com/ForceMind/Linko/actions/runs/43135410348)及[两端独立麦克风 CLI](https://github.com/ForceMind/Linko/actions/runs/43132393131)也通过三平台 CI。真实设备、录制提示、断线静音、输出切换及持续音质待验；[桌面麦克风入口](https://github.com/ForceMind/Linko/actions/runs/43137144867)通过三平台 CI，虚拟音频设备仍待开发与授权。 |
 | 便携包、安装和回滚 | [同源与校验](https://github.com/ForceMind/Linko/actions/runs/43110809035)；[隔离暂存、切换和回滚](https://github.com/ForceMind/Linko/actions/runs/43110821243) | 最终统一候选须核对三端包的版本、检出树与 SHA-256。真实安装、升级、回滚及长期资源观察待验。正式签名、公证、开机启动、系统服务、官网部署和发布按项目授权处理。 |
 

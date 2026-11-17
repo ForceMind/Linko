@@ -4,6 +4,8 @@ mod app_icon;
 mod audio_panel;
 #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
 mod clipboard_drop;
+#[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+mod clipboard_handoff;
 #[cfg(any(windows, target_os = "macos"))]
 mod clipboard_panel;
 mod config_store;
@@ -1207,7 +1209,7 @@ impl App {
     }
     fn resend_stop(&mut self) -> Result<()> {
         self.pending_start = None;
-        self.cancel_file_handoff();
+        self.cancel_drop_handoffs();
         let child = self.child.as_mut().context("没有活动工作进程")?;
         let stdin = child.stdin.as_mut().context("工作进程的停止通道不可用")?;
         stdin.write_all(b"stop\n").context("再次发送停止请求失败")?;
@@ -1219,7 +1221,7 @@ impl App {
         Ok(())
     }
     fn stop(&mut self) {
-        self.cancel_file_handoff();
+        self.cancel_drop_handoffs();
         self.layout_request = None;
         self.pairing_panel.cancel();
         self.switch_state = None;
@@ -1658,14 +1660,23 @@ impl App {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.audio_panel.stop();
         #[cfg(any(windows, target_os = "macos"))]
-        self.clipboard_panel.stop();
+        {
+            let mut clipboard = std::mem::take(&mut self.clipboard_panel);
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            clipboard.cancel_handoff(self);
+            clipboard.stop();
+            self.clipboard_panel = clipboard;
+        }
     }
-    fn cancel_file_handoff(&mut self) {
+    fn cancel_drop_handoffs(&mut self) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         {
             let mut files = std::mem::take(&mut self.file_panel);
             files.cancel_handoff(self);
             self.file_panel = files;
+            let mut clipboard = std::mem::take(&mut self.clipboard_panel);
+            clipboard.cancel_handoff(self);
+            self.clipboard_panel = clipboard;
         }
     }
     fn show_window(&mut self, ctx: &egui::Context) {

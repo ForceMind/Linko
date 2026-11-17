@@ -1,4 +1,4 @@
-//! Reserve one locally approved file for an existing v5 input lease.
+//! Reserve one locally approved copy for an existing v5 input lease.
 //! This only correlates authenticated sessions. It grants no input and does
 //! not start an OS drag. Use a separate connection on the layout sidecar ALPN.
 use crate::{
@@ -19,7 +19,8 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-const LABEL: &[u8] = b"EXPORTER-Linko-Verified-File-Drop-v1";
+const FILE_LABEL: &[u8] = b"EXPORTER-Linko-Verified-File-Drop-v1";
+const CLIPBOARD_LABEL: &[u8] = b"EXPORTER-Linko-Clipboard-Copy-Drop-v1";
 const IO_TIMEOUT: Duration = Duration::from_secs(4);
 const MAGIC: &[u8; 4] = b"PGFD";
 const BYTES: usize = 64;
@@ -29,7 +30,7 @@ const DECLINED: u8 = 3;
 const REQUEST_CONFIRM: u8 = 4;
 const CLAIMED: u8 = 5;
 
-/// Purpose-scoped proof of one authenticated file transfer. Export is limited
+/// Purpose-scoped proof of one authenticated copy transfer. Export is limited
 /// to the local worker pipe and never logged, persisted, or sent to a peer.
 #[derive(Clone)]
 pub(crate) struct Receipt {
@@ -44,9 +45,18 @@ impl Receipt {
         pin: &[u8],
         transfer: [u8; 16],
     ) -> Result<Self> {
+        Self::derive(connection, pin, transfer, FILE_LABEL)
+    }
+
+    fn derive(
+        connection: &Connection,
+        pin: &[u8],
+        transfer: [u8; 16],
+        purpose: &[u8],
+    ) -> Result<Self> {
         ensure!(
             transfer != [0; 16] && connection.close_reason().is_none(),
-            "file transfer ended"
+            "copy data connection ended"
         );
         let handshake = connection
             .handshake_data()
@@ -60,8 +70,8 @@ impl Receipt {
         verify_peer(connection, pin)?;
         let mut key = [0; 32];
         connection
-            .export_keying_material(&mut key, LABEL, &transfer)
-            .map_err(|_| anyhow::anyhow!("file connection exporter unavailable"))?;
+            .export_keying_material(&mut key, purpose, &transfer)
+            .map_err(|_| anyhow::anyhow!("copy connection exporter unavailable"))?;
         Ok(Self {
             transfer,
             peer: blake3::hash(pin),
@@ -112,8 +122,8 @@ impl Receipt {
     }
 }
 
-/// The authenticated receiving peer reported this file committed. The sender
-/// gives up this handle on one reservation attempt, including on failure.
+/// The authenticated receiving peer accepted this copy. The sender gives up
+/// this handle on one reservation attempt, including on failure.
 pub struct SentReceipt(pub(crate) Receipt);
 
 impl SentReceipt {
@@ -130,6 +140,57 @@ impl SentReceipt {
             "local file reservation peer differs"
         );
         Ok(Self(receipt))
+    }
+}
+
+pub(crate) enum ClipboardKind {
+    Text,
+    Png,
+}
+
+/// One local handoff proof from an explicitly approved clipboard copy. Its
+/// exporter domain is distinct from the file domain and its ID names one
+/// format and sequence on that exact connection.
+pub struct ClipboardReceipt {
+    receipt: Receipt,
+    expires: Instant,
+}
+
+impl ClipboardReceipt {
+    pub(crate) fn from_data(
+        connection: &Connection,
+        pin: &[u8],
+        format: ClipboardKind,
+        sequence: u64,
+    ) -> Result<Self> {
+        ensure!(sequence != 0, "invalid clipboard copy sequence");
+        let mut transfer = [0; 16];
+        transfer[0] = match format {
+            ClipboardKind::Text => 1,
+            ClipboardKind::Png => 2,
+        };
+        transfer[8..].copy_from_slice(&sequence.to_le_bytes());
+        Ok(Self {
+            receipt: Receipt::derive(connection, pin, transfer, CLIPBOARD_LABEL)?,
+            expires: Instant::now()
+                + Duration::from_millis(u64::from(
+                    peerglide_protocol::file_drop_ipc::MAX_LIFETIME_MS,
+                )),
+        })
+    }
+
+    pub fn matches_peer(&self, fingerprint: &str) -> bool {
+        Instant::now() < self.expires && self.receipt.peer.to_hex().as_str() == fingerprint
+    }
+
+    /// Consume the proof for the inherited worker pipe. The remaining lifetime
+    /// travels with it and cannot be extended by delaying local registration.
+    pub fn into_local_worker(self) -> Result<(String, Instant)> {
+        ensure!(
+            Instant::now() < self.expires,
+            "clipboard copy proof expired"
+        );
+        Ok((self.receipt.worker_token(), self.expires))
     }
 }
 

@@ -11,6 +11,7 @@ use std::{
 };
 
 type PromiseWriter = Box<dyn FnOnce(&Path, &dyn Fn() -> bool) -> Result<()> + Send>;
+type ContentAdmission = Box<dyn Fn() -> bool + Send + Sync>;
 type PromiseAdmission = unsafe extern "C" fn(*mut c_void) -> bool;
 type NativePromiseWriter =
     extern "C" fn(*mut c_void, *const c_char, *mut c_void, PromiseAdmission) -> bool;
@@ -34,17 +35,16 @@ extern "C" {
     ) -> i32;
     fn linko_macos_file_drag_press() -> *mut c_void;
     fn linko_macos_file_drag_press_release(press: *mut c_void);
-    fn linko_macos_copy_drag_text(
-        text: *const u8,
+    fn linko_macos_copy_drag_content(
+        content: *const u8,
         bytes: usize,
+        is_png: bool,
         millis: u32,
         owner: *mut *mut c_void,
-    ) -> i32;
-    fn linko_macos_copy_drag_png(
-        png: *const u8,
-        bytes: usize,
-        millis: u32,
-        owner: *mut *mut c_void,
+        origin: *mut c_void,
+        context: *mut c_void,
+        check: extern "C" fn(*mut c_void) -> bool,
+        destroy: extern "C" fn(*mut c_void),
     ) -> i32;
     fn linko_macos_copy_drag_outcome(owner: *mut c_void) -> i32;
     fn linko_macos_copy_drag_started(owner: *mut c_void) -> bool;
@@ -153,20 +153,71 @@ impl Drag {
 
     pub fn start_text(text: &str, remaining: Duration) -> Result<Self> {
         validate_text(text)?;
-        let millis = drag_millis(remaining)?;
-        Self::start(|owner| {
-            // SAFETY: text is bounded UTF-8 and AppKit owns the data used by the drag.
-            unsafe { linko_macos_copy_drag_text(text.as_ptr(), text.len(), millis, owner) }
-        })
+        Self::content(text.as_bytes(), false, remaining, None)
+    }
+
+    /// Advertise text from this tagged press. The native provider consults the
+    /// local admission check each time it is asked to deliver the bytes.
+    pub fn start_handoff_text(
+        text: &str,
+        remaining: Duration,
+        press: HandoffPress,
+        admit: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Result<Self> {
+        validate_text(text)?;
+        Self::content(
+            text.as_bytes(),
+            false,
+            remaining,
+            Some((press, Box::new(admit))),
+        )
     }
 
     /// The caller supplies a PNG already normalized by the clipboard receive path.
     pub fn start_png(png: &[u8], remaining: Duration) -> Result<Self> {
         validate_png(png)?;
+        Self::content(png, true, remaining, None)
+    }
+
+    /// Use the same release check for a PNG prepared by the clipboard worker.
+    pub fn start_handoff_png(
+        png: &[u8],
+        remaining: Duration,
+        press: HandoffPress,
+        admit: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Result<Self> {
+        validate_png(png)?;
+        Self::content(png, true, remaining, Some((press, Box::new(admit))))
+    }
+
+    fn content(
+        bytes: &[u8],
+        is_png: bool,
+        remaining: Duration,
+        handoff: Option<(HandoffPress, ContentAdmission)>,
+    ) -> Result<Self> {
         let millis = drag_millis(remaining)?;
+        let (press, context) = match handoff {
+            Some((press, check)) => (Some(press), Box::into_raw(Box::new(check)).cast()),
+            None => (None, null_mut()),
+        };
+        let origin = press.as_ref().map_or(null_mut(), |press| press.0);
         Self::start(|owner| {
-            // SAFETY: the bounded PNG stays alive through the call. AppKit copies it.
-            unsafe { linko_macos_copy_drag_png(png.as_ptr(), png.len(), millis, owner) }
+            // SAFETY: AppKit copies the bounded bytes and consumes context on
+            // success and failure. The press remains retained through the call.
+            unsafe {
+                linko_macos_copy_drag_content(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    is_png,
+                    millis,
+                    owner,
+                    origin,
+                    context,
+                    check_content,
+                    drop_content,
+                )
+            }
         })
     }
 
@@ -195,6 +246,20 @@ impl Drag {
         // SAFETY: the owner stays alive through this call.
         unsafe { linko_macos_copy_drag_cancel(self.owner) };
     }
+}
+
+extern "C" fn check_content(context: *mut c_void) -> bool {
+    catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the provider keeps its boxed admission alive until deallocation.
+        let admit = unsafe { &*context.cast::<ContentAdmission>() };
+        admit()
+    }))
+    .unwrap_or(false)
+}
+
+extern "C" fn drop_content(context: *mut c_void) {
+    // SAFETY: the native provider transfers ownership back once.
+    unsafe { drop(Box::from_raw(context.cast::<ContentAdmission>())) }
 }
 
 extern "C" fn write_promise(
@@ -250,6 +315,16 @@ fn decode_outcome(result: i32) -> Option<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    extern "C" {
+        fn linko_macos_guarded_copy_regression() -> i32;
+    }
+
+    #[test]
+    fn guarded_appkit_copy_rejects_early_and_retired_reads() {
+        // SAFETY: the fixture only exercises a pasteboard item's in-memory provider.
+        assert_eq!(unsafe { linko_macos_guarded_copy_regression() }, 0);
+    }
 
     #[test]
     fn path_limits_and_unknown_outcomes_are_preserved() {

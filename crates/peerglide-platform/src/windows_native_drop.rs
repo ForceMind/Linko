@@ -30,8 +30,20 @@ extern "C" {
         control: *const c_void,
         check: Option<CheckDrag>,
     ) -> i32;
-    fn linko_windows_copy_drag_text(text: *const u16, units: usize, millis: u32) -> i32;
-    fn linko_windows_copy_drag_png(png: *const u8, bytes: usize, millis: u32) -> i32;
+    fn linko_windows_copy_drag_text(
+        text: *const u16,
+        units: usize,
+        millis: u32,
+        control: *const c_void,
+        check: Option<CheckDrag>,
+    ) -> i32;
+    fn linko_windows_copy_drag_png(
+        png: *const u8,
+        bytes: usize,
+        millis: u32,
+        control: *const c_void,
+        check: Option<CheckDrag>,
+    ) -> i32;
 }
 
 struct ReadRequest {
@@ -190,19 +202,69 @@ pub fn drag_prepared_file(path: &Path, remaining: Duration) -> Result<Outcome> {
 }
 
 pub fn drag_text(text: &str, remaining: Duration) -> Result<Outcome> {
+    drag_text_checked(text, remaining, None)
+}
+
+/// Advertise text immediately, withhold bytes until this drag's release check succeeds.
+pub fn drag_handoff_text(
+    text: &str,
+    remaining: Duration,
+    control: DragControl<'_>,
+) -> Result<Outcome> {
+    drag_text_checked(text, remaining, Some(control))
+}
+
+fn drag_text_checked(
+    text: &str,
+    remaining: Duration,
+    control: Option<DragControl<'_>>,
+) -> Result<Outcome> {
     validate_text(text)?;
     let millis = drag_millis(remaining)?;
     let units: Vec<_> = text.encode_utf16().collect();
-    // SAFETY: the bounded UTF-16 slice stays alive through the call and OLE gets an owned copy.
-    decode_outcome(unsafe { linko_windows_copy_drag_text(units.as_ptr(), units.len(), millis) })
+    // SAFETY: OLE copies the bounded text and uses the borrowed control only during this call.
+    decode_outcome(unsafe {
+        linko_windows_copy_drag_text(
+            units.as_ptr(),
+            units.len(),
+            millis,
+            (&control as *const Option<DragControl<'_>>).cast(),
+            control.map(|_| check_handoff as CheckDrag),
+        )
+    })
 }
 
 /// The caller supplies a PNG already normalized by the clipboard receive path.
 pub fn drag_png(png: &[u8], remaining: Duration) -> Result<Outcome> {
+    drag_png_checked(png, remaining, None)
+}
+
+/// Guard access to a normalized PNG with the same lease check as text.
+pub fn drag_handoff_png(
+    png: &[u8],
+    remaining: Duration,
+    control: DragControl<'_>,
+) -> Result<Outcome> {
+    drag_png_checked(png, remaining, Some(control))
+}
+
+fn drag_png_checked(
+    png: &[u8],
+    remaining: Duration,
+    control: Option<DragControl<'_>>,
+) -> Result<Outcome> {
     validate_png(png)?;
     let millis = drag_millis(remaining)?;
-    // SAFETY: the bounded byte slice stays alive through the call and OLE gets an owned copy.
-    decode_outcome(unsafe { linko_windows_copy_drag_png(png.as_ptr(), png.len(), millis) })
+    // SAFETY: OLE copies the bounded PNG and uses the borrowed control only during this call.
+    decode_outcome(unsafe {
+        linko_windows_copy_drag_png(
+            png.as_ptr(),
+            png.len(),
+            millis,
+            (&control as *const Option<DragControl<'_>>).cast(),
+            control.map(|_| check_handoff as CheckDrag),
+        )
+    })
 }
 
 fn decode_outcome(result: i32) -> Result<Outcome> {
@@ -229,12 +291,19 @@ mod tests {
 
     extern "C" {
         fn linko_windows_file_stream_regression() -> i32;
+        fn linko_windows_guarded_copy_regression() -> i32;
     }
 
     #[test]
     fn native_file_stream_opens_only_for_the_drop_and_revokes_retained_streams() {
         // SAFETY: the native fixture owns only in-memory data and COM handles.
         assert_eq!(unsafe { linko_windows_file_stream_regression() }, 0);
+    }
+
+    #[test]
+    fn guarded_ole_copy_exposes_format_before_release_and_revokes_retained_object() {
+        // SAFETY: the fixture uses an in-memory OLE source and calls no input hook.
+        assert_eq!(unsafe { linko_windows_guarded_copy_regression() }, 0);
     }
 
     #[test]

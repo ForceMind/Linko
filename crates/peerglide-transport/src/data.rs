@@ -15,6 +15,7 @@ const TEXT: u8 = 1;
 const FILES: u8 = 2;
 const IMAGES: u8 = 4;
 const HELLO_BYTES: usize = 8;
+const CLIPBOARD_DROP: u8 = 1;
 const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -119,7 +120,7 @@ pub async fn open(
     pinned_peer: &[u8],
     supported: Capabilities,
 ) -> Result<Stream> {
-    negotiate(connection, pinned_peer, supported, Side::Connector).await
+    negotiate(connection, pinned_peer, supported, Side::Connector, false).await
 }
 
 pub async fn accept(
@@ -127,7 +128,30 @@ pub async fn accept(
     pinned_peer: &[u8],
     supported: Capabilities,
 ) -> Result<Stream> {
-    negotiate(connection, pinned_peer, supported, Side::Listener).await
+    negotiate(connection, pinned_peer, supported, Side::Listener, false).await
+}
+
+pub(super) async fn open_for_drop(
+    connection: &Connection,
+    pinned_peer: &[u8],
+    supported: Capabilities,
+) -> Result<Stream> {
+    negotiate(connection, pinned_peer, supported, Side::Connector, true).await
+}
+
+pub(super) async fn accept_for_drop(
+    connection: &Connection,
+    pinned_peer: &[u8],
+    supported: Capabilities,
+) -> Result<Stream> {
+    negotiate(connection, pinned_peer, supported, Side::Listener, true).await
+}
+
+fn matching_hello(mut hello: [u8; HELLO_BYTES], purpose: u8) -> Result<Capabilities> {
+    // The previously reserved byte stays zero on legacy data operations.
+    ensure!(hello[6] == purpose, "data operation purpose differs");
+    hello[6] = 0;
+    Capabilities::from_hello(hello)
 }
 
 async fn negotiate(
@@ -135,6 +159,7 @@ async fn negotiate(
     pinned_peer: &[u8],
     supported: Capabilities,
     side: Side,
+    for_drop: bool,
 ) -> Result<Stream> {
     let handshake = connection
         .handshake_data()
@@ -156,17 +181,20 @@ async fn negotiate(
             send.id().index() == 0,
             "data connection already used a stream"
         );
+        let purpose = if for_drop { CLIPBOARD_DROP } else { 0 };
+        let mut local = supported.hello();
+        local[6] = purpose;
         let mut hello = [0; HELLO_BYTES];
         let peer = match side {
             Side::Connector => {
-                send.write_all(&supported.hello()).await?;
+                send.write_all(&local).await?;
                 receive.read_exact(&mut hello).await?;
-                Capabilities::from_hello(hello)?
+                matching_hello(hello, purpose)?
             }
             Side::Listener => {
                 receive.read_exact(&mut hello).await?;
-                let peer = Capabilities::from_hello(hello)?;
-                send.write_all(&supported.hello()).await?;
+                let peer = matching_hello(hello, purpose)?;
+                send.write_all(&local).await?;
                 peer
             }
         };
