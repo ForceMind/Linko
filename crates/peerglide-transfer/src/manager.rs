@@ -158,7 +158,13 @@ impl Manager {
         let result = if resume {
             Receiver::resume_checked(&self.root, binding, manifest, check)
         } else {
-            check().and_then(|()| Receiver::create(&self.root, binding, manifest))
+            // Complete the staging setup once the reservation is durable. Check
+            // cancellation again before admitting any chunks so a stop cannot
+            // leave a reservation without a resumable staging file.
+            Receiver::create(&self.root, binding, manifest).and_then(|receiver| {
+                check()?;
+                Ok(receiver)
+            })
         };
         let summary = match &result {
             Ok(receiver) => Summary {
@@ -658,6 +664,39 @@ mod tests {
         assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_err());
         drop(manager);
         assert!(Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 100).is_ok());
+    }
+
+    #[test]
+    fn stop_after_reservation_leaves_the_same_transfer_resumable() {
+        let fixture = Fixture::new();
+        let (mut manager, manifest) = fixture.setup(9);
+        let root = manager.root.clone();
+        grant(&mut manager);
+        let mut checks = 0;
+        let result = manager.accept_checked(binding(1), manifest.clone(), false, 0, || {
+            checks += 1;
+            if checks == 1 {
+                Ok(())
+            } else {
+                Err(io::Error::new(io::ErrorKind::Interrupted, "stopped"))
+            }
+        });
+        assert!(matches!(
+            result,
+            Err(Error::Io(error)) if error.kind() == io::ErrorKind::Interrupted
+        ));
+        assert!(!root.join("source.txt").exists());
+        assert_eq!(manager.admitted_bytes(), 9);
+        drop(manager);
+
+        let mut resumed = Manager::new(&root, DataSession::new([1; 32], [3; 32], 0), 9).unwrap();
+        grant(&mut resumed);
+        resumed.accept(binding(1), manifest, true, 0).unwrap();
+        assert_eq!(resumed.next_chunk([1; 16]).unwrap(), 0);
+        assert_eq!(resumed.admitted_bytes(), 9);
+        resumed.write_chunk([1; 16], 0, b"file data", 1).unwrap();
+        let path = resumed.commit([1; 16], || 2).unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"file data");
     }
 
     #[test]
