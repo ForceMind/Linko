@@ -414,18 +414,26 @@ mod tests {
         }
 
         async fn reply(&mut self, kind: Kind) -> Result<Frame> {
-            let admitted = self.receive.read_file(&[kind], Duration::from_secs(5)).await?;
+            let admitted = self
+                .receive
+                .read_file(&[kind], Duration::from_secs(5))
+                .await?;
             self.consent.apply_received(admitted, Ok)
         }
 
         async fn chunk(&mut self, id: [u8; 16], index: u32, bytes: &[u8]) -> Result<()> {
-            self.send.write(&Frame::Chunk { id, index, bytes: bytes.to_vec() }).await
+            self.send
+                .write(&Frame::Chunk {
+                    id,
+                    index,
+                    bytes: bytes.to_vec(),
+                })
+                .await
         }
     }
 
     #[tokio::test]
     async fn stopping_after_publication_preserves_the_verified_local_result() -> Result<()> {
-
         let fixture = Fixture::new()?;
         let source = fixture.0.join("shared.bin");
         let destination = fixture.0.join("received");
@@ -467,7 +475,8 @@ mod tests {
         assert_eq!(result.outcome, FileOutcome::Committed);
         assert!(result.report_queued && result.file.is_some());
         assert_eq!(fs::read(destination.join("shared.bin"))?, bytes);
-        peer.connection.close(0u8.into(), b"local publication observed");
+        peer.connection
+            .close(0u8.into(), b"local publication observed");
         Ok(())
     }
 
@@ -499,7 +508,8 @@ mod tests {
             };
 
             let mut first = start_receiver()?;
-            let mut peer = FilePeer::offer(&mut first, &sender, &peer_pin, id, manifest.clone()).await?;
+            let mut peer =
+                FilePeer::offer(&mut first, &sender, &peer_pin, id, manifest.clone()).await?;
             first.decide(Decision::Accept {
                 directory: destination.clone(),
                 resume: false,
@@ -509,16 +519,18 @@ mod tests {
             );
             peer.chunk(id, 0, &bytes[..CHUNK_BYTES]).await?;
             tokio::time::timeout(Duration::from_secs(5), async {
-                while !first.progress().is_some_and(|progress|
+                while !first.progress().is_some_and(|progress| {
                     progress.verified_locally && progress.bytes == CHUNK_BYTES as u64
-                ) {
+                }) {
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
-            }).await?;
+            })
+            .await?;
             if receive_stopped {
                 first.stop();
             } else {
-                peer.connection.close(0u8.into(), b"initial file transfer interrupted");
+                peer.connection
+                    .close(0u8.into(), b"initial file transfer interrupted");
             }
             assert!(matches!(
                 (receive_stopped, next_async(&mut first).await?),
