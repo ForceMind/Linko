@@ -2100,7 +2100,9 @@ mod tests {
         let source = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
         let target = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
         let connect = async {
-            let connection = source.connect(target.local_addr()?, "peerglide.local")?.await?;
+            let connection = source
+                .connect(target.local_addr()?, "peerglide.local")?
+                .await?;
             Ok::<_, anyhow::Error>(connection)
         };
         let accept = async {
@@ -2119,8 +2121,8 @@ mod tests {
         };
         for explicit_stop in [true, false] {
             client.send_datagram(encode(&motion)?.into())?;
-            let first = tokio::time::timeout(Duration::from_secs(5), server.read_datagram())
-                .await??;
+            let first =
+                tokio::time::timeout(Duration::from_secs(5), server.read_datagram()).await??;
             let mut receiver = Receiver::default();
             assert!(receiver.acquire(motion.lease, now_ms(), true));
             let (owner, stopped) = tokio::sync::watch::channel(false);
