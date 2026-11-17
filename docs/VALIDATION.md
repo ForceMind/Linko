@@ -3114,10 +3114,36 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 [桌面接棒 CI](https://github.com/ForceMind/Linko/actions/runs/44024651413) ·
 [双机操作步骤](ADR/0015-native-copy-drag.md#验证)
 
+### 剪贴板连接关闭
+
+[PR293](https://github.com/ForceMind/Linko/pull/293) 在等待本机决定时监听连接关闭。接收端
+检测到断开后撤下确认提示。文本和 PNG 的普通导入与拖放准备各有互认证回归，覆盖发送端
+停止后旧请求不能写入剪贴板或准备拖放。
+[三平台工作区测试](https://github.com/ForceMind/Linko/actions/runs/44033173696)
+
 ## 集中验收清单
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
-提交 `f4cd212` 的 [Rust CI](https://github.com/ForceMind/Linko/actions/runs/43344254768)、
+
+提交 `75a6e42`（`2026.11.17-1421`）的 [Rust CI](https://github.com/ForceMind/Linko/actions/runs/44030627971)、
+[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44030627963) 和
+[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44030628013) 共 11 项检查通过。
+三端便携包均核对检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-1339` 更新后启动
+新包 worker，拒绝篡改的回滚包，恢复原始包后再次启动 worker。
+[Windows 包](https://github.com/ForceMind/Linko/actions/runs/44030627971/artifacts/14305078368) ·
+[macOS 包](https://github.com/ForceMind/Linko/actions/runs/44030627971/artifacts/14305587650) ·
+[Linux 包](https://github.com/ForceMind/Linko/actions/runs/44030627971/artifacts/14305357773)
+
+同一提交的 180 秒空闲场景中，macOS 和 Ubuntu 的最大 RSS 分别为 99.328 和 140.320 MiB，
+暖机后最大增长分别为 0.109 和 0 MiB，均通过 512 MiB 峰值和 64 MiB 增长门槛。macOS 已有身份
+场景平均单核 CPU 为 0.750%。另一个约 30 秒的 macOS 普通窗口仅通信场景测得 1.294% 和
+100.875 MiB，对照同口径基线 0.764% 和 119.078 MiB，CPU 高 0.530 个百分点，峰值 RSS 低
+18.203 MiB。以上为 GitHub Actions 的隔离短测。
+[macOS 空闲报告](https://github.com/ForceMind/Linko/actions/runs/44030627963/artifacts/14305262712) ·
+[Ubuntu 空闲报告](https://github.com/ForceMind/Linko/actions/runs/44030627963/artifacts/14304569341) ·
+[macOS 通信报告](https://github.com/ForceMind/Linko/actions/runs/44030627963/artifacts/14305312671)
+
+较早的提交 `f4cd212` 的 [Rust CI](https://github.com/ForceMind/Linko/actions/runs/43344254768)、
 [GUI 资源](https://github.com/ForceMind/Linko/actions/runs/43344254709) 和
 [配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/43344254750) 共 11 项检查通过。
 版本 `2026.11.13-0921` 的便携包通过检出树、SHA-256 与可执行文件架构检查。

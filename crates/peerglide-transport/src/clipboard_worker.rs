@@ -78,6 +78,7 @@ pub enum Event {
     PeerReceived,
     WaitingForImageResult,
     Pending(Box<PendingClipboard>),
+    Disconnected,
     Finished {
         outcome: TextOutcome,
         copy_receipt: Option<ClipboardReceipt>,
@@ -520,9 +521,13 @@ async fn run(
                 frame,
                 for_drop,
             })))?;
-            let completion = tokio::time::timeout(DECISION_TIMEOUT, decision)
-                .await
-                .context("clipboard import decision timed out")??;
+            let completion = tokio::select! {
+                biased;
+                _ = connection.0.closed() => return events.post(Event::Disconnected),
+                completion = tokio::time::timeout(DECISION_TIMEOUT, decision) => {
+                    completion.context("clipboard import decision timed out")??
+                }
+            };
             let outcome = completion.outcome();
             let receipt = if for_drop && outcome == TextOutcome::Submitted {
                 let sequence = match &completion.result {
@@ -638,6 +643,15 @@ mod tests {
     }
 
     #[test]
+    fn stopping_the_sender_ends_pending_import_and_copy_preparation() -> Result<()> {
+        for mode in [Mode::Text, Mode::Image] {
+            loopback(mode, Decision::StopSource)?;
+            loopback(mode, Decision::StopSourceDrop)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn declining_copy_preparation_reports_no_payload_effect() -> Result<()> {
         loopback(Mode::Text, Decision::DeclineDrop)?;
         loopback(Mode::Image, Decision::DeclineDrop)
@@ -651,6 +665,8 @@ mod tests {
         Stop,
         ReceiveDrop,
         StopDrop,
+        StopSource,
+        StopSourceDrop,
         DeclineDrop,
         DropToImport,
         ImportToDrop,
@@ -672,7 +688,10 @@ mod tests {
         };
         let drop_session = matches!(
             decision,
-            Decision::ReceiveDrop | Decision::StopDrop | Decision::DeclineDrop
+            Decision::ReceiveDrop
+                | Decision::StopDrop
+                | Decision::StopSourceDrop
+                | Decision::DeclineDrop
         );
         let receive_for_drop = drop_session || decision == Decision::ImportToDrop;
         let send_for_drop = drop_session || decision == Decision::DropToImport;
@@ -732,11 +751,22 @@ mod tests {
         );
         assert!(backend.text.is_empty());
         assert_eq!(backend.images, 0);
-        if matches!(decision, Decision::Stop | Decision::StopDrop) {
-            receiving.stop();
+        let stop_source = matches!(decision, Decision::StopSource | Decision::StopSourceDrop);
+        if stop_source || matches!(decision, Decision::Stop | Decision::StopDrop) {
+            let (local, peer) = if stop_source {
+                (&sending, &receiving)
+            } else {
+                (&receiving, &sending)
+            };
+            local.stop();
             assert!(matches!(
-                receiving.events.recv_timeout(Duration::from_secs(5))?,
+                local.events.recv_timeout(Duration::from_secs(5))?,
                 Event::Stopped
+            ));
+            let peer_event = peer.events.recv_timeout(Duration::from_secs(5))?;
+            assert!(matches!(
+                (stop_source, peer_event),
+                (true, Event::Disconnected) | (false, Event::Failed(_))
             ));
             if receive_for_drop {
                 assert!(pending.prepare_drop().is_err());
@@ -745,10 +775,6 @@ mod tests {
             }
             assert!(backend.text.is_empty());
             assert_eq!(backend.images, 0);
-            assert!(matches!(
-                sending.events.recv_timeout(Duration::from_secs(5))?,
-                Event::Failed(_)
-            ));
             return Ok(());
         }
         let expected = match decision {

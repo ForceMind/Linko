@@ -224,6 +224,10 @@ impl Panel {
                     }
                     outcome_label(outcome, active.for_drop).into()
                 }
+                Event::Disconnected => {
+                    active.pending = None;
+                    "剪贴板连接已关闭，本次共享已结束。".into()
+                }
                 Event::Stopped => "本次剪贴板共享已停止。".into(),
                 Event::Failed(_) => {
                     active.pending = None;
