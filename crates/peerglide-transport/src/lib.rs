@@ -281,14 +281,16 @@ fn endpoint_alpn_dual_stack(
     peer: &[u8],
     alpn: &[u8],
 ) -> Result<Endpoint> {
-    endpoint_with(identity, peer, alpn, |server| match dual_stack_socket(port) {
-        Ok(socket) => Endpoint::new(
-            quinn::EndpointConfig::default(),
-            Some(server),
-            socket,
-            Arc::new(quinn::TokioRuntime),
-        ),
-        Err(_) => Endpoint::server(server, (Ipv4Addr::UNSPECIFIED, port).into()),
+    endpoint_with(identity, peer, alpn, |server| {
+        match dual_stack_socket(port) {
+            Ok(socket) => Endpoint::new(
+                quinn::EndpointConfig::default(),
+                Some(server),
+                socket,
+                Arc::new(quinn::TokioRuntime),
+            ),
+            Err(_) => Endpoint::server(server, (Ipv4Addr::UNSPECIFIED, port).into()),
+        }
     })
 }
 

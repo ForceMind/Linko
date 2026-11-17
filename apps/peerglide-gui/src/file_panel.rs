@@ -174,7 +174,10 @@ impl Panel {
                     }
                     notice.into()
                 }
-                Event::Received { result, bind: _bind } => {
+                Event::Received {
+                    result,
+                    bind: _bind,
+                } => {
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if !active.stopping && active.pin.matches(app) {
                         if let Some(file) = result.file {

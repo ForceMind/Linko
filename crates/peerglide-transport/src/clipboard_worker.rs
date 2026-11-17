@@ -748,8 +748,7 @@ mod tests {
             mode,
             wake.clone(),
         )?;
-        let Event::Listening(bound) = receiving.events.recv_timeout(Duration::from_secs(5))?
-        else {
+        let Event::Listening(bound) = receiving.events.recv_timeout(Duration::from_secs(5))? else {
             anyhow::bail!("expected clipboard listener readiness");
         };
         let payload = match mode {

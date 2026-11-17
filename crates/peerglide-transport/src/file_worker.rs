@@ -688,11 +688,12 @@ mod tests {
             }
         ));
         let Event::Received {
-            result: ReceiveResult {
-                outcome: FileOutcome::Committed,
-                report_queued: true,
-                ..
-            },
+            result:
+                ReceiveResult {
+                    outcome: FileOutcome::Committed,
+                    report_queued: true,
+                    ..
+                },
             bind,
         } = next(&mut receiver)?
         else {
