@@ -97,13 +97,21 @@ impl ClipboardCompletion {
 pub struct AdmittedImage {
     sequence: u64,
     permit: Permit,
-    revision: u64,
+    revision: Option<u64>,
     image: Image,
 }
 
 impl AdmittedImage {
     pub fn dimensions(&self) -> (u32, u32) {
         self.image.dimensions()
+    }
+
+    fn complete(self, outcome: ClipboardOutcome) -> ImageCompletion {
+        ImageCompletion {
+            sequence: self.sequence,
+            outcome,
+            permit: self.permit,
+        }
     }
 }
 
@@ -221,18 +229,44 @@ impl Consent {
         let revision = admitted
             .clipboard_revision
             .ok_or_else(|| anyhow::anyhow!("clipboard revision missing"))?;
-        self.policy.check(|clipboard, now| {
-            clipboard
-                .validate(&admitted.permit, Capability::TextReceive, now)
-                .map_err(ClipboardError::Permission)?;
-            clipboard.accept_received_text(sequence, text.as_bytes(), now)?;
-            Ok::<_, ClipboardError>(())
-        })?;
+        self.accept_text(&admitted.permit, sequence, &text)?;
         let outcome = clipboard_outcome(backend.compare_and_write(revision, &text));
         Ok(ClipboardCompletion {
             sequence,
             outcome,
             permit: admitted.permit,
+        })
+    }
+
+    pub(super) fn take_text_for_drop(
+        &mut self,
+        admitted: AdmittedFrame,
+    ) -> Result<(ClipboardCompletion, String)> {
+        ensure!(
+            admitted.clipboard_revision.is_none(),
+            "expected text for a copy drag"
+        );
+        let Frame::Text { sequence, text } = admitted.frame else {
+            anyhow::bail!("expected a clipboard text frame");
+        };
+        self.accept_text(&admitted.permit, sequence, &text)?;
+        Ok((
+            ClipboardCompletion {
+                sequence,
+                outcome: TextOutcome::Submitted,
+                permit: admitted.permit,
+            },
+            text,
+        ))
+    }
+
+    fn accept_text(&self, permit: &Permit, sequence: u64, text: &str) -> Result<()> {
+        self.policy.check(|clipboard, now| {
+            clipboard
+                .validate(permit, Capability::TextReceive, now)
+                .map_err(ClipboardError::Permission)?;
+            clipboard.accept_received_text(sequence, text.as_bytes(), now)?;
+            Ok::<_, ClipboardError>(())
         })
     }
 
@@ -257,28 +291,41 @@ impl Consent {
         admitted: AdmittedImage,
         backend: &mut impl ImageBackend,
     ) -> Result<ImageCompletion> {
-        self.complete_image(admitted, |revision, image| {
-            clipboard_outcome(backend.compare_and_write_image(revision, image))
-        })
+        let revision = admitted
+            .revision
+            .ok_or_else(|| anyhow::anyhow!("clipboard revision missing"))?;
+        self.validate_image(&admitted)?;
+        let outcome = clipboard_outcome(backend.compare_and_write_image(revision, &admitted.image));
+        Ok(admitted.complete(outcome))
     }
 
     pub fn decline_image(&mut self, admitted: AdmittedImage) -> Result<ImageCompletion> {
-        self.complete_image(admitted, |_, _| ClipboardOutcome::Declined)
+        self.validate_image(&admitted)?;
+        Ok(admitted.complete(ClipboardOutcome::Declined))
     }
 
-    fn complete_image(
+    pub(super) fn take_image_for_drop(
         &mut self,
         admitted: AdmittedImage,
-        complete: impl FnOnce(u64, &Image) -> ClipboardOutcome,
-    ) -> Result<ImageCompletion> {
-        self.policy.check(|session, now| {
-            session.validate(&admitted.permit, Capability::ImageReceive, now)
-        })?;
-        Ok(ImageCompletion {
-            sequence: admitted.sequence,
-            outcome: complete(admitted.revision, &admitted.image),
-            permit: admitted.permit,
-        })
+    ) -> Result<(ImageCompletion, Vec<u8>)> {
+        ensure!(
+            admitted.revision.is_none(),
+            "expected an image for a copy drag"
+        );
+        self.validate_image(&admitted)?;
+        Ok((
+            ImageCompletion {
+                sequence: admitted.sequence,
+                outcome: ClipboardOutcome::Submitted,
+                permit: admitted.permit,
+            },
+            admitted.image.into_png(),
+        ))
+    }
+
+    fn validate_image(&self, admitted: &AdmittedImage) -> Result<()> {
+        self.policy
+            .check(|session, now| session.validate(&admitted.permit, Capability::ImageReceive, now))
     }
 }
 
@@ -412,6 +459,15 @@ impl Sender {
 impl Receiver {
     /// Supply the local clipboard revision before reading an incoming text frame.
     pub async fn read(&mut self, clipboard_revision: Option<u64>) -> Result<AdmittedFrame> {
+        ensure!(clipboard_revision.is_some(), "clipboard revision missing");
+        self.read_text(clipboard_revision).await
+    }
+
+    pub(super) async fn read_text_for_drop(&mut self) -> Result<AdmittedFrame> {
+        self.read_text(None).await
+    }
+
+    async fn read_text(&mut self, clipboard_revision: Option<u64>) -> Result<AdmittedFrame> {
         let policy = &self.policy;
         let (frame, permit) = self
             .frames
@@ -420,12 +476,7 @@ impl Receiver {
                     header.kind() == Kind::Text,
                     "use the file or clipboard response reader"
                 );
-                let capability = inbound(header.kind());
-                ensure!(
-                    capability != Capability::TextReceive || clipboard_revision.is_some(),
-                    "clipboard revision missing"
-                );
-                policy.check(|session, now| session.authorize(capability, now))
+                policy.check(|session, now| session.authorize(Capability::TextReceive, now))
             })
             .await?;
         Ok(AdmittedFrame {
@@ -439,6 +490,14 @@ impl Receiver {
     /// Check size and direction before allocating. Normalize off the network
     /// runtime, then recheck the original permission before exposing an image.
     pub async fn read_image(&mut self, revision: u64) -> Result<AdmittedImage> {
+        self.read_image_for(Some(revision)).await
+    }
+
+    pub(super) async fn read_image_for_drop(&mut self) -> Result<AdmittedImage> {
+        self.read_image_for(None).await
+    }
+
+    async fn read_image_for(&mut self, revision: Option<u64>) -> Result<AdmittedImage> {
         let policy = &self.policy;
         let (frame, permit) = self
             .frames
