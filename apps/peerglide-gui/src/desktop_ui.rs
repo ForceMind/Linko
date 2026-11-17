@@ -702,10 +702,8 @@ impl App {
             }
         }
     }
-    /// Advanced diagnostics, collapsed by default. The summary keeps its source: the newest
-    /// log line that `input_diagnostics::is_summary` accepts. Only the layout lives here.
+    /// Advanced diagnostics, collapsed by default.
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
-        use peerglide_platform::input_diagnostics::is_summary;
         ui.strong("本GUI进程的系统权限");
         ui.weak("只在点击时读取，不申请或修改权限。实际输入进程会独立复查。");
         if ui.button("检查当前系统权限").clicked() {
@@ -737,10 +735,17 @@ impl App {
         ui.weak("Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
         ui.separator();
         ui.strong("会话记录 · 不含按键内容");
-        let summary = self.logs.iter().rev().find(|line| is_summary(line));
+        let summary = self
+            .input_summary
+            .lock()
+            .ok()
+            .and_then(|latest| latest.clone());
         if let Some(summary) = summary {
             if ui.button("复制本机输入诊断摘要").clicked() {
                 ui.ctx().copy_text(summary.clone());
+            }
+            if !self.logs.contains(&summary) {
+                ui.monospace(summary);
             }
         }
         for line in &self.logs {
