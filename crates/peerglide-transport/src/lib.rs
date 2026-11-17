@@ -7,7 +7,13 @@ use quinn::{
     Endpoint,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{
+    io,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::io::AsyncReadExt;
 
 pub mod audio;
@@ -263,11 +269,52 @@ fn transport(alpn: &[u8]) -> Arc<quinn::TransportConfig> {
 pub fn endpoint(addr: SocketAddr, identity: &Identity, peer: &[u8]) -> Result<Endpoint> {
     endpoint_alpn(addr, identity, peer, peerglide_protocol::ALPN)
 }
+/// Prefer a single socket accepting IPv4 and IPv6. Hosts without dual-stack
+/// support keep the ordinary IPv4 listener.
+pub fn endpoint_dual_stack(port: u16, identity: &Identity, peer: &[u8]) -> Result<Endpoint> {
+    endpoint_with(
+        identity,
+        peer,
+        peerglide_protocol::ALPN,
+        |server| match dual_stack_socket(port) {
+            Ok(socket) => Endpoint::new(
+                quinn::EndpointConfig::default(),
+                Some(server),
+                socket,
+                Arc::new(quinn::TokioRuntime),
+            ),
+            Err(_) => Endpoint::server(server, (Ipv4Addr::UNSPECIFIED, port).into()),
+        },
+    )
+}
+
+fn dual_stack_socket(port: u16) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV6,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    socket.set_only_v6(false)?;
+    socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into())?;
+    Ok(socket.into())
+}
+
 fn endpoint_alpn(
     addr: SocketAddr,
     identity: &Identity,
     peer: &[u8],
     alpn: &[u8],
+) -> Result<Endpoint> {
+    endpoint_with(identity, peer, alpn, |server| {
+        Endpoint::server(server, addr)
+    })
+}
+
+fn endpoint_with(
+    identity: &Identity,
+    peer: &[u8],
+    alpn: &[u8],
+    bind: impl FnOnce(quinn::ServerConfig) -> io::Result<Endpoint>,
 ) -> Result<Endpoint> {
     let server = server_config(identity, roots(peer)?, alpn)?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -278,7 +325,7 @@ fn endpoint_alpn(
     client.alpn_protocols = vec![alpn.to_vec()];
     let mut c = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client)?));
     c.transport_config(transport(alpn));
-    let mut e = Endpoint::server(server, addr)?;
+    let mut e = bind(server)?;
     e.set_default_client_config(c);
     Ok(e)
 }

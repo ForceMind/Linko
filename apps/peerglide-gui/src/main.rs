@@ -1210,12 +1210,19 @@ impl App {
         let diagnostics = diagnostics && mode == SessionMode::Native;
         let mut cmd = Command::new(executable);
         if self.config.listen && !probe {
-            cmd.arg("listen");
+            cmd.args(["listen", "--listen-dual-stack"]);
         } else {
             cmd.arg("connect").arg(&self.config.address).args([
                 "--bind",
                 if self.resource_check_mode {
                     "127.0.0.1:0"
+                } else if self
+                    .config
+                    .address
+                    .parse::<std::net::SocketAddr>()
+                    .is_ok_and(|address| address.is_ipv6())
+                {
+                    "[::]:0"
                 } else {
                     "0.0.0.0:0"
                 },
@@ -2933,6 +2940,29 @@ mod lifecycle_tests {
         }
         assert!(app.child.is_none() && !app.dir.join("settings.json").exists());
         Ok(())
+    }
+    #[test]
+    fn gui_worker_binds_for_both_peer_address_families() -> Result<()> {
+        let fixture = super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        for (listen, address, expected) in [
+            (false, "192.0.2.2:24870", "0.0.0.0:0"),
+            (false, "[fe80::2%4]:24870", "[::]:0"),
+            (true, "", "--listen-dual-stack"),
+        ] {
+            app.config.listen = listen;
+            app.config.address = address.into();
+            let command = app.worker_command(
+                PathBuf::from("not-executed"),
+                PathBuf::from("public-test.der"),
+                SessionMode::Communication,
+                false,
+                ("test-local", "test-peer"),
+            );
+            assert!(command.get_args().any(|arg| arg == expected));
+        }
+        drop(app);
+        fixture.close()
     }
     #[test]
     fn switch_observation_coalesces_and_cannot_survive_a_reconnect_or_new_child() {

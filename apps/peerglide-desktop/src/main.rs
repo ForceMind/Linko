@@ -416,6 +416,9 @@ struct Options {
     expected_peer_fingerprint: Option<String>,
     #[arg(long, default_value = "0.0.0.0:24870")]
     bind: SocketAddr,
+    /// Managed GUI listener using one socket for both IPv4 and IPv6.
+    #[arg(long, hide = true, requires = "managed")]
+    listen_dual_stack: bool,
     /// Explicit consent to receive remote input (independent of connecting/listening).
     #[arg(long)]
     allow_control: bool,
@@ -1058,6 +1061,11 @@ async fn run_routed_worker(
 
 async fn run(mut o: Options, address: Option<SocketAddr>, probe: bool) -> Result<()> {
     anyhow::ensure!(
+        !o.listen_dual_stack
+            || (address.is_none() && o.bind.is_ipv4() && o.bind.ip().is_unspecified()),
+        "dual-stack binding requires a managed listener with an IPv4 wildcard bind"
+    );
+    anyhow::ensure!(
         o.remote_entry_edge.is_none() || (!probe && cfg!(any(windows, target_os = "macos"))),
         "remote entry edge requires a native Windows or macOS session"
     );
@@ -1260,7 +1268,11 @@ async fn run_inner(
         id.fingerprint(),
         transport::fingerprint(peer)
     );
-    let e = transport::endpoint(o.bind, id, peer)?;
+    let e = if o.listen_dual_stack {
+        transport::endpoint_dual_stack(o.bind.port(), id, peer)?
+    } else {
+        transport::endpoint(o.bind, id, peer)?
+    };
     println!(
         "Listening on {}. Incoming control: {}. Native input: {}.",
         e.local_addr()?,
