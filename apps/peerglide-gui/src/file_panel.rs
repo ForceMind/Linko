@@ -891,7 +891,10 @@ mod tests {
         while panel.prepared_id.is_none() {
             panel.tick(&mut app, &ctx);
             anyhow::ensure!(panel.active.is_some(), "sender ended before preparation");
-            anyhow::ensure!(std::time::Instant::now() < deadline, "preparation timed out");
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "preparation timed out"
+            );
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let prepared_id = panel.prepared_id;
