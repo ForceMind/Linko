@@ -735,7 +735,11 @@ impl App {
         ui.weak("Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
         ui.separator();
         ui.strong("会话记录 · 不含按键内容");
-        let summary = self.input_summary.lock().ok().and_then(|latest| latest.clone());
+        let summary = self
+            .input_summary
+            .lock()
+            .ok()
+            .and_then(|latest| latest.clone());
         if let Some(summary) = summary {
             if ui.button("复制本机输入诊断摘要").clicked() {
                 ui.ctx().copy_text(summary.clone());

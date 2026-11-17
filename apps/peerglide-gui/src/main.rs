@@ -2552,14 +2552,12 @@ mod lifecycle_tests {
         let stderr = format!("normal line\n{earlier}\n{terminal}\n{earlier} invalid=1\n");
         let (tx, rx) = mpsc::sync_channel(1);
         let summary = Mutex::default();
-        read_worker_diagnostics(
-            std::io::Cursor::new(stderr),
-            tx,
-            &summary,
-            Arc::new(|| {}),
-        );
+        read_worker_diagnostics(std::io::Cursor::new(stderr), tx, &summary, Arc::new(|| {}));
         assert_eq!(rx.try_recv()?, "normal line");
-        assert_eq!(summary.into_inner().unwrap().as_deref(), Some(terminal.as_str()));
+        assert_eq!(
+            summary.into_inner().unwrap().as_deref(),
+            Some(terminal.as_str())
+        );
         Ok(())
     }
 
