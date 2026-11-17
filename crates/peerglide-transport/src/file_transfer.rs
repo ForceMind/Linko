@@ -32,6 +32,8 @@ mod verified_drop_reader;
 #[cfg(any(all(windows, target_env = "msvc"), test))]
 pub use verified_drop_reader::VerifiedDropReader;
 
+use tokio::sync::watch;
+
 const FILES: data::Capabilities = data::Capabilities {
     text: false,
     files: true,
@@ -390,15 +392,33 @@ pub struct ReceiveOptions {
     pub stop: Cancellation,
 }
 
-/// Receive one offer on a dedicated file connection. The controller must give
-/// each job a fresh cancellation token and cancel/drop this future on local stop.
-/// No receive directory is opened until the controller approves this offer.
+pub(super) struct ReceiveFinalization<'a> {
+    pub started: &'a AtomicBool,
+    pub stopped: watch::Receiver<bool>,
+}
+
+/// Receive one offer on a dedicated file connection with a fresh cancellation
+/// token. No receive directory is opened before the local approval.
 pub async fn receive<F>(
     connection: &Connection,
     pinned_peer: &[u8],
     options: ReceiveOptions,
     decide: impl FnOnce(Offer) -> F,
+    progress: impl FnMut(Progress),
+) -> Result<ReceiveResult>
+where
+    F: Future<Output = Result<Decision>>,
+{
+    receive_with_finalization(connection, pinned_peer, options, decide, progress, None).await
+}
+
+pub(super) async fn receive_with_finalization<F>(
+    connection: &Connection,
+    pinned_peer: &[u8],
+    options: ReceiveOptions,
+    decide: impl FnOnce(Offer) -> F,
     mut progress: impl FnMut(Progress),
+    finalization: Option<ReceiveFinalization<'_>>,
 ) -> Result<ReceiveResult>
 where
     F: Future<Output = Result<Decision>>,
@@ -436,7 +456,7 @@ where
         }
     };
     let Decision::Accept { directory, resume } = decision else {
-        return Ok(report(connection, &mut send, id, FileOutcome::Declined).await);
+        return Ok(report(connection, &mut send, id, FileOutcome::Declined, None).await);
     };
 
     // Use the digest bound by the authenticated connection, independently of
@@ -482,7 +502,7 @@ where
     })
     .await?;
     let Ok((mut manager, next, initial)) = storage else {
-        return Ok(report(connection, &mut send, id, FileOutcome::Failed).await);
+        return Ok(report(connection, &mut send, id, FileOutcome::Failed, None).await);
     };
     progress(initial);
     send.write(&Frame::FileAccepted {
@@ -508,7 +528,7 @@ where
         })?;
         let Some(bytes) = bytes else {
             let _ = manager.cancel(id);
-            return Ok(report(connection, &mut send, id, FileOutcome::Failed).await);
+            return Ok(report(connection, &mut send, id, FileOutcome::Failed, None).await);
         };
         let (storage, written) = tokio::task::spawn_blocking({
             let guard = guard.clone();
@@ -522,9 +542,15 @@ where
         manager = storage;
         match written {
             Ok(verified) => progress(verified),
-            Err(_) => return Ok(report(connection, &mut send, id, FileOutcome::Failed).await),
+            Err(_) => return Ok(report(connection, &mut send, id, FileOutcome::Failed, None).await),
         }
     }
+    // Keep the result of the final disk operation even if the controller stops
+    // while publication or the network receipt is in progress.
+    let stopped = finalization.map(|finalization| {
+        finalization.started.store(true, Ordering::Release);
+        finalization.stopped
+    });
     let published = tokio::task::spawn_blocking({
         let guard = guard.clone();
         move || {
@@ -539,7 +565,7 @@ where
     } else {
         FileOutcome::Unknown
     };
-    let mut result = report(connection, &mut send, id, outcome).await;
+    let mut result = report(connection, &mut send, id, outcome, stopped).await;
     result.file = published.map(|path| ReceivedFile {
         path,
         manifest: verified_manifest,
@@ -559,16 +585,34 @@ async fn report(
     send: &mut data::Sender,
     id: [u8; 16],
     outcome: FileOutcome,
+    mut stopped: Option<watch::Receiver<bool>>,
 ) -> ReceiveResult {
-    let report_queued = send.write(&Frame::FileResult { id, outcome }).await.is_ok();
+    let frame = Frame::FileResult { id, outcome };
+    let report_queued = tokio::select! {
+        biased;
+        _ = wait_for_report_stop(&mut stopped) => false,
+        result = send.write(&frame) => result.is_ok(),
+    };
     if report_queued {
         // Let the sender consume the result before closing the owned connection.
-        let _ = tokio::time::timeout(FRAME_TIMEOUT, connection.closed()).await;
+        tokio::select! {
+            biased;
+            _ = wait_for_report_stop(&mut stopped) => (),
+            _ = tokio::time::timeout(FRAME_TIMEOUT, connection.closed()) => (),
+        }
     }
     ReceiveResult {
         outcome,
         report_queued,
         file: None,
+    }
+}
+
+async fn wait_for_report_stop(stopped: &mut Option<watch::Receiver<bool>>) {
+    if let Some(stopped) = stopped {
+        let _ = stopped.wait_for(|stopped| *stopped).await;
+    } else {
+        std::future::pending().await
     }
 }
 
