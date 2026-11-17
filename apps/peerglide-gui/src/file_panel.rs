@@ -921,8 +921,26 @@ mod tests {
         app.config.fingerprint = Some(transport::Identity::generate()?.fingerprint());
         assert!(panel.resume_paused(&mut app).is_err());
         assert!(panel.paused.is_some() && panel.active.is_none());
+        app.config.fingerprint = Some(peer.fingerprint());
+        panel.resume_paused(&mut app)?;
+        assert!(panel.paused.is_none());
+        assert!(matches!(
+            &panel.active.as_ref().context("resumed sender missing")?.request,
+            Request::Send {
+                target: saved_target,
+                source: saved_source,
+                resume_id,
+                prepare_handoff: false,
+            } if *saved_target == target && *saved_source == source && *resume_id == prepared_id
+        ));
         panel.stop(&mut app);
         assert!(panel.paused.is_none());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while panel.active.is_some() {
+            panel.tick(&mut app, &ctx);
+            anyhow::ensure!(std::time::Instant::now() < deadline, "stop did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         drop(panel);
         drop(app);
         fixture.close()
