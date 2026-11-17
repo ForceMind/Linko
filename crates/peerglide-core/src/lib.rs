@@ -120,6 +120,17 @@ impl Receiver {
         self.sequence = self.sequence.max(m.sequence);
         true
     }
+    /// Restore a newer, already submitted datagram after reliable input has
+    /// applied its own cursor. Do not replay movement through a pressed button.
+    pub fn can_restore_motion_after(&self, motion: Motion, anchor: Motion, now: u64) -> bool {
+        self.buttons.is_empty()
+            && motion.lease == anchor.lease
+            && motion.sequence == self.sequence
+            && motion.sequence > anchor.sequence
+            && (motion.x != anchor.x || motion.y != anchor.y)
+            && self.accepts(motion.lease, now)
+    }
+
     pub fn expired(&self, now: u64) -> bool {
         self.lease.is_some() && now >= self.deadline
     }
@@ -269,6 +280,47 @@ mod tests {
 #[cfg(test)]
 mod causal_tests {
     use super::*;
+    #[test]
+    fn newer_motion_can_return_only_after_the_last_button_up_and_within_its_lease() {
+        let mut receiver = Receiver::default();
+        assert!(receiver.acquire(1, 0, true));
+        let latest = Motion {
+            lease: 1,
+            sequence: 6,
+            x: 0.8,
+            y: 0.4,
+        };
+        let anchor = Motion {
+            sequence: 1,
+            x: 0.2,
+            ..latest
+        };
+        assert!(receiver.motion(latest, 1));
+        for (sequence, button, down) in [(1, 1, true), (2, 2, true), (3, 1, false), (4, 2, false)]
+        {
+            let cursor = Motion { sequence, ..anchor };
+            assert!(receiver.anchor(cursor, sequence));
+            assert!(receiver.input(1, Input::Button { button, down }, sequence));
+            assert_eq!(
+                receiver.can_restore_motion_after(latest, cursor, sequence),
+                sequence == 4
+            );
+        }
+        assert!(!receiver.can_restore_motion_after(latest, latest, 5));
+        assert!(!receiver.can_restore_motion_after(latest, anchor, LEASE_MS));
+        assert!(receiver.anchor(
+            Motion {
+                sequence: 7,
+                ..anchor
+            },
+            6
+        ));
+        assert!(!receiver.can_restore_motion_after(latest, anchor, 6));
+        receiver.release();
+        assert!(receiver.acquire(2, 7, true));
+        assert!(!receiver.can_restore_motion_after(latest, anchor, 7));
+    }
+
     #[test]
     fn reliable_cursor_anchor_repairs_loss_without_reopening_replay() {
         let mut r = Receiver::default();
