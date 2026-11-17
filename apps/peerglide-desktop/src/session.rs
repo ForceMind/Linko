@@ -16,6 +16,8 @@ use platform::{ReceiveAck, ReceiveSnapshot};
 use std::{future::Future, pin::Pin, time::Duration};
 use tokio::sync::mpsc;
 
+#[cfg(test)]
+mod data_isolation_tests;
 mod recovery;
 pub(super) mod routed_source;
 #[cfg(target_os = "linux")]
