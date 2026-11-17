@@ -1,6 +1,6 @@
 //! Local supervisor IPC only; independent of the authenticated network protocol.
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkerState {
     Listening,
@@ -28,23 +28,7 @@ impl WorkerPeerAddress {
     pub const PREFIX: &'static str = "LINKO-PEER-ADDRESS/1 ";
 
     pub fn new(address: SocketAddr) -> Option<Self> {
-        let address = match address {
-            SocketAddr::V6(v6) => {
-                if let Some(mapped) = v6.ip().to_ipv4_mapped() {
-                    SocketAddr::from((mapped, v6.port()))
-                } else if v6.ip().is_unicast_link_local() && v6.scope_id() == 0 {
-                    return None;
-                } else {
-                    address
-                }
-            }
-            SocketAddr::V4(_) => address,
-        };
-        (address.port() != 0
-            && !address.ip().is_unspecified()
-            && !address.ip().is_multicast()
-            && address.ip() != std::net::IpAddr::V4(Ipv4Addr::BROADCAST))
-        .then_some(Self(address))
+        crate::peer_destination(address).map(Self)
     }
 
     pub fn address(self) -> SocketAddr {

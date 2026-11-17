@@ -52,3 +52,28 @@ pub struct RouteSpec {
     pub remote_edge: Edge,
     pub remote_span: [f64; 2],
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn peer_and_secondary_layout_keep_ipv6_scope_in_local_json() {
+        let peer = PeerSpec {
+            address: "[fe80::22%4]:24870".parse().unwrap(),
+            certificate: "peer.crt.der".into(),
+            secondary_layout: Some("[fe80::22%4]:24877".parse().unwrap()),
+            fingerprint: None,
+        };
+        let raw = serde_json::to_string(&peer).unwrap();
+        assert!(raw.contains("[fe80::22%4]:24870"));
+        assert!(raw.contains("[fe80::22%4]:24877"));
+        let loaded: PeerSpec = serde_json::from_str(&raw).unwrap();
+        assert_eq!(crate::peer_destination(loaded.address), Some(peer.address));
+        assert_eq!(
+            loaded.secondary_layout.and_then(crate::peer_destination),
+            peer.secondary_layout
+        );
+        assert!(crate::peer_destination("[fe80::22]:24877".parse().unwrap()).is_none());
+    }
+}

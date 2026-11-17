@@ -620,8 +620,13 @@ mod tests {
 
         let source = transport::Identity::generate()?;
         let target = transport::Identity::generate()?;
-        let bind = "127.0.0.1:0".parse()?;
-        for allowed in [true, false] {
+        for (bind, allowed) in [
+            ("127.0.0.1:0", true),
+            ("127.0.0.1:0", false),
+            ("[::1]:0", true),
+            ("[::1]:0", false),
+        ] {
+            let bind = bind.parse()?;
             let input = transport::endpoint(bind, &target, &source.certificate)?;
             let layout = wire::endpoint(bind, &target, &source.certificate)?;
             let peer = Peer {

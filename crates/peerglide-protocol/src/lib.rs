@@ -1,5 +1,6 @@
 //! PeerGlide's independent, versioned wire protocol. Input payloads must never be logged.
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub mod audio;
 pub mod pairing_worker;
@@ -9,6 +10,28 @@ pub const VERSION: u16 = 5;
 pub const ALPN: &[u8] = b"peerglide/5";
 pub const MAX_FRAME: usize = 4096;
 pub const LEASE_MS: u64 = 1500;
+
+/// Network destination for a known peer. Preserve local IPv6 scope information
+/// and dial IPv4-mapped destinations through an IPv4 socket.
+pub fn peer_destination(address: SocketAddr) -> Option<SocketAddr> {
+    let address = match address {
+        SocketAddr::V6(v6) => {
+            if let Some(mapped) = v6.ip().to_ipv4_mapped() {
+                SocketAddr::from((mapped, v6.port()))
+            } else if v6.ip().is_unicast_link_local() && v6.scope_id() == 0 {
+                return None;
+            } else {
+                address
+            }
+        }
+        SocketAddr::V4(_) => address,
+    };
+    (address.port() != 0
+        && !address.ip().is_unspecified()
+        && !address.ip().is_multicast()
+        && address.ip() != IpAddr::V4(Ipv4Addr::BROADCAST))
+    .then_some(address)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Edge {
