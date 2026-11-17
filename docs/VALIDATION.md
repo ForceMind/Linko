@@ -3125,24 +3125,23 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
 
-核心功能验收候选 `3e3a620`（`2026.11.17-2326`，北京时间）通过 11 项 GitHub Actions 检查。
-三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-2218` 升级，
+核心功能验收候选 `920cd92`（`2026.11.18-0008`，北京时间）通过 11 项 GitHub Actions 检查。
+三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-2326` 升级，
 启动新包 worker，拒绝篡改的回滚包并恢复原包。
-[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44114422538) ·
-[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44114422538/artifacts/14342797732) ·
-[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44114422538/artifacts/14342203609) ·
-[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44114422538/artifacts/14343685972)
+[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44122247492) ·
+[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44122247492/artifacts/14345889716) ·
+[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44122247492/artifacts/14347535770) ·
+[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44122247492/artifacts/14346517893)
 
-Windows、macOS、Ubuntu 的互认证回环均在默认监听上通过了 IPv4 与 IPv6 回归。
-错误证书握手先被拒绝，随后已配对的发送端完成文本、PNG 和文件传输，保留本机逐次决定。
+三平台通过 v5 心跳时间匹配、旧租约隔离、p95 计算和旧版 `KVM-DIAG/5` 读取回归。
 macOS 与 Ubuntu 的空闲检查通过 512 MiB 峰值和 64 MiB 暖机后增长门槛。
-`2218` 复验了手填绑定与拖放预约地址；`2112` 验证了文件传输期间的输入租约与停止释放。
+`2326` 已验证双栈接收端拒绝错证书后仍可接收文本、PNG 和文件；
+`2218` 复验手填绑定与拖放预约地址；`2112` 验证了文件传输期间的输入租约与停止释放。
 真实局域网中的双栈接收、拖放和输入延迟仍待双机验收。
-[PR307](https://github.com/ForceMind/Linko/pull/307) ·
-[2218 基线](https://github.com/ForceMind/Linko/actions/runs/44101652981) ·
-[2112 基线](https://github.com/ForceMind/Linko/actions/runs/44090494556) ·
-[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44114421852) ·
-[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44114421900)
+[PR308](https://github.com/ForceMind/Linko/pull/308) ·
+[2326 基线](https://github.com/ForceMind/Linko/actions/runs/44114422538) ·
+[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44122247657) ·
+[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44122247835)
 
 两端配对后，可以先关闭键鼠会话再测数据。接收端将本机监听地址留空，剪贴板点击「等待接收」，
 文件点击「等待文件请求」。发送端分别填写接收端的 IPv4 和 IPv6 地址，剪贴板默认 UDP 24872，
@@ -3214,6 +3213,7 @@ macOS 与 Ubuntu 的空闲检查通过 512 MiB 峰值和 64 MiB 暖机后增长�
 - Mac→Windows 记录跨屏后光标是否移动、点击和滚动是否生效、Mac 光标是否隐藏、普通返回与紧急停止，以及是否出现 `native receive service: Timeout`。Windows→Mac 用同样步骤测量，方向分开记录。
 - 每个方向单独开一轮诊断。两端停止上一轮，打开「开启键鼠协同」，按界面检查键鼠权限并确认，再选「开启并诊断」。连接后立即完成预定动作，确保动作落在 120 秒采样内。先测 Mac 鼠标从屏内越向 Windows，越边后继续朝同一方向移动约 3 秒，记下 Windows 光标是否先跳到入口、是否继续移动，再测试回程。
 - 完成该轮后在两端停止键鼠协同，从「设置 → 诊断与资料 → 高级诊断」选择「复制本机输入诊断摘要」。下一轮启动前贴入本机验收记录。每个方向标明两行的机器和角色、动作时间及该轮原始错误行。若动作发生在 `expired` 摘要之后，新开一轮采样。按键、剪贴板和文件内容只留在本机。
+- 测文件传输期间的键鼠延迟时，在同一网络分别开启两轮诊断。一轮只运行键鼠，另一轮先开始足以覆盖采样窗口的文件发送再切到远端。各轮保持控制方向和时长一致，记录发送侧摘要的 `hb_rtt_n`（已确认的样本数）、`hb_rtt_p95_us`（微秒）和 `pong_to`，有线和 Wi-Fi 分开。样本数为 0 或进入后的回执持续缺失时，记录故障并另开一轮。该指标测的是本机单调时钟上的 v5 心跳往返，光标显示延迟另测。
 - 先跑基础双向键鼠、恢复和权限，再跑数据与音频。多机和多屏以 [CLI 说明](CLI.md) 和最终候选实际公开的入口为准。按开发计划记录双向 500 次切换、关键恢复场景 100 轮、8 小时预览与 24 小时正式候选耐久的执行范围。
 
 F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMind/Linko/pull/125)待决定。
