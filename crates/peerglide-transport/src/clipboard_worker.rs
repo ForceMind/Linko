@@ -485,8 +485,9 @@ async fn run(
             let endpoint = bind.endpoint(&identity, &pinned_peer)?;
             let bound = endpoint.local_addr()?;
             events.post(Event::Listening(bound))?;
-            let connection =
-                OwnedConnection(data::accept_pinned(&endpoint, &pinned_peer, LISTEN_TIMEOUT).await?);
+            let connection = OwnedConnection(
+                data::accept_pinned(&endpoint, &pinned_peer, LISTEN_TIMEOUT).await?,
+            );
             let for_drop = revision.is_none();
             let stream = if for_drop {
                 data::accept_for_drop(&connection.0, &pinned_peer, mode.capabilities()).await?
