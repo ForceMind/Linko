@@ -5,9 +5,12 @@ use crate::{
     Identity,
 };
 use anyhow::{ensure, Context, Result};
-pub use peerglide_transfer::{clipboard::Classification, codec::TextOutcome};
+pub use peerglide_transfer::{
+    clipboard::{Classification, Origin},
+    codec::TextOutcome,
+};
 use peerglide_transfer::{
-    clipboard::{Backend, Origin, WriteResult, MAX_TEXT_BYTES},
+    clipboard::{Backend, WriteResult, MAX_TEXT_BYTES},
     clipboard_image::{Image, ImageBackend, MAX_PNG_BYTES},
     data_policy::Permissions,
 };
