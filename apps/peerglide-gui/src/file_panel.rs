@@ -22,8 +22,6 @@ struct Active {
     job: Job,
     offer: Option<Offer>,
     stopping: bool,
-    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-    listened: Option<std::net::SocketAddr>,
 }
 
 enum HistoryQuery {
@@ -176,12 +174,15 @@ impl Panel {
                     }
                     notice.into()
                 }
-                Event::Received(result) => {
+                Event::Received {
+                    result,
+                    bind: _bind,
+                } => {
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
                     if !active.stopping && active.pin.matches(app) {
                         if let Some(file) = result.file {
                             self.export
-                                .received(app, active.pin.clone(), file, active.listened);
+                                .received(app, active.pin.clone(), file, Some(_bind));
                         }
                     }
                     let local = outcome_label(result.outcome, true);
@@ -198,10 +199,6 @@ impl Panel {
                     "文件准备完毕，正在连接接收端。".into()
                 }
                 Event::Listening(address) => {
-                    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-                    {
-                        active.listened = Some(address);
-                    }
                     format!(
                         "正在等待已配对电脑。发送端需填写本机 IP 和 UDP 端口 {}。",
                         address.port()
@@ -240,10 +237,7 @@ impl Panel {
             }
         } else {
             Request::Receive {
-                bind: data_access::receive_address(
-                    &self.bind,
-                    data_access::default_bind(app, PORT),
-                )?,
+                bind: data_access::receive_bind(&self.bind, PORT)?,
                 budget: file_worker::MAX_FILE_BYTES,
             }
         };
@@ -268,8 +262,6 @@ impl Panel {
             job,
             offer: None,
             stopping: false,
-            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-            listened: None,
         });
         self.progress = None;
         if sending {
@@ -525,7 +517,7 @@ impl Panel {
                 ui.label("本机监听地址");
                 ui.add(
                     egui::TextEdit::singleline(&mut self.bind)
-                        .hint_text(data_access::default_bind(app, PORT).to_string()),
+                        .hint_text(format!("留空自动监听 IPv4 / IPv6，端口 {PORT}")),
                 );
                 if ui.button("等待文件请求").clicked() {
                     let result = self.start(app, false, false);

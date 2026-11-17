@@ -33,7 +33,7 @@ struct Active {
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     drag_payload: Option<DragPayload>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-    address: std::net::SocketAddr,
+    address: Option<std::net::SocketAddr>,
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     sending: bool,
     stopping: bool,
@@ -191,6 +191,7 @@ impl Panel {
                 Event::Finished {
                     outcome,
                     copy_receipt,
+                    receive_bind: _receive_bind,
                 } => {
                     active.pending = None;
                     if active.for_drop
@@ -211,9 +212,13 @@ impl Panel {
                                 self.notice = "本次复制拖放准备已失效。".into();
                                 return;
                             }
+                            let Some(address) = _receive_bind.or(active.address) else {
+                                self.notice = "本次复制拖放缺少已确认的地址。".into();
+                                return;
+                            };
                             self.prepared_handoff = Some(clipboard_handoff::Prepared {
                                 pin: active.pin.clone(),
-                                address: active.address,
+                                address,
                                 receipt,
                                 payload,
                             });
@@ -259,15 +264,16 @@ impl Panel {
         let for_drop = self.for_drop;
         let (pin, identity, peer) = Pin::load(app)?;
         let wake = app.wake_ui.clone();
-        let address = if send {
-            data_access::send_address(&self.target, data_access::default_target(app, PORT))?
-        } else {
-            data_access::receive_address(&self.bind, data_access::default_bind(app, PORT))?
-        };
-        let job = if send {
+        let (job, _address) = if send {
+            let address =
+                data_access::send_address(&self.target, data_access::default_target(app, PORT))?;
             let payload = self.local_payload()?;
-            clipboard_worker::send(address, identity, peer, payload, for_drop, wake)
+            (
+                clipboard_worker::send(address, identity, peer, payload, for_drop, wake),
+                Some(address),
+            )
         } else {
+            let bind = data_access::receive_bind(&self.bind, PORT)?;
             let revision = if for_drop {
                 None
             } else {
@@ -277,9 +283,12 @@ impl Panel {
                         .context("无法确认本机剪贴板当前版本")?,
                 )
             };
-            clipboard_worker::receive(address, identity, peer, revision, self.mode, wake)
-        }
-        .context("无法启动剪贴板后台任务")?;
+            (
+                clipboard_worker::receive(bind, identity, peer, revision, self.mode, wake),
+                None,
+            )
+        };
+        let job = job.context("无法启动剪贴板后台任务")?;
         self.active = Some(Active {
             pin,
             job,
@@ -288,7 +297,7 @@ impl Panel {
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             drag_payload: None,
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-            address,
+            address: _address,
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             sending: send,
             stopping: false,
@@ -412,7 +421,7 @@ impl Panel {
             ui.label("本机监听地址");
             ui.add(
                 egui::TextEdit::singleline(&mut self.bind)
-                    .hint_text(data_access::default_bind(app, PORT).to_string()),
+                    .hint_text(format!("留空自动监听 IPv4 / IPv6，端口 {PORT}")),
             );
             if ui.button("等待接收").clicked() {
                 self.local_outcome = None;
