@@ -257,7 +257,7 @@ impl Panel {
                     }
                 }
                 Event::Stopped if self.paused.is_some() => {
-                    "文件传输已暂停。继续时接收端须重新同意恢复。".into()
+                    "文件传输已暂停。继续时接收端须重新确认。".into()
                 }
                 Event::Stopped => "文件任务已停止。已暂存的数据保留。".into(),
                 _ if active.stopping => continue,
@@ -287,14 +287,13 @@ impl Panel {
             }
             self.active = None;
             if self.paused.is_some() {
-                self.notice = "文件传输已暂停。继续时接收端须重新同意恢复。".into();
+                self.notice = "文件传输已暂停。继续时接收端须重新确认。".into();
             }
         }
     }
 
     fn start(&mut self, app: &mut App, sending: bool, prepare_handoff: bool) -> Result<()> {
         anyhow::ensure!(self.active.is_none(), "请先结束当前文件任务");
-        anyhow::ensure!(!self.edge_active(), "请先关闭边沿发送");
         let request = if sending {
             Request::Send {
                 target: data_access::send_address(
@@ -316,6 +315,7 @@ impl Panel {
 
     fn start_job(&mut self, app: &mut App, request: Request, expected: Option<&Pin>) -> Result<()> {
         anyhow::ensure!(self.active.is_none(), "请先结束当前文件任务");
+        anyhow::ensure!(!self.edge_active(), "请先关闭边沿发送");
         anyhow::ensure!(!self.handoff_active(), "请先撤回本次文件预约");
         let (pin, identity, peer) = Pin::load(app)?;
         anyhow::ensure!(
@@ -613,7 +613,10 @@ impl Panel {
         if self.active.is_none() && self.paused.is_some() {
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(ready, egui::Button::new("继续已暂停的传输"))
+                    .add_enabled(
+                        ready && !self.edge_active(),
+                        egui::Button::new("继续已暂停的传输"),
+                    )
                     .clicked()
                 {
                     if let Err(error) = self.resume_paused(app) {
@@ -625,7 +628,7 @@ impl Panel {
                     self.notice = "已结束暂停任务，接收端已暂存的数据保留。".into();
                 }
             });
-            ui.weak("接收端须重新等待请求并选择恢复。暂停记录在退出应用后清除。");
+            ui.weak("接收端须重新等待请求。有暂存记录时选择恢复。退出应用会清除暂停记录。");
         }
         if let Some(id) = self.prepared_id {
             ui.horizontal_wrapped(|ui| {
@@ -863,18 +866,59 @@ fn outcome_label(outcome: FileOutcome, receiving: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+    use transport::data::ReceiveBind;
+
+    fn next_event(job: &mut Job) -> Result<Event> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(event) = job.poll() {
+                return Ok(event);
+            }
+            anyhow::ensure!(Instant::now() < deadline, "file worker event timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn finish_sender(panel: &mut Panel, app: &mut App, ctx: &egui::Context) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while panel.active.is_some() {
+            panel.tick(app, ctx);
+            anyhow::ensure!(Instant::now() < deadline, "file sender did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
+    }
 
     #[test]
-    fn paused_sender_keeps_the_original_request_and_rechecks_pairing() -> Result<()> {
+    fn paused_sender_keeps_the_original_request_and_requires_a_new_receive_decision() -> Result<()> {
         let fixture = super::super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
-        transport::Identity::create(&app.identity_dir())?;
-        let peer = transport::Identity::generate()?;
+        let sender = transport::Identity::create(&app.identity_dir())?;
+        let receiver_identity = fixture.path.join("receiver-identity");
+        let peer = transport::Identity::create(&receiver_identity)?;
         std::fs::write(app.dir.join("trusted-peer.crt.der"), &peer.certificate)?;
         app.config.fingerprint = Some(peer.fingerprint());
         let source = fixture.path.join("pause-source.bin");
-        std::fs::write(&source, b"pause and resume regression")?;
-        let target = "127.0.0.1:9".parse()?;
+        let destination = fixture.path.join("received");
+        let contents = b"pause and resume regression";
+        std::fs::write(&source, contents)?;
+        std::fs::create_dir(&destination)?;
+        let listen = |address| {
+            file_worker::start(
+                Request::Receive {
+                    bind: ReceiveBind::Explicit(address),
+                    budget: file_worker::MAX_FILE_BYTES,
+                },
+                transport::Identity::load(&receiver_identity)?,
+                sender.certificate.clone(),
+                std::sync::Arc::new(|| {}),
+            )
+        };
+        let mut first_receiver = listen("127.0.0.1:0".parse()?)?;
+        let Event::Listening(target) = next_event(&mut first_receiver)? else {
+            anyhow::bail!("file receiver did not listen");
+        };
         let mut panel = Panel::default();
         panel.start_job(
             &mut app,
@@ -887,25 +931,19 @@ mod tests {
             None,
         )?;
         let ctx = egui::Context::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while panel.prepared_id.is_none() {
-            panel.tick(&mut app, &ctx);
-            anyhow::ensure!(panel.active.is_some(), "sender ended before preparation");
-            anyhow::ensure!(
-                std::time::Instant::now() < deadline,
-                "preparation timed out"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        let prepared_id = panel.prepared_id;
+        let Event::Offer(first_offer) = next_event(&mut first_receiver)? else {
+            anyhow::bail!("file receiver did not see the initial offer");
+        };
+        panel.tick(&mut app, &ctx);
+        let prepared_id = Some(first_offer.id);
+        assert_eq!(panel.prepared_id, prepared_id);
         panel.pause(&mut app);
         assert!(panel.paused.is_some());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while panel.active.is_some() {
-            panel.tick(&mut app, &ctx);
-            anyhow::ensure!(std::time::Instant::now() < deadline, "pause did not finish");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        finish_sender(&mut panel, &mut app, &ctx)?;
+        assert!(matches!(next_event(&mut first_receiver)?, Event::Failed));
+        assert!(first_receiver.decide(Decision::Decline).is_err());
+        drop(first_receiver);
+
         panel.source = "changed source field".into();
         panel.resume = encode_id([99; 16]);
         let paused = panel.paused.as_ref().context("pause record lost")?;
@@ -918,10 +956,43 @@ mod tests {
                 prepare_handoff: false,
             } if *saved_target == target && *saved_source == source && *resume_id == prepared_id
         ));
+
+        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+        {
+            use peerglide_platform::display_layout::{Bounds, Display, DisplayId, Layout, Rotation};
+            let display = Display {
+                id: DisplayId(1),
+                bounds: Bounds {
+                    left: 0.0,
+                    top: 0.0,
+                    right: 1200.0,
+                    bottom: 900.0,
+                },
+                scale: 1.0,
+                rotation: Rotation::Upright,
+            };
+            let layout = Layout::new(display.id, vec![display]).expect("valid test display layout");
+            panel.edge = Some(super::super::file_edge_drop::Offer::with_layout(
+                &ctx,
+                paused.pin.clone(),
+                target,
+                peerglide_protocol::Edge::Right,
+                layout,
+            )?);
+            let error = panel.resume_paused(&mut app).unwrap_err();
+            assert_eq!(error.to_string(), "请先关闭边沿发送");
+            assert!(panel.edge.is_some() && panel.paused.is_some() && panel.active.is_none());
+            panel.edge = None;
+        }
+
         app.config.fingerprint = Some(transport::Identity::generate()?.fingerprint());
         assert!(panel.resume_paused(&mut app).is_err());
         assert!(panel.paused.is_some() && panel.active.is_none());
         app.config.fingerprint = Some(peer.fingerprint());
+        let mut resumed_receiver = listen(target)?;
+        assert!(
+            matches!(next_event(&mut resumed_receiver)?, Event::Listening(address) if address == target)
+        );
         panel.resume_paused(&mut app)?;
         assert!(panel.paused.is_none());
         assert!(matches!(
@@ -933,14 +1004,22 @@ mod tests {
                 prepare_handoff: false,
             } if *saved_target == target && *saved_source == source && *resume_id == prepared_id
         ));
-        panel.stop(&mut app);
-        assert!(panel.paused.is_none());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while panel.active.is_some() {
-            panel.tick(&mut app, &ctx);
-            anyhow::ensure!(std::time::Instant::now() < deadline, "stop did not finish");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        let Event::Offer(resumed_offer) = next_event(&mut resumed_receiver)? else {
+            anyhow::bail!("file receiver did not see the new offer");
+        };
+        assert_eq!(resumed_offer.id, first_offer.id);
+        assert!(std::fs::read_dir(&destination)?.next().is_none());
+        resumed_receiver.decide(Decision::Accept {
+            directory: destination.clone(),
+            resume: false,
+        })?;
+        assert!(
+            matches!(next_event(&mut resumed_receiver)?, Event::Received { result, .. } if result.outcome == FileOutcome::Committed && result.report_queued)
+        );
+        finish_sender(&mut panel, &mut app, &ctx)?;
+        assert_eq!(panel.notice, outcome_label(FileOutcome::Committed, false));
+        assert_eq!(std::fs::read(destination.join("pause-source.bin"))?, contents);
+        drop(resumed_receiver);
         drop(panel);
         drop(app);
         fixture.close()

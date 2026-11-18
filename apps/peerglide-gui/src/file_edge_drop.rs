@@ -70,6 +70,16 @@ impl Offer {
         ensure!(!ctx.embed_viewports(), "当前环境无法打开边沿接收条");
         let edge = configured_edge(app.displayed_edge()).context("当前发送边沿不可用")?;
         let layout = peerglide_platform::read_display_layout().context("无法读取本机显示器")?;
+        Self::with_layout(ctx, pin, target, edge, layout)
+    }
+
+    pub(super) fn with_layout(
+        ctx: &egui::Context,
+        pin: Pin,
+        target: SocketAddr,
+        edge: Edge,
+        layout: Layout,
+    ) -> Result<Self> {
         let zoom = ctx.zoom_factor();
         let placement = placement(&layout, edge, zoom)?;
         let now = Instant::now();
