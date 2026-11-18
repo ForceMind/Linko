@@ -1,4 +1,4 @@
-use peerglide_platform::input_diagnostics::{InputDiagnostics, Phase, Snapshot};
+use peerglide_platform::input_diagnostics::{HeldCause, InputDiagnostics, Phase, Snapshot};
 #[cfg(unix)]
 use std::os::fd::AsFd;
 #[cfg(windows)]
@@ -7,6 +7,72 @@ use std::{collections::VecDeque, io::Write, sync::Arc, time::Duration};
 use tokio::{sync::oneshot, time::Instant};
 
 const MAX_PENDING_HEARTBEATS: usize = 8;
+/// Held-state lines written for gate blocks and busy denials per session.
+pub(super) const MAX_HELD_EVENTS: u8 = 5;
+const REPORT_QUEUE: usize = 8;
+
+enum Report {
+    Summary(Snapshot),
+    Line(String),
+}
+
+/// Non-blocking handle to the diagnostic writer thread.
+#[derive(Clone)]
+pub(super) struct DiagnosticOutput(std::sync::mpsc::SyncSender<Report>);
+
+impl DiagnosticOutput {
+    /// A stalled stderr reader drops the line instead of delaying input.
+    pub fn line(&self, line: String) {
+        let _ = self.0.try_send(Report::Line(line));
+    }
+}
+
+/// Session-owned diagnostic lines. Reads atomics written by the capture
+/// callback; never runs inside a callback.
+pub(super) struct SessionDiagnostics<'a> {
+    counters: Option<&'a Arc<InputDiagnostics>>,
+    output: Option<DiagnosticOutput>,
+    held_events: u8,
+}
+
+impl<'a> SessionDiagnostics<'a> {
+    pub fn new(
+        counters: Option<&'a Arc<InputDiagnostics>>,
+        output: Option<DiagnosticOutput>,
+    ) -> Self {
+        Self {
+            counters,
+            output,
+            held_events: 0,
+        }
+    }
+
+    /// Writes what the gate counts as held when a crossing or a peer
+    /// request is refused. Categories and counts only, never key codes.
+    pub fn held_event(&mut self, cause: HeldCause, gate: u64, pending: bool, outgoing: bool) {
+        if let Some(line) = self.held_event_line(cause, gate, pending, outgoing) {
+            if let Some(output) = &self.output {
+                output.line(line);
+            }
+        }
+    }
+
+    fn held_event_line(
+        &mut self,
+        cause: HeldCause,
+        gate: u64,
+        pending: bool,
+        outgoing: bool,
+    ) -> Option<String> {
+        let counters = self.counters?;
+        if self.held_events >= MAX_HELD_EVENTS {
+            return None;
+        }
+        self.held_events += 1;
+        let report = counters.held_report(cause, gate, pending, outgoing);
+        Some(report.to_string())
+    }
+}
 
 /// Replies use the ordered v5 stream and carry their lease, so match them in
 /// send order. If the queue overflows, stop sampling that lease.
@@ -51,6 +117,7 @@ impl HeartbeatTiming {
 
 pub(super) struct DiagnosticWindow {
     pub counters: Arc<InputDiagnostics>,
+    output: DiagnosticOutput,
     finish: oneshot::Sender<()>,
     written: oneshot::Receiver<()>,
 }
@@ -59,7 +126,8 @@ impl DiagnosticWindow {
     pub fn start() -> std::io::Result<Self> {
         let counters = Arc::new(InputDiagnostics::default());
         let observed = Arc::clone(&counters);
-        let (reports, output) = std::sync::mpsc::sync_channel::<Snapshot>(2);
+        let (reports, output) = std::sync::mpsc::sync_channel::<Report>(REPORT_QUEUE);
+        let lines = DiagnosticOutput(reports.clone());
         let (finish, mut finished) = oneshot::channel();
         let (drained, written) = oneshot::channel();
         // The writer must not hold Rust's global stderr lock while a pipe is
@@ -73,7 +141,11 @@ impl DiagnosticWindow {
             .name("input-diagnostics".into())
             .spawn(move || {
                 for report in output {
-                    if stream.write_all(format!("{report}\n").as_bytes()).is_err() {
+                    let text = match report {
+                        Report::Summary(summary) => summary.to_string(),
+                        Report::Line(line) => line,
+                    };
+                    if stream.write_all(format!("{text}\n").as_bytes()).is_err() {
                         break;
                     }
                 }
@@ -92,31 +164,64 @@ impl DiagnosticWindow {
                     _ = &mut finished => break Phase::End,
                     _ = &mut deadline => break Phase::Expired,
                     _ = tick.tick() => {
-                        let _ = reports.try_send(observed.snapshot(Phase::Sample));
+                        let sample = observed.snapshot(Phase::Sample);
+                        let _ = reports.try_send(Report::Summary(sample));
                     }
                 }
             };
             observed.stop();
-            let _ = reports.try_send(observed.snapshot(phase));
+            let _ = reports.try_send(Report::Summary(observed.snapshot(phase)));
         });
         Ok(Self {
             counters,
+            output: lines,
             finish,
             written,
         })
     }
 
+    pub fn output(&self) -> DiagnosticOutput {
+        self.output.clone()
+    }
+
     pub async fn finish(self) {
-        let _ = self.finish.send(());
+        let Self {
+            finish,
+            written,
+            output,
+            ..
+        } = self;
+        // The writer ends once every line handle is gone.
+        drop(output);
+        let _ = finish.send(());
         // Native cleanup has already finished. A blocked output reader can
         // discard diagnostics but cannot delay recovery or keep the worker alive.
-        let _ = tokio::time::timeout(Duration::from_millis(200), self.written).await;
+        let _ = tokio::time::timeout(Duration::from_millis(200), written).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use peerglide_platform::input_diagnostics::is_held_line;
+
+    #[test]
+    fn held_events_are_bounded_per_session_and_need_a_diagnostic_session() {
+        let counters = Arc::new(InputDiagnostics::default());
+        let mut s = SessionDiagnostics::new(Some(&counters), None);
+        let (gate, busy) = (HeldCause::BlockGate, HeldCause::DenyBusy);
+        let mut lines = Vec::new();
+        for _ in 0..4 {
+            lines.extend(s.held_event_line(gate, 1, false, false));
+            lines.extend(s.held_event_line(busy, 1, true, false));
+        }
+        assert_eq!(lines.len(), usize::from(MAX_HELD_EVENTS));
+        assert!(lines.iter().all(|line| is_held_line(line, false)));
+        assert!(lines[0].starts_with("KVM-HELD/1 blk_gate "));
+        assert!(lines[1].starts_with("KVM-HELD/1 deny_busy "));
+        let mut plain = SessionDiagnostics::new(None, None);
+        assert!(plain.held_event_line(gate, 1, false, false).is_none());
+    }
 
     #[test]
     fn heartbeat_timings_match_in_order_and_discard_retired_leases() {

@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use peerglide_core::{EdgeGate, PendingReleases, Receiver};
 use peerglide_platform::display_layout::Layout;
-use peerglide_platform::input_diagnostics::{Count, InputDiagnostics};
+use peerglide_platform::input_diagnostics::{Count, HeldCause, InputDiagnostics};
 use peerglide_platform::{
     self as platform, now_ms, CaptureCommit, CaptureCommitToken, CaptureEpoch, CaptureRoute,
     Captured,
@@ -25,6 +25,7 @@ pub(super) mod wayland_source;
 #[cfg(target_os = "linux")]
 pub(super) mod x11_source;
 use super::file_drop_control::TargetAction;
+use super::input_diagnostics::{DiagnosticOutput, SessionDiagnostics};
 use recovery::Recovery;
 
 pub(super) struct Abort(pub(super) tokio::task::JoinHandle<()>);
@@ -361,6 +362,7 @@ async fn run_with_status(
 #[derive(Default)]
 pub(super) struct SessionControls<'a> {
     pub diagnostics: Option<&'a std::sync::Arc<InputDiagnostics>>,
+    pub diagnostic_output: Option<DiagnosticOutput>,
     pub layout: Option<&'a super::layout_control::Controller>,
     pub file_drop: Option<super::file_drop_control::Config<'a>>,
     pub receive_display: Option<std::sync::Arc<platform::ReceiveDisplay>>,
@@ -406,6 +408,7 @@ pub(super) async fn run_with_diagnostics(
 ) -> Result<()> {
     let SessionControls {
         diagnostics,
+        diagnostic_output,
         layout,
         file_drop,
         receive_display,
@@ -461,6 +464,7 @@ pub(super) async fn run_with_diagnostics(
             diagnostics.increment(kind);
         }
     };
+    let mut session_diagnostics = SessionDiagnostics::new(diagnostics, diagnostic_output);
     // Native display enumeration runs before installing capture, on the
     // worker. A failed OS query keeps the compatible primary-screen behavior.
     let topology = monitor_layout(native);
@@ -814,6 +818,10 @@ pub(super) async fn run_with_diagnostics(
                         let mut granted=argument_ok && idle && recovery.receiver.acquire(lease,admitted_at,authorized);
                         if !granted {
                             count(if !argument_ok {Count::DenyArgument} else if !idle {Count::DenyBusy} else if !authorized {Count::DenyAuthorization} else {Count::DenyLease});
+                            if argument_ok && !idle {
+                                let held=capture.as_ref().map_or(0,|cap|cap.gate.held_inputs());
+                                session_diagnostics.held_event(HeldCause::DenyBusy,held,pending.is_some(),outgoing.is_some());
+                            }
                         }
                         if granted {
                             let begin=recovery.begin_receive().await;
@@ -1066,6 +1074,10 @@ pub(super) async fn run_with_diagnostics(
                             else if recovery.protection_pending() {Some(Count::BlockProtection)}
                             else {None};
                         if let Some(kind)=blocker {count(kind);}
+                        if matches!(blocker,Some(Count::BlockGate)) {
+                            let held=capture.as_ref().map_or(0,|cap|cap.gate.held_inputs());
+                            session_diagnostics.held_event(HeldCause::BlockGate,held,pending.is_some(),outgoing.is_some());
+                        }
                         if let Some(along)=entry.filter(|_|blocker.is_none()){
                             let CaptureRoute::Local(epoch)=route else{continue;};
                             let Some(cap)=&capture else{continue;};

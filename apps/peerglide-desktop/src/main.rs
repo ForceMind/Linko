@@ -1378,6 +1378,7 @@ async fn run_inner(
         input_status,
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
+            diagnostic_output: diagnostics.as_ref().map(|window| window.output()),
             layout: Some(&o.layout),
             file_drop: (o.managed && o.native).then_some(file_drop_control::Config {
                 controller: &o.file_drop,

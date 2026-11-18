@@ -333,6 +333,31 @@ impl HookState {
     }
     pub(super) fn update_held(&self) {
         self.gate.update_held(self.held_count(), false);
+        if let Some(diagnostics) = self.gate.0.diagnostics.get() {
+            diagnostics.record_held(self.held_totals());
+        }
+    }
+    /// Category totals for diagnostics: fixed-word counts, no allocation.
+    fn held_totals(&self) -> input_diagnostics::HeldTotals {
+        let table = self.keys.count_range(0, 0x100);
+        let modifiers = self.keys.count_range(0xe0, 0xe8);
+        let mut buttons = 0u16;
+        for button in 0..15u8 {
+            if self.buttons.contains(&button) {
+                buttons |= 1 << button;
+            }
+        }
+        if self.buttons.count_range(15, 256) != 0 {
+            buttons |= 1 << 15;
+        }
+        let total = |count: usize| u32::try_from(count).unwrap_or(u32::MAX);
+        input_diagnostics::HeldTotals {
+            modifiers: total(modifiers),
+            keys: total(table - modifiers),
+            unknown: total(self.keys.len() - table),
+            buttons,
+            extra: total(self.pairs.extra_held),
+        }
     }
     pub(super) fn emit(&mut self, event: Captured) -> bool {
         if self.tx.try_push(event).is_err() {

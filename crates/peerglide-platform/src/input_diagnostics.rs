@@ -1,6 +1,6 @@
 //! Session-local aggregate observations. No input payload leaves the owner.
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::{sync::Mutex, time::Duration};
 
 #[derive(Clone, Copy)]
@@ -159,6 +159,10 @@ pub struct InputDiagnostics {
     heartbeat_rtt_us: Mutex<Vec<u32>>,
     #[cfg(windows)]
     next_cursor_sample: std::sync::atomic::AtomicU64,
+    started_ms: u64,
+    held: AtomicU64,
+    held_changes: AtomicU32,
+    held_changed_ms: AtomicU64,
 }
 
 // Arrays longer than 32 elements do not implement Default.
@@ -170,11 +174,193 @@ impl Default for InputDiagnostics {
             heartbeat_rtt_us: Mutex::new(Vec::with_capacity(MAX_HEARTBEAT_SAMPLES)),
             #[cfg(windows)]
             next_cursor_sample: std::sync::atomic::AtomicU64::new(0),
+            started_ms: crate::now_ms(),
+            held: AtomicU64::new(0),
+            held_changes: AtomicU32::new(0),
+            held_changed_ms: AtomicU64::new(0),
         }
     }
 }
 
+/// Category totals of the holds the capture callback currently tracks.
+/// They contain no key code or input content.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeldTotals {
+    /// HID modifier usages 0xe0..=0xe7.
+    pub modifiers: u32,
+    /// Other HID usages below 0x100.
+    pub keys: u32,
+    /// Platform keys outside the HID table.
+    pub unknown: u32,
+    /// Bit n is button n for n < 15; bit 15 means some higher button.
+    pub buttons: u16,
+    /// Protected pairs and consumed unknown keys (`pairs.extra_held`).
+    pub extra: u32,
+}
+
+impl HeldTotals {
+    const SMALL: u32 = 0xfff;
+
+    fn pack(self) -> u64 {
+        u64::from(self.modifiers.min(0xff))
+            | (u64::from(self.keys.min(Self::SMALL)) << 8)
+            | (u64::from(self.unknown.min(Self::SMALL)) << 20)
+            | (u64::from(self.extra.min(Self::SMALL)) << 32)
+            | (u64::from(self.buttons) << 44)
+    }
+
+    fn unpack(word: u64) -> Self {
+        let small = |shift: u32| ((word >> shift) as u32) & Self::SMALL;
+        Self {
+            modifiers: (word as u32) & 0xff,
+            keys: small(8),
+            unknown: small(20),
+            extra: small(32),
+            buttons: (word >> 44) as u16,
+        }
+    }
+}
+
+/// Why a held-state line was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldCause {
+    Sample,
+    BlockGate,
+    DenyBusy,
+}
+
+impl HeldCause {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Sample => "sample",
+            Self::BlockGate => "blk_gate",
+            Self::DenyBusy => "deny_busy",
+        }
+    }
+}
+
+/// Longest valid held-state line, including every field at its maximum.
+pub const MAX_HELD_BYTES: usize = 256;
+/// Prefix of a line that repeats a validated line received from the peer.
+pub const PEER_PREFIX: &str = "KVM-PEER ";
+
+/// One read of the held-state record, formatted outside callbacks.
+#[derive(Clone, Copy, Debug)]
+pub struct HeldReport {
+    pub cause: HeldCause,
+    /// Milliseconds since the diagnostic session started.
+    pub at_ms: u64,
+    /// Hold count in the capture gate word (`idle()` requires zero).
+    pub gate: u64,
+    pub held: HeldTotals,
+    pub changes: u32,
+    /// Session time of the latest change; zero when `changes` is zero.
+    pub changed_ms: u64,
+    pub pending: bool,
+    pub outgoing: bool,
+}
+
+impl fmt::Display for HeldReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (cause, at, gate) = (self.cause.name(), self.at_ms, self.gate);
+        let held = self.held;
+        let (mods, keys, unk) = (held.modifiers, held.keys, held.unknown);
+        let (buttons, extra) = (held.buttons, held.extra);
+        let (changes, changed) = (self.changes, self.changed_ms);
+        let (pending, outgoing) = (u8::from(self.pending), u8::from(self.outgoing));
+        write!(f, "KVM-HELD/1 {cause} t_ms={at} gate={gate}")?;
+        write!(f, " mods={mods} keys={keys} unk={unk}")?;
+        write!(f, " btn=0x{buttons:04x} extra={extra}")?;
+        write!(f, " changes={changes} changed_ms={changed}")?;
+        write!(f, " pending={pending} outgoing={outgoing}")
+    }
+}
+
+const HELD_COUNTS: [&str; 5] = ["t_ms", "gate", "mods", "keys", "unk"];
+const HELD_TOTALS: [&str; 3] = ["extra", "changes", "changed_ms"];
+
+fn held_numbers(fields: &mut std::str::SplitAsciiWhitespace<'_>, keys: &[&str]) -> bool {
+    keys.iter().all(|key| held_number(fields.next(), key))
+}
+
+fn held_number(field: Option<&str>, key: &str) -> bool {
+    let Some((name, value)) = field.and_then(|field| field.split_once('=')) else {
+        return false;
+    };
+    name == key && value.bytes().all(|b| b.is_ascii_digit()) && value.parse::<u64>().is_ok()
+}
+
+fn held_flag(field: Option<&str>, key: &str) -> bool {
+    matches!(field.and_then(|f| f.split_once('=')), Some((name, "0" | "1")) if name == key)
+}
+
+fn held_buttons(field: Option<&str>) -> bool {
+    let hex = field.and_then(|field| field.strip_prefix("btn=0x"));
+    let hex = hex.unwrap_or_default();
+    let lower = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b);
+    hex.len() == 4 && hex.bytes().all(lower)
+}
+
+/// Strict check for a held-state line. `sample` selects periodic lines;
+/// otherwise only the gate and busy causes are accepted.
+pub fn is_held_line(line: &str, sample: bool) -> bool {
+    if line.len() > MAX_HELD_BYTES || line.bytes().any(|b| b.is_ascii_control()) {
+        return false;
+    }
+    let mut fields = line.split_ascii_whitespace();
+    if fields.next() != Some("KVM-HELD/1") {
+        return false;
+    }
+    let cause = match fields.next() {
+        Some("sample") => sample,
+        Some("blk_gate" | "deny_busy") => !sample,
+        _ => false,
+    };
+    cause
+        && held_numbers(&mut fields, &HELD_COUNTS)
+        && held_buttons(fields.next())
+        && held_numbers(&mut fields, &HELD_TOTALS)
+        && held_flag(fields.next(), "pending")
+        && held_flag(fields.next(), "outgoing")
+        && fields.next().is_none()
+}
+
 impl InputDiagnostics {
+    /// Capture-callback store: atomics only, no allocation, lock or I/O.
+    pub fn record_held(&self, held: HeldTotals) {
+        let packed = held.pack();
+        if self.held.swap(packed, Relaxed) != packed {
+            self.held_changes.fetch_add(1, Relaxed);
+            self.held_changed_ms.store(crate::now_ms(), Relaxed);
+        }
+    }
+
+    /// Read by the session worker, never by a native callback.
+    pub fn held_report(
+        &self,
+        cause: HeldCause,
+        gate: u64,
+        pending: bool,
+        outgoing: bool,
+    ) -> HeldReport {
+        let changes = self.held_changes.load(Relaxed);
+        let changed = self.held_changed_ms.load(Relaxed);
+        HeldReport {
+            cause,
+            at_ms: crate::now_ms().saturating_sub(self.started_ms),
+            gate,
+            held: HeldTotals::unpack(self.held.load(Relaxed)),
+            changes,
+            changed_ms: if changes == 0 {
+                0
+            } else {
+                changed.saturating_sub(self.started_ms)
+            },
+            pending,
+            outgoing,
+        }
+    }
+
     #[cfg(windows)]
     pub(crate) fn sample_cursor(&self, now: u64) -> bool {
         if !self.active() || now < self.next_cursor_sample.load(Relaxed) {
@@ -341,5 +527,82 @@ mod tests {
         assert!(!is_summary(&summary.replace("KVM-DIAG/5", "KVM-DIAG/4")));
         assert!(!is_summary(&(summary.clone() + " path=/private")));
         assert!(!is_summary(&summary.replace("cap=", "address=")));
+    }
+
+    #[test]
+    fn held_record_reports_categories_changes_and_saturates() {
+        let d = InputDiagnostics::default();
+        let idle = d.held_report(HeldCause::Sample, 0, false, false);
+        assert_eq!(idle.held, HeldTotals::default());
+        assert_eq!((idle.changes, idle.changed_ms), (0, 0));
+        let held = HeldTotals {
+            modifiers: 1,
+            keys: 2,
+            unknown: 3,
+            buttons: 0b10,
+            extra: 4,
+        };
+        d.record_held(held);
+        d.record_held(held);
+        let report = d.held_report(HeldCause::BlockGate, 10, true, false);
+        assert_eq!(report.held, held);
+        assert_eq!(report.changes, 1);
+        let line = report.to_string();
+        assert!(line.starts_with("KVM-HELD/1 blk_gate t_ms="), "{line}");
+        let fields = " gate=10 mods=1 keys=2 unk=3 btn=0x0002 extra=4 changes=1 ";
+        assert!(line.contains(fields), "{line}");
+        assert!(line.ends_with(" pending=1 outgoing=0"), "{line}");
+        d.record_held(HeldTotals {
+            keys: 5000,
+            ..HeldTotals::default()
+        });
+        let saturated = d.held_report(HeldCause::Sample, 0, false, false);
+        assert_eq!(saturated.held.keys, 0xfff);
+        assert_eq!(saturated.changes, 2);
+    }
+
+    #[test]
+    fn held_lines_are_strict_and_fit_their_bound() {
+        let widest = HeldReport {
+            cause: HeldCause::DenyBusy,
+            at_ms: u64::MAX,
+            gate: u64::MAX,
+            held: HeldTotals {
+                modifiers: u32::MAX,
+                keys: u32::MAX,
+                unknown: u32::MAX,
+                buttons: u16::MAX,
+                extra: u32::MAX,
+            },
+            changes: u32::MAX,
+            changed_ms: u64::MAX,
+            pending: true,
+            outgoing: true,
+        };
+        let line = widest.to_string();
+        assert!(line.len() <= MAX_HELD_BYTES, "{}", line.len());
+        assert!(is_held_line(&line, false));
+        assert!(!is_held_line(&line, true));
+        let sample = HeldReport {
+            cause: HeldCause::Sample,
+            ..widest
+        }
+        .to_string();
+        assert!(is_held_line(&sample, true));
+        assert!(!is_held_line(&sample, false));
+        for bad in [
+            line.replace("KVM-HELD/1", "KVM-HELD/2"),
+            line.replace("btn=0xffff", "btn=0xFFFF"),
+            line.replace("btn=0xffff", "btn=0xfff"),
+            line.replace("pending=1", "pending=2"),
+            line.replace("mods=", "usage="),
+            line.replace("gate=", "gate=-"),
+            format!("{line} key=4"),
+            format!("{line}\u{7}"),
+            line.replace(" outgoing=1", ""),
+            format!("{PEER_PREFIX}{line}"),
+        ] {
+            assert!(!is_held_line(&bad, false), "{bad}");
+        }
     }
 }
