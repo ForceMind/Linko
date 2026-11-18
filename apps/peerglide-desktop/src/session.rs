@@ -25,7 +25,7 @@ pub(super) mod wayland_source;
 #[cfg(target_os = "linux")]
 pub(super) mod x11_source;
 use super::file_drop_control::TargetAction;
-use super::input_diagnostics::{DiagnosticOutput, SessionDiagnostics};
+use super::input_diagnostics::{receive_with_peer, DiagnosticOutput, SessionDiagnostics};
 use recovery::Recovery;
 
 pub(super) struct Abort(pub(super) tokio::task::JoinHandle<()>);
@@ -37,6 +37,12 @@ impl Drop for Abort {
 
 pub(super) async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
     tokio::time::timeout(Duration::from_millis(250), transport::send(tx, m)).await??;
+    Ok(())
+}
+
+/// Same deadline and failure as `send`, for an already encoded frame.
+async fn send_frame(tx: &mut quinn::SendStream, frame: &[u8]) -> Result<()> {
+    tokio::time::timeout(Duration::from_millis(250), transport::send_frame(tx, frame)).await??;
     Ok(())
 }
 
@@ -363,6 +369,8 @@ async fn run_with_status(
 pub(super) struct SessionControls<'a> {
     pub diagnostics: Option<&'a std::sync::Arc<InputDiagnostics>>,
     pub diagnostic_output: Option<DiagnosticOutput>,
+    /// Both Hellos offered the ADR-0019 diagnostics exchange.
+    pub peer_diagnostics: bool,
     pub layout: Option<&'a super::layout_control::Controller>,
     pub file_drop: Option<super::file_drop_control::Config<'a>>,
     pub receive_display: Option<std::sync::Arc<platform::ReceiveDisplay>>,
@@ -409,6 +417,7 @@ pub(super) async fn run_with_diagnostics(
     let SessionControls {
         diagnostics,
         diagnostic_output,
+        peer_diagnostics,
         layout,
         file_drop,
         receive_display,
@@ -464,7 +473,8 @@ pub(super) async fn run_with_diagnostics(
             diagnostics.increment(kind);
         }
     };
-    let mut session_diagnostics = SessionDiagnostics::new(diagnostics, diagnostic_output);
+    let mut diag = SessionDiagnostics::new(diagnostics, diagnostic_output, peer_diagnostics);
+    let mut peer_inbox = diag.peer_inbox();
     // Native display enumeration runs before installing capture, on the
     // worker. A failed OS query keeps the compatible primary-screen behavior.
     let topology = monitor_layout(native);
@@ -514,7 +524,10 @@ pub(super) async fn run_with_diagnostics(
     let reader_invalid = invalid_frame.clone();
     let reader = tokio::spawn(async move {
         loop {
-            let m = transport::receive(&mut rx).await;
+            let m = match peer_inbox.as_mut() {
+                Some(inbox) => receive_with_peer(&mut rx, inbox).await,
+                None => transport::receive(&mut rx).await,
+            };
             let failed = m.is_err();
             if m.as_ref()
                 .err()
@@ -792,6 +805,10 @@ pub(super) async fn run_with_diagnostics(
                 }
                 // A full native event queue disables capture in the callback. Reconcile protocol immediately.
                 if let (Some(cap),Some(current))=(&capture,outgoing){if !cap.gate.is_current(CaptureRoute::Remote(current.epoch)){input_status.restore(Some(cap))?;outgoing=None;send(&mut tx,&Message::Release { lease: current.lease, cursor: None }).await?;}}
+                // Diagnostic sessions only: local held sample and, when both
+                // Hellos offered it, one display-only frame per second.
+                let held=capture.as_ref().map_or(0,|cap|cap.gate.held_inputs());
+                if let Some(frame)=diag.tick(now_ms(),held,pending.is_some(),outgoing.is_some()) {send_frame(&mut tx,&frame).await?;}
             },
             m=messages.recv()=>{
                 if session_stopping(&stop) {return Ok(());}
@@ -820,7 +837,7 @@ pub(super) async fn run_with_diagnostics(
                             count(if !argument_ok {Count::DenyArgument} else if !idle {Count::DenyBusy} else if !authorized {Count::DenyAuthorization} else {Count::DenyLease});
                             if argument_ok && !idle {
                                 let held=capture.as_ref().map_or(0,|cap|cap.gate.held_inputs());
-                                session_diagnostics.held_event(HeldCause::DenyBusy,held,pending.is_some(),outgoing.is_some());
+                                diag.held_event(HeldCause::DenyBusy,held,pending.is_some(),outgoing.is_some());
                             }
                         }
                         if granted {
@@ -1076,7 +1093,7 @@ pub(super) async fn run_with_diagnostics(
                         if let Some(kind)=blocker {count(kind);}
                         if matches!(blocker,Some(Count::BlockGate)) {
                             let held=capture.as_ref().map_or(0,|cap|cap.gate.held_inputs());
-                            session_diagnostics.held_event(HeldCause::BlockGate,held,pending.is_some(),outgoing.is_some());
+                            diag.held_event(HeldCause::BlockGate,held,pending.is_some(),outgoing.is_some());
                         }
                         if let Some(along)=entry.filter(|_|blocker.is_none()){
                             let CaptureRoute::Local(epoch)=route else{continue;};

@@ -3191,3 +3191,58 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMind/Linko/pull/125)待决定。
 #3/C06 与历史故障 #10 保留待验证状态。Linux Xvfb、模拟输入、编译通过和 SDK 核对仅作为各自范围的证据。
+
+## 按住状态诊断与两端诊断互看（diag-held-and-peer-sync，未物理验证）
+
+背景：`2026.11.11-2058`（`2a78ccf`）的两端摘要显示 Mac 侧 `blk_gate=15`、`deny_busy=4`，即捕获门
+认为仍有按住的键或按钮；Mac 静止时系统查询无按住。本节的改动只增加诊断，不改按住账本、捕获门或
+授权行为，目的是在下一轮实测中抓出“被按住的是什么”。
+
+已实现（CI 待跑，本机未编译）：
+
+- A：回调在 `update_held` 处把修饰键数、普通键数、未知键数、按钮位掩码（bit n 为按钮 n，bit 15
+  表示更高编号）和 `pairs.extra_held` 打包写入一个原子变量，变化时累加变化次数并记录会话时间。
+  只用原子操作，不分配、不加锁、不做 I/O。会话层在 `BlockGate` 和 `DenyBusy` 时读出，经诊断写
+  线程输出一行 `KVM-HELD/1 blk_gate|deny_busy t_ms=… gate=… mods=… keys=… unk=… btn=0x…
+  extra=… changes=… changed_ms=… pending=0|1 outgoing=0|1`，每个会话至多 5 行。`gate` 是捕获门
+  字里 `idle()` 检查的计数。行内没有键码或输入内容。诊断窗口内每秒另写一行 `sample` 采样，GUI
+  只保存最新一行，不进日志列表。`KVM-DIAG/5` 摘要行与 `MAX_SUMMARY_BYTES` 不变。
+- B：「复制本机输入诊断摘要」在原摘要前加说明行：应用版本、系统名与版本、本机方向、本机接收控制、
+  本机键鼠状态，以及本机的按住状态行。不写主机名、设备名、指纹或地址。
+- C：两端都选「开启并诊断」时，Hello 多带 `peer_diagnostics` 字段；双方都带时，每秒在 v5 可靠
+  流上发送一帧摘要和按住状态（ADR-0019）。对端严格校验后在「高级诊断 → 另一台的诊断」按纯文本
+  显示，并提供「复制两端摘要」。旧版本对端收不到这种帧，本机显示「另一台未提供诊断」。
+
+测试覆盖（均为新增，CI 运行；本机未运行）：
+
+- `held_inputs::range_counts_split_categories_without_allocation`：分类计数跨字边界、不分配。
+- `input_diagnostics::held_record_reports_categories_changes_and_saturates`、
+  `held_lines_are_strict_and_fit_their_bound`：打包、变化次数、饱和、最长行不超过 256 字节、
+  严格格式（拒绝大写十六进制、额外字段、控制字符、`KVM-PEER` 前缀）。
+- `hook_tests::held_diagnostics_follow_callback_categories_without_allocation`（Windows/macOS）：
+  回调路径按下修饰键、普通键、按钮和未知键后分类正确、`gate` 与计数一致、`update_held` 不分配，
+  全部松开后归零。改动前回调不写这些原子变量，断言会失败。
+- 桌面 `input_diagnostics` 的 `held_events_are_bounded_per_session…`、
+  `peer_frames_need_both_offers…`、`peer_reports_are_rate_limited…`、
+  `stream_reader_shows_reports_and_keeps_v5_failure_classes`：5 行上限、无诊断会话不输出、只有
+  双方提出才发帧、每秒一帧、事件只发一次、窗口结束停止、接收端限速和整帧拒绝、真实 QUIC 流上
+  诊断帧不进入消息通道而未知帧仍是 `InvalidMessageFrame`。
+- `hello_offer_tests::diagnostics_offer_needs_both_hellos_and_keeps_plain_peers_working`：真实
+  QUIC 回环四种提出组合，只有双方提出时启用；不提出的一侧与原 v5 Hello 相同并能读入提出方的 Hello。
+- 协议 `peer_diagnostics` 两个测试：现有 v5 解码器把带字段的 Hello 读成普通 Hello；诊断帧拒绝未知
+  字段、超长和控制字符，且不能被解码为 v5 消息。
+- GUI `diagnostic_report` 三个测试与 `per_second_and_peer_diagnostics_are_stored_without_filling_the_log`：
+  说明行不含设备名、地址和指纹；本机与另一台的行分开保存；复制两端文本的顺序；另一台缺失时的短句。
+
+未验证：两台实机上的 KVM-HELD 行内容、Windows 与 macOS 的系统版本读取、两端互看与复制、诊断帧对
+输入延迟的影响。这些属于 #3/C06。#10 历史根因仍未确认；本轮不推断 Mac 按住残留的原因。
+
+用新包复测：
+
+1. 两端安装同一新包，各自停止旧会话，打开「开启键鼠协同」并选「开启并诊断」。
+2. 连接后在 120 秒内先从 Mac 越向 Windows，再从 Windows 越向 Mac，重复到出现拦截。
+3. 在任一台打开「设置 → 诊断与资料 → 高级诊断」，确认「另一台的诊断」有内容，选「复制两端摘要」。
+4. 记录 Mac 侧 `KVM-HELD/1 blk_gate` 与 `deny_busy` 行的 `gate`、`mods`、`keys`、`unk`、`btn`、
+   `extra`、`changes`、`changed_ms`。`changes=1` 且 `changed_ms` 接近 0 表示启动采样；`gate` 大于
+   各类之和表示计数来自 `update_held` 之外的路径。
+5. 若另一台显示「另一台未提供诊断」，确认两端都是新包并都选了「开启并诊断」，再分别复制本机摘要。

@@ -1,6 +1,83 @@
 //! Text copied from the diagnostics page. Only facts this computer knows:
 //! no host name, certificate fingerprint, address or input content.
 use super::*;
+use peerglide_platform::input_diagnostics::{is_held_line, is_summary, PEER_PREFIX};
+
+const MAX_EVENTS: usize = 5;
+
+/// Newest diagnostic lines of the current worker. Lines from the other
+/// computer are shown as plain text only; nothing here is saved or sent.
+#[derive(Clone, Default)]
+pub(super) struct Latest {
+    pub summary: Option<String>,
+    pub held: Option<String>,
+    pub events: Vec<String>,
+    pub peer_summary: Option<String>,
+    pub peer_held: Option<String>,
+    pub peer_events: Vec<String>,
+}
+
+/// What one stderr line did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Seen {
+    /// Not a diagnostic line; it goes to the log as before.
+    Other,
+    /// Stored and also kept in the log.
+    Logged,
+    /// Stored only, so per-second lines do not fill the log.
+    Quiet,
+}
+
+fn push_event(events: &mut Vec<String>, line: &str) {
+    if events.len() < MAX_EVENTS {
+        events.push(line.to_owned());
+    }
+}
+
+impl Latest {
+    /// Every line is validated again here; the worker already checked
+    /// lines from the other computer before repeating them.
+    pub(super) fn observe(&mut self, line: &str) -> Seen {
+        if let Some(peer) = line.strip_prefix(PEER_PREFIX) {
+            if is_summary(peer) {
+                self.peer_summary = Some(peer.to_owned());
+            } else if is_held_line(peer, true) {
+                self.peer_held = Some(peer.to_owned());
+            } else if is_held_line(peer, false) {
+                push_event(&mut self.peer_events, peer);
+            }
+            return Seen::Quiet;
+        }
+        if is_summary(line) {
+            self.summary = Some(line.to_owned());
+            Seen::Logged
+        } else if is_held_line(line, true) {
+            self.held = Some(line.to_owned());
+            Seen::Quiet
+        } else if is_held_line(line, false) {
+            push_event(&mut self.events, line);
+            Seen::Logged
+        } else {
+            Seen::Other
+        }
+    }
+
+    pub(super) fn local_lines(&self) -> Vec<&str> {
+        let mut lines = Vec::new();
+        lines.extend(self.summary.as_deref());
+        lines.extend(self.held.as_deref());
+        lines.extend(self.events.iter().map(String::as_str));
+        lines
+    }
+
+    pub(super) fn peer_lines(&self) -> Vec<&str> {
+        let mut lines = Vec::new();
+        lines.extend(self.peer_summary.as_deref());
+        lines.extend(self.peer_held.as_deref());
+        lines.extend(self.peer_events.iter().map(String::as_str));
+        lines
+    }
+}
 
 pub(super) struct Facts {
     pub version: &'static str,
@@ -22,10 +99,27 @@ pub(super) fn header(facts: &Facts) -> String {
     lines.join("\n")
 }
 
-/// Header followed by the unchanged summary line.
-pub(super) fn local_text(header: &str, summary: &str) -> String {
-    format!("{header}\n{summary}")
+/// Header followed by this computer's unchanged diagnostic lines.
+pub(super) fn local_text(header: &str, latest: &Latest) -> String {
+    let mut lines = vec![header];
+    lines.extend(latest.local_lines());
+    lines.join("\n")
 }
+
+/// One text with both computers. The header states only local facts.
+pub(super) fn both_text(header: &str, latest: &Latest) -> String {
+    let mut lines = vec![header, "本机："];
+    lines.extend(latest.local_lines());
+    lines.push("另一台：");
+    let peer = latest.peer_lines();
+    if peer.is_empty() {
+        lines.push(NO_PEER);
+    }
+    lines.extend(peer);
+    lines.join("\n")
+}
+
+pub(super) const NO_PEER: &str = "另一台未提供诊断";
 
 impl App {
     pub(super) fn diagnostic_facts(&self) -> Facts {
@@ -147,7 +241,11 @@ mod tests {
         app.config.fingerprint = Some("ab12cd34ef56".into());
         app.config.edge = "left".into();
         app.config.allow = true;
-        let text = local_text(&header(&app.diagnostic_facts()), "KVM-DIAG/5 end");
+        let latest = Latest {
+            summary: Some("KVM-DIAG/5 end".into()),
+            ..Latest::default()
+        };
+        let text = local_text(&header(&app.diagnostic_facts()), &latest);
         assert!(text.contains(shell_ui::DISPLAY_VERSION), "{text}");
         assert!(text.contains("本机方向：另一台在本机左侧"), "{text}");
         assert!(text.contains("本机接收控制：已允许"), "{text}");
@@ -162,6 +260,49 @@ mod tests {
         assert!(routed.contains("本机接收控制：关闭"), "{routed}");
         drop(app);
         fixture.close()
+    }
+
+    #[test]
+    fn peer_lines_are_kept_apart_and_copied_with_both_ends() {
+        use peerglide_platform::input_diagnostics::{HeldCause, InputDiagnostics, Phase};
+        let d = InputDiagnostics::default();
+        let summary = d.snapshot(Phase::Sample).to_string();
+        let sample = d.held_report(HeldCause::Sample, 0, false, false);
+        let sample = sample.to_string();
+        let event = d.held_report(HeldCause::BlockGate, 1, false, false);
+        let event = event.to_string();
+        let peer_summary = format!("{PEER_PREFIX}{summary}");
+        let peer_event = format!("{PEER_PREFIX}{event}");
+        let forged = format!("{PEER_PREFIX}KVM-HELD/1 sample key=4");
+        let mut latest = Latest::default();
+        assert_eq!(latest.observe(&summary), Seen::Logged);
+        assert_eq!(latest.observe(&sample), Seen::Quiet);
+        assert_eq!(latest.observe(&event), Seen::Logged);
+        assert_eq!(latest.observe(&peer_summary), Seen::Quiet);
+        assert_eq!(latest.observe(&peer_event), Seen::Quiet);
+        assert_eq!(latest.observe(&forged), Seen::Quiet);
+        assert_eq!(latest.observe("ordinary log line"), Seen::Other);
+        assert_eq!(latest.summary.as_deref(), Some(summary.as_str()));
+        assert_eq!(latest.peer_summary.as_deref(), Some(summary.as_str()));
+        assert_eq!(latest.peer_held, None);
+        assert_eq!(latest.peer_events, [event.clone()]);
+
+        let text = both_text("H", &latest);
+        let local = format!("{summary}\n{sample}\n{event}");
+        let peer = format!("{summary}\n{event}");
+        assert_eq!(text, format!("H\n本机：\n{local}\n另一台：\n{peer}"));
+        for _ in 0..10 {
+            latest.observe(&event);
+        }
+        assert_eq!(latest.events.len(), MAX_EVENTS);
+
+        let alone = Latest {
+            summary: Some(summary),
+            ..Latest::default()
+        };
+        let text = both_text("H", &alone);
+        assert!(text.ends_with(&format!("另一台：\n{NO_PEER}")), "{text}");
+        assert!(alone.peer_lines().is_empty());
     }
 
     #[test]

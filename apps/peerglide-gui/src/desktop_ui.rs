@@ -735,20 +735,33 @@ impl App {
         ui.weak("Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
         ui.separator();
         ui.strong("会话记录 · 不含按键内容");
-        let summary = self
-            .input_summary
-            .lock()
-            .ok()
-            .and_then(|latest| latest.clone());
-        if let Some(summary) = summary {
+        let latest = match self.input_summary.lock() {
+            Ok(latest) => latest.clone(),
+            Err(_) => Default::default(),
+        };
+        if let Some(summary) = &latest.summary {
             if ui.button("复制本机输入诊断摘要").clicked() {
                 let header = diagnostic_report::header(&self.diagnostic_facts());
-                let text = diagnostic_report::local_text(&header, &summary);
+                let text = diagnostic_report::local_text(&header, &latest);
                 ui.ctx().copy_text(text);
             }
-            if !self.logs.contains(&summary) {
-                ui.monospace(summary);
+            if !self.logs.contains(summary) {
+                ui.monospace(summary.as_str());
             }
+        }
+        ui.strong("另一台的诊断");
+        let peer = latest.peer_lines();
+        if peer.is_empty() {
+            ui.weak(diagnostic_report::NO_PEER);
+        }
+        for line in &peer {
+            ui.monospace(*line);
+        }
+        let copyable = latest.summary.is_some() || !peer.is_empty();
+        if copyable && ui.button("复制两端摘要").clicked() {
+            let header = diagnostic_report::header(&self.diagnostic_facts());
+            let text = diagnostic_report::both_text(&header, &latest);
+            ui.ctx().copy_text(text);
         }
         for line in &self.logs {
             ui.monospace(line);
