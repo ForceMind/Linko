@@ -3125,6 +3125,38 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
 
+核心功能验收候选 `920cd92`（`2026.11.18-0008`，北京时间）通过 11 项 GitHub Actions 检查。
+三端便携包核对了检出树、SHA-256 和可执行文件架构。隔离作业从 `2026.11.17-2326` 升级，
+启动新包 worker，拒绝篡改的回滚包并恢复原包。
+[三端 CI 与回滚](https://github.com/ForceMind/Linko/actions/runs/44122247492) ·
+[Windows AMD64](https://github.com/ForceMind/Linko/actions/runs/44122247492/artifacts/14345889716) ·
+[macOS ARM64](https://github.com/ForceMind/Linko/actions/runs/44122247492/artifacts/14347535770) ·
+[Linux x86-64](https://github.com/ForceMind/Linko/actions/runs/44122247492/artifacts/14346517893)
+
+三平台通过 v5 心跳时间匹配、旧租约隔离、p95 计算和旧版 `KVM-DIAG/5` 读取回归。
+macOS 与 Ubuntu 的空闲检查通过 512 MiB 峰值和 64 MiB 暖机后增长门槛。
+`2326` 已验证双栈接收端拒绝错证书后仍可接收文本、PNG 和文件；
+`2218` 复验手填绑定与拖放预约地址；`2112` 验证了文件传输期间的输入租约与停止释放。
+真实局域网中的双栈接收、拖放和输入延迟仍待双机验收。
+[PR308](https://github.com/ForceMind/Linko/pull/308) ·
+[2326 基线](https://github.com/ForceMind/Linko/actions/runs/44114422538) ·
+[GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44122247657) ·
+[配对依赖上游](https://github.com/ForceMind/Linko/actions/runs/44122247835)
+
+逐张检查了该候选的 8 张 Xvfb 截图，覆盖首页、添加电脑弹窗、设置和滚动后的本机鼠标页，
+每页各有标准与紧凑窗口。返回与关闭入口可见，添加电脑弹窗文字完整。
+此轮截图覆盖浅色主题及未添加电脑状态。剪贴板页、文件页和真实桌面操作继续按下方清单验收。
+[截图产物](https://github.com/ForceMind/Linko/actions/runs/44122247492/artifacts/14346902258)
+
+两端配对后，可以先关闭键鼠会话再测数据。接收端将本机监听地址留空，剪贴板点击「等待接收」，
+文件点击「等待文件请求」。发送端分别填写接收端的 IPv4 和 IPv6 地址，剪贴板默认 UDP 24872，
+文件默认 UDP 24873。若用 IPv6 链路本地地址，发送端在地址中填写自己的出网接口编号。
+两端交换角色后复测文本、PNG 和文件。在已配对的接收端逐次确认或拒绝请求。
+
+用同一版 Windows 和 macOS 便携包按下方顺序测双向键鼠、文本与 PNG、文件接收和续传。
+跨屏点击、滚轮、Mac 光标隐藏、`native receive service: Timeout` 及蓝牙、USB、混合 DPI
+仍由真实双机验收确认。每个方向分别保留两端的 `KVM-DIAG/5` 摘要。
+
 候选 `b581714`（`2026.11.17-1613`）通过 11 项 GitHub Actions 检查。三端从 `1549` 隔离升级，
 启动新包 worker，拒绝被篡改的回滚包并恢复原包。该候选覆盖剪贴板断开撤下确认、文件在
 配额入账后停止仍可续传、监督者退出时丢弃未分发输入，以及乱序点击后的光标位置恢复。
