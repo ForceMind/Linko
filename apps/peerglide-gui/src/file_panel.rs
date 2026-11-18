@@ -891,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn paused_sender_keeps_the_original_request_and_requires_a_new_receive_decision() -> Result<()> {
+    fn paused_send_rechecks_pairing_and_requires_new_approval() -> Result<()> {
         let fixture = super::super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let sender = transport::Identity::create(&app.identity_dir())?;
@@ -959,7 +959,9 @@ mod tests {
 
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         {
-            use peerglide_platform::display_layout::{Bounds, Display, DisplayId, Layout, Rotation};
+            use peerglide_platform::display_layout::{
+                Bounds, Display, DisplayId, Layout, Rotation,
+            };
             let display = Display {
                 id: DisplayId(1),
                 bounds: Bounds {
@@ -1018,7 +1020,10 @@ mod tests {
         );
         finish_sender(&mut panel, &mut app, &ctx)?;
         assert_eq!(panel.notice, outcome_label(FileOutcome::Committed, false));
-        assert_eq!(std::fs::read(destination.join("pause-source.bin"))?, contents);
+        assert_eq!(
+            std::fs::read(destination.join("pause-source.bin"))?,
+            contents
+        );
         drop(resumed_receiver);
         drop(panel);
         drop(app);
