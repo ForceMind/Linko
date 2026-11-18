@@ -89,12 +89,42 @@
       </section>
 
       <section class="progress-section section-space wrap" id="progress" aria-labelledby="progress-title">
-        <div class="section-heading split-heading"><div><p class="eyebrow">公开说明进度</p><h2 id="progress-title">已有的，和还在路上的。</h2></div><p class="section-intro">Linko 正在逐项验证协作能力。界面与流程已实现，不代表已完成真实双机验收。</p></div>
-        <p class="hero-status">状态更新：2026-11-09 · <a href="https://github.com/ForceMind/Linko/blob/project-status-site/docs/STATUS.zh-CN.md" target="_blank" rel="noopener noreferrer">查看完整功能状态与剩余范围 ↗</a></p>
+        <div class="section-heading split-heading">
+          <div><h2 id="progress-title">开发进度</h2></div>
+          <p class="section-intro">当前集成候选已通过 Windows、macOS 和 Linux 的自动检查。Windows 与 macOS 双机实测仍待完成。</p>
+        </div>
+        <p class="hero-status"><a href="https://github.com/ForceMind/Linko/actions/runs/44271438816" target="_blank" rel="noopener noreferrer">查看 CI 与升级回滚记录 ↗</a></p>
         <div class="progress-grid">
-          <article class="progress-card progress-now"><span class="stage-label">现在<span>开发版已实现流程</span></span><h3>先让两台电脑<br>彼此认识。</h3><ul><li>短码核验与双方记住设备</li><li>主屏相对方向与中文工作区</li><li>独立权限检查、明确开启与停止恢复入口</li></ul><p class="progress-foot">真实双机跨屏尚未通过；键盘、DPI 与故障恢复矩阵仍待验收。</p></article>
-          <article class="progress-card"><span class="stage-label">接下来<span>继续验证与接通</span></span><h3>把基础验证做完整，<br>再扩展协作。</h3><ul><li>真实 Windows ↔ macOS 双机验证</li><li>系统剪贴板与文件收发尚未接通</li><li>全局鼠标手势尚未接通</li></ul><p class="progress-foot">0.3.23-dev 包含 Mac 回程候选修复和连接中安全调整方向，双机复测尚待完成。</p></article>
-          <article class="progress-card"><span class="stage-label">未来<span>研究与规划</span></span><h3>探索更广的<br>工作空间。</h3><ul><li>多设备与多显示器拓扑</li><li>Linux 原生键鼠后端</li><li>签名、公证与安装更新</li></ul><p class="progress-foot">全局 G1、系统剪贴板和文件收发尚未接通。</p></article>
+          <article class="progress-card progress-now">
+            <span class="stage-label">已实现<span>2026.11.18-1657</span></span>
+            <h3>键鼠、剪贴板和文件</h3>
+            <ul>
+              <li>跨屏鼠标移动、点击、滚轮与键盘输入</li>
+              <li>手动发送剪贴板纯文本和 PNG</li>
+              <li>发送单个文件、一键暂停和继续</li>
+            </ul>
+            <p class="progress-foot">键鼠协同由两端分别开启，剪贴板导入和文件接收由接收方确认。</p>
+          </article>
+          <article class="progress-card">
+            <span class="stage-label">待验收<span>Windows 与 macOS</span></span>
+            <h3>双机实测</h3>
+            <ul>
+              <li>Mac → Windows 的光标移动、滚轮与回程</li>
+              <li>双向键鼠、不同 DPI 与断线恢复</li>
+              <li>双向剪贴板、文件接收与中断续传</li>
+            </ul>
+            <p class="progress-foot">官网提供的公开下载版本为 0.3.23-dev。</p>
+          </article>
+          <article class="progress-card">
+            <span class="stage-label">规划</span>
+            <h3>平台与设备支持</h3>
+            <ul>
+              <li>多设备与多显示器拓扑</li>
+              <li>Linux 原生键鼠后端</li>
+              <li>签名、公证与安装更新</li>
+              <li>全局鼠标手势</li>
+            </ul>
+          </article>
         </div>
       </section>
 
@@ -115,7 +145,10 @@
           <details><summary>现在适合直接作为日常主力工具吗？<span aria-hidden="true">＋</span></summary><p>目前仍是开发预览。真实 Windows ↔ macOS 键鼠、不同 DPI、权限变化和恢复行为还在验收中。请先在可中断的场景验证，不把开发进度当作稳定可用的承诺。</p></details>
           <details><summary>两台电脑需要使用同一种系统吗？<span aria-hidden="true">＋</span></summary><p>Linko 面向 Windows 与 macOS 的局域网协同。当前首版范围是两台电脑、每台一个主显示器；Linux 目前仅用于通信与界面诊断。真实跨系统键鼠体验仍在验证。</p></details>
           <details><summary>记住设备后，对方就能控制我吗？<span aria-hidden="true">＋</span></summary><p>不会。设备登记与使用许可分别处理。本机是否接收对方控制，由本机单独选择；启动键鼠协同还需要权限检查与本次明确确认。连接成功也不会开放剪贴板或文件权限。</p></details>
-          <details><summary>剪贴板、文件和跨屏拖拽能用了吗？<span aria-hidden="true">＋</span></summary><p>系统剪贴板、生产文件收发与原生文件跨屏拖拽尚未接通。音频、多屏、远程窗口、工作空间与移动控制仍是后续研究或规划，不是当前开发包的能力。</p></details>
+          <details>
+            <summary>剪贴板、文件和跨屏拖拽能用了吗？<span aria-hidden="true">＋</span></summary>
+            <p>公开下载的 0.3.23-dev 尚未接通跨机剪贴板和文件传输。集成候选 2026.11.18-1657 支持手动发送纯文本、PNG 和单个文件。继续已暂停的传输时，接收端需重新确认。直接从 Finder 或文件资源管理器跨屏拖放仍在开发。</p>
+          </details>
           <details><summary>需要注册账号吗？为什么下载会打开 GitHub？<span aria-hidden="true">＋</span></summary><p>App 的局域网协作不需要应用账号。当前开发包通过 GitHub Releases 提供，免登录直接下载。公开版本与最新候选分别标明；入口不可用时请在项目问题页反馈。</p></details>
         </div>
       </section>

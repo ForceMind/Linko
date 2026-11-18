@@ -1,6 +1,6 @@
 # Linko / 屏跃官网
 
-中文官网 **0.1.8**。现有 Cloudflare Pages 项目 `linko`：<https://linko-63e.pages.dev/>。
+中文官网 **0.1.9**。现有 Cloudflare Pages 项目 `linko`：<https://linko-63e.pages.dev/>。
 只上传 `website/dist` 白名单静态内容，不上传凭据、身份、target 或个人资料。不需要全局安装依赖或浏览器测试。
 
 ## 构建与部署
