@@ -7,7 +7,7 @@ use desktop_style::{tokens, Tone};
 use icons::{Direction, Icon};
 
 /// CI sets LINKO_VERSION (commit time, UTC+08:00); local builds fall back to the crate version.
-const DISPLAY_VERSION: &str = match option_env!("LINKO_VERSION") {
+pub(super) const DISPLAY_VERSION: &str = match option_env!("LINKO_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };

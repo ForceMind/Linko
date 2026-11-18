@@ -742,7 +742,9 @@ impl App {
             .and_then(|latest| latest.clone());
         if let Some(summary) = summary {
             if ui.button("复制本机输入诊断摘要").clicked() {
-                ui.ctx().copy_text(summary.clone());
+                let header = diagnostic_report::header(&self.diagnostic_facts());
+                let text = diagnostic_report::local_text(&header, &summary);
+                ui.ctx().copy_text(text);
             }
             if !self.logs.contains(&summary) {
                 ui.monospace(summary);

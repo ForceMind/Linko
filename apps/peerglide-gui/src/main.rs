@@ -16,6 +16,7 @@ mod desktop_state;
 mod desktop_style;
 mod desktop_ui;
 mod device_hardware;
+mod diagnostic_report;
 mod discovery_panel;
 #[cfg(any(windows, target_os = "macos"))]
 mod display_inventory;
