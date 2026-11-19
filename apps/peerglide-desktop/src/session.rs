@@ -25,7 +25,7 @@ pub(super) mod wayland_source;
 #[cfg(target_os = "linux")]
 pub(super) mod x11_source;
 use super::file_drop_control::TargetAction;
-use super::input_diagnostics::{receive_with_peer, DiagnosticOutput, SessionDiagnostics};
+use super::input_diagnostics::{DiagnosticOutput, SessionDiagnostics};
 use recovery::Recovery;
 
 pub(super) struct Abort(pub(super) tokio::task::JoinHandle<()>);
@@ -37,12 +37,6 @@ impl Drop for Abort {
 
 pub(super) async fn send(tx: &mut quinn::SendStream, m: &Message) -> Result<()> {
     tokio::time::timeout(Duration::from_millis(250), transport::send(tx, m)).await??;
-    Ok(())
-}
-
-/// Same deadline and failure as `send`, for an already encoded frame.
-async fn send_frame(tx: &mut quinn::SendStream, frame: &[u8]) -> Result<()> {
-    tokio::time::timeout(Duration::from_millis(250), transport::send_frame(tx, frame)).await??;
     Ok(())
 }
 
@@ -474,7 +468,6 @@ pub(super) async fn run_with_diagnostics(
         }
     };
     let mut diag = SessionDiagnostics::new(diagnostics, diagnostic_output, peer_diagnostics);
-    let mut peer_inbox = diag.peer_inbox();
     // Native display enumeration runs before installing capture, on the
     // worker. A failed OS query keeps the compatible primary-screen behavior.
     let topology = monitor_layout(native);
@@ -519,15 +512,13 @@ pub(super) async fn run_with_diagnostics(
     let _native_stop = driver.as_ref().map(|driver| {
         super::NativeRecoveryRegistration::new(driver.control(), session_stopping(&stop))
     });
+    let diagnostic_peer = diag.peer_exchange(&c);
     let (mtx, mut messages) = mpsc::channel(64);
     let invalid_frame = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader_invalid = invalid_frame.clone();
     let reader = tokio::spawn(async move {
         loop {
-            let m = match peer_inbox.as_mut() {
-                Some(inbox) => receive_with_peer(&mut rx, inbox).await,
-                None => transport::receive(&mut rx).await,
-            };
+            let m = transport::receive(&mut rx).await;
             let failed = m.is_err();
             if m.as_ref()
                 .err()
@@ -808,7 +799,7 @@ pub(super) async fn run_with_diagnostics(
                 // Diagnostic sessions only: local held sample and, when both
                 // Hellos offered it, one display-only frame per second.
                 let held=capture.as_ref().map_or(0,|cap|cap.gate.held_inputs());
-                if let Some(frame)=diag.tick(now_ms(),held,pending.is_some(),outgoing.is_some()) {send_frame(&mut tx,&frame).await?;}
+                if let (Some(peer),Some(frame))=(&diagnostic_peer,diag.tick(now_ms(),held,pending.is_some(),outgoing.is_some())) {peer.offer(frame);}
             },
             m=messages.recv()=>{
                 if session_stopping(&stop) {return Ok(());}

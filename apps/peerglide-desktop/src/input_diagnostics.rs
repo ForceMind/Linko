@@ -2,14 +2,18 @@ use peerglide_platform::input_diagnostics::{
     is_held_line, is_summary, HeldCause, InputDiagnostics, Phase, Snapshot, PEER_PREFIX,
 };
 use peerglide_platform::now_ms;
-use peerglide_protocol::{peer_diagnostics, Message, MAX_FRAME};
+use peerglide_protocol::{peer_diagnostics, MAX_FRAME};
 use peerglide_transport as transport;
 #[cfg(unix)]
 use std::os::fd::AsFd;
 #[cfg(windows)]
 use std::os::windows::io::AsHandle;
 use std::{collections::VecDeque, io::Write, sync::Arc, time::Duration};
-use tokio::{sync::oneshot, time::Instant};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinSet,
+    time::Instant,
+};
 
 const MAX_PENDING_HEARTBEATS: usize = 8;
 /// Held-state lines written for gate blocks and busy denials per session.
@@ -18,9 +22,11 @@ const REPORT_QUEUE: usize = 8;
 const SAMPLE_INTERVAL_MS: u64 = 1000;
 /// Frames one session sends: one per second over the 120 s window.
 const MAX_PEER_FRAMES: u32 = 150;
-/// Frames one session accepts; later frames are ignored.
-const MAX_PEER_ACCEPTED: u32 = 300;
+/// Total frames the diagnostic reader examines, including discarded frames.
+const MAX_PEER_RECEIVED: u32 = 300;
 const PEER_MIN_GAP_MS: u64 = 250;
+const PEER_OPEN_DEADLINE: Duration = Duration::from_secs(2);
+const PEER_WRITE_DEADLINE: Duration = Duration::from_millis(250);
 
 enum Report {
     Summary(Snapshot),
@@ -64,18 +70,18 @@ impl PeerOutbox {
 }
 
 /// Receiver side of the exchange, owned by the stream reader task.
-pub(super) struct PeerInbox {
+struct PeerInbox {
     output: DiagnosticOutput,
-    accepted: u32,
     last_ms: Option<u64>,
 }
 
 impl PeerInbox {
-    /// Lines to show for one report. Any invalid line rejects the report;
-    /// early or excess reports are ignored.
+    /// Lines to show for one report. Invalid or early reports are ignored.
     fn lines(&mut self, report: peer_diagnostics::Report, now: u64) -> Vec<String> {
-        let early = self.last_ms.is_some_and(|last| now < last.saturating_add(PEER_MIN_GAP_MS));
-        if early || self.accepted >= MAX_PEER_ACCEPTED {
+        if self
+            .last_ms
+            .is_some_and(|last| now < last.saturating_add(PEER_MIN_GAP_MS))
+        {
             return Vec::new();
         }
         let valid = report.summary.as_deref().is_none_or(is_summary)
@@ -84,7 +90,6 @@ impl PeerInbox {
         if !valid {
             return Vec::new();
         }
-        self.accepted += 1;
         self.last_ms = Some(now);
         let fields = [report.summary, report.held, report.event];
         let mut lines = Vec::new();
@@ -101,21 +106,70 @@ impl PeerInbox {
     }
 }
 
-/// Reads the v5 stream when both sides offered the exchange. A frame that
-/// is neither a v5 message nor a valid report fails exactly as before.
-pub(super) async fn receive_with_peer(
-    rx: &mut quinn::RecvStream,
-    inbox: &mut PeerInbox,
-) -> anyhow::Result<Message> {
-    let mut buffer = [0; MAX_FRAME];
-    loop {
-        let frame = transport::receive_frame(rx, &mut buffer).await?;
-        let message = transport::decode_message(frame);
-        if message.is_ok() {
-            return message;
+/// Two session-owned tasks keep optional traffic off the v5 input stream.
+pub(super) struct PeerExchange {
+    outbound: mpsc::Sender<Vec<u8>>,
+    _tasks: JoinSet<()>,
+}
+
+impl PeerExchange {
+    fn start(connection: &quinn::Connection, inbox: PeerInbox) -> Self {
+        connection.set_max_concurrent_uni_streams(1u8.into());
+        let (outbound, frames) = mpsc::channel(1);
+        let mut tasks = JoinSet::new();
+        tasks.spawn(read_peer_reports(connection.clone(), inbox));
+        let connection = connection.clone();
+        tasks.spawn(async move {
+            let _ = write_peer_reports(connection, frames).await;
+        });
+        Self {
+            outbound,
+            _tasks: tasks,
         }
+    }
+
+    pub fn offer(&self, frame: Vec<u8>) {
+        let _ = self.outbound.try_send(frame);
+    }
+}
+
+async fn write_peer_reports(
+    connection: quinn::Connection,
+    mut frames: mpsc::Receiver<Vec<u8>>,
+) -> anyhow::Result<()> {
+    let mut stream = tokio::time::timeout(PEER_OPEN_DEADLINE, connection.open_uni()).await??;
+    stream.set_priority(-1)?;
+    while let Some(frame) = frames.recv().await {
+        let result = tokio::time::timeout(
+            PEER_WRITE_DEADLINE,
+            transport::send_frame(&mut stream, &frame),
+        )
+        .await;
+        let error = match result {
+            Ok(Ok(())) => continue,
+            Ok(Err(error)) => error,
+            Err(timeout) => timeout.into(),
+        };
+        // A timed-out write may have left a partial frame in this stream.
+        let _ = stream.reset(0u8.into());
+        return Err(error);
+    }
+    stream.finish()?;
+    Ok(())
+}
+
+async fn read_peer_reports(connection: quinn::Connection, mut inbox: PeerInbox) {
+    let Ok(mut stream) = connection.accept_uni().await else {
+        return;
+    };
+    connection.set_max_concurrent_uni_streams(0u8.into());
+    let mut buffer = [0; MAX_FRAME];
+    for _ in 0..MAX_PEER_RECEIVED {
+        let Ok(frame) = transport::receive_frame(&mut stream, &mut buffer).await else {
+            break;
+        };
         let Some(report) = peer_diagnostics::decode_report(frame) else {
-            return message;
+            break;
         };
         inbox.accept(report, now_ms());
     }
@@ -138,14 +192,17 @@ impl<'a> SessionDiagnostics<'a> {
         }
     }
 
-    /// Receiver state for the stream reader, when the exchange is on.
-    pub fn peer_inbox(&self) -> Option<PeerInbox> {
-        let output = self.peer.as_ref().and(self.output.clone())?;
+    fn peer_inbox(&self) -> Option<PeerInbox> {
+        let output = self.peer.as_ref().and(self.output.as_ref())?.clone();
         Some(PeerInbox {
             output,
-            accepted: 0,
             last_ms: None,
         })
+    }
+
+    pub fn peer_exchange(&self, connection: &quinn::Connection) -> Option<PeerExchange> {
+        self.peer_inbox()
+            .map(|inbox| PeerExchange::start(connection, inbox))
     }
 
     /// Writes what the gate counts as held when a crossing or a peer
@@ -335,6 +392,7 @@ impl DiagnosticWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use peerglide_protocol::Message;
 
     fn output() -> (DiagnosticOutput, std::sync::mpsc::Receiver<Report>) {
         let (sender, receiver) = std::sync::mpsc::sync_channel(REPORT_QUEUE);
@@ -415,7 +473,6 @@ mod tests {
         let (lines, _local) = output();
         let mut inbox = PeerInbox {
             output: lines,
-            accepted: 0,
             last_ms: None,
         };
         let shown = inbox.lines(report.clone(), 1000);
@@ -429,17 +486,32 @@ mod tests {
         let mut swapped = report.clone();
         swapped.event = report.held.clone();
         assert!(inbox.lines(swapped, 6000).is_empty());
-        inbox.accepted = MAX_PEER_ACCEPTED;
-        assert!(inbox.lines(report, 9000).is_empty());
     }
 
-    #[tokio::test]
-    async fn stream_reader_shows_reports_and_keeps_v5_failure_classes() -> anyhow::Result<()> {
+    async fn pinned_pair() -> anyhow::Result<(
+        (quinn::Endpoint, quinn::Connection),
+        (quinn::Endpoint, quinn::Connection),
+    )> {
         let a = transport::Identity::generate()?;
         let b = transport::Identity::generate()?;
         let ea = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
         let eb = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
         let address = eb.local_addr()?;
+        let dial = async {
+            let connection = ea.connect(address, "peerglide.local")?.await?;
+            Ok::<_, anyhow::Error>(connection)
+        };
+        let accept = async { Ok::<_, anyhow::Error>(eb.accept().await.unwrap().await?) };
+        let (client, server) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(dial, accept)
+        })
+        .await??;
+        Ok(((ea, client), (eb, server)))
+    }
+
+    #[tokio::test]
+    async fn malformed_diagnostics_leave_the_v5_input_reader_unchanged() -> anyhow::Result<()> {
+        let ((_ea, client), (_eb, server)) = pinned_pair().await?;
         let counters = InputDiagnostics::default();
         let held = counters.held_report(HeldCause::Sample, 0, false, false);
         let report = peer_diagnostics::Report {
@@ -448,37 +520,67 @@ mod tests {
         };
         let frame = peer_diagnostics::encode_report(&report).unwrap();
         let (lines, local) = output();
-        let mut inbox = PeerInbox {
+        let inbox = PeerInbox {
             output: lines,
-            accepted: 0,
             last_ms: None,
         };
-        let server = async {
-            let c = eb.accept().await.unwrap().await?;
-            let (_tx, mut rx) = c.accept_bi().await?;
-            let first = receive_with_peer(&mut rx, &mut inbox).await?;
-            let second = receive_with_peer(&mut rx, &mut inbox).await;
-            Ok::<_, anyhow::Error>((c, first, second))
-        };
-        let client = async {
-            let c = ea.connect(address, "peerglide.local")?.await?;
-            let (mut tx, _rx) = c.open_bi().await?;
-            transport::send_frame(&mut tx, &frame).await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            server.set_max_concurrent_uni_streams(1u8.into());
+            let (mut tx, _rx) = client.open_bi().await?;
+            let mut diagnostics = client.open_uni().await?;
+            transport::send_frame(&mut diagnostics, &frame).await?;
+            transport::send_frame(&mut diagnostics, br#"{"Unknown":{}}"#).await?;
+            diagnostics.finish()?;
+            read_peer_reports(server.clone(), inbox).await;
+
             transport::send(&mut tx, &Message::Ping { lease: 0 }).await?;
             transport::send_frame(&mut tx, br#"{"Unknown":{}}"#).await?;
-            Ok::<_, anyhow::Error>((c, tx))
-        };
-        let (server, _client) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::try_join!(server, client)
+            let (_tx, mut rx) = server.accept_bi().await?;
+            let first = transport::receive(&mut rx).await?;
+            assert!(matches!(first, Message::Ping { lease: 0 }));
+            let error = transport::receive(&mut rx).await.err().unwrap();
+            assert!(error.is::<transport::InvalidMessageFrame>());
+            Ok::<_, anyhow::Error>(())
         })
         .await??;
-        let (_connection, first, second) = server;
-        assert!(matches!(first, Message::Ping { lease: 0 }));
-        let error = second.err().unwrap();
-        assert!(error.is::<transport::InvalidMessageFrame>());
         let shown = written(&local);
         assert_eq!(shown.len(), 1);
         assert!(shown[0].starts_with(PEER_PREFIX), "{}", shown[0]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn backpressured_diagnostics_time_out_without_closing_input() -> anyhow::Result<()> {
+        let ((_ea, client), (_eb, server)) = pinned_pair().await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            server.set_max_concurrent_uni_streams(1u8.into());
+            let (mut tx, _rx) = client.open_bi().await?;
+            transport::send(&mut tx, &Message::Ping { lease: 1 }).await?;
+            let (_tx, mut rx) = server.accept_bi().await?;
+            let first = transport::receive(&mut rx).await?;
+            assert!(matches!(first, Message::Ping { lease: 1 }));
+
+            let (outbound, frames) = mpsc::channel(1);
+            let writer = tokio::spawn(write_peer_reports(client.clone(), frames));
+            outbound.send(vec![b'x'; MAX_FRAME]).await?;
+            let stalled = server.accept_uni().await?;
+            // Never read this stream. More than its receive window can hold.
+            for _ in 0..16 {
+                if outbound.send(vec![b'x'; MAX_FRAME]).await.is_err() {
+                    break;
+                }
+            }
+            drop(outbound);
+            let error = writer.await?.unwrap_err();
+            assert!(error.is::<tokio::time::error::Elapsed>(), "{error:#}");
+
+            transport::send(&mut tx, &Message::Ping { lease: 2 }).await?;
+            let second = transport::receive(&mut rx).await?;
+            assert!(matches!(second, Message::Ping { lease: 2 }));
+            drop(stalled);
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
         Ok(())
     }
 

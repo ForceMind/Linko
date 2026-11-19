@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 /// Longest carried line; the GUI summary copy limit.
 pub const MAX_LINE_BYTES: usize = 1600;
+// The first draft used value 1 for reports on the input stream.
+const STREAM_OFFER: u8 = 2;
 
 #[derive(Serialize)]
 enum HelloOffer<'a> {
@@ -30,7 +32,7 @@ pub fn hello_with_offer(capabilities: &InputCapabilities) -> Result<Vec<u8>, ser
     encode(&HelloOffer::Hello {
         version: VERSION,
         capabilities,
-        peer_diagnostics: 1,
+        peer_diagnostics: STREAM_OFFER,
     })
 }
 
@@ -40,7 +42,12 @@ pub fn hello_offers(frame: &[u8]) -> bool {
         return false;
     }
     let flag = serde_json::from_slice::<HelloFlag>(frame);
-    matches!(flag, Ok(HelloFlag::Hello { peer_diagnostics: 1 }))
+    matches!(
+        flag,
+        Ok(HelloFlag::Hello {
+            peer_diagnostics: STREAM_OFFER
+        })
+    )
 }
 
 /// Lines from the sender's diagnostic session. Each one is validated again
@@ -108,8 +115,11 @@ mod tests {
     fn offered_hello_is_an_ordinary_hello_for_existing_v5_decoders() {
         let frame = hello_with_offer(&caps()).unwrap();
         let decoded = decode::<Message>(&frame).unwrap();
-        assert!(matches!(decoded, Message::Hello { version: VERSION, .. }));
-        let Message::Hello { capabilities, .. } = decoded else {
+        let Message::Hello {
+            version: VERSION,
+            capabilities,
+        } = decoded
+        else {
             panic!("an offered Hello must stay a v5 Hello");
         };
         assert!(capabilities == caps() && capabilities.valid());
@@ -122,8 +132,10 @@ mod tests {
         assert!(!hello_offers(&plain));
         let ping = encode(&Message::Ping { lease: 0 }).unwrap();
         assert!(!hello_offers(&ping));
-        let other = String::from_utf8(frame).unwrap().replace(":1}", ":2}");
-        assert!(!hello_offers(other.as_bytes()));
+        let draft = String::from_utf8(frame)
+            .unwrap()
+            .replace("\"peer_diagnostics\":2", "\"peer_diagnostics\":1");
+        assert!(!hello_offers(draft.as_bytes()));
     }
 
     #[test]

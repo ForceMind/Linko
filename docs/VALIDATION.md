@@ -3198,7 +3198,7 @@ F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMi
 认为仍有按住的键或按钮；Mac 静止时系统查询无按住。本节的改动只增加诊断，不改按住账本、捕获门或
 授权行为，目的是在下一轮实测中抓出“被按住的是什么”。
 
-已实现（CI 待跑，本机未编译）：
+草稿实现（验证结果见 [PR #312](https://github.com/ForceMind/Linko/pull/312)）：
 
 - A：回调在 `update_held` 处把修饰键数、普通键数、未知键数、按钮位掩码（bit n 为按钮 n，bit 15
   表示更高编号）和 `pairs.extra_held` 打包写入一个原子变量，变化时累加变化次数并记录会话时间。
@@ -3209,9 +3209,9 @@ F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMi
   只保存最新一行，不进日志列表。`KVM-DIAG/5` 摘要行与 `MAX_SUMMARY_BYTES` 不变。
 - B：「复制本机输入诊断摘要」在原摘要前加说明行：应用版本、系统名与版本、本机方向、本机接收控制、
   本机键鼠状态，以及本机的按住状态行。不写主机名、设备名、指纹或地址。
-- C：两端都选「开启并诊断」时，Hello 多带 `peer_diagnostics` 字段；双方都带时，每秒在 v5 可靠
-  流上发送一帧摘要和按住状态（ADR-0019）。对端严格校验后在「高级诊断 → 另一台的诊断」按纯文本
-  显示，并提供「复制两端摘要」。旧版本对端收不到这种帧，本机显示「另一台未提供诊断」。
+- C：两端都选「开启并诊断」并协商 ADR-0019 后，每秒在独立低优先级诊断流发送一帧摘要和按住状态。
+  发送超时只重置诊断流，v5 输入流保留原有读写和恢复路径。对端校验后在「高级诊断 → 另一台的诊断」
+  按纯文本显示，并提供「复制两端摘要」。旧版本对端可继续使用键鼠，本机显示「另一台未提供诊断」。
 
 测试覆盖（均为新增，CI 运行；本机未运行）：
 
@@ -3224,9 +3224,10 @@ F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMi
   全部松开后归零。改动前回调不写这些原子变量，断言会失败。
 - 桌面 `input_diagnostics` 的 `held_events_are_bounded_per_session…`、
   `peer_frames_need_both_offers…`、`peer_reports_are_rate_limited…`、
-  `stream_reader_shows_reports_and_keeps_v5_failure_classes`：5 行上限、无诊断会话不输出、只有
-  双方提出才发帧、每秒一帧、事件只发一次、窗口结束停止、接收端限速和整帧拒绝、真实 QUIC 流上
-  诊断帧不进入消息通道而未知帧仍是 `InvalidMessageFrame`。
+  `malformed_diagnostics_leave_the_v5_input_reader_unchanged`、
+  `backpressured_diagnostics_time_out_without_closing_input`：5 行上限、无诊断会话不输出、只有
+  双方提出才发帧、每秒一帧、事件只发一次、窗口结束停止、接收端限速和整帧拒绝。认证 QUIC 回环
+  验证诊断流损坏或写入超时后，原输入流仍能收发，原输入流的未知帧仍是 `InvalidMessageFrame`。
 - `hello_offer_tests::diagnostics_offer_needs_both_hellos_and_keeps_plain_peers_working`：真实
   QUIC 回环四种提出组合，只有双方提出时启用；不提出的一侧与原 v5 Hello 相同并能读入提出方的 Hello。
 - 协议 `peer_diagnostics` 两个测试：现有 v5 解码器把带字段的 Hello 读成普通 Hello；诊断帧拒绝未知
