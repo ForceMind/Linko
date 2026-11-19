@@ -1089,7 +1089,11 @@ mod tests {
         let (gate, _events) = callback_gate();
         for usage in 0xe0..=0xe7 {
             assert!(!flags_changed(usage, 0, false));
-            assert_eq!(gate.held_inputs(), 0, "an unmatched release invented a hold");
+            assert_eq!(
+                gate.held_inputs(),
+                0,
+                "an unmatched release invented a hold"
+            );
         }
         assert!(gate.prepare_commit(gate.snapshot().epoch()).is_some());
         let _ = STATE.take();
