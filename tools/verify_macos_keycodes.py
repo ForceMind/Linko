@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check physical key mappings and scroll fields against the active Apple SDK."""
+"""Check key mappings, modifier flags and scroll fields against the active Apple SDK."""
 import pathlib
 import re
 import subprocess
@@ -41,3 +41,18 @@ for local, apple in wheel_fields.items():
     assert local_match and sdk_match, f"missing scroll field {local} or {apple}"
     assert int(local_match[1]) == int(sdk_match[1], 0), f"{local} disagrees with {apple}"
 print(f"PASS: {len(wheel_fields)} scroll fields match active Apple SDK constants")
+
+hid_headers = list((frameworks / "IOKit.framework").glob("**/IOLLEvent.h"))
+assert hid_headers, f"IOLLEvent.h not found under SDK {sdk}"
+hid = hid_headers[0].read_text()
+table = re.search(r"const MODIFIER_FLAGS:[^=]+?= \[(.*?)\];", source, re.S)
+assert table, "macOS modifier table missing"
+rows = re.findall(r"\(1 << (\d+), (0x[\da-f]+), (0x[\da-f]+)\)", table[1])
+families = [("CONTROL", "CTL"), ("SHIFT", "SHIFT"), ("ALTERNATE", "ALT"), ("COMMAND", "CMD")]
+assert len(rows) == len(families), "expected four modifier families"
+for (shift, left, right), (group, side) in zip(rows, families):
+    names = [f"NX_{group}MASK", f"NX_DEVICEL{side}KEYMASK", f"NX_DEVICER{side}KEYMASK"]
+    for name, value in zip(names, [1 << int(shift), int(left, 16), int(right, 16)]):
+        sdk_flag = re.search(rf"^\s*#define\s+{name}\s+(0x[\da-fA-F]+|\d+)\b", hid, re.M)
+        assert sdk_flag and int(sdk_flag[1], 0) == value, f"{name} disagrees with the SDK"
+print("PASS: all 12 group and side-specific modifier flags match the active Apple SDK")

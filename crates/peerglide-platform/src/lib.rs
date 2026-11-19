@@ -667,6 +667,13 @@ impl CaptureGate {
     pub fn idle(&self) -> bool {
         self.0.control.load(Ordering::Acquire) & COUNT == 0
     }
+    #[cfg(all(test, target_os = "macos"))]
+    fn held_inputs(&self) -> u64 {
+        match self.0.control.load(Ordering::Acquire) & COUNT {
+            PRIMARY => 1,
+            held => held,
+        }
+    }
     /// Retire queued local events when applying a new edge. The same mode /
     /// callback / physical-hold CAS used by capture admission remains in force.
     pub fn reconfigure_local(&self) -> bool {
@@ -2147,7 +2154,7 @@ mod tests {
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod hook_tests {
     use super::*;
-    fn state(capacity: usize) -> (HookState, CaptureEvents) {
+    pub(super) fn state(capacity: usize) -> (HookState, CaptureEvents) {
         let (tx, rx) = capture_events::channel(capacity).unwrap();
         (
             HookState {
