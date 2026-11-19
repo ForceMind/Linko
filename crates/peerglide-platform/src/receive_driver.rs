@@ -73,7 +73,7 @@ mod implementation {
             Arc,
         },
     };
-    use tokio::sync::oneshot;
+    use tokio::sync::{oneshot, watch};
     const COMMAND_MS: u64 = 250;
     const WATCHDOG_MS: u64 = 1000;
     const BUDGET: usize = 32;
@@ -310,6 +310,7 @@ mod implementation {
     pub struct ReceiveDriver {
         sender: SyncSender<Command>,
         control: ReceiveControl,
+        drain_started: watch::Receiver<Option<CaptureEpoch>>,
         next_request: u64,
         _single: PhantomData<Cell<()>>,
     }
@@ -360,6 +361,11 @@ mod implementation {
             }
         }
         pub async fn begin(&mut self) -> Result<CaptureEpoch, ReceiveError> {
+            // An owner still holds receive protection. Report Busy without
+            // waiting on the same Native inbox that is draining that owner.
+            if self.control.outcome() == ReceiveAck::Submitted {
+                return Err(ReceiveError::Busy);
+            }
             match self.command(Kind::Begin).await? {
                 Reply::Begun(epoch) => Ok(epoch),
                 _ => Err(ReceiveError::Invalid),
@@ -398,6 +404,24 @@ mod implementation {
         ) -> Result<ReceiveAck, ReceiveError> {
             if terminal_cursor.is_some_and(|point| !point.valid()) {
                 return Err(ReceiveError::Invalid);
+            }
+            if self.snapshot(epoch) == ReceiveSnapshot::Draining {
+                // A requested takeover already invalidates the terminal cursor.
+                // Only the Native owner can acknowledge starting this cleanup.
+                let started = self.drain_started.wait_for(|seen| *seen == Some(epoch));
+                let observed = match tokio::time::timeout(COMMAND_TIMEOUT, started).await {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(_)) => Err(ReceiveError::Closed),
+                    Err(_) => Err(ReceiveError::Timeout),
+                };
+                return match (self.snapshot(epoch), self.control.outcome()) {
+                    (ReceiveSnapshot::Retired, ReceiveAck::Retired) => Ok(ReceiveAck::Retired),
+                    (ReceiveSnapshot::RecoveryRequired, _) | (_, ReceiveAck::RecoveryRequired) => {
+                        Ok(ReceiveAck::RecoveryRequired)
+                    }
+                    (ReceiveSnapshot::Draining, _) => observed.map(|()| ReceiveAck::Submitted),
+                    _ => Err(ReceiveError::Stale),
+                };
             }
             // Queue-full/cancel/timeout invokes CancelRequest's atomic recovery.
             // A normally queued release may still apply its terminal cursor before
@@ -620,6 +644,7 @@ mod implementation {
     pub(crate) struct ReceiveEngine {
         inbox: Receiver<Command>,
         control: ReceiveControl,
+        drain_started: watch::Sender<Option<CaptureEpoch>>,
         active: Option<Active>,
         poisoned: bool,
     }
@@ -635,6 +660,7 @@ mod implementation {
             return Err(ReceiveError::Invalid);
         }
         let (sender, inbox) = mpsc::sync_channel(capacity);
+        let (drain_started, drain_observer) = watch::channel(None);
         let control = ReceiveControl {
             shared: Arc::new(Shared::new(capture.map(|gate| gate.0.control.clone()))),
             wake,
@@ -643,12 +669,14 @@ mod implementation {
             ReceiveDriver {
                 sender,
                 control: control.clone(),
+                drain_started: drain_observer,
                 next_request: 1,
                 _single: PhantomData,
             },
             ReceiveEngine {
                 inbox,
                 control,
+                drain_started,
                 active: None,
                 poisoned: false,
             },
@@ -677,9 +705,10 @@ mod implementation {
             ) {
                 return;
             }
-            if let Some(active) = &mut self.active {
+            if let Some(active) = self.active.as_mut().filter(|active| !active.draining) {
                 active.draining = true;
                 self.control.shared.phase.store(DRAINING, Ordering::Release);
+                self.drain_started.send_replace(Some(active.epoch));
             }
         }
         fn retire_epoch(&mut self, epoch: CaptureEpoch) {
@@ -2091,6 +2120,111 @@ mod implementation {
             pump(&mut engine, &mut backend, clock);
             assert!(!backend.effects.contains(&Effect::Key(4, true)));
             assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+        }
+
+        #[tokio::test]
+        async fn timed_out_scroll_does_not_disconnect_a_receiver_already_draining() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let start = now_ms();
+            let epoch = begin(&mut driver, &mut engine, &mut backend, start);
+            let down = key_down();
+            input(&mut driver, &mut engine, &mut backend, epoch, down, start).unwrap();
+
+            // Pause the native pump for one real command deadline.
+            let scroll = Input::Scroll { x: 0, y: 1 };
+            let result = driver.input(epoch, scroll, point()).await;
+            assert_eq!(result, Err(ReceiveError::Timeout));
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+
+            // The native owner acknowledges recovery, issues the owed Up, and
+            // keeps protection while a Windows injection is still outstanding.
+            backend.pending = true;
+            let now = now_ms();
+            pump(&mut engine, &mut backend, now);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+            assert_eq!(up_count(&backend, false), 1);
+            assert!(!backend.effects.contains(&Effect::Scroll));
+            let effects = backend.effects.clone();
+            let release = driver.release(epoch, Some(point())).await;
+            let ack = release.unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(ack, ReceiveAck::Submitted);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+            assert!(!driver.is_current(epoch));
+            assert_eq!(engine.outcome(), ReceiveAck::Submitted);
+            assert_eq!(driver.begin().await, Err(ReceiveError::Busy));
+            assert!(matches!(engine.inbox.try_recv(), Err(TryRecvError::Empty)));
+
+            backend.pending = false;
+            pump(&mut engine, &mut backend, now + 1);
+            assert_eq!(&backend.effects[..effects.len()], effects.as_slice());
+            assert_eq!(&backend.effects[effects.len()..], &[Effect::Leave]);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+            let next = begin(&mut driver, &mut engine, &mut backend, now + 2);
+            assert_ne!(epoch, next);
+            assert!(driver.is_current(next));
+        }
+
+        #[tokio::test]
+        async fn release_observes_native_drain_started_after_its_first_poll() {
+            use std::future::{poll_fn, Future};
+            use std::task::Poll;
+
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, now_ms());
+            let control = driver.control();
+            control.request_recovery(epoch);
+            let mut release = Box::pin(driver.release(epoch, None));
+            poll_fn(|cx| {
+                assert!(release.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            // The normal priority check runs before the inbox and SDK cleanup.
+            engine.priority(&mut backend, now_ms());
+            let ack = release.await.unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(ack, ReceiveAck::Submitted);
+            assert_eq!(control.snapshot(epoch), ReceiveSnapshot::Draining);
+            assert!(matches!(engine.inbox.try_recv(), Err(TryRecvError::Empty)));
+        }
+
+        #[tokio::test]
+        async fn requested_recovery_alone_cannot_acknowledge_release() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, now_ms());
+            let control = driver.control();
+            control.request_recovery(epoch);
+            pump(&mut engine, &mut backend, now_ms());
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+            backend.effects.clear();
+
+            let epoch = begin(&mut driver, &mut engine, &mut backend, now_ms());
+            control.request_recovery(epoch);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+            let release = driver.release(epoch, None).await;
+            assert_eq!(release, Err(ReceiveError::Timeout));
+            assert!(!backend.effects.contains(&Effect::Leave));
+            pump(&mut engine, &mut backend, now_ms());
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+        }
+
+        #[tokio::test]
+        async fn native_failure_after_drain_starts_still_requires_recovery() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, now_ms());
+            let control = driver.control();
+            control.request_recovery(epoch);
+            let (release, ()) = tokio::join!(
+                biased;
+                driver.release(epoch, None),
+                async {
+                    engine.priority(&mut backend, now_ms());
+                    backend.alive = false;
+                    pump(&mut engine, &mut backend, now_ms());
+                },
+            );
+            assert_eq!(release, Ok(ReceiveAck::RecoveryRequired));
+            assert_eq!(control.snapshot(epoch), ReceiveSnapshot::RecoveryRequired);
+            assert!(!backend.effects.contains(&Effect::Leave));
         }
 
         #[tokio::test]
