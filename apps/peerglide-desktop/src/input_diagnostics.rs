@@ -85,8 +85,14 @@ impl PeerInbox {
             return Vec::new();
         }
         let valid = report.summary.as_deref().is_none_or(is_summary)
-            && report.held.as_deref().is_none_or(|line| is_held_line(line, true))
-            && report.event.as_deref().is_none_or(|line| is_held_line(line, false));
+            && report
+                .held
+                .as_deref()
+                .is_none_or(|line| is_held_line(line, true))
+            && report
+                .event
+                .as_deref()
+                .is_none_or(|line| is_held_line(line, false));
         if !valid {
             return Vec::new();
         }
