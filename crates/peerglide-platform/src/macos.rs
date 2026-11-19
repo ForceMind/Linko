@@ -1060,6 +1060,60 @@ mod tests {
         assert_eq!(modifier_flags(0x10), 1 << 18);
         assert_eq!(modifier_flags(0), 0);
     }
+
+    fn callback_gate() -> (CaptureGate, CaptureEvents) {
+        let (state, events) = crate::hook_tests::state(32);
+        let gate = state.gate.clone();
+        STATE.set(Some(state));
+        (gate, events)
+    }
+
+    fn flags_changed(usage: u16, flags: u64, tagged: bool) -> bool {
+        extern "C" {
+            fn CGEventSetType(event: Ref, kind: u32);
+        }
+        // Deliver an unposted CoreGraphics event to the real callback on this test thread.
+        unsafe {
+            let code = to_code(usage).unwrap();
+            let raw = CGEventCreateKeyboardEvent(null_mut(), code, true);
+            let event = OwnedEvent::created(raw).unwrap();
+            CGEventSetType(event.0, 12);
+            CGEventSetFlags(event.0, flags);
+            CGEventSetIntegerValueField(event.0, 42, if tagged { TAG } else { 0 });
+            callback(null_mut(), 12, event.0, null_mut()).is_null()
+        }
+    }
+
+    #[test]
+    fn modifier_release_without_a_captured_down_keeps_mouse_handoff_available() {
+        let (gate, _events) = callback_gate();
+        for usage in 0xe0..=0xe7 {
+            assert!(!flags_changed(usage, 0, false));
+            assert_eq!(gate.held_inputs(), 0, "an unmatched release invented a hold");
+        }
+        assert!(gate.prepare_commit(gate.snapshot().epoch()).is_some());
+        let _ = STATE.take();
+    }
+
+    #[test]
+    fn repeated_and_two_sided_shift_flags_preserve_the_mouse_admission_guard() {
+        const SHIFT: u64 = 1 << 17;
+        let (gate, _events) = callback_gate();
+        assert!(!flags_changed(0xe1, SHIFT | 2, false));
+        assert!(!flags_changed(0xe1, SHIFT | 2, false));
+        assert_eq!(gate.held_inputs(), 1, "repeated left Shift is still down");
+        assert!(gate.prepare_commit(gate.snapshot().epoch()).is_none());
+        assert!(!flags_changed(0xe5, SHIFT | 2 | 4, false));
+        assert_eq!(gate.held_inputs(), 2);
+        assert!(!flags_changed(0xe1, SHIFT | 4, false));
+        assert!(!flags_changed(0xe1, SHIFT | 4, false));
+        assert!(!flags_changed(0xe5, 0, true));
+        assert_eq!(gate.held_inputs(), 1, "right Shift remains physically held");
+        assert!(gate.enter_receiving().is_none());
+        assert!(!flags_changed(0xe5, 0, false));
+        assert!(gate.enter_receiving().is_some());
+        let _ = STATE.take();
+    }
 }
 
 #[cfg(test)]
