@@ -2154,7 +2154,7 @@ mod tests {
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod hook_tests {
     use super::*;
-    fn state(capacity: usize) -> (HookState, CaptureEvents) {
+    pub(super) fn state(capacity: usize) -> (HookState, CaptureEvents) {
         let (tx, rx) = capture_events::channel(capacity).unwrap();
         (
             HookState {

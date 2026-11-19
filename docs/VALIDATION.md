@@ -3247,3 +3247,11 @@ F04/F11/F17 和 macOS 完整冻结仍按 [ADR 草稿](https://github.com/ForceMi
    `extra`、`changes`、`changed_ms`。`changes=1` 且 `changed_ms` 接近 0 表示启动采样；`gate` 大于
    各类之和表示计数来自 `update_held` 之外的路径。
 5. 若另一台显示「另一台未提供诊断」，确认两端都是新包并都选了「开启并诊断」，再分别复制本机摘要。
+
+## 2026-11-19 macOS 修饰键松开后鼠标仍被拦住
+
+`2a78ccf` 的真机记录有 15 次 `blk_gate`。这个计数说明 Mac 当时有按住记录，未区分按键或按钮。PR #313 检查一个可单独触发的原因。旧回调每次收到 Control、Shift、Option 或 Command 的 `flagsChanged` 都反转按住记录。若首次看到的事件是松开，它会把已经松开的键记成按住，鼠标到达边缘时发不出控制请求。重复的按下通知也会让保护过早解除。
+
+新回调读取事件创建时的左右修饰键标志。整组已松开时直接处理为松开。设备只提供活动的整组标志时，保留原有配对逻辑，以处理另一侧或已注入修饰键仍按住的情况。启动时先启用已有的事件 tap，再采样初始按键和鼠标按钮，最后在同一线程分发回调。这样能接到采样期间发生的松开事件。[Apple 事件标志](https://developer.apple.com/documentation/coregraphics/cgeventflags)
+
+macOS Actions 的两个对照用例向实际回调传入未向系统投递的 CoreGraphics 事件，分别检查未配对松开后的跨屏准入，以及重复通知下左右 Shift 的持键保护。补充用例检查修饰键松开后鼠标位移进入远程队列、自注入事件继续旁路，以及受保护的键保持到物理松开。SDK 检查逐项核对四组修饰键的 12 个标志。各提交的结果见 [PR #313](https://github.com/ForceMind/Linko/pull/313)。Windows 超时的历史记录与两台真机上的最终行为仍按 #3/C06 跟踪。
