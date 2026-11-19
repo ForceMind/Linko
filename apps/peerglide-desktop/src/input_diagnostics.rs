@@ -29,7 +29,7 @@ const PEER_OPEN_DEADLINE: Duration = Duration::from_secs(2);
 const PEER_WRITE_DEADLINE: Duration = Duration::from_millis(250);
 
 enum Report {
-    Summary(Snapshot),
+    Summary(Box<Snapshot>),
     Line(String),
 }
 
@@ -360,12 +360,13 @@ impl DiagnosticWindow {
                     _ = &mut deadline => break Phase::Expired,
                     _ = tick.tick() => {
                         let sample = observed.snapshot(Phase::Sample);
-                        let _ = reports.try_send(Report::Summary(sample));
+                        let _ = reports.try_send(Report::Summary(Box::new(sample)));
                     }
                 }
             };
             observed.stop();
-            let _ = reports.try_send(Report::Summary(observed.snapshot(phase)));
+            let summary = Box::new(observed.snapshot(phase));
+            let _ = reports.try_send(Report::Summary(summary));
         });
         Ok(Self {
             counters,

@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(latest.summary.as_deref(), Some(summary.as_str()));
         assert_eq!(latest.peer_summary.as_deref(), Some(summary.as_str()));
         assert_eq!(latest.peer_held, None);
-        assert_eq!(latest.peer_events, [event.clone()]);
+        assert_eq!(latest.peer_events.as_slice(), std::slice::from_ref(&event));
 
         let text = both_text("H", &latest);
         let local = format!("{summary}\n{sample}\n{event}");
