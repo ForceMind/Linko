@@ -2094,6 +2094,82 @@ mod implementation {
         }
 
         #[tokio::test]
+        async fn timed_out_scroll_does_not_disconnect_a_receiver_already_draining() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let start = now_ms();
+            let epoch = begin(&mut driver, &mut engine, &mut backend, start);
+            let down = key_down();
+            input(&mut driver, &mut engine, &mut backend, epoch, down, start).unwrap();
+
+            // Pause the native pump for one real command deadline.
+            let scroll = Input::Scroll { x: 0, y: 1 };
+            let result = driver.input(epoch, scroll, point()).await;
+            assert_eq!(result, Err(ReceiveError::Timeout));
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+
+            // The native owner acknowledges recovery, issues the owed Up, and
+            // keeps protection while a Windows injection is still outstanding.
+            backend.pending = true;
+            let now = now_ms();
+            pump(&mut engine, &mut backend, now);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+            assert_eq!(up_count(&backend, false), 1);
+            assert!(!backend.effects.contains(&Effect::Scroll));
+            let effects = backend.effects.clone();
+            let release = driver.release(epoch, Some(point())).await;
+            let ack = release.unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(ack, ReceiveAck::Submitted);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+            assert!(!driver.is_current(epoch));
+            assert_eq!(engine.outcome(), ReceiveAck::Submitted);
+
+            backend.pending = false;
+            pump(&mut engine, &mut backend, now + 1);
+            assert_eq!(&backend.effects[..effects.len()], effects.as_slice());
+            assert_eq!(&backend.effects[effects.len()..], &[Effect::Leave]);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+            let next = begin(&mut driver, &mut engine, &mut backend, now + 2);
+            assert_ne!(epoch, next);
+            assert!(driver.is_current(next));
+        }
+
+        #[tokio::test]
+        async fn release_observes_native_drain_started_after_its_first_poll() {
+            use std::future::{poll_fn, Future};
+            use std::task::Poll;
+
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, now_ms());
+            let control = driver.control();
+            control.request_recovery(epoch);
+            let mut release = Box::pin(driver.release(epoch, None));
+            poll_fn(|cx| {
+                assert!(release.as_mut().poll(cx).is_pending());
+                Poll::Ready(())
+            })
+            .await;
+            // The normal priority check runs before the inbox and SDK cleanup.
+            engine.priority(&mut backend, now_ms());
+            let ack = release.await.unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(ack, ReceiveAck::Submitted);
+            assert_eq!(control.snapshot(epoch), ReceiveSnapshot::Draining);
+            assert!(matches!(engine.inbox.try_recv(), Err(TryRecvError::Empty)));
+        }
+
+        #[tokio::test]
+        async fn requested_recovery_alone_cannot_acknowledge_release() {
+            let (mut driver, mut engine, mut backend, _) = setup(8);
+            let epoch = begin(&mut driver, &mut engine, &mut backend, now_ms());
+            driver.control().request_recovery(epoch);
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Draining);
+            let release = driver.release(epoch, None).await;
+            assert_eq!(release, Err(ReceiveError::Timeout));
+            assert!(!backend.effects.contains(&Effect::Leave));
+            pump(&mut engine, &mut backend, now_ms());
+            assert_eq!(driver.snapshot(epoch), ReceiveSnapshot::Retired);
+        }
+
+        #[tokio::test]
         async fn dropping_an_actually_polled_begin_future_cancels_its_queued_admission() {
             use std::{
                 future::{poll_fn, Future},
