@@ -53,6 +53,7 @@ extern "C" {
     fn CGEventGetIntegerValueField(event: Ref, field: u32) -> i64;
     fn CGEventGetDoubleValueField(event: Ref, field: u32) -> f64;
     fn CGEventSetIntegerValueField(event: Ref, field: u32, value: i64);
+    fn CGEventGetFlags(event: Ref) -> u64;
     fn CGEventSetFlags(event: Ref, flags: u64);
     fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
     fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
@@ -390,19 +391,6 @@ pub(super) fn capture_receiving(
                 gate: gate.clone(),
                 observation: source_health.observation,
             };
-            let state = HookState {
-                pairs: PairLedger::default(),
-                stopping: false,
-                toggle_route: None,
-                tx,
-                gate,
-                keys: initial_keys().into_iter().collect(),
-                buttons: initial_buttons().into_iter().collect(),
-                toggle_armed: false,
-                target,
-            };
-            state.update_held();
-            STATE.set(Some(state));
             let mask = [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 22, 25, 26, 27]
                 .iter()
                 .fold(0, |a, n| a | 1u64 << n);
@@ -417,15 +405,29 @@ pub(super) fn capture_receiving(
                 let _ = ready.send(false);
                 return;
             }
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             let Some(_wake_registration) = wake.register() else {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
                 CFRelease(source);
                 CFRelease(tap);
                 let _ = ready.send(false);
                 return;
             };
+            // Observe transitions during the startup snapshot. The tap's source is
+            // scheduled on this thread only after the initial holds are published.
             CGEventTapEnable(tap, true);
+            let state = HookState {
+                pairs: PairLedger::default(),
+                stopping: false,
+                toggle_route: None,
+                tx,
+                gate,
+                keys: initial_keys().into_iter().collect(),
+                buttons: initial_buttons().into_iter().collect(),
+                toggle_armed: false,
+                target,
+            };
+            state.update_held();
+            STATE.set(Some(state));
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             let _ = ready.send(true);
             let mut last_turn = std::time::Instant::now();
             loop {
@@ -531,13 +533,12 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 let code = CGEventGetIntegerValueField(event, 9) as u16;
                 let usage = from_code(code);
                 let down = if kind == 12 {
-                    // Own-tagged posts were filtered above. Modifier transition
-                    // events do not repeat; combined key state may still contain
-                    // our remote synthetic modifier and is not a physical Up.
                     match usage {
-                        Some(usage) if (0xe0..=0xe7).contains(&usage) => {
-                            !s.physical_key_held(usage)
-                        }
+                        Some(usage) if (0xe0..=0xe7).contains(&usage) => modifier_changed_down(
+                            usage,
+                            CGEventGetFlags(event),
+                            s.physical_key_held(usage),
+                        ),
                         _ => CGEventSourceKeyState(0, code),
                     }
                 } else {
@@ -953,16 +954,31 @@ fn from_code(c: u16) -> Option<u16> {
     KEYS.iter().find(|p| p.1 == c).map(|p| p.0)
 }
 
+// IOLLEvent.h group, left and right flags in HID Control, Shift, Option, Command order.
+const MODIFIER_FLAGS: [(u64, u64, u64); 4] = [
+    (1 << 18, 0x0001, 0x2000),
+    (1 << 17, 0x0002, 0x0004),
+    (1 << 19, 0x0020, 0x0040),
+    (1 << 20, 0x0008, 0x0010),
+];
+
+fn modifier_changed_down(usage: u16, flags: u64, was_down: bool) -> bool {
+    let index = usize::from(usage - 0xe0);
+    let (group, left, right) = MODIFIER_FLAGS[index % 4];
+    if flags & (left | right) != 0 {
+        let side = if index < 4 { left } else { right };
+        return flags & side != 0;
+    }
+    // A cleared group is an Up even if its Down preceded capture. With only an
+    // active aggregate bit, the other side or a synthetic modifier can keep it set.
+    flags & group != 0 && !was_down
+}
+
 fn modifier_flags(bits: u64) -> u64 {
     let mut flags = 0;
-    for (mask, flag) in [
-        (0x11, 1 << 18),
-        (0x22, 1 << 17),
-        (0x44, 1 << 19),
-        (0x88, 1 << 20),
-    ] {
-        if bits & mask != 0 {
-            flags |= flag;
+    for (index, (group, _, _)) in MODIFIER_FLAGS.into_iter().enumerate() {
+        if bits & (0x11 << index) != 0 {
+            flags |= group;
         }
     }
     flags
@@ -1116,6 +1132,54 @@ mod tests {
         assert!(gate.enter_receiving().is_none());
         assert!(!flags_changed(0xe5, 0, false));
         assert!(gate.enter_receiving().is_some());
+        let _ = STATE.take();
+    }
+
+    #[test]
+    fn modifier_release_allows_committed_source_motion_into_the_capture_queue() {
+        let (gate, mut events) = callback_gate();
+        assert!(!flags_changed(0xe1, 0, false));
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Captured::Input {
+                event: Input::Key { down: false, .. },
+                route: CaptureRoute::Local(_),
+            }
+        ));
+        let token = gate.prepare_commit(gate.snapshot().epoch()).unwrap();
+        let CaptureCommit::Committed(epoch) = gate.commit_from(token, u64::MAX, now_ms()) else {
+            panic!("released source must admit the handoff");
+        };
+        unsafe {
+            let point = Point { x: 0.0, y: 10.0 };
+            let raw = CGEventCreateMouseEvent(null_mut(), 5, point, 0);
+            let event = OwnedEvent::created(raw).unwrap();
+            CGEventSetIntegerValueField(event.0, 4, -12);
+            CGEventSetIntegerValueField(event.0, 5, 3);
+            assert!(callback(null_mut(), 5, event.0, null_mut()).is_null());
+        }
+        let Captured::Motion { dx, dy, route } = events.try_recv().unwrap() else {
+            panic!("expected remote motion after the handoff");
+        };
+        assert_eq!(route, CaptureRoute::Remote(epoch));
+        assert_eq!((dx, dy), (-12.0, 3.0));
+        let _ = STATE.take();
+    }
+
+    #[test]
+    fn protected_modifier_with_only_group_flags_keeps_its_physical_up() {
+        const SHIFT: u64 = 1 << 17;
+        let (gate, _events) = callback_gate();
+        let epoch = gate.enter_receiving().unwrap();
+        assert!(flags_changed(0xe1, SHIFT, false));
+        assert!(!flags_changed(0xe1, 0, true));
+        assert_eq!(gate.held_inputs(), 1);
+        assert!(suppressed_modifiers_held());
+        // An injected modifier can keep the aggregate bit set on the physical Up.
+        assert!(flags_changed(0xe1, SHIFT, false));
+        assert_eq!(gate.held_inputs(), 0);
+        assert!(!suppressed_modifiers_held());
+        assert!(gate.leave_receiving(epoch, false));
         let _ = STATE.take();
     }
 }
