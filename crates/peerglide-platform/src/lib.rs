@@ -667,6 +667,13 @@ impl CaptureGate {
     pub fn idle(&self) -> bool {
         self.0.control.load(Ordering::Acquire) & COUNT == 0
     }
+    /// The hold count `idle()` tests, for diagnostics only.
+    pub fn held_inputs(&self) -> u64 {
+        match self.0.control.load(Ordering::Acquire) & COUNT {
+            PRIMARY => 1,
+            held => held,
+        }
+    }
     /// Retire queued local events when applying a new edge. The same mode /
     /// callback / physical-hold CAS used by capture admission remains in force.
     pub fn reconfigure_local(&self) -> bool {
@@ -2791,6 +2798,36 @@ mod hook_tests {
             .to_string()
             .split_ascii_whitespace()
             .any(|field| field == "scr_zero=1"));
+    }
+
+    #[test]
+    fn held_diagnostics_follow_callback_categories_without_allocation() {
+        use input_diagnostics::{HeldCause, HeldTotals};
+        let (mut s, _events) = state(16);
+        let d = Arc::new(input_diagnostics::InputDiagnostics::default());
+        assert!(s.gate.0.diagnostics.set(d.clone()).is_ok());
+        assert!(!s.key(0xe0, true));
+        assert!(!s.key(4, true));
+        assert!(!s.button(3, true));
+        s.keys.insert(0x8004);
+        let allocated = crate::allocation_checks::count(|| s.update_held());
+        assert_eq!(allocated, 0);
+        let gate = s.gate.held_inputs();
+        assert_eq!(gate, 4);
+        let report = d.held_report(HeldCause::BlockGate, gate, false, false);
+        let held = report.held;
+        assert_eq!((held.modifiers, held.keys, held.unknown), (1, 1, 1));
+        assert_eq!((held.buttons, held.extra), (1 << 3, 0));
+        assert!(!s.key(0xe0, false));
+        assert!(!s.key(4, false));
+        assert!(!s.button(3, false));
+        s.keys.remove(&0x8004);
+        s.update_held();
+        assert!(s.gate.idle());
+        assert_eq!(s.gate.held_inputs(), 0);
+        let idle = d.held_report(HeldCause::Sample, 0, false, false);
+        assert_eq!(idle.held, HeldTotals::default());
+        assert!(idle.changes >= 4, "{}", idle.changes);
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 pub mod audio;
 pub mod pairing_worker;
+pub mod peer_diagnostics;
 pub mod route_plan;
 
 pub const VERSION: u16 = 5;
