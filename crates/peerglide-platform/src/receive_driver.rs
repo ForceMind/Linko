@@ -63,6 +63,8 @@ impl std::error::Error for ReceiveError {}
 #[cfg(any(windows, target_os = "macos", test))]
 mod implementation {
     use super::*;
+    #[cfg(windows)]
+    use crate::input_diagnostics::{InputDiagnostics, ReceiveCommand};
     use crate::now_ms;
     use std::{
         cell::Cell,
@@ -239,6 +241,17 @@ mod implementation {
         },
     }
     impl Kind {
+        #[cfg(windows)]
+        fn diagnostic_kind(&self) -> Option<ReceiveCommand> {
+            match self {
+                Self::Begin => Some(ReceiveCommand::Begin),
+                Self::Pointer { .. } => Some(ReceiveCommand::Pointer),
+                Self::Input { .. } => Some(ReceiveCommand::Input),
+                Self::Release { .. } => Some(ReceiveCommand::Release),
+                Self::Heartbeat { .. } => None,
+            }
+        }
+
         fn epoch(&self) -> Option<CaptureEpoch> {
             match self {
                 Self::Begin => None,
@@ -311,6 +324,8 @@ mod implementation {
         sender: SyncSender<Command>,
         control: ReceiveControl,
         drain_started: watch::Receiver<Option<CaptureEpoch>>,
+        #[cfg(windows)]
+        diagnostics: Option<Arc<InputDiagnostics>>,
         next_request: u64,
         _single: PhantomData<Cell<()>>,
     }
@@ -340,6 +355,8 @@ mod implementation {
                 armed: true,
             };
             let (reply, result) = oneshot::channel();
+            #[cfg(windows)]
+            let diagnostic_kind = kind.diagnostic_kind();
             let command = Command {
                 request,
                 expires: now_ms().saturating_add(COMMAND_MS),
@@ -351,14 +368,21 @@ mod implementation {
                 TrySendError::Disconnected(_) => ReceiveError::Closed,
             })?;
             self.control.wake_loop();
-            match tokio::time::timeout(COMMAND_TIMEOUT, result).await {
+            let result = match tokio::time::timeout(COMMAND_TIMEOUT, result).await {
                 Ok(Ok(result)) => {
                     cancel.armed = false;
                     result
                 }
                 Ok(Err(_)) => Err(ReceiveError::Closed),
                 Err(_) => Err(ReceiveError::Timeout),
+            };
+            #[cfg(windows)]
+            if let (Err(ReceiveError::Timeout), Some(diagnostics), Some(kind)) =
+                (&result, &self.diagnostics, diagnostic_kind)
+            {
+                diagnostics.record_receive_timeout(kind);
             }
+            result
         }
         pub async fn begin(&mut self) -> Result<CaptureEpoch, ReceiveError> {
             // An owner still holds receive protection. Report Busy without
@@ -414,7 +438,7 @@ mod implementation {
                     Ok(Err(_)) => Err(ReceiveError::Closed),
                     Err(_) => Err(ReceiveError::Timeout),
                 };
-                return match (self.snapshot(epoch), self.control.outcome()) {
+                let result = match (self.snapshot(epoch), self.control.outcome()) {
                     (ReceiveSnapshot::Retired, ReceiveAck::Retired) => Ok(ReceiveAck::Retired),
                     (ReceiveSnapshot::RecoveryRequired, _) | (_, ReceiveAck::RecoveryRequired) => {
                         Ok(ReceiveAck::RecoveryRequired)
@@ -422,6 +446,12 @@ mod implementation {
                     (ReceiveSnapshot::Draining, _) => observed.map(|()| ReceiveAck::Submitted),
                     _ => Err(ReceiveError::Stale),
                 };
+                #[cfg(windows)]
+                if let (Err(ReceiveError::Timeout), Some(diagnostics)) = (result, &self.diagnostics)
+                {
+                    diagnostics.record_receive_timeout(ReceiveCommand::Drain);
+                }
+                return result;
             }
             // Queue-full/cancel/timeout invokes CancelRequest's atomic recovery.
             // A normally queued release may still apply its terminal cursor before
@@ -670,6 +700,8 @@ mod implementation {
                 sender,
                 control: control.clone(),
                 drain_started: drain_observer,
+                #[cfg(windows)]
+                diagnostics: capture.and_then(|gate| gate.0.diagnostics.get()).cloned(),
                 next_request: 1,
                 _single: PhantomData,
             },
@@ -1205,6 +1237,36 @@ mod implementation {
             Leave,
             Force,
         }
+
+        #[cfg(windows)]
+        struct DelayedScroll {
+            entered: Option<oneshot::Sender<()>>,
+            resume: Option<oneshot::Receiver<()>>,
+        }
+
+        #[cfg(windows)]
+        impl crate::inject_thread::Sink for DelayedScroll {
+            fn admit(&mut self, _epoch: CaptureEpoch) -> bool {
+                true
+            }
+
+            fn submit(&mut self, item: crate::inject_thread::Item) -> Result<(), NativeFailure> {
+                assert!(matches!(
+                    item,
+                    crate::inject_thread::Item::Input(Input::Scroll { .. })
+                ));
+                self.entered.take().unwrap().send(()).unwrap();
+                self.resume.take().unwrap().blocking_recv().unwrap();
+                Ok(())
+            }
+        }
+
+        #[cfg(windows)]
+        enum ScrollInjection {
+            Inline(DelayedScroll),
+            Queued(crate::inject_thread::InjectThread),
+        }
+
         struct Fake {
             generation: u64,
             epoch: Option<CaptureEpoch>,
@@ -1228,6 +1290,8 @@ mod implementation {
             async_failed: bool,
             async_up_failures: usize,
             failed_releases: Vec<Input>,
+            #[cfg(windows)]
+            scroll_injection: Option<ScrollInjection>,
         }
         impl Fake {
             fn new() -> Self {
@@ -1253,6 +1317,8 @@ mod implementation {
                     async_failed: false,
                     async_up_failures: 0,
                     failed_releases: Vec::new(),
+                    #[cfg(windows)]
+                    scroll_injection: None,
                 }
             }
         }
@@ -1301,6 +1367,18 @@ mod implementation {
             }
             fn input(&mut self, event: Input) -> Result<(), NativeFailure> {
                 self.clock = self.clock.saturating_add(self.advance_input);
+                #[cfg(windows)]
+                if matches!(event, Input::Scroll { .. }) {
+                    use crate::inject_thread::{Item, Sink};
+                    let item = Item::Input(event);
+                    match self.scroll_injection.as_mut() {
+                        Some(ScrollInjection::Inline(sink)) => sink.submit(item)?,
+                        Some(ScrollInjection::Queued(thread)) => {
+                            thread.push(self.epoch.unwrap(), item)?;
+                        }
+                        None => (),
+                    }
+                }
                 match event {
                     Input::Key { usage, down } => {
                         self.effects.push(Effect::Key(usage, down));
@@ -1368,6 +1446,74 @@ mod implementation {
             }
             fn take_failed_release(&mut self) -> Option<Input> {
                 self.failed_releases.pop()
+            }
+        }
+
+        #[cfg(windows)]
+        #[tokio::test]
+        async fn slow_injection_times_out_the_first_scroll_only_when_run_inline() {
+            use crate::input_diagnostics::{Phase, ReceiveLoopPhase};
+
+            for queued in [false, true] {
+                let (wake_tx, wake_rx) = mpsc::channel();
+                let (mut driver, mut engine) = channel(
+                    8,
+                    Arc::new(move || {
+                        let _ = wake_tx.send(());
+                    }),
+                    None,
+                )
+                .unwrap();
+                let diagnostics = Arc::new(InputDiagnostics::default());
+                driver.diagnostics = Some(diagnostics.clone());
+                let (entered_tx, entered) = oneshot::channel();
+                let (resume, resume_rx) = oneshot::channel();
+                let sink = DelayedScroll {
+                    entered: Some(entered_tx),
+                    resume: Some(resume_rx),
+                };
+                let injection = if queued {
+                    let injector = crate::inject_thread::spawn(sink, 8, Arc::new(|| {})).unwrap();
+                    ScrollInjection::Queued(injector)
+                } else {
+                    ScrollInjection::Inline(sink)
+                };
+                let (ready, started) = oneshot::channel();
+                let native = std::thread::spawn(move || {
+                    let mut backend = Fake::new();
+                    backend.scroll_injection = Some(injection);
+                    ready.send(()).unwrap();
+                    while wake_rx.recv_timeout(Duration::from_secs(5)).is_ok() {
+                        let clock = now_ms();
+                        pump(&mut engine, &mut backend, clock);
+                        if engine.control().stop_requested() {
+                            return;
+                        }
+                    }
+                });
+                started.await.unwrap();
+                let epoch = driver.begin().await.unwrap();
+                diagnostics.set_receive_phase(ReceiveLoopPhase::Pump);
+                let scroll = Input::Scroll { x: 0, y: 1 };
+                let (reply, reached_sink) = tokio::join!(
+                    driver.input(epoch, scroll, point()),
+                    tokio::time::timeout(Duration::from_secs(5), entered),
+                );
+                let _ = resume.send(());
+                drop(driver);
+                native.join().unwrap();
+                reached_sink.unwrap().unwrap();
+                let summary = diagnostics.snapshot(Phase::End).to_string();
+                assert!(crate::input_diagnostics::is_summary(&summary));
+                if queued {
+                    assert_eq!(reply, Ok(ReceiveAck::Submitted));
+                    assert!(!summary.contains("first_rx_to="));
+                } else {
+                    assert_eq!(reply, Err(ReceiveError::Timeout));
+                    assert!(summary.ends_with(" first_rx_to=32"));
+                    diagnostics.record_receive_timeout(ReceiveCommand::Drain);
+                    assert_eq!(diagnostics.snapshot(Phase::End).to_string(), summary);
+                }
             }
         }
         fn setup(capacity: usize) -> (ReceiveDriver, ReceiveEngine, Fake, Arc<AtomicUsize>) {

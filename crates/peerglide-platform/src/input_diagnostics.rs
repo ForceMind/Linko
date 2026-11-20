@@ -76,6 +76,26 @@ pub enum Count {
     MotionCoalesced,
 }
 
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+pub(crate) enum ReceiveLoopPhase {
+    Desktop = 1,
+    Pump = 2,
+    Messages = 3,
+    Wait = 4,
+    Shutdown = 5,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+pub(crate) enum ReceiveCommand {
+    Begin = 1,
+    Pointer = 2,
+    Input = 3,
+    Release = 4,
+    Drain = 5,
+}
+
 /// Longest line the worker, the GUI log and the copy action accept. The
 /// largest possible summary (every counter at u32::MAX) must fit below it.
 pub const MAX_SUMMARY_BYTES: usize = 1600;
@@ -159,6 +179,10 @@ pub struct InputDiagnostics {
     heartbeat_rtt_us: Mutex<Vec<u32>>,
     #[cfg(windows)]
     next_cursor_sample: std::sync::atomic::AtomicU64,
+    #[cfg(windows)]
+    receive_phase: AtomicU32,
+    #[cfg(windows)]
+    first_receive_timeout: AtomicU32,
 }
 
 // Arrays longer than 32 elements do not implement Default.
@@ -170,11 +194,30 @@ impl Default for InputDiagnostics {
             heartbeat_rtt_us: Mutex::new(Vec::with_capacity(MAX_HEARTBEAT_SAMPLES)),
             #[cfg(windows)]
             next_cursor_sample: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(windows)]
+            receive_phase: AtomicU32::new(0),
+            #[cfg(windows)]
+            first_receive_timeout: AtomicU32::new(0),
         }
     }
 }
 
 impl InputDiagnostics {
+    #[cfg(windows)]
+    pub(crate) fn set_receive_phase(&self, phase: ReceiveLoopPhase) {
+        self.receive_phase.store(phase as u32, Relaxed);
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn record_receive_timeout(&self, command: ReceiveCommand) {
+        if self.active() {
+            let code = command as u32 * 10 + self.receive_phase.load(Relaxed);
+            let _ = self
+                .first_receive_timeout
+                .compare_exchange(0, code, Relaxed, Relaxed);
+        }
+    }
+
     #[cfg(windows)]
     pub(crate) fn sample_cursor(&self, now: u64) -> bool {
         if !self.active() || now < self.next_cursor_sample.load(Relaxed) {
@@ -226,6 +269,10 @@ impl InputDiagnostics {
             counts: std::array::from_fn(|i| self.counts[i].load(Relaxed)),
             heartbeat_samples: samples.len(),
             heartbeat_p95_us,
+            #[cfg(windows)]
+            first_receive_timeout: self.first_receive_timeout.load(Relaxed),
+            #[cfg(not(windows))]
+            first_receive_timeout: 0,
         }
     }
 }
@@ -242,6 +289,7 @@ pub struct Snapshot {
     counts: [u32; KEYS.len()],
     heartbeat_samples: usize,
     heartbeat_p95_us: u32,
+    first_receive_timeout: u32,
 }
 
 impl fmt::Display for Snapshot {
@@ -259,7 +307,11 @@ impl fmt::Display for Snapshot {
             f,
             " hb_rtt_n={} hb_rtt_p95_us={}",
             self.heartbeat_samples, self.heartbeat_p95_us
-        )
+        )?;
+        if self.first_receive_timeout != 0 {
+            write!(f, " first_rx_to={}", self.first_receive_timeout)?;
+        }
+        Ok(())
     }
 }
 
@@ -290,7 +342,11 @@ pub fn is_summary(line: &str) -> bool {
                     && fields
                         .next()
                         .is_some_and(|field| matches_counter(field, "hb_rtt_p95_us"))
-                    && fields.next().is_none()
+                    && fields.next().is_none_or(|field| {
+                        field.strip_prefix("first_rx_to=").is_some_and(|value| {
+                            matches!(value.as_bytes(), [b'1'..=b'5', b'0'..=b'5'])
+                        }) && fields.next().is_none()
+                    })
             }
         }
 }
@@ -325,11 +381,15 @@ mod tests {
             counts: [u32::MAX; KEYS.len()],
             heartbeat_samples: MAX_HEARTBEAT_SAMPLES,
             heartbeat_p95_us: u32::MAX,
+            first_receive_timeout: 55,
         }
         .to_string();
         assert!(summary.len() <= MAX_SUMMARY_BYTES);
         assert!(is_summary(&summary));
-        let (missing_percentile, _) = summary.rsplit_once(' ').unwrap();
+        let (without_timeout, _) = summary.rsplit_once(' ').unwrap();
+        assert!(is_summary(without_timeout));
+        assert!(!is_summary(&format!("{without_timeout} first_rx_to=99")));
+        let (missing_percentile, _) = without_timeout.rsplit_once(' ').unwrap();
         assert!(!is_summary(missing_percentile));
         let (without_latency, _) = missing_percentile.rsplit_once(' ').unwrap();
         assert!(is_summary(without_latency));

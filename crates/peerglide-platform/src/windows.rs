@@ -1,5 +1,6 @@
 use super::*;
 use anyhow::ensure;
+use input_diagnostics::ReceiveLoopPhase;
 use std::{cell::RefCell, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::*,
@@ -240,9 +241,16 @@ fn capture_impl(
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
             let mut last_turn = std::time::Instant::now();
+            let receive_diagnostics = receive.as_ref().and(receive_gate.0.diagnostics.get());
+            let mark_receive = |phase| {
+                if let Some(diagnostics) = receive_diagnostics {
+                    diagnostics.set_receive_phase(phase);
+                }
+            };
             let unexpected = loop {
                 super::note_loop_gap(&receive_gate, &mut last_turn);
                 if receive.is_some() {
+                    mark_receive(ReceiveLoopPhase::Desktop);
                     let debt = STATE
                         .with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
                         || receive_gate.receiving_epoch().is_some();
@@ -250,6 +258,7 @@ fn capture_impl(
                 }
                 // Native effects may synchronously reenter our hooks. This
                 // engine and its backend live outside the STATE RefCell borrow.
+                mark_receive(ReceiveLoopPhase::Pump);
                 let immediate = receive.as_mut().is_some_and(|(engine, _)| {
                     engine.pump(&mut receive_backend, now_ms(), stop.load(Ordering::Acquire))
                 });
@@ -292,6 +301,7 @@ fn capture_impl(
                 if !receive_gate.0.healthy.load(Ordering::Acquire) {
                     break true;
                 }
+                mark_receive(ReceiveLoopPhase::Messages);
                 let has_message = PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0;
                 if has_message {
                     if msg.message == WM_QUIT {
@@ -308,6 +318,7 @@ fn capture_impl(
                     }
                 });
                 if !has_message && !immediate {
+                    mark_receive(ReceiveLoopPhase::Wait);
                     // Input/typed commands wake immediately; the timeout bounds cooperative shutdown.
                     if MsgWaitForMultipleObjectsEx(
                         0,
@@ -321,6 +332,7 @@ fn capture_impl(
                     }
                 }
             };
+            mark_receive(ReceiveLoopPhase::Shutdown);
             STATE.with_borrow_mut(|state| {
                 if let Some(s) = state {
                     s.gate.disable();
