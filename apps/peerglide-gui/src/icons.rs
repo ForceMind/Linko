@@ -68,6 +68,9 @@ pub(super) enum Icon {
     Moon,
     /// Page with text lines, for diagnostics and logs.
     Log,
+    Folder,
+    Audio,
+    Gesture,
 }
 
 impl Icon {
@@ -99,6 +102,21 @@ impl Icon {
             Icon::Sun => paint_sun(painter, grid, color),
             Icon::Moon => paint_moon(painter, grid, color),
             Icon::Log => paint_log(painter, grid, color),
+            Icon::Folder => {
+                let points = [(1, 4), (6, 4), (8, 6), (15, 6), (15, 13), (1, 13), (1, 4)];
+                paint_path(painter, points.map(|(x, y)| grid.at(x as f32, y as f32)).to_vec(), color);
+            }
+            Icon::Audio => {
+                for (x, height) in [(2.0, 2.0), (5.0, 4.0), (8.0, 6.0), (11.0, 3.5), (14.0, 1.5)] {
+                    let endpoints = [grid.at(x, 8.0 - height), grid.at(x, 8.0 + height)];
+                    painter.line_segment(endpoints, line_stroke(color));
+                }
+            }
+            Icon::Gesture => {
+                let points = vec![grid.at(2.0, 12.0), grid.at(9.0, 12.0), grid.at(13.0, 3.0)];
+                paint_path(painter, points, color);
+                painter.circle_filled(grid.at(2.0, 12.0), grid.unit * 1.4, color);
+            }
         }
     }
 }

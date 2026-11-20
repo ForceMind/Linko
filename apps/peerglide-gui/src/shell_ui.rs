@@ -176,6 +176,20 @@ impl App {
         if add.clicked() {
             self.open_setup();
         }
+        for (page, icon, label, key) in [
+            (Page::Transfers, Icon::Folder, "共享", "nav_sharing"),
+            (Page::GestureLab, Icon::Gesture, "手势", "nav_gestures"),
+        ] {
+            let selected = view_key(self.page) == view_key(page);
+            let entry = icon_control(ui, icon, label, expanded, selected, false);
+            self.record_layout_control(key, &entry, ui.clip_rect());
+            if entry.clicked() {
+                self.navigate_to(page);
+                if page == Page::GestureLab {
+                    self.mouse_tab = MouseTab::Practice;
+                }
+            }
+        }
         let align = if expanded {
             egui::Align::LEFT
         } else {

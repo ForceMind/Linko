@@ -306,6 +306,7 @@ impl Panel {
     }
 
     pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        super::visual_assets::handoff_art(ui, super::icons::Icon::Audio);
         ui.label(self.status);
         if self.is_active() {
             if ui.button("停止音频").clicked() {
@@ -321,7 +322,7 @@ impl Panel {
             ui.selectable_value(&mut self.source, Source::System, "系统音频");
             ui.selectable_value(&mut self.source, Source::Microphone, "麦克风");
         });
-        ui.label("先在播放端开启接收。每次会话最长 10 分钟。");
+        ui.label("播放端先接收 · 每次最长 10 分钟");
         ui.add(
             egui::Slider::new(&mut self.volume, 0..=100)
                 .suffix("%")

@@ -545,8 +545,15 @@ impl Panel {
                 self.source = path;
             }
         }
+        if self.active.is_none() {
+            self.file_request_controls(app, ui, ready);
+        }
+        self.transfer_controls(app, ui, ready);
+    }
+
+    fn file_request_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool) {
         ui.add_enabled_ui(
-            ready && self.active.is_none() && !self.edge_active(),
+            ready && !self.edge_active(),
             |ui| {
                 ui.strong("发送文件");
                 ui.add(
@@ -557,11 +564,10 @@ impl Panel {
                     .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
                 ui.label("接收端地址");
                 ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.resume)
-                        .hint_text("续传编号，首次发送留空"),
-                );
-                if ui.button("发送选定文件").clicked() {
+                ui.collapsing("手动续传", |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.resume).hint_text("续传编号"));
+                });
+                if ui.add(super::desktop_style::primary("发送选定文件")).clicked() {
                     let result = self.start(app, true, false);
                     if let Err(error) = result {
                         self.notice = error.to_string();
@@ -603,6 +609,9 @@ impl Panel {
                 }
             },
         );
+    }
+
+    fn transfer_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if let Some(offer) = &self.edge {
             if ui.button("取消边沿发送").clicked() {
@@ -615,6 +624,7 @@ impl Panel {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.source_handoff_ui(app, ui);
         if self.active.is_none() && self.paused.is_some() {
+            ui.strong("已暂停");
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
@@ -642,9 +652,6 @@ impl Panel {
                 }
             });
         }
-        if self.active.is_some() {
-            self.active_ui(app, ui);
-        }
         if let Some(progress) = self.progress {
             let ratio = if progress.total == 0 {
                 1.0
@@ -660,6 +667,9 @@ impl Panel {
                 "{label} {} / {} 字节",
                 progress.bytes, progress.total
             )));
+        }
+        if self.active.is_some() {
+            self.active_ui(app, ui);
         }
         if !self.notice.is_empty() {
             ui.label(&self.notice);
