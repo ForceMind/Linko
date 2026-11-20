@@ -254,11 +254,14 @@ impl App {
         } else {
             None
         };
-        let preview = |(_, center, _)| {
-            snap_preview(center, area, interaction_canvas, local, peer, zoom)
-        };
+        let preview =
+            |(_, center, _)| snap_preview(center, area, interaction_canvas, local, peer, zoom);
         let snapped = self.screen_drag.and_then(preview);
-        let last_snap = if ended { before.and_then(preview) } else { None };
+        let last_snap = if ended {
+            before.and_then(preview)
+        } else {
+            None
+        };
         // A committed direction moves both screens; draw and hit-test the new layout now.
         let (local, peer) = workspace_rects(area, self.displayed_edge(), registered, zoom);
         let ctx = ui.ctx().clone();
@@ -1385,10 +1388,19 @@ mod tests {
         let area = canvas.shrink(20.0);
         let (local, peer) = workspace_rects(area, "right", true, 1.0);
         for (pointer, direction) in [
-            (egui::pos2(16.0, local.center().y + 5.0), egui::vec2(-1.0, 0.0)),
+            (
+                egui::pos2(16.0, local.center().y + 5.0),
+                egui::vec2(-1.0, 0.0),
+            ),
             (peer.center() + egui::vec2(10.0, 8.0), egui::vec2(1.0, 0.0)),
-            (egui::pos2(local.center().x + 5.0, 10.0), egui::vec2(0.0, -1.0)),
-            (egui::pos2(local.center().x + 5.0, 270.0), egui::vec2(0.0, 1.0)),
+            (
+                egui::pos2(local.center().x + 5.0, 10.0),
+                egui::vec2(0.0, -1.0),
+            ),
+            (
+                egui::pos2(local.center().x + 5.0, 270.0),
+                egui::vec2(0.0, 1.0),
+            ),
         ] {
             let (first, second) =
                 snap_preview(pointer, area, canvas, local, peer, 1.0).expect("snap preview");
