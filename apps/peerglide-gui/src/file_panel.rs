@@ -639,26 +639,33 @@ impl Panel {
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.source_handoff_ui(app, ui);
-        if self.active.is_none() && self.paused.is_some() {
-            ui.strong("已暂停");
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        ready && !self.edge_active(),
-                        egui::Button::new("继续已暂停的传输"),
-                    )
-                    .clicked()
-                {
-                    if let Err(error) = self.resume_paused(app) {
-                        self.notice = error.to_string();
+        if let Some(paused) = self.paused.as_ref().filter(|_| self.active.is_none()) {
+            let name = task_label(&paused.request).to_owned();
+            super::desktop_style::card(ui).show(ui, |ui| {
+                ui.label(super::desktop_style::semibold(name, 18.0));
+                if let Some(progress) = self.progress {
+                    progress_meter(ui, progress);
+                }
+                ui.horizontal_wrapped(|ui| {
+                    super::desktop_style::pill(ui, "已暂停", super::desktop_style::Tone::Neutral);
+                    if ui
+                        .add_enabled(
+                            ready && !self.edge_active(),
+                            super::desktop_style::primary("继续"),
+                        )
+                        .clicked()
+                    {
+                        if let Err(error) = self.resume_paused(app) {
+                            self.notice = error.to_string();
+                        }
                     }
-                }
-                if ui.button("结束暂停任务").clicked() {
-                    self.paused = None;
-                    self.notice = "已结束暂停任务，接收端已暂存的数据保留。".into();
-                }
+                    if ui.button("结束暂停任务").clicked() {
+                        self.paused = None;
+                        self.notice = "已结束暂停任务，接收端已暂存的数据保留。".into();
+                    }
+                });
+                ui.weak("接收端须重新等待请求。有暂存记录时选择恢复。退出应用会清除暂停记录。");
             });
-            ui.weak("接收端须重新等待请求。有暂存记录时选择恢复。退出应用会清除暂停记录。");
         }
         if let Some(id) = self.prepared_id {
             ui.horizontal_wrapped(|ui| {
@@ -668,24 +675,10 @@ impl Panel {
                 }
             });
         }
-        if let Some(progress) = self.progress {
-            let ratio = if progress.total == 0 {
-                1.0
-            } else {
-                progress.bytes as f32 / progress.total as f32
-            };
-            let label = if progress.verified_locally {
-                "本机已校验"
-            } else {
-                "已排队发送或匹配续传"
-            };
-            ui.add(egui::ProgressBar::new(ratio).text(format!(
-                "{label} {} / {} 字节",
-                progress.bytes, progress.total
-            )));
-        }
         if self.active.is_some() {
-            self.active_ui(app, ui);
+            super::desktop_style::card(ui).show(ui, |ui| self.active_ui(app, ui));
+        } else if let Some(progress) = self.progress.filter(|_| self.paused.is_none()) {
+            progress_meter(ui, progress);
         }
         if !self.notice.is_empty() {
             ui.label(&self.notice);
@@ -758,6 +751,13 @@ impl Panel {
         };
         let stopping = active.stopping;
         let can_pause = self.can_pause();
+        ui.label(super::desktop_style::semibold(
+            task_label(&active.request),
+            18.0,
+        ));
+        if let Some(progress) = self.progress {
+            progress_meter(ui, progress);
+        }
         if let Some(offer) = &active.offer {
             ui.separator();
             ui.label(format!("{} · {} 字节", offer.name, offer.size));
@@ -783,7 +783,8 @@ impl Panel {
             });
         }
         if ui
-            .add_enabled(can_pause, egui::Button::new("暂停文件传输"))
+            .add_enabled(can_pause, egui::Button::new("暂停"))
+            .on_hover_text("暂停文件传输")
             .clicked()
         {
             self.pause(app);
@@ -795,6 +796,34 @@ impl Panel {
             self.stop(app);
         }
     }
+}
+
+fn task_label(request: &Request) -> &str {
+    match request {
+        Request::Send { source, .. } => source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("发送文件"),
+        Request::Receive { .. } => "接收文件",
+    }
+}
+
+fn progress_meter(ui: &mut egui::Ui, progress: Progress) {
+    let ratio = if progress.total == 0 {
+        1.0
+    } else {
+        (progress.bytes as f32 / progress.total as f32).clamp(0.0, 1.0)
+    };
+    ui.add(egui::ProgressBar::new(ratio).show_percentage());
+    let label = if progress.verified_locally {
+        "本机已校验"
+    } else {
+        "已排队发送或匹配续传"
+    };
+    ui.weak(format!(
+        "{label} {} / {} 字节",
+        progress.bytes, progress.total
+    ));
 }
 
 impl HistorySearch {

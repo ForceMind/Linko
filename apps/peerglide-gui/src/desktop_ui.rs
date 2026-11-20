@@ -550,15 +550,10 @@ impl App {
                             self.save();
                         }
                     });
-                    if ui.small_button("查看快捷键").clicked() {
-                        self.navigate_to(Page::Shortcuts);
-                    }
+                    ui.add_space(12.0);
                     ui.add_enabled_ui(self.writable() && self.desktop_store.is_some(), |ui| {
                         let mut preferences = self.desktop_preferences;
-                        if ui
-                            .checkbox(&mut preferences.reduce_motion, "减少界面动效")
-                            .changed()
-                        {
+                        if motion_switch(ui, &mut preferences.reduce_motion).changed() {
                             let result = self.set_desktop_preferences(ctx, preferences);
                             self.feedback(result, "已保存界面动效偏好。");
                         }
@@ -587,6 +582,16 @@ impl App {
                     {
                         self.cursor_overlay.locate(Instant::now());
                     }
+                    ui.separator();
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button("查看快捷键").clicked() {
+                            self.navigate_to(Page::Shortcuts);
+                        }
+                        for key in SHORTCUTS[1].keys {
+                            keycap(ui, key);
+                        }
+                    });
+                    ui.separator();
                     ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                         if ui
                             .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
@@ -1571,6 +1576,46 @@ const SETTINGS_SECTIONS: [(SettingsSection, Icon, &str); 3] = [
     (SettingsSection::Advanced, Icon::Log, "诊断与资料"),
 ];
 /// Selectable miniature windows use the same foreground and surface tokens as the app.
+fn motion_switch(ui: &mut egui::Ui, enabled: &mut bool) -> egui::Response {
+    let label = "减少界面动效";
+    let (row, mut response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), egui::Sense::click());
+    if response.clicked() {
+        *enabled = !*enabled;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::Checkbox, ui.is_enabled(), *enabled, label)
+    });
+    let painter = ui.painter();
+    let dark = ui.visuals().dark_mode;
+    let center = egui::pos2(row.right() - 24.0, row.center().y);
+    let track = egui::Rect::from_center_size(center, egui::vec2(42.0, 22.0));
+    let fill = if *enabled {
+        tokens::accent_color(dark)
+    } else {
+        tokens::line_color(dark)
+    };
+    painter.rect_filled(track, 11.0, fill);
+    painter.circle_filled(
+        center + egui::vec2(if *enabled { 10.0 } else { -10.0 }, 0.0),
+        8.0,
+        egui::Color32::WHITE,
+    );
+    if response.has_focus() {
+        let stroke = egui::Stroke::new(1.5, tokens::accent_color(dark));
+        painter.rect_stroke(track.expand(3.0), 13.0, stroke, egui::StrokeKind::Outside);
+    }
+    painter.text(
+        row.left_center(),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(15.0),
+        ui.visuals().text_color(),
+    );
+    response
+}
+
 fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
     ui.horizontal(|ui| {
         let width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).min(294.0);
