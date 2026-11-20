@@ -992,6 +992,58 @@ unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
 mod tests {
     use super::*;
 
+    struct WheelTarget(HWND);
+
+    impl Drop for WheelTarget {
+        fn drop(&mut self) {
+            // The current-thread test creates and destroys this window.
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    fn wheel_target() -> WheelTarget {
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+
+        unsafe {
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let module = GetModuleHandleW(std::ptr::null());
+            let class = windows_sys::w!("LinkoHostedWheelTarget");
+            let class_info = WNDCLASSW {
+                lpfnWndProc: Some(DefWindowProcW),
+                hInstance: module,
+                lpszClassName: class,
+                ..WNDCLASSW::default()
+            };
+            assert_ne!(RegisterClassW(&class_info), 0, "register wheel test window");
+
+            let midpoint = POINT {
+                x: GetSystemMetrics(SM_CXSCREEN) / 2,
+                y: GetSystemMetrics(SM_CYSCREEN) / 2,
+            };
+            let hwnd = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                class,
+                class,
+                WS_POPUP | WS_VISIBLE,
+                midpoint.x - 128,
+                midpoint.y - 128,
+                256,
+                256,
+                null_mut(),
+                null_mut(),
+                module,
+                std::ptr::null(),
+            );
+            assert!(!hwnd.is_null(), "create wheel test window");
+            let target = WheelTarget(hwnd);
+            SetForegroundWindow(hwnd);
+            assert_eq!(GetForegroundWindow(), hwnd, "focus wheel test window");
+            assert_eq!(WindowFromPoint(midpoint), hwnd, "wheel test window at center");
+            assert_ne!(SetCursorPos(midpoint.x, midpoint.y), 0, "place test cursor");
+            target
+        }
+    }
+
     #[tokio::test]
     #[ignore = "uses the input desktop and Win32 injection on a GitHub-hosted runner"]
     async fn hosted_windows_native_receive_reports_command_deadlines() {
@@ -1009,6 +1061,7 @@ mod tests {
             Ok("github-hosted")
         );
         assert!(context::capture_source_available());
+        let target = wheel_target();
 
         for pressure in [false, true] {
             let diagnostics = Arc::new(InputDiagnostics::default());
@@ -1053,11 +1106,15 @@ mod tests {
                         .context("receive pointer")?;
                     ensure!(ack == ReceiveAck::Submitted, "pointer was not submitted");
                     longest = longest.max(started.elapsed());
+                    ensure!(
+                        unsafe { GetForegroundWindow() } == target.0,
+                        "wheel test window lost focus"
+                    );
                     let started = Instant::now();
                     let ack = driver
-                        .input(epoch, Input::Scroll { x: 0, y: 0 }, point)
+                        .input(epoch, Input::Scroll { x: 0, y: 1 }, point)
                         .await
-                        .context("receive zero-delta wheel")?;
+                        .context("receive wheel")?;
                     ensure!(ack == ReceiveAck::Submitted, "wheel was not submitted");
                     longest = longest.max(started.elapsed());
                     let started = Instant::now();
@@ -1083,6 +1140,13 @@ mod tests {
                     })
                     .await
                     .context("receive cleanup fence")??;
+                    // Keep the test window's messages bounded during the probe.
+                    let mut msg: MSG = unsafe { std::mem::zeroed() };
+                    unsafe {
+                        while PeekMessageW(&mut msg, target.0, 0, 0, PM_REMOVE) != 0 {
+                            DispatchMessageW(&msg);
+                        }
+                    }
                     rounds += 1;
                     // Exercise the message wait and the periodic desktop check.
                     tokio::time::sleep(Duration::from_millis(12)).await;
@@ -1105,6 +1169,13 @@ mod tests {
             shutdown.unwrap();
             assert!(input_diagnostics::is_summary(&summary));
             assert!(!summary.contains(" sdk=0 "));
+            let wheels = summary
+                .split_ascii_whitespace()
+                .find_map(|field| field.strip_prefix("wh_inj="))
+                .unwrap()
+                .parse::<u32>()
+                .unwrap();
+            assert!(wheels >= rounds, "wheel packets must reach the existing hook");
             assert!(!summary.contains("first_rx_to="));
         }
     }
