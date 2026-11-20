@@ -964,7 +964,10 @@ mod tests {
         panel.tick(&mut app, &ctx);
         assert_eq!(panel.notice, outcome_label(FileOutcome::Failed, true));
         assert!(panel.paused.is_some() && panel.active.is_none());
-        assert_eq!(std::fs::read(&destination)?, b"leave this local file intact");
+        assert_eq!(
+            std::fs::read(&destination)?,
+            b"leave this local file intact"
+        );
         drop(sender);
         drop(panel);
         drop(app);
