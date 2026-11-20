@@ -304,7 +304,12 @@ impl App {
             };
             devices.line_segment([shown_local.center(), shown_peer.center()], stroke);
             if snapped.is_some() {
-                devices.rect_stroke(shown_peer.expand(2.0), 8.0, stroke, egui::StrokeKind::Outside);
+                devices.rect_stroke(
+                    shown_peer.expand(2.0),
+                    8.0,
+                    stroke,
+                    egui::StrokeKind::Outside,
+                );
             }
         }
         let head = if self.activity_tick_active() {
