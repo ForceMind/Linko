@@ -518,6 +518,22 @@ impl Panel {
             let glyph = self.feedback.glyph(ui.ctx(), self.supervisor.needs_poll());
             status_row(ui, glyph, phase_text(phase));
         }
+        let approvals = match phase {
+            Phase::Verified => Some(("本机待确认", "另一台待回执")),
+            Phase::WaitingPeer => Some(("本机已确认", "等待另一台确认")),
+            Phase::SaveReady => Some(("本机保存中", "两端已确认")),
+            Phase::AwaitingPeerSaved => Some(("本机已保存", "另一台待回执")),
+            Phase::ReceiptReady | Phase::Finishing | Phase::Completed => {
+                Some(("本机已保存", "另一台已保存"))
+            }
+            _ => None,
+        };
+        if let Some((local, peer)) = approvals {
+            ui.horizontal_wrapped(|ui| {
+                desktop_style::pill(ui, local, Tone::Neutral);
+                desktop_style::pill(ui, peer, Tone::Neutral);
+            });
+        }
         if phase == Phase::Verified {
             ui.label("两台分别确认。接收、键鼠和自动重连仍关闭。");
             if app.config.fingerprint.is_some() {

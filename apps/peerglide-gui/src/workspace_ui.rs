@@ -2234,6 +2234,8 @@ mod tests {
         let mut app = App::load(fixture.path.clone());
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
+        // Exercise the labelled, expanded rail; compact controls retain these accessible names.
+        app.sidebar_open = true;
         // Sidebar entries, subpage back arrows and in-page links, in the order a person
         // could click them; together they reach every page of the shell.
         for (page, label) in [
@@ -2351,9 +2353,10 @@ mod tests {
         app.config.fingerprint = Some("presentation-only-not-authentication".into());
         let original = app.config.clone();
         app.page = Page::Devices;
+        app.sidebar_open = true;
         let ctx = crate::tests::ui_context();
         let output = frame(&mut app, &ctx, vec![]);
-        // The roster now lives in the sidebar: the peer name painted inside its column.
+        // The roster lives in the expanded rail: the peer name painted inside its column.
         let label = app.config.peer_name.clone();
         let at = output
             .shapes

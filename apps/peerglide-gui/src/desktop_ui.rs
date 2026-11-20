@@ -1370,7 +1370,7 @@ impl App {
                 }
             });
         });
-        let expanded = self.sidebar_expanded(window_width);
+        let expanded = self.sidebar_open;
         let sidebar_mix = motion::sidebar_mix(&ctx, egui::Id::unique("linko-sidebar"), expanded);
         egui::Panel::left("navigation")
             .exact_size(motion::sidebar_width_for(sidebar_mix))
@@ -1575,7 +1575,12 @@ fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
                 ui.allocate_exact_size(egui::vec2(width, 72.0), egui::Sense::click());
             let selected = *current == dark;
             response.widget_info(|| {
-                egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), selected, label)
+                egui::WidgetInfo::selected(
+                    egui::Role::RadioButton,
+                    ui.is_enabled(),
+                    selected,
+                    label,
+                )
             });
             let painter = ui.painter();
             let ink = tokens::text_color(dark);
@@ -1592,7 +1597,13 @@ fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
                 painter.rect_filled(row, 2.0, tokens::line_color(dark));
             }
             let at = egui::pos2(start.x, rect.bottom() - 9.0);
-            painter.text(at, egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(14.0), ink);
+            painter.text(
+                at,
+                egui::Align2::LEFT_BOTTOM,
+                label,
+                egui::FontId::proportional(14.0),
+                ink,
+            );
             let accent = tokens::accent_color(ui.visuals().dark_mode);
             let stroke = if selected || response.has_focus() || response.hovered() {
                 egui::Stroke::new(2.0, accent)

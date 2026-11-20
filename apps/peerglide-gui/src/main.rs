@@ -567,7 +567,7 @@ struct App {
     #[cfg(any(windows, target_os = "macos"))]
     route_plan: route_plan::Panel,
     /// Explicit sidebar choice; None follows the window width.
-    sidebar_pref: Option<bool>,
+    sidebar_open: bool,
     page_motion: motion::Retrigger<u8>,
     capsule_motion: motion::Retrigger<(&'static str, desktop_style::Tone)>,
     notice_details: bool,
@@ -721,7 +721,7 @@ impl App {
             display_inventory: display_inventory::Panel::default(),
             #[cfg(any(windows, target_os = "macos"))]
             route_plan: route_plan::Panel::default(),
-            sidebar_pref: None,
+            sidebar_open: false,
             page_motion: motion::Retrigger::default(),
             capsule_motion: motion::Retrigger::default(),
             notice_details: false,
