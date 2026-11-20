@@ -456,14 +456,16 @@ impl Panel {
         };
         super::visual_assets::handoff_art(ui, symbol);
         if !self.supervisor.needs_poll() && self.supervisor.phase() != Phase::Completed {
-            ui.small("两台电脑需在同一局域网");
+            if needs_identity {
+                ui.label("先创建本机安全身份，协同仍关闭。");
+            } else {
+                ui.small("两台电脑需在同一局域网");
+            }
             if let Some(join) = entry_cards(ui, self.join_entry) {
                 self.select_entry(join);
             }
             ui.add_space(10.0);
-            if needs_identity {
-                ui.label("先创建本机安全身份，协同仍关闭。");
-            } else {
+            if !needs_identity {
                 ui.label("设备名称");
                 ui.text_edit_singleline(&mut self.name);
                 if self.join_entry {
@@ -666,7 +668,7 @@ impl Panel {
     /// Leave room for the active step and keep the footer outside its scroll area.
     fn target_height(&self, needs_identity: bool) -> f32 {
         if needs_identity {
-            return 280.0;
+            return 340.0;
         }
         match self.supervisor.phase() {
             Phase::Listening => 510.0,
@@ -1558,7 +1560,8 @@ mod tests {
                         },
                         |root| app.desktop(root),
                     );
-                    let controls: Vec<_> = ["准备这台电脑", "关闭"]
+                    let labels = ["准备这台电脑", "关闭", "先创建本机安全身份，协同仍关闭。"];
+                    let controls: Vec<_> = labels
                         .into_iter()
                         .map(|label| {
                             let bounds = output.shapes.iter().find_map(|s| {

@@ -1381,7 +1381,9 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(shell_ui::SIDEBAR_MARGIN, 8)),
             )
             .show(root, |ui| {
-                ui.style_mut().visuals = egui::Visuals::dark();
+                let rail = &mut ui.style_mut().visuals;
+                *rail = egui::Visuals::dark();
+                rail.override_text_color = Some(egui::Color32::from_rgb(231, 232, 247));
                 self.sidebar(ui, sidebar_mix);
             });
         if self.page != Page::GestureLab && self.page != Page::GestureRules

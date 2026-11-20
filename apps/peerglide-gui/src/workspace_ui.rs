@@ -203,11 +203,7 @@ impl App {
 
     fn workspace_canvas(&mut self, ui: &mut egui::Ui) {
         let registered = self.config.fingerprint.is_some();
-        let height = if ui.available_width() < 440.0 {
-            180.0
-        } else {
-            280.0
-        };
+        let height = (ui.ctx().viewport_rect().height() * 0.48).clamp(180.0, 420.0);
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::hover(),
