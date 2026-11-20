@@ -203,7 +203,13 @@ impl App {
 
     fn workspace_canvas(&mut self, ui: &mut egui::Ui) {
         let registered = self.config.fingerprint.is_some();
-        let height = (ui.ctx().viewport_rect().height() * 0.48).clamp(180.0, 420.0);
+        // Leave room for the recovery banner, locked-direction note and controls.
+        let limit = if self.recovery_blocked || self.stopping.is_some() {
+            280.0
+        } else {
+            420.0
+        };
+        let height = (ui.ctx().viewport_rect().height() * 0.48).clamp(180.0, limit);
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::hover(),
