@@ -1955,7 +1955,7 @@ pub(super) fn local_device_name() -> &'static str {
         "这台电脑"
     }
 }
-fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
+pub(super) fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
     if !center.x.is_finite() || !center.y.is_finite() || local.expand(10.0).contains(center) {
         return None;
     }
