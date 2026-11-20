@@ -1038,7 +1038,11 @@ mod tests {
             let target = WheelTarget(hwnd);
             SetForegroundWindow(hwnd);
             assert_eq!(GetForegroundWindow(), hwnd, "focus wheel test window");
-            assert_eq!(WindowFromPoint(midpoint), hwnd, "wheel test window at center");
+            assert_eq!(
+                WindowFromPoint(midpoint),
+                hwnd,
+                "wheel test window at center"
+            );
             assert_ne!(SetCursorPos(midpoint.x, midpoint.y), 0, "place test cursor");
             target
         }
@@ -1175,7 +1179,10 @@ mod tests {
                 .unwrap()
                 .parse::<u32>()
                 .unwrap();
-            assert!(wheels >= rounds, "wheel packets must reach the existing hook");
+            assert!(
+                wheels >= rounds,
+                "wheel packets must reach the existing hook"
+            );
             assert!(!summary.contains("first_rx_to="));
         }
     }
