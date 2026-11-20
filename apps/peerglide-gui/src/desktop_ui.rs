@@ -469,18 +469,16 @@ impl App {
         } else {
             CollaborationTab::Files
         };
-        self.subpage_header(ui, "文件与剪贴板", Page::Displays);
-        ui.horizontal(|ui| {
-            for (page, label) in [
-                (Page::Transfers, "文件传输"),
-                (Page::Clipboard, "剪贴板"),
-                (Page::Audio, "音频"),
-            ] {
-                if ui.selectable_label(self.page == page, label).clicked() {
-                    self.navigate_to(page);
-                }
-            }
-        });
+        self.subpage_header(ui, "共享", Page::Displays);
+        let mut page = self.page;
+        let tabs = [
+            (Page::Clipboard, Icon::Log, "剪贴板"),
+            (Page::Transfers, Icon::Folder, "文件传输"),
+            (Page::Audio, Icon::Audio, "音频"),
+        ];
+        if segmented(ui, &mut page, &tabs) {
+            self.navigate_to(page);
+        }
         let muted = tokens::muted_color(ui.visuals().dark_mode);
         icon_row(
             ui,

@@ -380,6 +380,7 @@ impl Panel {
         if self.handoff_ui(app, ui) {
             return;
         }
+        super::visual_assets::handoff_art(ui, super::icons::Icon::Log);
         ui.add_enabled_ui(self.active.is_none(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.mode, Mode::Text, "纯文本");
@@ -388,11 +389,11 @@ impl Panel {
             #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
             ui.checkbox(&mut self.for_drop, "接收端准备拖放");
         });
-        ui.label("两端选择相同内容类型和用途，接收端再开启等待。");
+        ui.small("两端选择相同类型与用途，接收端先等待。");
         if self.for_drop {
             ui.weak("接收端确认后可在本机拖放，系统剪贴板不会被写入。");
         } else {
-            ui.weak("发送前请确认当前复制的内容。导入需要在接收端再次确认。");
+            ui.weak("发送当前内容，导入需接收端确认。");
         }
         let send_label = match self.mode {
             Mode::Text => "发送当前纯文本",
@@ -565,7 +566,9 @@ fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Dec
         }
         return ui.button("拒绝").clicked().then_some(Decision::Decline);
     }
-    let import = ui.button("导入到本机剪贴板").clicked();
+    let import = ui
+        .add(super::desktop_style::primary("导入到本机剪贴板"))
+        .clicked();
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     let prepare_drag = ui
         .add_enabled(
