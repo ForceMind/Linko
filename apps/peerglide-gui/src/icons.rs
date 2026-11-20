@@ -104,7 +104,11 @@ impl Icon {
             Icon::Log => paint_log(painter, grid, color),
             Icon::Folder => {
                 let points = [(1, 4), (6, 4), (8, 6), (15, 6), (15, 13), (1, 13), (1, 4)];
-                paint_path(painter, points.map(|(x, y)| grid.at(x as f32, y as f32)).to_vec(), color);
+                paint_path(
+                    painter,
+                    points.map(|(x, y)| grid.at(x as f32, y as f32)).to_vec(),
+                    color,
+                );
             }
             Icon::Audio => {
                 for (x, height) in [(2.0, 2.0), (5.0, 4.0), (8.0, 6.0), (11.0, 3.5), (14.0, 1.5)] {

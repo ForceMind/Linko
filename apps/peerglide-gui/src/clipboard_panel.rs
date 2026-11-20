@@ -566,7 +566,9 @@ fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Dec
         }
         return ui.button("拒绝").clicked().then_some(Decision::Decline);
     }
-    let import = ui.add(super::desktop_style::primary("导入到本机剪贴板")).clicked();
+    let import = ui
+        .add(super::desktop_style::primary("导入到本机剪贴板"))
+        .clicked();
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
     let prepare_drag = ui
         .add_enabled(

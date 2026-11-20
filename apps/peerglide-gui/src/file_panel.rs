@@ -552,63 +552,63 @@ impl Panel {
     }
 
     fn file_request_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool) {
-        ui.add_enabled_ui(
-            ready && !self.edge_active(),
-            |ui| {
-                ui.strong("发送文件");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.source)
-                        .hint_text("源文件绝对路径，可拖入单个本机文件"),
-                );
-                let hint = data_access::default_target(app, PORT)
-                    .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
-                ui.label("接收端地址");
-                ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
-                ui.collapsing("手动续传", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.resume).hint_text("续传编号"));
-                });
-                if ui.add(super::desktop_style::primary("发送选定文件")).clicked() {
-                    let result = self.start(app, true, false);
-                    if let Err(error) = result {
-                        self.notice = error.to_string();
-                    }
+        ui.add_enabled_ui(ready && !self.edge_active(), |ui| {
+            ui.strong("发送文件");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.source)
+                    .hint_text("源文件绝对路径，可拖入单个本机文件"),
+            );
+            let hint = data_access::default_target(app, PORT)
+                .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
+            ui.label("接收端地址");
+            ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
+            ui.collapsing("手动续传", |ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.resume).hint_text("续传编号"));
+            });
+            if ui
+                .add(super::desktop_style::primary("发送选定文件"))
+                .clicked()
+            {
+                let result = self.start(app, true, false);
+                if let Err(error) = result {
+                    self.notice = error.to_string();
                 }
-                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-                if ui
-                    .add_enabled(
-                        source_context(app, ui.ctx()),
-                        egui::Button::new("发送并准备跨机拖动"),
-                    )
-                    .clicked()
-                {
-                    if let Err(error) = self.start(app, true, true) {
-                        self.notice = error.to_string();
-                    }
+            }
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            if ui
+                .add_enabled(
+                    source_context(app, ui.ctx()),
+                    egui::Button::new("发送并准备跨机拖动"),
+                )
+                .clicked()
+            {
+                if let Err(error) = self.start(app, true, true) {
+                    self.notice = error.to_string();
                 }
-                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-                if ui
-                    .add_enabled(!self.export.active(), egui::Button::new("开启一次边沿发送"))
-                    .clicked()
-                {
-                    if let Err(error) = self.arm_edge(app, ui.ctx()) {
-                        self.notice = error.to_string();
-                    }
+            }
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            if ui
+                .add_enabled(!self.export.active(), egui::Button::new("开启一次边沿发送"))
+                .clicked()
+            {
+                if let Err(error) = self.arm_edge(app, ui.ctx()) {
+                    self.notice = error.to_string();
                 }
-                ui.add_space(8.0);
-                ui.strong("接收文件");
-                ui.label("本机监听地址");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.bind)
-                        .hint_text(format!("留空自动监听 IPv4 / IPv6，端口 {PORT}")),
-                );
-                if ui.button("等待文件请求").clicked() {
-                    let result = self.start(app, false, false);
-                    if let Err(error) = result {
-                        self.notice = error.to_string();
-                    }
+            }
+            ui.add_space(8.0);
+            ui.strong("接收文件");
+            ui.label("本机监听地址");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.bind)
+                    .hint_text(format!("留空自动监听 IPv4 / IPv6，端口 {PORT}")),
+            );
+            if ui.button("等待文件请求").clicked() {
+                let result = self.start(app, false, false);
+                if let Err(error) = result {
+                    self.notice = error.to_string();
                 }
-            },
-        );
+            }
+        });
     }
 
     fn transfer_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool) {
