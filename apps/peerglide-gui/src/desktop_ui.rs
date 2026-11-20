@@ -384,7 +384,6 @@ impl App {
             (MouseTab::Rules, Icon::Sliders, "规则与应用"),
         ];
         segmented(ui, &mut self.mouse_tab, &tabs);
-        ui.small("仅本窗口预览 · 全局捕获与动作关闭");
         ui.add_space(14.0);
         let writable = self.idle_writable();
         match self.mouse_tab {
@@ -1413,7 +1412,7 @@ impl App {
             .show(root, |ui| {
                 ui.multiply_opacity(shell_ui::view_alpha(progress));
                 if matches!(self.page, Page::GestureLab | Page::GestureRules) {
-                    self.subpage_header(ui, "本机鼠标", Page::Shortcuts);
+                    self.subpage_header(ui, "手势", Page::Shortcuts);
                 }
                 egui::ScrollArea::vertical()
                     .id_salt(shell_ui::view_key(self.page))

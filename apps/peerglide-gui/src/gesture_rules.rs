@@ -281,7 +281,7 @@ impl RuleEditor {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, dir: &Path, writable: bool) {
         ui.strong("轨迹、范围与动作");
-        ui.small("规则仅保存在本机，勾选后可预览匹配。");
+        ui.small("仅本机预览 · 全局捕获与动作关闭");
         if !writable {
             ui.label("当前配置只读，可以查看与测试，不能编辑或保存。");
         }

@@ -233,7 +233,7 @@ impl GestureLab {
     pub fn ui(&mut self, ui: &mut egui::Ui, worker_running: bool) -> Option<Rect> {
         self.inspection = None;
         ui.label("按住右键试画 · Esc 取消");
-        ui.small("仅本窗口，不执行动作；手动保存才写入文件。");
+        ui.small("全局捕获与动作关闭");
         if worker_running {
             self.cancel();
             ui.label("设备会话运行期间暂停画布录制。请先停止设备会话，再进行窗口内测试。");
@@ -347,16 +347,13 @@ impl GestureLab {
                 });
             }
         }
-        ui.horizontal(|ui| {
-            if ui.button("清空画布").clicked() {
-                self.cancel();
-                self.samples.clear();
-                self.result = None;
-                self.completed = false;
-                self.saved = false;
-            }
-            ui.weak("绘制后到规则页选择轨迹、范围与动作；保存规则不会启用全局手势。");
-        });
+        if ui.button("清空画布").clicked() {
+            self.cancel();
+            self.samples.clear();
+            self.result = None;
+            self.completed = false;
+            self.saved = false;
+        }
         let mut save_rect = None;
         let export = egui::CollapsingHeader::new("样本标注与导出 · 可选")
             .open(Some(self.export_open))
@@ -396,7 +393,6 @@ impl GestureLab {
         {
             self.inspection = save_rect.map(|save| (rect, save));
         }
-        ui.weak("窗口内轨迹不能证明原生鼠标采样率、全局手势或动作执行已经验收。");
         if !self.feedback.is_empty() {
             ui.label(&self.feedback);
         }
