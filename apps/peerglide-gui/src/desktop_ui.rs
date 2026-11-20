@@ -1585,7 +1585,7 @@ fn motion_switch(ui: &mut egui::Ui, enabled: &mut bool) -> egui::Response {
         response.mark_changed();
     }
     response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::Role::Checkbox, ui.is_enabled(), *enabled, label)
+        egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *enabled, label)
     });
     let painter = ui.painter();
     let dark = ui.visuals().dark_mode;
@@ -2585,9 +2585,14 @@ mod subpage_tests {
         assert!(app.config.dark);
         let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         assert_eq!(stored["data"]["dark"], true);
+        click_text(&mut app, &ctx, "减少界面动效")?;
+        assert!(app.desktop_preferences.reduce_motion);
         assert!(!app.config.native && !app.config.allow && !app.config.reconnect);
         assert!(app.config.fingerprint.is_none() && app.child.is_none());
         drop(app);
+        let reopened = App::load(fixture.path.clone());
+        assert!(reopened.desktop_preferences.reduce_motion);
+        drop(reopened);
         fixture.close()?;
         Ok(())
     }
