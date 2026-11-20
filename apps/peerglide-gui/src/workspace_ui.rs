@@ -177,7 +177,9 @@ impl App {
         } else {
             420.0
         };
-        let height = (ui.ctx().viewport_rect().height() * 0.48).clamp(180.0, limit);
+        let viewport = ui.ctx().viewport_rect();
+        let status_room = if viewport.height() < 760.0 { 426.0 } else { 400.0 };
+        let height = (viewport.height() - status_room).clamp(180.0, limit);
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::hover(),
@@ -630,6 +632,7 @@ impl App {
             ui.multiply_opacity(amount);
             card(ui).inner_margin(margin).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
+                ui.strong("连接与身份详情");
                 self.selected_device_metadata(ui);
                 #[cfg(any(windows, target_os = "macos"))]
                 if !self.workspace_peer_selected {
@@ -1791,7 +1794,8 @@ mod tests {
             time += FRAME_SECS;
         }
         let start = label_at(&mut app, &ctx, time, "B")?;
-        let end = start - Vec2::new(260.0, 0.0);
+        let local = label_at(&mut app, &ctx, time, desktop_ui::local_device_name())?;
+        let end = egui::pos2(local.x - (start.x - local.x) * 0.65, start.y);
         time += FRAME_SECS;
         let press = vec![egui::Event::PointerMoved(start), pointer(start, true)];
         step(&mut app, &ctx, time, press);

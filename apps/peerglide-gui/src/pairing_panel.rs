@@ -435,8 +435,10 @@ impl Panel {
         };
         let width = ui.available_width().min(660.0);
         let room = ui.available_height();
+        let top_gap = ((room - height - 108.0) * 0.45).clamp(8.0, 72.0);
+        let body_height = (height + 12.0).min(room - top_gap - 128.0).max(1.0);
         ui.vertical_centered(|ui| {
-            ui.add_space(((room - height - 108.0) * 0.45).clamp(8.0, 72.0));
+            ui.add_space(top_gap);
             let title = match phase {
                 Phase::Verified => "确认设备",
                 Phase::Completed => "已配对",
@@ -445,13 +447,13 @@ impl Panel {
             ui.label(egui::RichText::new(title).size(34.0).strong());
             ui.add_space(12.0);
             ui.allocate_ui_with_layout(
-                egui::vec2(width, 0.0),
+                egui::vec2(width, body_height + 64.0),
                 egui::Layout::top_down(egui::Align::Center),
                 |ui| {
                     ui.set_width(width);
                     egui::ScrollArea::vertical()
                         .id_salt(body_id)
-                        .max_height((height + 12.0).min(room - 150.0).max(1.0))
+                        .max_height(body_height)
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             ui.vertical_centered(|ui| self.body(app, ui, now, needs_identity));

@@ -881,7 +881,7 @@ mod tests {
 /// logic, paint and activity-beat path that eframe runs, at an explicit 60 Hz clock.
 #[cfg(test)]
 mod shell_budget_tests {
-    use crate::{App, Dialog, SessionMode, WorkerSnapshot};
+    use crate::{desktop_ui, App, Dialog, SessionMode, WorkerSnapshot};
 
     use anyhow::{Context, Result};
     use eframe::egui;
@@ -1161,7 +1161,8 @@ mod shell_budget_tests {
         window.frames(&mut app, 20);
         // At 920 points the sidebar hides names, so the first "B" is the canvas screen.
         let start = window.find(&mut app, "B")?;
-        let end = start - egui::vec2(260.0, 0.0);
+        let local = window.find(&mut app, desktop_ui::local_device_name())?;
+        let end = egui::pos2(local.x - (start.x - local.x) * 0.65, start.y);
         let press = vec![egui::Event::PointerMoved(start), pointer(start, true)];
         window.step(&mut app, press);
         window.step(&mut app, vec![egui::Event::PointerMoved(end)]);

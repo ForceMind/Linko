@@ -265,7 +265,6 @@ impl App {
     }
     /// Body of the details drawer: the former connection and identity card, discovery included.
     pub(super) fn connection_details(&mut self, ui: &mut egui::Ui) {
-        ui.strong("连接与身份详情");
         ui.label(format!("连接详情：{}", self.status));
         ui.label(if self.config.listen {
             "连接方式：等待另一台电脑"
