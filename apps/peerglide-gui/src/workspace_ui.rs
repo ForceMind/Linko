@@ -178,7 +178,11 @@ impl App {
             420.0
         };
         let viewport = ui.ctx().viewport_rect();
-        let status_room = if viewport.height() < 760.0 { 426.0 } else { 400.0 };
+        let status_room = if viewport.height() < 760.0 {
+            426.0
+        } else {
+            400.0
+        };
         let height = (viewport.height() - status_room).clamp(180.0, limit);
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
@@ -392,11 +396,13 @@ impl App {
         ui.separator();
         if ui.available_width() >= 620.0 {
             ui.columns(3, |columns| {
-                self.context_header(&mut columns[0]);
-                self.context_primary(&mut columns[0]);
-                if columns[0].small_button("文件与剪贴板").clicked() {
-                    self.navigate_to(Page::Transfers);
-                }
+                columns[0].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                    self.context_header(ui);
+                    self.context_primary(ui);
+                    if ui.small_button("文件与剪贴板").clicked() {
+                        self.navigate_to(Page::Transfers);
+                    }
+                });
                 self.context_rows(&mut columns[1]);
                 self.context_attention(&mut columns[2]);
             });
