@@ -297,11 +297,15 @@ impl App {
         }
         if registered {
             let stroke = if snapped.is_some() {
-                egui::Stroke::new(2.5, tokens::accent_color(self.config.dark))
+                let ink = desktop_style::status_colors(self.config.dark, Tone::Good).1;
+                egui::Stroke::new(2.5, ink)
             } else {
                 ui.visuals().widgets.noninteractive.bg_stroke
             };
             devices.line_segment([shown_local.center(), shown_peer.center()], stroke);
+            if snapped.is_some() {
+                devices.rect_stroke(shown_peer.expand(2.0), 8.0, stroke, egui::StrokeKind::Outside);
+            }
         }
         let head = if self.activity_tick_active() {
             motion::spinner_head_for(ui.ctx(), now)

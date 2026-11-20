@@ -449,8 +449,14 @@ impl Panel {
     }
 
     fn body(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64, needs_identity: bool) {
+        let symbol = match self.supervisor.phase() {
+            Phase::Completed => Icon::Check,
+            Phase::Failed(_) | Phase::Stopped(_) => Icon::Warning,
+            _ => Icon::Link,
+        };
+        super::visual_assets::handoff_art(ui, symbol);
         if !self.supervisor.needs_poll() && self.supervisor.phase() != Phase::Completed {
-            ui.label("两台电脑连接同一局域网。");
+            ui.small("两台电脑需在同一局域网");
             if let Some(join) = entry_cards(ui, self.join_entry) {
                 self.select_entry(join);
             }

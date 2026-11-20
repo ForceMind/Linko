@@ -36,14 +36,14 @@ fn palette(dark: bool) -> Palette {
         }
     } else {
         Palette {
-            canvas: Color32::from_rgb(247, 248, 250),
+            canvas: Color32::from_rgb(249, 248, 246),
             surface: Color32::WHITE,
             soft: Color32::from_rgb(241, 244, 249),
             hover: Color32::from_rgb(232, 238, 255),
             text: Color32::from_rgb(32, 37, 45),
             muted: Color32::from_rgb(95, 111, 133),
             line: Color32::from_rgb(226, 231, 239),
-            accent: Color32::from_rgb(66, 99, 235),
+            accent: Color32::from_rgb(78, 76, 170),
         }
     }
 }
@@ -54,7 +54,7 @@ fn tone_colors(dark: bool, tone: Tone) -> (Color32, Color32) {
         (false, Tone::Good) => ((226, 244, 237), (30, 103, 78)),
         (false, Tone::Warning) => ((255, 243, 213), (128, 82, 8)),
         (false, Tone::Danger) => ((253, 233, 235), (160, 44, 60)),
-        (false, Tone::Accent) => ((232, 238, 255), (54, 81, 204)),
+        (false, Tone::Accent) => ((235, 234, 250), (73, 69, 158)),
         (true, Tone::Neutral) => ((48, 57, 71), (205, 215, 230)),
         (true, Tone::Good) => ((29, 63, 53), (145, 222, 186)),
         (true, Tone::Warning) => ((74, 56, 26), (244, 204, 127)),
@@ -231,28 +231,21 @@ pub(super) fn card(ui: &egui::Ui) -> egui::Frame {
         })
 }
 
-/// A quiet, single-layer wash; no second rounded panel sits behind the hardware.
+/// A stationary dot grid provides a spatial reference during screen placement.
 pub(super) fn canvas_wash(painter: &egui::Painter, rect: egui::Rect, dark: bool) {
     let colors = palette(dark);
+    painter.rect_filled(rect, 9.0, colors.canvas);
+    let step = 20.0_f32.max((rect.area() / 1600.0).sqrt());
     let mut mesh = egui::Mesh::default();
-    for band in 0..24 {
-        let middle = 1.0 - ((band as f32 + 0.5) / 12.0 - 1.0).abs();
-        let blend = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * middle) as u8;
-        let color = Color32::from_rgb(
-            blend(colors.surface.r(), colors.canvas.r()),
-            blend(colors.surface.g(), colors.canvas.g()),
-            blend(colors.surface.b(), colors.canvas.b()),
-        );
-        mesh.add_colored_rect(
-            egui::Rect::from_min_max(
-                rect.min + egui::vec2(0.0, rect.height() * band as f32 / 24.0),
-                egui::pos2(
-                    rect.max.x,
-                    rect.min.y + rect.height() * (band + 1) as f32 / 24.0,
-                ),
-            ),
-            color,
-        );
+    let mut y = rect.top() + step * 0.5;
+    while y < rect.bottom() {
+        let mut x = rect.left() + step * 0.5;
+        while x < rect.right() {
+            let dot = egui::Rect::from_center_size(egui::pos2(x, y), egui::Vec2::splat(1.5));
+            mesh.add_colored_rect(dot, colors.line);
+            x += step;
+        }
+        y += step;
     }
     painter.add(egui::Shape::mesh(mesh));
 }
@@ -275,8 +268,8 @@ pub(super) fn pill(ui: &mut egui::Ui, label: &str, tone: Tone) {
 
 pub(super) fn primary(label: &str) -> egui::Button<'static> {
     egui::Button::new(semibold(label, 15.0).color(Color32::WHITE))
-        .fill(Color32::from_rgb(66, 99, 235))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(54, 81, 204)))
+        .fill(Color32::from_rgb(78, 76, 170))
+        .stroke(Stroke::new(1.0, Color32::from_rgb(60, 57, 144)))
         .corner_radius(egui::CornerRadius::same(9))
         .min_size(egui::vec2(120.0, 38.0))
 }
