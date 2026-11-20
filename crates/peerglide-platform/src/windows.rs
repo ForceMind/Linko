@@ -992,6 +992,123 @@ unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "uses the input desktop and Win32 injection on a GitHub-hosted runner"]
+    async fn hosted_windows_native_receive_reports_command_deadlines() {
+        use anyhow::Context;
+        use input_diagnostics::{InputDiagnostics, Phase};
+        use std::time::{Duration, Instant};
+
+        assert_eq!(
+            std::env::var("LINKO_TEST_WINDOWS_RECEIVE").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        assert_eq!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref(),
+            Ok("github-hosted")
+        );
+        assert!(context::capture_source_available());
+
+        for pressure in [false, true] {
+            let diagnostics = Arc::new(InputDiagnostics::default());
+            let display = if pressure {
+                Some(Arc::new(ReceiveDisplay::select((0.0, 0.0)).unwrap()))
+            } else {
+                None
+            };
+            let (events, _received) = capture_event_channel();
+            let mut session = capture_with_receive_display(
+                events,
+                input_capabilities(),
+                Some(diagnostics.clone()),
+                display,
+            )
+            .unwrap();
+            let mut driver = session.take_receive_driver().unwrap().unwrap();
+            let control = driver.control();
+            let burst = pressure.then(|| {
+                tokio::spawn(async move {
+                    loop {
+                        for _ in 0..16 {
+                            control.wake_loop();
+                        }
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                    }
+                })
+            });
+
+            let point = ReceivePoint { x: 0.5, y: 0.5 };
+            let mut rounds = 0;
+            let mut longest = Duration::ZERO;
+            let result: Result<()> = async {
+                for _ in 0..64 {
+                    let started = Instant::now();
+                    let epoch = driver.begin().await.context("receive begin")?;
+                    longest = longest.max(started.elapsed());
+                    let started = Instant::now();
+                    let ack = driver
+                        .pointer(epoch, point)
+                        .await
+                        .context("receive pointer")?;
+                    ensure!(ack == ReceiveAck::Submitted, "pointer was not submitted");
+                    longest = longest.max(started.elapsed());
+                    let started = Instant::now();
+                    let ack = driver
+                        .input(epoch, Input::Scroll { x: 0, y: 0 }, point)
+                        .await
+                        .context("receive zero-delta wheel")?;
+                    ensure!(ack == ReceiveAck::Submitted, "wheel was not submitted");
+                    longest = longest.max(started.elapsed());
+                    let started = Instant::now();
+                    let ack = driver
+                        .release(epoch, None)
+                        .await
+                        .context("receive release")?;
+                    ensure!(
+                        ack != ReceiveAck::RecoveryRequired,
+                        "release requires recovery"
+                    );
+                    longest = longest.max(started.elapsed());
+                    tokio::time::timeout(Duration::from_secs(2), async {
+                        loop {
+                            match driver.snapshot(epoch) {
+                                ReceiveSnapshot::Retired => return Ok(()),
+                                ReceiveSnapshot::RecoveryRequired => {
+                                    anyhow::bail!("native cleanup remains unconfirmed")
+                                }
+                                _ => tokio::time::sleep(Duration::from_millis(1)).await,
+                            }
+                        }
+                    })
+                    .await
+                    .context("receive cleanup fence")??;
+                    rounds += 1;
+                    // Exercise the message wait and the periodic desktop check.
+                    tokio::time::sleep(Duration::from_millis(12)).await;
+                }
+                Ok(())
+            }
+            .await;
+            if let Some(burst) = burst {
+                burst.abort();
+            }
+            let summary = diagnostics.snapshot(Phase::End).to_string();
+            println!(
+                "Windows native receive: pressure={pressure} rounds={rounds} max_command_us={}",
+                longest.as_micros()
+            );
+            println!("{summary}");
+            drop(driver);
+            let shutdown = session.shutdown();
+            result.unwrap();
+            shutdown.unwrap();
+            assert!(input_diagnostics::is_summary(&summary));
+            assert!(!summary.contains(" sdk=0 "));
+            assert!(!summary.contains("first_rx_to="));
+        }
+    }
+
     #[test]
     fn recovery_inputs_are_only_a_tagged_right_pair_or_one_right_up() {
         // Opaque test tags test field propagation, never consent/authentication.

@@ -29,6 +29,12 @@ jobs:
         if: runner.os == 'Windows'
         run: .\target\debug\peerglide.exe --version
       - run: cargo test --workspace --locked
+      - name: Windows native receive on the hosted input desktop
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        env:
+          LINKO_TEST_WINDOWS_RECEIVE: '1'
+        run: cargo test -p peerglide-platform --lib --locked windows::tests::hosted_windows_native_receive_reports_command_deadlines -- --ignored --exact --nocapture
       - name: Synthetic gesture corpus metrics (not human acceptance)
         run: cargo test -p peerglide-gestures --test corpus --locked -- --nocapture
       - name: Verify macOS keycodes against active SDK
