@@ -764,27 +764,31 @@ fn generic_device_symbol(
     surface: egui::Color32,
 ) {
     let size = rect.size();
-    let stroke = egui::Stroke::new((size.y * 0.014).clamp(1.2, 2.0), ink);
-    let first = egui::Rect::from_min_size(
-        rect.min + egui::vec2(size.x * 0.12, size.y * 0.18),
-        egui::vec2(size.x * 0.50, size.y * 0.44),
-    );
-    let second = egui::Rect::from_min_size(
-        rect.min + egui::vec2(size.x * 0.38, size.y * 0.40),
-        egui::vec2(size.x * 0.50, size.y * 0.44),
-    );
-    let radius = (size.y * 0.04).clamp(1.0, 5.0);
-    painter.rect_filled(first, radius, surface);
-    painter.rect_stroke(first, radius, stroke, egui::StrokeKind::Inside);
-    painter.rect_filled(second, radius, surface);
-    painter.rect_stroke(second, radius, stroke, egui::StrokeKind::Inside);
-    painter.line_segment(
-        [
-            rect.min + egui::vec2(size.x * 0.34, size.y * 0.69),
-            rect.min + egui::vec2(size.x * 0.65, size.y * 0.34),
+    let stroke = egui::Stroke::new((size.y * 0.018).clamp(1.0, 3.0), ink);
+    let screen_size = egui::vec2(size.x * 0.83, size.y * 0.68);
+    let rear = egui::Rect::from_min_size(rect.min + size * 0.035, screen_size);
+    let front = egui::Rect::from_min_size(rect.min + size * 0.15, screen_size);
+    let radius = (size.y * 0.035).clamp(1.0, 6.0);
+    painter.rect_filled(rear, radius, surface);
+    painter.rect_stroke(rear, radius, stroke, egui::StrokeKind::Inside);
+    painter.rect_filled(front, radius, ink);
+
+    let panel = front.shrink(stroke.width * 1.7);
+    if !panel.is_positive() {
+        return;
+    }
+    let sky = egui::Color32::from_rgb(190, 204, 245);
+    let ridge = egui::Color32::from_rgb(129, 150, 212);
+    painter.rect_filled(panel, (radius - stroke.width).max(0.0), sky);
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            panel.left_bottom(),
+            egui::pos2(panel.center().x, panel.top() + panel.height() * 0.24),
+            panel.right_bottom(),
         ],
-        stroke,
-    );
+        ridge,
+        egui::Stroke::NONE,
+    ));
 }
 
 fn card_metadata(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -1246,13 +1250,7 @@ fn draw_workspace_device(
     let label_height = node.height() * 0.26;
     let image_area =
         egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
-    // The arrangement shows a display, even when the other computer's chassis is unknown.
-    let artwork_kind = if kind == visual_assets::DeviceKind::Unknown {
-        visual_assets::DeviceKind::Desktop
-    } else {
-        kind
-    };
-    let artwork = visual_assets::device_art(ui.ctx(), artwork_kind);
+    let artwork = visual_assets::device_art(ui.ctx(), kind);
     let aspect = artwork.as_ref().map_or(4.0 / 3.0, |asset| asset.aspect);
     let illustration_scale = match kind {
         visual_assets::DeviceKind::Laptop => 0.70,
@@ -1267,7 +1265,7 @@ fn draw_workspace_device(
     );
     let selected_frame = if artwork.is_none() {
         image_rect.shrink(5.0)
-    } else if artwork_kind == visual_assets::DeviceKind::Desktop {
+    } else if kind == visual_assets::DeviceKind::Desktop {
         egui::Rect::from_min_max(
             image_rect.min,
             egui::pos2(
@@ -1297,7 +1295,7 @@ fn draw_workspace_device(
             egui::Color32::WHITE,
         );
     } else {
-        // Preserve a visible target if a bundled illustration could not be decoded.
+        // A stand-free silhouette shows display placement without claiming a device type.
         generic_device_symbol(
             painter,
             image_rect.shrink(4.0),
