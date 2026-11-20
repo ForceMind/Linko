@@ -1391,10 +1391,13 @@ impl App {
             .resizable(false)
             .frame(
                 egui::Frame::NONE
-                    .fill(root.visuals().panel_fill)
+                    .fill(egui::Color32::from_rgb(42, 44, 73))
                     .inner_margin(egui::Margin::symmetric(shell_ui::SIDEBAR_MARGIN, 8)),
             )
-            .show(root, |ui| self.sidebar(ui, sidebar_mix));
+            .show(root, |ui| {
+                ui.style_mut().visuals = egui::Visuals::dark();
+                self.sidebar(ui, sidebar_mix);
+            });
         if self.page != Page::GestureLab && self.page != Page::GestureRules
             || self.child.is_some()
             || self.mouse_tab != MouseTab::Practice

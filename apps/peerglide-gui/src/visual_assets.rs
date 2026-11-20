@@ -64,6 +64,26 @@ fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
     })
 }
 
+/// Illustrates the two ends of a handoff. Runtime state is reported by the caller.
+pub(super) fn handoff_art(ui: &mut egui::Ui, symbol: super::icons::Icon) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::hover());
+    let center = rect.center();
+    let offset = (rect.width() * 0.24).min(92.0);
+    let painter = ui.painter_at(rect);
+    for (x, kind) in [(-offset, DeviceKind::Laptop), (offset, DeviceKind::Desktop)] {
+        if let Some(art) = device_art(ui.ctx(), kind) {
+            let height = 44.0_f32.min(offset / art.aspect);
+            let size = egui::vec2(height * art.aspect, height);
+            let bounds = Rect::from_center_size(center + egui::vec2(x, 0.0), size);
+            painter.image(art.texture.id(), bounds, art.uv, egui::Color32::WHITE);
+        }
+    }
+    let icon = Rect::from_center_size(center, egui::Vec2::splat(24.0));
+    let ink = super::desktop_style::tokens::accent_color(ui.visuals().dark_mode);
+    symbol.paint(&painter, icon, ink);
+}
+
 fn asset(kind: DeviceKind) -> Option<(&'static str, &'static [u8])> {
     match kind {
         DeviceKind::Laptop => Some((
