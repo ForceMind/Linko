@@ -10,6 +10,7 @@ use transport::file_worker::{
 };
 
 const PORT: u16 = 24873;
+const PAUSING: &str = "正在暂停文件传输，已暂存的数据保留。";
 
 enum Approval {
     Receive,
@@ -156,7 +157,7 @@ impl Panel {
         };
         self.stop(app);
         self.paused = Some(paused);
-        self.notice = "正在暂停文件传输，已暂存的数据保留。".into();
+        self.notice = PAUSING.into();
     }
 
     fn resume_paused(&mut self, app: &mut App) -> Result<()> {
@@ -264,6 +265,10 @@ impl Panel {
                     "文件传输已暂停。继续时接收端须重新确认。".into()
                 }
                 Event::Stopped => "文件任务已停止。已暂存的数据保留。".into(),
+                Event::Failed => {
+                    active.offer = None;
+                    "传输结束，未收到成功确认。再次发送前请检查接收目录。".into()
+                }
                 _ if active.stopping => continue,
                 Event::Prepared(id) => {
                     self.prepared_id = Some(id);
@@ -279,15 +284,11 @@ impl Panel {
                     active.offer = Some(offer);
                     "收到文件请求，请选择接收、恢复或拒绝。".into()
                 }
-                Event::Failed => {
-                    active.offer = None;
-                    "传输结束，未收到成功确认。再次发送前请检查接收目录。".into()
-                }
             };
         }
         if finished {
-            if active.stopping && self.paused.is_some() {
-                self.notice = "文件传输已暂停。继续时接收端须重新确认。".into();
+            if active.stopping && self.notice == PAUSING {
+                self.notice = "暂停结果未确认，请检查接收目录。".into();
             } else if active.stopping && self.notice == "正在停止文件传输。" {
                 self.notice = "文件任务已停止。请在接收端确认目录状态。".into();
             }
@@ -891,6 +892,84 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         Ok(())
+    }
+
+    #[test]
+    fn pause_keeps_a_file_receive_failure_visible() -> Result<()> {
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let receiver = transport::Identity::create(&app.identity_dir())?;
+        let peer = transport::Identity::generate()?;
+        std::fs::write(app.dir.join("trusted-peer.crt.der"), &peer.certificate)?;
+        app.config.fingerprint = Some(peer.fingerprint());
+        let source = fixture.path.join("source.bin");
+        let destination = fixture.path.join("not-a-directory");
+        std::fs::write(&source, b"file receive fixture")?;
+        std::fs::write(&destination, b"leave this local file intact")?;
+
+        let mut panel = Panel::default();
+        panel.start_job(
+            &mut app,
+            Request::Receive {
+                bind: ReceiveBind::Explicit("127.0.0.1:0".parse()?),
+                budget: file_worker::MAX_FILE_BYTES,
+            },
+            None,
+        )?;
+        let Event::Listening(target) =
+            next_event(&mut panel.active.as_mut().context("missing receiver")?.job)?
+        else {
+            anyhow::bail!("file receiver did not listen");
+        };
+        let mut sender = file_worker::start(
+            Request::Send {
+                target,
+                source,
+                resume_id: None,
+                prepare_handoff: false,
+            },
+            peer,
+            receiver.certificate,
+            std::sync::Arc::new(|| {}),
+        )?;
+        assert!(matches!(next_event(&mut sender)?, Event::Prepared(_)));
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while panel.active.as_ref().is_some_and(|job| job.offer.is_none()) {
+            panel.tick(&mut app, &ctx);
+            anyhow::ensure!(Instant::now() < deadline, "file offer did not arrive");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panel.destination = destination.to_str().context("destination path")?.into();
+        panel.decide(&app, Approval::Receive)?;
+        assert!(matches!(
+            next_event(&mut sender)?,
+            Event::Sent {
+                outcome: FileOutcome::Failed,
+                ..
+            }
+        ));
+        // The received result is queued, but the UI has yet to read it.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !panel
+            .active
+            .as_ref()
+            .context("missing receiver")?
+            .job
+            .is_finished()
+        {
+            anyhow::ensure!(Instant::now() < deadline, "file receiver did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panel.pause(&mut app);
+        panel.tick(&mut app, &ctx);
+        assert_eq!(panel.notice, outcome_label(FileOutcome::Failed, true));
+        assert!(panel.paused.is_some() && panel.active.is_none());
+        assert_eq!(std::fs::read(&destination)?, b"leave this local file intact");
+        drop(sender);
+        drop(panel);
+        drop(app);
+        fixture.close()
     }
 
     #[test]

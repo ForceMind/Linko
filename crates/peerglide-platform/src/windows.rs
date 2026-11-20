@@ -991,6 +991,48 @@ unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    async fn await_retired(driver: &ReceiveDriver, epoch: CaptureEpoch) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match driver.snapshot(epoch) {
+                    ReceiveSnapshot::Retired => return Ok(()),
+                    ReceiveSnapshot::RecoveryRequired => {
+                        anyhow::bail!("native cleanup remains unconfirmed")
+                    }
+                    _ => tokio::time::sleep(Duration::from_millis(1)).await,
+                }
+            }
+        })
+        .await
+        .context("receive cleanup fence")?
+    }
+
+    fn native_test_holds() -> (bool, bool) {
+        unsafe {
+            (
+                GetAsyncKeyState(i32::from(VK_RSHIFT)) < 0,
+                GetAsyncKeyState(i32::from(VK_LBUTTON)) < 0,
+            )
+        }
+    }
+
+    async fn await_native_test_holds(expected: (bool, bool)) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while native_test_holds() != expected {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .context("wait for native key and button state")?;
+        ensure!(
+            context::capture_source_available(),
+            "test desktop unavailable"
+        );
+        Ok(())
+    }
 
     struct WheelTarget(HWND);
 
@@ -1051,9 +1093,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "uses the input desktop and Win32 injection on a GitHub-hosted runner"]
     async fn hosted_windows_native_receive_reports_command_deadlines() {
-        use anyhow::Context;
         use input_diagnostics::{InputDiagnostics, Phase};
-        use std::time::{Duration, Instant};
+        use std::time::Instant;
 
         assert_eq!(
             std::env::var("LINKO_TEST_WINDOWS_RECEIVE").as_deref(),
@@ -1131,19 +1172,7 @@ mod tests {
                         "release requires recovery"
                     );
                     longest = longest.max(started.elapsed());
-                    tokio::time::timeout(Duration::from_secs(2), async {
-                        loop {
-                            match driver.snapshot(epoch) {
-                                ReceiveSnapshot::Retired => return Ok(()),
-                                ReceiveSnapshot::RecoveryRequired => {
-                                    anyhow::bail!("native cleanup remains unconfirmed")
-                                }
-                                _ => tokio::time::sleep(Duration::from_millis(1)).await,
-                            }
-                        }
-                    })
-                    .await
-                    .context("receive cleanup fence")??;
+                    await_retired(&driver, epoch).await?;
                     // Keep the test window's messages bounded during the probe.
                     let mut msg: MSG = unsafe { std::mem::zeroed() };
                     unsafe {
@@ -1155,6 +1184,46 @@ mod tests {
                     // Exercise the message wait and the periodic desktop check.
                     tokio::time::sleep(Duration::from_millis(12)).await;
                 }
+
+                ensure!(
+                    unsafe { GetForegroundWindow() } == target.0,
+                    "receive test window lost focus"
+                );
+                ensure!(
+                    native_test_holds() == (false, false),
+                    "test input already held"
+                );
+                let epoch = driver.begin().await?;
+                for event in [
+                    Input::Key {
+                        usage: 0xe5,
+                        down: true,
+                    },
+                    Input::Button {
+                        button: 1,
+                        down: true,
+                    },
+                ] {
+                    let ack = driver.input(epoch, event, point).await?;
+                    ensure!(ack == ReceiveAck::Submitted, "held input was not submitted");
+                }
+                await_native_test_holds((true, true)).await?;
+                if pressure {
+                    let recovery = driver.control();
+                    recovery.request_recovery(epoch);
+                    recovery.wake_loop();
+                } else {
+                    let ack = driver.release(epoch, None).await?;
+                    ensure!(
+                        ack != ReceiveAck::RecoveryRequired,
+                        "release requires recovery"
+                    );
+                }
+                await_retired(&driver, epoch).await?;
+                await_native_test_holds((false, false)).await?;
+                println!(
+                    "Windows native recovery: pressure={pressure} key_released=true button_released=true"
+                );
                 Ok(())
             }
             .await;

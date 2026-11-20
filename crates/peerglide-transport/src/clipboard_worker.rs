@@ -822,8 +822,9 @@ mod tests {
             if receive_for_drop {
                 assert!(pending.prepare_drop().is_err());
             } else {
-                assert!(pending.import_for_drag(&mut backend).is_err());
+                assert!(pending.import(&mut backend).is_err());
             }
+            assert_eq!(backend.revision, 5);
             assert!(backend.text.is_empty());
             assert_eq!(backend.images, 0);
             return Ok(());
