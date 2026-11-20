@@ -28,6 +28,8 @@ const SIDE_BY_SIDE_W: f32 = 700.0;
 const STACKED_LAYOUT_H: f32 = 680.0;
 /// Offsets shorter than this snap instead of rebounding, so a plain click never animates.
 const REBOUND_MIN_PX: f32 = 0.5;
+/// The pointer must approach a valid landing position before it can snap.
+const SNAP_RADIUS: f32 = 28.0;
 /// Segments of the filled half of the pending badge.
 const HALF_DISC_STEPS: usize = 12;
 /// Shown under the direction buttons while the layout is locked without a session.
@@ -118,7 +120,6 @@ impl App {
         let editable = self.layout_editable() && self.screen_drag.is_none();
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.small("另一台在本机");
                 for (side, direction) in EDGES {
                     let word = edge_label(side);
                     let name = format!("另一台在本机{word}");
@@ -249,9 +250,15 @@ impl App {
         let ended = before.is_some() && self.screen_drag.is_none();
         let released = if ended {
             released_center(before, &events)
+                .filter(|center| center.x.is_finite() && center.y.is_finite())
         } else {
             None
         };
+        let preview = |(_, center, _)| {
+            snap_preview(center, area, interaction_canvas, local, peer, zoom)
+        };
+        let snapped = self.screen_drag.and_then(preview);
+        let last_snap = if ended { before.and_then(preview) } else { None };
         // A committed direction moves both screens; draw and hit-test the new layout now.
         let (local, peer) = workspace_rects(area, self.displayed_edge(), registered, zoom);
         let ctx = ui.ctx().clone();
@@ -261,13 +268,20 @@ impl App {
         let rest = || CanvasMotion::rest(layout, canvas.min, (local, peer));
         let stored = ctx.data(|data| data.get_temp::<CanvasMotion>(motion_id));
         let mut state = stored.unwrap_or_else(rest);
+        let released = if let Some((snap_local, snap_peer)) = last_snap {
+            state.local_drawn = snap_local.center() - canvas.min;
+            Some(snap_peer.center())
+        } else {
+            released
+        };
         state.retarget(layout, canvas.min, (local, peer), released, now);
         let remaining = state.remaining(&ctx);
-        let shown_local = local.translate(state.from_local * remaining);
-        let shown_peer = match self.screen_drag {
+        let resting_local = local.translate(state.from_local * remaining);
+        let resting_peer = match self.screen_drag {
             Some((_, center, _)) => egui::Rect::from_center_size(center, peer.size()),
             None => peer.translate(state.from_peer * remaining),
         };
+        let (shown_local, shown_peer) = snapped.unwrap_or((resting_local, resting_peer));
         state.local_drawn = shown_local.center() - canvas.min;
         state.peer_drawn = shown_peer.center() - canvas.min;
 
@@ -279,8 +293,11 @@ impl App {
             devices.multiply_opacity(LOCKED_OPACITY);
         }
         if registered {
-            let dot = ui.visuals().widgets.noninteractive.bg_stroke.color;
-            let stroke = egui::Stroke::new(1.0, dot);
+            let stroke = if snapped.is_some() {
+                egui::Stroke::new(2.5, tokens::accent_color(self.config.dark))
+            } else {
+                ui.visuals().widgets.noninteractive.bg_stroke
+            };
             devices.line_segment([shown_local.center(), shown_peer.center()], stroke);
         }
         let head = if self.activity_tick_active() {
@@ -316,13 +333,7 @@ impl App {
             state
                 .peer_badge
                 .observe_appearance(badge.has_emphasis(), now, pop);
-            let hint = if !editable {
-                None
-            } else if self.child.is_some() {
-                Some("拖动屏幕或点方向按钮调整；新布局等待工作进程确认。")
-            } else {
-                Some("拖动屏幕或点方向按钮调整；位置用于下一次会话。")
-            };
+            let hint = editable.then_some("拖动屏幕或选择方向");
             let peer_screen = ScreenView {
                 id: ui.scope_id().with("peer-screen"),
                 target: peer,
@@ -1323,9 +1334,78 @@ fn workspace_rects(
     )
 }
 
+/// Preview the same edge the drop handler would accept. A narrow canvas can use the
+/// compact layout for that edge if the dragged screen would otherwise be clipped.
+fn snap_preview(
+    center: egui::Pos2,
+    area: egui::Rect,
+    canvas: egui::Rect,
+    local: egui::Rect,
+    peer: egui::Rect,
+    zoom: f32,
+) -> Option<(egui::Rect, egui::Rect)> {
+    if !canvas.contains(center) || center.distance(peer.center()) <= REBOUND_MIN_PX {
+        return None;
+    }
+    let edge = desktop_ui::dropped_edge(center, local)?;
+    let (compact_local, compact_peer) = workspace_rects(area, edge, true, zoom);
+    if compact_peer.width() <= f32::EPSILON {
+        return None;
+    }
+    let step = compact_peer.center() - compact_local.center();
+    let rest = local.center() + step * (peer.width() / compact_peer.width());
+    let bounds = canvas.shrink(4.0);
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return None;
+    }
+    let reach = egui::pos2(
+        rest.x.clamp(bounds.left(), bounds.right()),
+        rest.y.clamp(bounds.top(), bounds.bottom()),
+    );
+    if center.distance(reach) > SNAP_RADIUS {
+        return None;
+    }
+    let placed = egui::Rect::from_center_size(rest, peer.size());
+    if canvas.contains_rect(placed) {
+        Some((local, placed))
+    } else if canvas.contains_rect(compact_local) && canvas.contains_rect(compact_peer) {
+        Some((compact_local, compact_peer))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_preview_aligns_four_edges_without_escaping_the_canvas() {
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(620.0, 280.0));
+        let area = canvas.shrink(20.0);
+        let (local, peer) = workspace_rects(area, "right", true, 1.0);
+        for (pointer, direction) in [
+            (egui::pos2(16.0, local.center().y + 5.0), egui::vec2(-1.0, 0.0)),
+            (peer.center() + egui::vec2(10.0, 8.0), egui::vec2(1.0, 0.0)),
+            (egui::pos2(local.center().x + 5.0, 10.0), egui::vec2(0.0, -1.0)),
+            (egui::pos2(local.center().x + 5.0, 270.0), egui::vec2(0.0, 1.0)),
+        ] {
+            let (first, second) =
+                snap_preview(pointer, area, canvas, local, peer, 1.0).expect("snap preview");
+            assert!(canvas.contains_rect(first) && canvas.contains_rect(second));
+            assert!(!first.intersects(second));
+            let offset = second.center() - first.center();
+            assert!((offset.normalized() - direction).length() < 0.01);
+        }
+        for pointer in [
+            peer.center(),
+            local.center(),
+            peer.center() + egui::vec2(0.0, 50.0),
+        ] {
+            assert!(snap_preview(pointer, area, canvas, local, peer, 1.0).is_none());
+        }
+    }
+
     #[test]
     fn essential_context_and_connection_details_fit_the_supported_first_viewport() -> Result<()> {
         fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
@@ -1707,6 +1787,8 @@ mod tests {
             app.screen_drag.is_some(),
             "drag did not acquire the peer screen"
         );
+        assert_eq!(app.config.edge, "right", "preview committed before release");
+        assert!(!app.dir.join("settings.json").exists());
         let requests = std::sync::Arc::new(AtomicUsize::new(0));
         let observed = std::sync::Arc::clone(&requests);
         ctx.set_request_repaint_callback(move |request| {

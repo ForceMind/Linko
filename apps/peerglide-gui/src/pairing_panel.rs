@@ -28,7 +28,7 @@ const CELL_W: f32 = 34.0;
 const CELL_H: f32 = 42.0;
 const CELL_GAP: f32 = 6.0;
 const GROUP_GAP: f32 = 16.0;
-const CARD_H: f32 = 78.0;
+const CARD_H: f32 = 56.0;
 const CARD_MIN_W: f32 = 140.0;
 /// Pairing stages shown as dots. Each name stays visible beneath its dot.
 const STAGES: [&str; 5] = ["准备", "连接", "核验", "记住", "回执"];
@@ -142,6 +142,7 @@ pub(super) struct Panel {
     message: String,
     discovery: super::pairing_discovery::Panel,
     feedback: Feedback,
+    code_reveal: motion::Retrigger<bool>,
 }
 impl Drop for Panel {
     fn drop(&mut self) {
@@ -159,6 +160,7 @@ impl Panel {
             self.feedback = Feedback::default();
         }
         self.open = true;
+        self.code_reveal = motion::Retrigger::default();
         self.join_entry = false;
         self.offer_ipv6 = false;
         self.name = name.into();
@@ -413,120 +415,245 @@ impl Panel {
         let now = ctx.input(|input| input.time);
         let phase = self.supervisor.phase();
         self.feedback.observe(phase, self.join_entry, now);
-        // M10: the fixed-size window glides between content heights instead of jumping.
-        let target = self.target_height(app);
-        let height_id = egui::Id::unique("pairing_window_height");
-        let requested_height = motion::dialog_height(ctx, height_id, target);
-        let height = requested_height.min((ctx.viewport_rect().height() - 48.0).max(1.0));
-        egui::Window::new("添加电脑").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO).fixed_size(egui::vec2(510.0,height)).vscroll(true).show(ctx,|ui|{
-            ui.label(desktop_style::semibold("把另一台电脑加入工作区",21.0));
-            ui.label("两台电脑连到同一 Wi-Fi 或局域网。任选一台显示配对码，另一台输入；双方确认后会记住彼此。键鼠与数据权限仍单独选择。");
-            ui.add_space(12.0);
-            if !self.supervisor.needs_poll() && !matches!(self.supervisor.phase(),Phase::Completed) {
-                if let Some(join)=entry_cards(ui,self.join_entry){self.select_entry(join);}
-                ui.add_space(10.0);
-                if app.local_fingerprint().is_none() {
-                    ui.label("首次使用，先为这台电脑准备独立安全身份。不会因此开始协同。");
-                    if ui.add_enabled(app.instance_lock.is_some()&&app.config_store.is_some()&&!app.enrollment_blocked&&!app.quit_check_mode&&!app.recording_mode,egui::Button::new("准备这台电脑")).clicked(){
-                        let result=Identity::create(&app.identity_dir());
-                        self.message=match result{Ok(_)=>"本机身份已创建。".into(),Err(error)=>format!("身份未创建，原文件保留：{error:#}")};
-                    }
-                }else{
-                    ui.label("如何称呼另一台电脑");ui.text_edit_singleline(&mut self.name);
-                    ui.add_space(10.0);
-                    if !self.join_entry {
-                    ui.label("点击显示后，在另一台屏跃中选择“我来输入配对码”。");
-                    ui.horizontal_wrapped(|ui| {
-                        ui.selectable_value(&mut self.offer_ipv6, false, "IPv4");
-                        ui.selectable_value(&mut self.offer_ipv6, true, "IPv6");
-                    });
-                    if ui.add(desktop_style::primary("显示我的配对码")).clicked(){
-                        let bind=if self.offer_ipv6 {SocketAddr::from((Ipv6Addr::UNSPECIFIED,24871))} else {SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))};
-                        let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(bind),None,&worker));
-                        if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
-                    }
-                    }else{
-                    ui.strong("找到另一台电脑，输入它显示的短码");
-                    if let Some(address)=self.discovery.ui(ui,app.local_fingerprint(),None,true){self.select_address(address);}
-                    ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IP，例如 [fd00::1]:24871"));
-                    ui.label(CODE_LABEL);
-                    let offset=self.feedback.shake_offset(ui.ctx());
-                    let (_,edited)=code_cells(ui,&mut self.code,offset,self.feedback.code_error);
-                    if edited{self.feedback.code_error=false;}
-                    if ui.add(desktop_style::primary("开始核验这台电脑")).clicked(){
-                        // Only a malformed address or code shakes the cells (M8); other refusals keep still.
-                        let input=(||->Result<(SocketAddr,Mode)>{
-                            let address=parse_address(&self.address)?;
-                            let mode=Mode::connect(address,std::mem::take(&mut self.code))?;
-                            Ok((address,mode))
-                        })();
-                        let result=match input{
-                            Err(error)=>{self.feedback.reject(now);Err(error)}
-                            Ok((address,mode))=>Self::worker().and_then(|worker|self.start(app,ctx,mode,Some(address),&worker)),
-                        };
-                        if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
-                    }
-                    }
-                    ui.add_space(12.0);
-                    if ui.button("高级：独立核对公开连接信息…").clicked(){self.open=false;app.open_advanced_setup();}
-                }
-            }
-            if let Some((code,address))=self.supervisor.displayed_code(){
-                if is_cells_code(code){shown_code(ui,code);}else{ui.heading(code);}
-                warning_line(ui,"请在另一台输入这个短码；不要发到公开群聊。");
-                for interface in if_addrs::get_if_addrs().unwrap_or_default(){
-                    if let Some(endpoint)=local_offer_address(interface.ip(),address){ui.label(format!("本机地址 {endpoint}"));}
-                }
-                if let Some(offer)=self.discovery_offer(){
-                    let own=self.supervisor.local_certificate_snapshot().map(transport::fingerprint);
-                    self.discovery.ui(ui,own,Some(offer),false);
-                }
-            }
-            let current=self.supervisor.phase();
-            // Once verification starts, each phase has a text label alongside its shape.
-            if current!=Phase::Idle{
-                if app.local_fingerprint().is_some(){stage_dots(ui,self.feedback.stage,stage_of(current).is_none());}
-                let glyph=self.feedback.glyph(ui.ctx(),self.supervisor.needs_poll());
-                status_row(ui,glyph,phase_text(current));
-            }
-            if current==Phase::Verified{
-                ui.label("两台电脑都要点击一次。记住设备后，本机接收、键鼠和自动重连仍关闭。");
-                if app.config.fingerprint.is_some(){ui.weak("若身份不同，这会替换原设备登记。");}
-                if ui.add(desktop_style::primary("记住这台设备")).clicked(){if let Err(error)=self.approve(app){self.cancel();self.message=format!("未确认：{error:#}");}}
-            }
-            if app.pairing_pending(){ui.colored_label(egui::Color32::from_rgb(185,110,25),"本机保存了待回执登记，暂不能连接。断线或退出后请重新核验或撤销，不会恢复旧授权。");}
-            if app.pairing_pending() && !self.needs_poll() && ui.button("撤销待确认登记").clicked(){
-                self.cancel();let result=app.revoke();self.message=match result{Ok(())=>"待确认登记已撤销，本机身份保留。".into(),Err(error)=>format!("撤销未确认：{error:#}")};
-            }
-            if !self.message.is_empty(){ui.separator();ui.label(&self.message);}
-            ui.add_space(8.0);
-            ui.horizontal(|ui|{
-                if self.supervisor.phase()==Phase::Completed&&ui.add(desktop_style::primary("下一步：摆好屏幕位置")).clicked(){
-                    app.page=super::Page::Devices;app.device_tab=super::DeviceTab::Layout;self.open=false;
-                }
-                if self.supervisor.needs_poll()&&ui.button("停止核验").clicked(){self.cancel();}
-                if ui.button("关闭").on_hover_text("Esc 关闭").clicked(){self.close();}
+        self.code_reveal.observe_appearance(
+            phase == Phase::Listening && self.supervisor.displayed_code().is_some(),
+            now,
+            tokens::RESIZE_SECS + tokens::HOVER_SECS,
+        );
+        let height = motion::dialog_height(
+            ctx,
+            egui::Id::unique("pairing_window_height"),
+            self.target_height(app),
+        )
+        .min((ctx.viewport_rect().height() - 72.0).max(1.0));
+        let body_id = match phase {
+            Phase::Listening => "pairing-code",
+            Phase::Verified => "pairing-confirm",
+            _ => "pairing-body",
+        };
+        egui::Window::new("添加电脑")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .fixed_size(egui::vec2(510.0, height))
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt(body_id)
+                    .max_height((height - 42.0).max(1.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.body(app, ui, now));
+                ui.separator();
+                ui.horizontal(|ui| self.footer(app, ui));
             });
-        });
     }
+
+    fn body(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64) {
+        if !self.supervisor.needs_poll() && self.supervisor.phase() != Phase::Completed {
+            ui.label("两台电脑连接同一局域网。");
+            if let Some(join) = entry_cards(ui, self.join_entry) {
+                self.select_entry(join);
+            }
+            ui.add_space(10.0);
+            if app.local_fingerprint().is_none() {
+                self.prepare_identity(app, ui);
+            } else {
+                ui.label("设备名称");
+                ui.text_edit_singleline(&mut self.name);
+                if self.join_entry {
+                    self.join_controls(app, ui, now);
+                } else {
+                    self.offer_controls(app, ui);
+                }
+                ui.add_space(8.0);
+                if ui
+                    .button("高级配对…")
+                    .on_hover_text("独立核对公开连接信息")
+                    .clicked()
+                {
+                    self.open = false;
+                    app.open_advanced_setup();
+                }
+            }
+        }
+        if let Some((code, address)) = self
+            .supervisor
+            .displayed_code()
+            .filter(|_| self.supervisor.phase() == Phase::Listening)
+        {
+            let opacity = code_opacity(self.code_reveal.tick(ui.ctx()));
+            ui.scope(|ui| {
+                ui.multiply_opacity(opacity);
+                if is_cells_code(code) {
+                    shown_code(ui, code);
+                } else {
+                    ui.heading(code);
+                }
+            });
+            warning_line(ui, "在另一台输入短码。请勿公开分享。");
+            for interface in if_addrs::get_if_addrs().unwrap_or_default() {
+                if let Some(endpoint) = local_offer_address(interface.ip(), address) {
+                    ui.label(format!("本机地址 {endpoint}"));
+                }
+            }
+            if let Some(offer) = self.discovery_offer() {
+                let own = self
+                    .supervisor
+                    .local_certificate_snapshot()
+                    .map(transport::fingerprint);
+                self.discovery.ui(ui, own, Some(offer), false);
+            }
+        }
+        let phase = self.supervisor.phase();
+        if phase != Phase::Idle {
+            if app.local_fingerprint().is_some() {
+                stage_dots(ui, self.feedback.stage, stage_of(phase).is_none());
+            }
+            let glyph = self.feedback.glyph(ui.ctx(), self.supervisor.needs_poll());
+            status_row(ui, glyph, phase_text(phase));
+        }
+        if phase == Phase::Verified {
+            ui.label("两台分别确认。接收、键鼠和自动重连仍关闭。");
+            if app.config.fingerprint.is_some() {
+                ui.weak("若身份不同，这会替换原设备登记。");
+            }
+            if ui.add(desktop_style::primary("记住这台设备")).clicked() {
+                if let Err(error) = self.approve(app) {
+                    self.cancel();
+                    self.message = format!("未确认：{error:#}");
+                }
+            }
+        }
+        if app.pairing_pending() {
+            ui.colored_label(
+                egui::Color32::from_rgb(185, 110, 25),
+                "已保存，等待另一台回执，暂不能连接。断线或退出后请重新核验或撤销，旧授权不会恢复。",
+            );
+        }
+        if app.pairing_pending()
+            && !self.supervisor.needs_poll()
+            && ui.button("撤销待确认登记").clicked()
+        {
+            self.cancel();
+            self.message = match app.revoke() {
+                Ok(()) => "待确认登记已撤销，本机身份保留。".into(),
+                Err(error) => format!("撤销未确认：{error:#}"),
+            };
+        }
+        if !self.message.is_empty() {
+            ui.separator();
+            ui.label(&self.message);
+        }
+    }
+
+    fn prepare_identity(&mut self, app: &App, ui: &mut egui::Ui) {
+        ui.label("先创建本机安全身份，协同仍关闭。");
+        let can_prepare = app.instance_lock.is_some()
+            && app.config_store.is_some()
+            && !app.enrollment_blocked
+            && !app.quit_check_mode
+            && !app.recording_mode;
+        if ui
+            .add_enabled(can_prepare, egui::Button::new("准备这台电脑"))
+            .clicked()
+        {
+            self.message = match Identity::create(&app.identity_dir()) {
+                Ok(_) => "本机身份已创建。".into(),
+                Err(error) => format!("身份未创建，原文件保留：{error:#}"),
+            };
+        }
+    }
+
+    fn offer_controls(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut self.offer_ipv6, false, "IPv4");
+            ui.selectable_value(&mut self.offer_ipv6, true, "IPv6");
+        });
+        if ui.add(desktop_style::primary("显示我的配对码")).clicked() {
+            let bind = if self.offer_ipv6 {
+                SocketAddr::from((Ipv6Addr::UNSPECIFIED, 24871))
+            } else {
+                SocketAddr::from((Ipv4Addr::UNSPECIFIED, 24871))
+            };
+            let result = Self::worker()
+                .and_then(|worker| self.start(app, ui.ctx(), Mode::Offer(bind), None, &worker));
+            if let Err(error) = result {
+                self.message = format!("尚未开始：{error:#}");
+            }
+        }
+    }
+
+    fn join_controls(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64) {
+        if let Some(address) = self.discovery.ui(ui, app.local_fingerprint(), None, true) {
+            self.select_address(address);
+        }
+        ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IP 地址"));
+        ui.label(CODE_LABEL);
+        let offset = self.feedback.shake_offset(ui.ctx());
+        let (_, edited) = code_cells(ui, &mut self.code, offset, self.feedback.code_error);
+        if edited {
+            self.feedback.code_error = false;
+        }
+        if ui.add(desktop_style::primary("核验设备")).clicked() {
+            let input = (|| -> Result<(SocketAddr, Mode)> {
+                let address = parse_address(&self.address)?;
+                let mode = Mode::connect(address, std::mem::take(&mut self.code))?;
+                Ok((address, mode))
+            })();
+            let result = match input {
+                Err(error) => {
+                    self.feedback.reject(now);
+                    Err(error)
+                }
+                Ok((address, mode)) => Self::worker()
+                    .and_then(|worker| self.start(app, ui.ctx(), mode, Some(address), &worker)),
+            };
+            if let Err(error) = result {
+                self.message = format!("尚未开始：{error:#}");
+            }
+        }
+    }
+
+    fn footer(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        if self.supervisor.phase() == Phase::Completed
+            && ui.add(desktop_style::primary("排列屏幕")).clicked()
+        {
+            app.page = super::Page::Devices;
+            app.device_tab = super::DeviceTab::Layout;
+            self.open = false;
+        }
+        if self.supervisor.needs_poll() && ui.button("停止核验").clicked() {
+            self.cancel();
+        }
+        if ui.button("关闭").on_hover_text("Esc 关闭").clicked() {
+            self.close();
+        }
+    }
+
     fn select_address(&mut self, address: SocketAddr) {
         self.address = address.to_string();
         peerglide_protocol::pairing_worker::clear_code(&mut self.code);
-        self.message = "已填写地址，请输入这台电脑当前显示的配对码；发现结果不代表已核验。".into();
+        self.message = "地址已填，身份待核验。请输入另一台的短码。".into();
     }
-    /// Window height for the current content; M10 glides between these values.
+
+    /// Leave room for the active step and keep the footer outside its scroll area.
     fn target_height(&self, app: &App) -> f32 {
         if app.local_fingerprint().is_none() {
-            return 520.0;
+            return 280.0;
         }
-        if self.supervisor.displayed_code().is_some() {
-            return 600.0;
+        match self.supervisor.phase() {
+            Phase::Listening => 510.0,
+            Phase::Verified => 320.0,
+            Phase::Completed => 240.0,
+            _ if self.supervisor.needs_poll() => 260.0,
+            _ if self.join_entry => 510.0,
+            _ => 330.0,
         }
-        if self.join_entry {
-            return 620.0;
-        }
-        540.0
     }
+}
+
+/// Give the window time to expand before revealing the transient short code.
+fn code_opacity(progress: f32) -> f32 {
+    motion::fade_alpha((progress - 0.7) / 0.3)
 }
 
 /// Result shown by the M9 stroke beside the phase sentence.
@@ -647,12 +774,12 @@ fn phase_text(phase: Phase) -> &'static str {
         Phase::Listening => "等待另一台电脑",
         Phase::Verifying => "正在核验身份",
         Phase::Verified => "身份已核验，尚未记住设备",
-        Phase::WaitingPeer => "等待两边分别确认记住设备",
-        Phase::SaveReady => "正在检查并保存本机登记",
+        Phase::WaitingPeer => "等另一台确认",
+        Phase::SaveReady => "正在保存本机登记",
         Phase::AwaitingPeerSaved => "本机已记住，等待另一台保存回执",
         Phase::ReceiptReady => "正在保存完成回执",
         Phase::Finishing => "本机回执已保存，正在结束核验",
-        Phase::Completed => "本机已记住，并已收到另一台的保存回执",
+        Phase::Completed => "已配对，两端均已保存",
         Phase::Stopping => "正在停止核验",
         Phase::Stopped(_) => "核验已停止；已写入的记录会保留",
         Phase::Failed(_) => "核验未完成，请检查两端状态",
@@ -847,19 +974,16 @@ fn paint_cells(
 struct EntryCard {
     icon: Icon,
     title: &'static str,
-    detail: &'static str,
 }
 
 const SHOW_CARD: EntryCard = EntryCard {
     icon: Icon::Device,
     title: "我来显示配对码",
-    detail: "本机生成短码",
 };
 
 const ENTER_CARD: EntryCard = EntryCard {
     icon: Icon::Keyboard,
     title: "我来输入配对码",
-    detail: "输入另一台的短码",
 };
 
 /// The two entry paths side by side. Returns `Some(join)` when a card is clicked.
@@ -913,13 +1037,9 @@ fn entry_card(ui: &mut egui::Ui, card: &EntryCard, on: bool, width: f32) -> egui
     card.icon.paint(painter, icon_rect, ink);
     let title_font = egui::FontId::proportional(15.0);
     let title = painter.layout_no_wrap(card.title.to_owned(), title_font, ink);
-    let muted = tokens::muted_color(dark);
-    let detail_font = egui::FontId::proportional(12.0);
-    let detail = painter.layout_no_wrap(card.detail.to_owned(), detail_font, muted);
     let x = rect.left() + 56.0;
-    let title_top = rect.center().y - title.size().y;
+    let title_top = rect.center().y - title.size().y / 2.0;
     painter.galley(egui::pos2(x, title_top), title, ink);
-    painter.galley(egui::pos2(x, rect.center().y + 2.0), detail, muted);
     response
 }
 
@@ -1170,6 +1290,29 @@ mod tests {
         cells_pass(&ctx, &mut code, vec![text("9")]);
         assert_eq!(code, "12345678");
     }
+    #[test]
+    fn short_code_reveal_waits_for_the_window_and_honors_reduced_motion() {
+        let mut reveal = motion::Retrigger::default();
+        let duration = tokens::RESIZE_SECS + tokens::HOVER_SECS;
+        reveal.observe_appearance(false, 0.0, duration);
+        reveal.observe_appearance(true, 1.0, duration);
+        assert_eq!(code_opacity(reveal.progress(1.1)), 0.0);
+        let revealing = code_opacity(reveal.progress(1.24));
+        assert!(revealing > 0.0 && revealing < 1.0);
+        assert_eq!(code_opacity(reveal.progress(1.4)), 1.0);
+
+        let ctx = egui::Context::default();
+        motion::set_reduced(&ctx, true);
+        ctx.run_ui(
+            egui::RawInput {
+                time: Some(1.1),
+                ..Default::default()
+            },
+            |ui| assert_eq!(code_opacity(reveal.tick(ui.ctx())), 1.0),
+        )
+        .drop_without_applying_deltas();
+    }
+
     #[test]
     fn rejected_code_shakes_once_and_then_stops_repainting() {
         let rejected = Phase::Failed(Failure::Authentication);
