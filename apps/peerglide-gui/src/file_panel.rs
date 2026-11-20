@@ -25,6 +25,7 @@ struct Active {
     stopping: bool,
 }
 
+#[derive(Clone)]
 struct Paused {
     pin: Pin,
     request: Request,
@@ -159,10 +160,12 @@ impl Panel {
     }
 
     fn resume_paused(&mut self, app: &mut App) -> Result<()> {
-        let paused = self.paused.as_ref().context("没有已暂停的文件任务")?;
-        let pin = paused.pin.clone();
-        let request = paused.request.clone();
-        self.start_job(app, request, Some(&pin))
+        let paused = self.paused.clone().context("没有已暂停的文件任务")?;
+        self.start_job(app, paused.request.clone(), Some(&paused.pin))?;
+        // Starting a worker does not confirm the transfer. Keep the same
+        // continuation available if the connection or approval exchange fails.
+        self.paused = Some(paused);
+        Ok(())
     }
 
     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -239,7 +242,8 @@ impl Panel {
                     result,
                     bind: _bind,
                 } => {
-                    if result.outcome == FileOutcome::Committed {
+                    let outcome = result.outcome;
+                    if matches!(outcome, FileOutcome::Committed | FileOutcome::Declined) {
                         self.paused = None;
                     }
                     #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -249,7 +253,7 @@ impl Panel {
                                 .received(app, active.pin.clone(), file, Some(_bind));
                         }
                     }
-                    let local = outcome_label(result.outcome, true);
+                    let local = outcome_label(outcome, true);
                     if result.report_queued {
                         local.into()
                     } else {
@@ -282,13 +286,12 @@ impl Panel {
             };
         }
         if finished {
-            if active.stopping && self.notice == "正在停止文件传输。" {
+            if active.stopping && self.paused.is_some() {
+                self.notice = "文件传输已暂停。继续时接收端须重新确认。".into();
+            } else if active.stopping && self.notice == "正在停止文件传输。" {
                 self.notice = "文件任务已停止。请在接收端确认目录状态。".into();
             }
             self.active = None;
-            if self.paused.is_some() {
-                self.notice = "文件传输已暂停。继续时接收端须重新确认。".into();
-            }
         }
     }
 
@@ -991,12 +994,35 @@ mod tests {
         assert!(panel.resume_paused(&mut app).is_err());
         assert!(panel.paused.is_some() && panel.active.is_none());
         app.config.fingerprint = Some(peer.fingerprint());
+
+        let mut interrupted_receiver = listen(target)?;
+        assert!(matches!(
+            next_event(&mut interrupted_receiver)?,
+            Event::Listening(_)
+        ));
+        panel.resume_paused(&mut app)?;
+        let Event::Offer(interrupted_offer) = next_event(&mut interrupted_receiver)? else {
+            anyhow::bail!("receiver did not see the first continuation attempt");
+        };
+        assert_eq!(interrupted_offer.id, first_offer.id);
+        interrupted_receiver.stop();
+        assert!(matches!(
+            next_event(&mut interrupted_receiver)?,
+            Event::Stopped
+        ));
+        drop(interrupted_receiver);
+        finish_sender(&mut panel, &mut app, &ctx)?;
+        assert!(
+            panel.paused.is_some(),
+            "a failed continuation must retain the paused request"
+        );
+        assert!(!panel.notice.starts_with("文件传输已暂停。"));
+
         let mut resumed_receiver = listen(target)?;
         assert!(
             matches!(next_event(&mut resumed_receiver)?, Event::Listening(address) if address == target)
         );
         panel.resume_paused(&mut app)?;
-        assert!(panel.paused.is_none());
         assert!(matches!(
             &panel.active.as_ref().context("resumed sender missing")?.request,
             Request::Send {
@@ -1019,6 +1045,7 @@ mod tests {
             matches!(next_event(&mut resumed_receiver)?, Event::Received { result, .. } if result.outcome == FileOutcome::Committed && result.report_queued)
         );
         finish_sender(&mut panel, &mut app, &ctx)?;
+        assert!(panel.paused.is_none());
         assert_eq!(panel.notice, outcome_label(FileOutcome::Committed, false));
         assert_eq!(
             std::fs::read(destination.join("pause-source.bin"))?,

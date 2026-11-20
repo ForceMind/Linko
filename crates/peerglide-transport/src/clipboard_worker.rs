@@ -655,6 +655,12 @@ mod tests {
         loopback(Mode::Image, Decision::DeclineDrop)
     }
 
+    #[test]
+    fn declining_import_reports_to_both_ends_and_preserves_the_clipboard() -> Result<()> {
+        loopback(Mode::Text, Decision::DeclineImport)?;
+        loopback(Mode::Image, Decision::DeclineImport)
+    }
+
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Decision {
         Import,
@@ -665,6 +671,7 @@ mod tests {
         StopDrop,
         StopSource,
         StopSourceDrop,
+        DeclineImport,
         DeclineDrop,
         DropToImport,
         ImportToDrop,
@@ -826,12 +833,12 @@ mod tests {
                 backend.revision += 1;
                 TextOutcome::Changed
             }
-            Decision::DeclineDrop => TextOutcome::Declined,
+            Decision::DeclineImport | Decision::DeclineDrop => TextOutcome::Declined,
             _ => TextOutcome::Submitted,
         };
         let completion = if decision == Decision::Import {
             pending.import(&mut backend)?
-        } else if decision == Decision::DeclineDrop {
+        } else if expected == TextOutcome::Declined {
             pending.decline()?
         } else if decision == Decision::ReceiveDrop {
             let (completion, payload) = pending.prepare_drop()?;
@@ -868,6 +875,9 @@ mod tests {
         } else {
             assert!(backend.text.is_empty());
             assert_eq!(backend.images, 0);
+        }
+        if expected == TextOutcome::Declined {
+            assert_eq!(backend.revision, 5);
         }
         let (sender, send_bind) = finished(&sending, expected)?;
         let (receiver, receive_bind) = finished(&receiving, expected)?;
