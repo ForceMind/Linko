@@ -213,10 +213,7 @@ impl App {
         };
         for (page, icon, label, key) in entries {
             let selected = match page {
-                Page::Shortcuts => matches!(
-                    self.page,
-                    Page::Shortcuts | Page::Home | Page::GestureLab | Page::GestureRules
-                ),
+                Page::Shortcuts => matches!(self.page, Page::Shortcuts | Page::Home),
                 _ => self.page == page,
             };
             let response = icon_control(ui, icon, label, expanded, selected, false);

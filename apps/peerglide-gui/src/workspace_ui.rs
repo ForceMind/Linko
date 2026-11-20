@@ -2201,6 +2201,8 @@ mod tests {
         for key in [
             "nav_sidebar",
             "nav_layout",
+            "nav_sharing",
+            "nav_gestures",
             "nav_shortcuts",
             "nav_settings",
             "add_device",

@@ -534,7 +534,8 @@ impl Panel {
             super::visual_assets::handoff_art(ui, super::icons::Icon::Folder);
             ui.label("文件共享需要已配对的电脑及可写窗口。");
             let action = app.workspace_view().action;
-            if action == super::desktop_state::Action::AddDevice && ui.button("添加电脑").clicked() {
+            if action == super::desktop_state::Action::AddDevice && ui.button("添加电脑").clicked()
+            {
                 app.workspace_action(action);
             }
         }
@@ -555,7 +556,9 @@ impl Panel {
         }
         self.transfer_controls(app, ui, ready);
         if paired && self.active.is_none() && self.paused.is_some() {
-            ui.collapsing("其他文件任务", |ui| self.file_request_controls(app, ui, ready));
+            ui.collapsing("其他文件任务", |ui| {
+                self.file_request_controls(app, ui, ready)
+            });
         }
     }
 
