@@ -414,6 +414,7 @@ impl Panel {
         }
         let now = ctx.input(|input| input.time);
         let phase = self.supervisor.phase();
+        let needs_identity = app.local_fingerprint().is_none();
         self.feedback.observe(phase, self.join_entry, now);
         self.code_reveal.observe_appearance(
             phase == Phase::Listening && self.supervisor.displayed_code().is_some(),
@@ -423,7 +424,7 @@ impl Panel {
         let height = motion::dialog_height(
             ctx,
             egui::Id::unique("pairing_window_height"),
-            self.target_height(app),
+            self.target_height(needs_identity),
         )
         .min((ctx.viewport_rect().height() - 72.0).max(1.0));
         let body_id = match phase {
@@ -441,21 +442,21 @@ impl Panel {
                     .id_salt(body_id)
                     .max_height((height - 42.0).max(1.0))
                     .auto_shrink([false, false])
-                    .show(ui, |ui| self.body(app, ui, now));
+                    .show(ui, |ui| self.body(app, ui, now, needs_identity));
                 ui.separator();
-                ui.horizontal(|ui| self.footer(app, ui));
+                ui.horizontal(|ui| self.footer(app, ui, needs_identity));
             });
     }
 
-    fn body(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64) {
+    fn body(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64, needs_identity: bool) {
         if !self.supervisor.needs_poll() && self.supervisor.phase() != Phase::Completed {
             ui.label("两台电脑连接同一局域网。");
             if let Some(join) = entry_cards(ui, self.join_entry) {
                 self.select_entry(join);
             }
             ui.add_space(10.0);
-            if app.local_fingerprint().is_none() {
-                self.prepare_identity(app, ui);
+            if needs_identity {
+                ui.label("先创建本机安全身份，协同仍关闭。");
             } else {
                 ui.label("设备名称");
                 ui.text_edit_singleline(&mut self.name);
@@ -505,7 +506,7 @@ impl Panel {
         }
         let phase = self.supervisor.phase();
         if phase != Phase::Idle {
-            if app.local_fingerprint().is_some() {
+            if !needs_identity {
                 stage_dots(ui, self.feedback.stage, stage_of(phase).is_none());
             }
             let glyph = self.feedback.glyph(ui.ctx(), self.supervisor.needs_poll());
@@ -546,7 +547,6 @@ impl Panel {
     }
 
     fn prepare_identity(&mut self, app: &App, ui: &mut egui::Ui) {
-        ui.label("先创建本机安全身份，协同仍关闭。");
         let can_prepare = app.instance_lock.is_some()
             && app.config_store.is_some()
             && !app.enrollment_blocked
@@ -613,7 +613,13 @@ impl Panel {
         }
     }
 
-    fn footer(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    fn footer(&mut self, app: &mut App, ui: &mut egui::Ui, needs_identity: bool) {
+        if needs_identity
+            && !self.supervisor.needs_poll()
+            && self.supervisor.phase() != Phase::Completed
+        {
+            self.prepare_identity(app, ui);
+        }
         if self.supervisor.phase() == Phase::Completed
             && ui.add(desktop_style::primary("排列屏幕")).clicked()
         {
@@ -636,8 +642,8 @@ impl Panel {
     }
 
     /// Leave room for the active step and keep the footer outside its scroll area.
-    fn target_height(&self, app: &App) -> f32 {
-        if app.local_fingerprint().is_none() {
+    fn target_height(&self, needs_identity: bool) -> f32 {
+        if needs_identity {
             return 280.0;
         }
         match self.supervisor.phase() {
@@ -1548,7 +1554,10 @@ mod tests {
                         assert!(!idle_placeholder);
                         for (label, bounds) in controls {
                             let (clip, rect) = bounds.with_context(|| format!("{label} absent"))?;
-                            assert!(clip.contains_rect(rect), "{label} clipped at {size:?}");
+                            assert!(
+                                clip.contains_rect(rect.expand2(egui::vec2(0.0, 10.0))),
+                                "{label} clipped at {size:?}"
+                            );
                         }
                     }
                 }
