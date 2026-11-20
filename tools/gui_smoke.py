@@ -19,8 +19,27 @@ def run_external(arguments, **options):
     options.setdefault("timeout", 10)
     return subprocess.run(arguments, **options)
 
-def main():
+def wait_for_display():
+    """Probe the existing isolated X server without opening an application."""
     require_isolated_x11()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            probe = run_external(
+                ["xdotool", "getdisplaygeometry"], capture_output=True, timeout=1
+            )
+            dimensions = probe.stdout.split()
+            if (probe.returncode == 0 and len(dimensions) == 2
+                    and all(value.isdigit() and int(value) > 0 for value in dimensions)):
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError("isolated X11 display did not respond to geometry queries")
+
+
+def main():
+    wait_for_display()
     root = pathlib.Path(__file__).resolve().parent.parent
     with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
         profile = pathlib.Path(temporary) / "explicit-profile"

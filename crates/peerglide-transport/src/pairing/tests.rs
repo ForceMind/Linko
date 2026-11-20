@@ -34,10 +34,19 @@ async fn fixed_argon2_parameters_match_the_old_0_5_3_fixture() -> Result<()> {
 
 #[tokio::test]
 async fn real_tcp_pake_then_mutual_tls_returns_only_bound_temporary_peers() -> Result<()> {
+    bound_temporary_peers("127.0.0.1:0").await
+}
+
+#[tokio::test]
+async fn ipv6_loopback_uses_the_same_pake_and_certificate_binding() -> Result<()> {
+    bound_temporary_peers("[::1]:0").await
+}
+
+async fn bound_temporary_peers(bind: &str) -> Result<()> {
     let _scenario = CRYPTO_SCENARIOS.lock().await;
     let server = Arc::new(Identity::generate()?);
     let client = Arc::new(Identity::generate()?);
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = TcpListener::bind(bind).await?;
     let mut offer = Offer::new(&server)?;
     let entry = CodeEntry::new(offer.code()?.to_owned())?;
     let cancel_client = entry.cancellation();

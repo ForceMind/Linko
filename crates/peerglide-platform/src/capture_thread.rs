@@ -1,34 +1,29 @@
 //! Cooperative native-loop shutdown with a bounded join; never waits in a hook.
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc,
+    Arc,
 };
-use std::time::Duration;
+#[cfg(any(windows, target_os = "macos", test))]
+use std::{sync::mpsc, time::Duration};
 
-#[cfg(any(windows, target_os = "macos", test))]
 use anyhow::Context;
-#[cfg(any(windows, target_os = "macos", test))]
 use std::{
     fs::{File, Metadata, OpenOptions},
     path::Path,
 };
 
-#[cfg(any(windows, target_os = "macos", test))]
 static RESERVED: AtomicBool = AtomicBool::new(false);
 
 /// Cooperating processes use this one empty inode in their configured temp root.
 /// TMPDIR/TEMP configuration determines the scope: different temp roots and
 /// malicious local file replacement are not an authenticated security boundary.
-#[cfg(any(windows, target_os = "macos", test))]
 pub(super) struct Reservation {
     file: File,
     release_healthy: Arc<AtomicBool>,
     #[cfg(test)]
     fail_unlock: bool,
 }
-#[cfg(any(windows, target_os = "macos", test))]
 struct RollbackReservation(bool);
-#[cfg(any(windows, target_os = "macos", test))]
 impl Drop for RollbackReservation {
     fn drop(&mut self) {
         if self.0 {
@@ -36,7 +31,6 @@ impl Drop for RollbackReservation {
         }
     }
 }
-#[cfg(any(windows, target_os = "macos", test))]
 fn validate_lock_metadata(metadata: &Metadata) -> anyhow::Result<()> {
     anyhow::ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == 0,
@@ -44,7 +38,6 @@ fn validate_lock_metadata(metadata: &Metadata) -> anyhow::Result<()> {
     );
     Ok(())
 }
-#[cfg(any(windows, target_os = "macos", test))]
 fn validate_lock_file(file: &File, path: &Path, before: Option<&Metadata>) -> anyhow::Result<()> {
     let opened = file
         .metadata()
@@ -68,7 +61,6 @@ fn validate_lock_file(file: &File, path: &Path, before: Option<&Metadata>) -> an
     let _ = before;
     Ok(())
 }
-#[cfg(any(windows, target_os = "macos", test))]
 fn open_lock_file(path: &Path) -> anyhow::Result<File> {
     let mut create = OpenOptions::new();
     create.read(true).write(true).create_new(true);
@@ -96,11 +88,17 @@ fn open_lock_file(path: &Path) -> anyhow::Result<File> {
     validate_lock_file(&file, path, before.as_ref())?;
     Ok(file)
 }
-#[cfg(any(windows, target_os = "macos", test))]
 impl Reservation {
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     pub(super) fn acquire() -> anyhow::Result<Self> {
-        Self::acquire_at(&std::env::temp_dir().join("peerglide-native-input-capture.lock"))
+        #[cfg(target_os = "linux")]
+        let directory = std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .unwrap_or_else(std::env::temp_dir);
+        #[cfg(not(target_os = "linux"))]
+        let directory = std::env::temp_dir();
+        Self::acquire_at(&directory.join("peerglide-native-input-capture.lock"))
     }
 
     /// All filesystem checks and nonblocking locking occur before hook install.
@@ -126,7 +124,6 @@ impl Reservation {
         Ok(reservation)
     }
 }
-#[cfg(any(windows, target_os = "macos", test))]
 impl Drop for Reservation {
     fn drop(&mut self) {
         // Explicit unlock is necessary even if another reference/duplicated fd
@@ -148,11 +145,13 @@ impl Drop for Reservation {
     }
 }
 
+#[cfg(any(windows, target_os = "macos", test))]
 pub(super) struct CaptureThread {
     stop: Arc<AtomicBool>,
     done: mpsc::Receiver<bool>,
     completed: Option<bool>,
 }
+#[cfg(any(windows, target_os = "macos", test))]
 impl CaptureThread {
     #[cfg(test)]
     pub(super) fn spawn(task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
@@ -211,6 +210,7 @@ impl CaptureThread {
         }
     }
 }
+#[cfg(any(windows, target_os = "macos", test))]
 impl Drop for CaptureThread {
     fn drop(&mut self) {
         if !self.shutdown(Duration::from_millis(500)) {

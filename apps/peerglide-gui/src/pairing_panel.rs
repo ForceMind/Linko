@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use eframe::egui;
 use peerglide_transport as transport;
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -56,21 +56,47 @@ fn optional_peer(dir: &Path) -> Result<Option<Vec<u8>>> {
 }
 fn parse_address(text: &str) -> Result<SocketAddr> {
     let text = text.trim();
-    anyhow::ensure!(!text.is_empty(), "请填写另一台电脑的 IPv4 地址");
+    anyhow::ensure!(!text.is_empty(), "请填写另一台电脑的 IP 地址");
     let address = text
         .parse::<SocketAddr>()
         .or_else(|_| text.parse::<IpAddr>().map(|ip| SocketAddr::new(ip, 24871)))
-        .map_err(|_| anyhow::anyhow!("地址格式不正确，请填写 IPv4 或 IPv4:端口"))?;
+        .map_err(|_| anyhow::anyhow!("地址格式不正确，带端口的 IPv6 地址请加方括号"))?;
     anyhow::ensure!(
-        address.is_ipv4()
-            && !address.ip().is_unspecified()
+        !address.ip().is_unspecified()
             && !address.ip().is_multicast()
             && address.ip() != IpAddr::V4(Ipv4Addr::BROADCAST)
             && address.port() != 0,
-        "请使用有效的 IPv4 单播地址和端口"
+        "请使用有效的单播地址和端口"
     );
+    if let SocketAddr::V6(address) = address {
+        anyhow::ensure!(
+            address.ip().to_ipv4_mapped().is_none(),
+            "请直接填写 IPv4 地址"
+        );
+        anyhow::ensure!(
+            !address.ip().is_unicast_link_local() || address.scope_id() != 0,
+            "IPv6 链路本地地址需要连接端的数字接口编号"
+        );
+    }
     Ok(address)
 }
+
+fn local_offer_address(ip: IpAddr, listening: SocketAddr) -> Option<String> {
+    let port = listening.port();
+    match ip {
+        IpAddr::V4(ip) if listening.is_ipv4() && (ip.is_private() || ip.is_link_local()) => {
+            Some(format!("{ip}:{port}"))
+        }
+        IpAddr::V6(ip) if listening.is_ipv6() && ip.is_unique_local() => {
+            Some(format!("[{ip}]:{port}"))
+        }
+        IpAddr::V6(ip) if listening.is_ipv6() && ip.is_unicast_link_local() => {
+            Some(format!("[{ip}%连接端接口编号]:{port}"))
+        }
+        _ => None,
+    }
+}
+
 impl Origin {
     fn capture(app: &App, next: Config) -> Result<Self> {
         let local = Identity::load(&app.identity_dir())?.certificate;
@@ -107,6 +133,7 @@ impl Origin {
 pub(super) struct Panel {
     pub(super) open: bool,
     join_entry: bool,
+    offer_ipv6: bool,
     supervisor: Supervisor,
     origin: Option<Origin>,
     name: String,
@@ -133,6 +160,7 @@ impl Panel {
         }
         self.open = true;
         self.join_entry = false;
+        self.offer_ipv6 = false;
         self.name = name.into();
         self.address = address
             .parse::<SocketAddr>()
@@ -164,6 +192,7 @@ impl Panel {
             generation: self.supervisor.generation(),
             attempts_remaining,
             port: address.port(),
+            ipv6: address.is_ipv6(),
         })
     }
     pub(super) fn cancel(&mut self) {
@@ -407,14 +436,19 @@ impl Panel {
                     ui.add_space(10.0);
                     if !self.join_entry {
                     ui.label("点击显示后，在另一台屏跃中选择“我来输入配对码”。");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(&mut self.offer_ipv6, false, "IPv4");
+                        ui.selectable_value(&mut self.offer_ipv6, true, "IPv6");
+                    });
                     if ui.add(desktop_style::primary("显示我的配对码")).clicked(){
-                        let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))),None,&worker));
+                        let bind=if self.offer_ipv6 {SocketAddr::from((Ipv6Addr::UNSPECIFIED,24871))} else {SocketAddr::from((Ipv4Addr::UNSPECIFIED,24871))};
+                        let result=Self::worker().and_then(|worker|self.start(app,ctx,Mode::Offer(bind),None,&worker));
                         if let Err(error)=result{self.message=format!("尚未开始：{error:#}");}
                     }
                     }else{
                     ui.strong("找到另一台电脑，输入它显示的短码");
                     if let Some(address)=self.discovery.ui(ui,app.local_fingerprint(),None,true){self.select_address(address);}
-                    ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IPv4 或 IPv4:24871"));
+                    ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IP，例如 [fd00::1]:24871"));
                     ui.label(CODE_LABEL);
                     let offset=self.feedback.shake_offset(ui.ctx());
                     let (_,edited)=code_cells(ui,&mut self.code,offset,self.feedback.code_error);
@@ -441,7 +475,7 @@ impl Panel {
                 if is_cells_code(code){shown_code(ui,code);}else{ui.heading(code);}
                 warning_line(ui,"请在另一台输入这个短码；不要发到公开群聊。");
                 for interface in if_addrs::get_if_addrs().unwrap_or_default(){
-                    if let IpAddr::V4(ip)=interface.ip(){if !ip.is_loopback()&&!ip.is_unspecified()&&(ip.is_private()||ip.is_link_local()){ui.label(format!("本机地址：{ip}:{}",address.port()));}}
+                    if let Some(endpoint)=local_offer_address(interface.ip(),address){ui.label(format!("本机地址 {endpoint}"));}
                 }
                 if let Some(offer)=self.discovery_offer(){
                     let own=self.supervisor.local_certificate_snapshot().map(transport::fingerprint);
@@ -965,7 +999,7 @@ fn paint_glyph(ui: &egui::Ui, rect: egui::Rect, glyph: Glyph) {
         Glyph::Spinner => {
             let now = ui.input(|input| input.time);
             let ink = tokens::accent_color(dark);
-            icons::paint_spinner(painter, rect, ink, motion::spinner_head_at(now));
+            icons::paint_spinner(painter, rect, ink, motion::spinner_head_for(ui.ctx(), now));
         }
         Glyph::Check(progress) => {
             let ink = desktop_style::status_colors(dark, Tone::Good).1;
@@ -1416,12 +1450,24 @@ mod tests {
             parse_address("127.0.0.1")?,
             "127.0.0.1:24871".parse::<SocketAddr>()?
         );
+        assert_eq!(parse_address("::1")?, "[::1]:24871".parse()?);
+        assert_eq!(
+            parse_address("[fe80::1%2]:24871")?,
+            "[fe80::1%2]:24871".parse()?
+        );
+        assert_eq!(
+            local_offer_address("fe80::1".parse()?, "[::]:24871".parse()?),
+            Some("[fe80::1%连接端接口编号]:24871".into())
+        );
+        assert!(local_offer_address("fd00::1".parse()?, "0.0.0.0:24871".parse()?).is_none());
         for text in [
             "",
             "private-invalid-marker",
             "0.0.0.0:0",
             "255.255.255.255:24871",
-            "[::1]:24871",
+            "[fe80::1]:24871",
+            "[::ffff:192.0.2.1]:24871",
+            "[ff02::1%2]:24871",
         ] {
             let error = parse_address(text).unwrap_err().to_string();
             assert!(error

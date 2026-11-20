@@ -23,11 +23,18 @@ struct Rect {
     size: Size,
 }
 const TAG: i64 = 0x50474c44;
+const WHEEL_AXIS1: u32 = 11;
+const WHEEL_AXIS2: u32 = 12;
+const WHEEL_CONTINUOUS: u32 = 88;
+const WHEEL_FIXED_AXIS1: u32 = 93;
+const WHEEL_FIXED_AXIS2: u32 = 94;
+const ONE_LINE: i64 = 1 << 16;
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn CGMainDisplayID() -> u32;
     fn CGDisplayBounds(display: u32) -> Rect;
+    fn CGDisplayIsActive(display: u32) -> i32;
     fn CGGetActiveDisplayList(max_displays: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayRotation(display: u32) -> f64;
     fn CGDisplayCopyDisplayMode(display: u32) -> Ref;
@@ -46,6 +53,7 @@ extern "C" {
     fn CGEventGetIntegerValueField(event: Ref, field: u32) -> i64;
     fn CGEventGetDoubleValueField(event: Ref, field: u32) -> f64;
     fn CGEventSetIntegerValueField(event: Ref, field: u32, value: i64);
+    fn CGEventGetFlags(event: Ref) -> u64;
     fn CGEventSetFlags(event: Ref, flags: u64);
     fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
     fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
@@ -315,6 +323,53 @@ fn reconcile_source_cursor(remote: impl FnOnce() -> bool) {
     };
     state.reconcile(remote(), &mut NativeCursor);
 }
+struct FractionalWheel {
+    route: Option<CaptureRoute>,
+    remainder: [i64; 2],
+}
+
+impl FractionalWheel {
+    const fn new() -> Self {
+        Self {
+            route: None,
+            remainder: [0; 2],
+        }
+    }
+
+    fn steps(
+        &mut self,
+        route: CaptureRoute,
+        continuous: bool,
+        integer: [i16; 2],
+        fixed: [i64; 2],
+    ) -> [i16; 2] {
+        if !continuous || !route.remote() {
+            self.route = None;
+            self.remainder = [0; 2];
+            return integer;
+        }
+        if self.route != Some(route) {
+            self.route = Some(route);
+            self.remainder = [0; 2];
+        }
+        std::array::from_fn(|axis| {
+            let remainder = &mut self.remainder[axis];
+            // Keep native whole-line events and ignore ambiguous fixed-point
+            // values that are not fractional when the whole-line field is zero.
+            if integer[axis] != 0 || fixed[axis].unsigned_abs() >= ONE_LINE as u64 {
+                *remainder = 0;
+                return integer[axis];
+            }
+            let total = *remainder + fixed[axis];
+            *remainder = total % ONE_LINE;
+            (total / ONE_LINE) as i16
+        })
+    }
+}
+
+thread_local! {
+    static WHEEL: RefCell<FractionalWheel> = const { RefCell::new(FractionalWheel::new()) };
+}
 thread_local! {static STATE:RefCell<Option<HookState>>=const {RefCell::new(None)};}
 static MODIFIERS: Mutex<u64> = Mutex::new(0);
 static BUTTONS: AtomicU64 = AtomicU64::new(0);
@@ -336,19 +391,6 @@ pub(super) fn capture_receiving(
                 gate: gate.clone(),
                 observation: source_health.observation,
             };
-            let state = HookState {
-                pairs: PairLedger::default(),
-                stopping: false,
-                toggle_route: None,
-                tx,
-                gate,
-                keys: initial_keys().into_iter().collect(),
-                buttons: initial_buttons().into_iter().collect(),
-                toggle_armed: false,
-                target,
-            };
-            state.update_held();
-            STATE.set(Some(state));
             let mask = [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 22, 25, 26, 27]
                 .iter()
                 .fold(0, |a, n| a | 1u64 << n);
@@ -363,15 +405,29 @@ pub(super) fn capture_receiving(
                 let _ = ready.send(false);
                 return;
             }
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             let Some(_wake_registration) = wake.register() else {
-                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
                 CFRelease(source);
                 CFRelease(tap);
                 let _ = ready.send(false);
                 return;
             };
+            // Observe transitions during the startup snapshot. The tap's source is
+            // scheduled on this thread only after the initial holds are published.
             CGEventTapEnable(tap, true);
+            let state = HookState {
+                pairs: PairLedger::default(),
+                stopping: false,
+                toggle_route: None,
+                tx,
+                gate,
+                keys: initial_keys().into_iter().collect(),
+                buttons: initial_buttons().into_iter().collect(),
+                toggle_armed: false,
+                target,
+            };
+            state.update_held();
+            STATE.set(Some(state));
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
             let _ = ready.send(true);
             let mut last_turn = std::time::Instant::now();
             loop {
@@ -477,13 +533,12 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 let code = CGEventGetIntegerValueField(event, 9) as u16;
                 let usage = from_code(code);
                 let down = if kind == 12 {
-                    // Own-tagged posts were filtered above. Modifier transition
-                    // events do not repeat; combined key state may still contain
-                    // our remote synthetic modifier and is not a physical Up.
                     match usage {
-                        Some(usage) if (0xe0..=0xe7).contains(&usage) => {
-                            !s.physical_key_held(usage)
-                        }
+                        Some(usage) if (0xe0..=0xe7).contains(&usage) => modifier_changed_down(
+                            usage,
+                            CGEventGetFlags(event),
+                            s.physical_key_held(usage),
+                        ),
                         _ => CGEventSourceKeyState(0, code),
                     }
                 } else {
@@ -504,12 +559,18 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 } else {
                     let p = CGEventGetLocation(event);
                     let b = CGDisplayBounds(CGMainDisplayID());
+                    let (x, y) = if s.gate.0.routed_target.get().is_some() {
+                        (p.x, p.y)
+                    } else {
+                        (p.x - b.origin.x, p.y - b.origin.y)
+                    };
                     Captured::Position {
-                        x: p.x - b.origin.x,
-                        y: p.y - b.origin.y,
+                        x,
+                        y,
                         width: b.size.width,
                         height: b.size.height,
                         route,
+                        primary: s.gate.primary_for_position(route),
                     }
                 };
                 return s.movement(captured, route);
@@ -541,11 +602,23 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
                 if let Some(diagnostics) = s.gate.0.diagnostics.get() {
                     diagnostics.increment(input_diagnostics::Count::WheelPhysical);
                 }
-                return s.scroll_routed(
-                    CGEventGetIntegerValueField(event, 12).clamp(-1200, 1200) as i16,
-                    CGEventGetIntegerValueField(event, 11).clamp(-1200, 1200) as i16,
-                    route,
-                );
+                let integer = [
+                    CGEventGetIntegerValueField(event, WHEEL_AXIS2).clamp(-1200, 1200) as i16,
+                    CGEventGetIntegerValueField(event, WHEEL_AXIS1).clamp(-1200, 1200) as i16,
+                ];
+                let continuous =
+                    route.remote() && CGEventGetIntegerValueField(event, WHEEL_CONTINUOUS) != 0;
+                let fixed = if continuous {
+                    [
+                        CGEventGetIntegerValueField(event, WHEEL_FIXED_AXIS2),
+                        CGEventGetIntegerValueField(event, WHEEL_FIXED_AXIS1),
+                    ]
+                } else {
+                    [0; 2]
+                };
+                let [x, y] =
+                    WHEEL.with_borrow_mut(|wheel| wheel.steps(route, continuous, integer, fixed));
+                return s.scroll_routed(x, y, route);
             }
             _ => (),
         }
@@ -562,6 +635,12 @@ unsafe extern "C" fn callback(_: Ref, kind: u32, event: Ref, _: Ref) -> Ref {
     }
 }
 struct OwnedEvent(Ref);
+pub(super) fn cursor_position() -> Option<[f64; 2]> {
+    // Read the current position from a private, unposted CoreGraphics event.
+    let event = OwnedEvent::created(unsafe { CGEventCreate(null_mut()) }).ok()?;
+    let point = unsafe { CGEventGetLocation(event.0) };
+    Some([point.x, point.y])
+}
 impl OwnedEvent {
     fn created(
         event: Ref,
@@ -615,8 +694,54 @@ pub(super) fn receive_pointer(
     if !(ReceivePoint { x, y }).valid() {
         return Err(NativeFailure::BeforeSubmission);
     }
+    let b = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+    receive_global_pointer(Point {
+        x: b.origin.x + x * (b.size.width - 1.0),
+        y: b.origin.y + y * (b.size.height - 1.0),
+    })
+}
+
+pub(super) fn receive_on_display(
+    expected: display_layout::Display,
+    _desktop: display_layout::Bounds,
+    placement: display_layout::Placement,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    let id = u32::try_from(expected.id.0).map_err(|_| NativeFailure::TargetLost)?;
+    // SAFETY: CoreGraphics checks the scalar ID, and the pointer coordinates
+    // are only sent if the selected monitor still occupies that region.
+    let (rect, rotation) = unsafe {
+        if CGDisplayIsActive(id) == 0 {
+            return Err(NativeFailure::TargetLost);
+        }
+        (CGDisplayBounds(id), CGDisplayRotation(id))
+    };
+    let actual = display_layout::Bounds {
+        left: rect.origin.x,
+        top: rect.origin.y,
+        right: rect.origin.x + rect.size.width,
+        bottom: rect.origin.y + rect.size.height,
+    };
+    let angle = match expected.rotation {
+        display_layout::Rotation::Upright => 0.0,
+        display_layout::Rotation::Clockwise90 => 90.0,
+        display_layout::Rotation::Clockwise180 => 180.0,
+        display_layout::Rotation::Clockwise270 => 270.0,
+    };
+    if actual != expected.bounds || rotation.rem_euclid(360.0) != angle {
+        return Err(NativeFailure::TargetLost);
+    }
+    receive_global_pointer(Point {
+        x: placement.desktop_x,
+        y: placement.desktop_y,
+    })
+}
+
+fn receive_global_pointer(
+    point: Point,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
     unsafe {
-        let b = CGDisplayBounds(CGMainDisplayID());
         let buttons = BUTTONS.load(Ordering::Acquire);
         let (kind, button) = if buttons & 1 != 0 {
             (6, 0)
@@ -627,15 +752,7 @@ pub(super) fn receive_pointer(
         } else {
             (5, 0)
         };
-        let event = OwnedEvent::created(CGEventCreateMouseEvent(
-            null_mut(),
-            kind,
-            Point {
-                x: b.origin.x + x * (b.size.width - 1.0),
-                y: b.origin.y + y * (b.size.height - 1.0),
-            },
-            button,
-        ))?;
+        let event = OwnedEvent::created(CGEventCreateMouseEvent(null_mut(), kind, point, button))?;
         let modifiers = MODIFIERS
             .lock()
             .map_err(|_| NativeFailure::BeforeSubmission)?;
@@ -810,6 +927,14 @@ const KEYS: &[(u16, u16)] = &[
     (0x62, 82),
     (0x63, 65),
     (0x64, 10),
+    (0x68, 105),
+    (0x69, 107),
+    (0x6a, 113),
+    (0x6b, 106),
+    (0x6c, 64),
+    (0x6d, 79),
+    (0x6e, 80),
+    (0x6f, 90),
     (0xe0, 59),
     (0xe1, 56),
     (0xe2, 58),
@@ -829,16 +954,31 @@ fn from_code(c: u16) -> Option<u16> {
     KEYS.iter().find(|p| p.1 == c).map(|p| p.0)
 }
 
+// IOLLEvent.h group, left and right flags in HID Control, Shift, Option, Command order.
+const MODIFIER_FLAGS: [(u64, u64, u64); 4] = [
+    (1 << 18, 0x0001, 0x2000),
+    (1 << 17, 0x0002, 0x0004),
+    (1 << 19, 0x0020, 0x0040),
+    (1 << 20, 0x0008, 0x0010),
+];
+
+fn modifier_changed_down(usage: u16, flags: u64, was_down: bool) -> bool {
+    let index = usize::from(usage - 0xe0);
+    let (group, left, right) = MODIFIER_FLAGS[index % 4];
+    if flags & (left | right) != 0 {
+        let side = if index < 4 { left } else { right };
+        return flags & side != 0;
+    }
+    // A cleared group is an Up even if its Down preceded capture. With only an
+    // active aggregate bit, the other side or a synthetic modifier can keep it set.
+    flags & group != 0 && !was_down
+}
+
 fn modifier_flags(bits: u64) -> u64 {
     let mut flags = 0;
-    for (mask, flag) in [
-        (0x11, 1 << 18),
-        (0x22, 1 << 17),
-        (0x44, 1 << 19),
-        (0x88, 1 << 20),
-    ] {
-        if bits & mask != 0 {
-            flags |= flag;
+    for (index, (group, _, _)) in MODIFIER_FLAGS.into_iter().enumerate() {
+        if bits & (0x11 << index) != 0 {
+            flags |= group;
         }
     }
     flags
@@ -936,6 +1076,112 @@ mod tests {
         assert_eq!(modifier_flags(0x10), 1 << 18);
         assert_eq!(modifier_flags(0), 0);
     }
+
+    fn callback_gate() -> (CaptureGate, CaptureEvents) {
+        let (state, events) = crate::hook_tests::state(32);
+        let gate = state.gate.clone();
+        STATE.set(Some(state));
+        (gate, events)
+    }
+
+    fn flags_changed(usage: u16, flags: u64, tagged: bool) -> bool {
+        extern "C" {
+            fn CGEventSetType(event: Ref, kind: u32);
+        }
+        // Deliver an unposted CoreGraphics event to the real callback on this test thread.
+        unsafe {
+            let code = to_code(usage).unwrap();
+            let raw = CGEventCreateKeyboardEvent(null_mut(), code, true);
+            let event = OwnedEvent::created(raw).unwrap();
+            CGEventSetType(event.0, 12);
+            CGEventSetFlags(event.0, flags);
+            CGEventSetIntegerValueField(event.0, 42, if tagged { TAG } else { 0 });
+            callback(null_mut(), 12, event.0, null_mut()).is_null()
+        }
+    }
+
+    #[test]
+    fn modifier_release_without_a_captured_down_keeps_mouse_handoff_available() {
+        let (gate, _events) = callback_gate();
+        for usage in 0xe0..=0xe7 {
+            assert!(!flags_changed(usage, 0, false));
+            assert_eq!(
+                gate.held_inputs(),
+                0,
+                "an unmatched release invented a hold"
+            );
+        }
+        assert!(gate.prepare_commit(gate.snapshot().epoch()).is_some());
+        let _ = STATE.take();
+    }
+
+    #[test]
+    fn repeated_and_two_sided_shift_flags_preserve_the_mouse_admission_guard() {
+        const SHIFT: u64 = 1 << 17;
+        let (gate, _events) = callback_gate();
+        assert!(!flags_changed(0xe1, SHIFT | 2, false));
+        assert!(!flags_changed(0xe1, SHIFT | 2, false));
+        assert_eq!(gate.held_inputs(), 1, "repeated left Shift is still down");
+        assert!(gate.prepare_commit(gate.snapshot().epoch()).is_none());
+        assert!(!flags_changed(0xe5, SHIFT | 2 | 4, false));
+        assert_eq!(gate.held_inputs(), 2);
+        assert!(!flags_changed(0xe1, SHIFT | 4, false));
+        assert!(!flags_changed(0xe1, SHIFT | 4, false));
+        assert!(!flags_changed(0xe5, 0, true));
+        assert_eq!(gate.held_inputs(), 1, "right Shift remains physically held");
+        assert!(gate.enter_receiving().is_none());
+        assert!(!flags_changed(0xe5, 0, false));
+        assert!(gate.enter_receiving().is_some());
+        let _ = STATE.take();
+    }
+
+    #[test]
+    fn modifier_release_allows_committed_source_motion_into_the_capture_queue() {
+        let (gate, mut events) = callback_gate();
+        assert!(!flags_changed(0xe1, 0, false));
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Captured::Input {
+                event: Input::Key { down: false, .. },
+                route: CaptureRoute::Local(_),
+            }
+        ));
+        let token = gate.prepare_commit(gate.snapshot().epoch()).unwrap();
+        let CaptureCommit::Committed(epoch) = gate.commit_from(token, u64::MAX, now_ms()) else {
+            panic!("released source must admit the handoff");
+        };
+        unsafe {
+            let point = Point { x: 0.0, y: 10.0 };
+            let raw = CGEventCreateMouseEvent(null_mut(), 5, point, 0);
+            let event = OwnedEvent::created(raw).unwrap();
+            CGEventSetIntegerValueField(event.0, 4, -12);
+            CGEventSetIntegerValueField(event.0, 5, 3);
+            assert!(callback(null_mut(), 5, event.0, null_mut()).is_null());
+        }
+        let Captured::Motion { dx, dy, route } = events.try_recv().unwrap() else {
+            panic!("expected remote motion after the handoff");
+        };
+        assert_eq!(route, CaptureRoute::Remote(epoch));
+        assert_eq!((dx, dy), (-12.0, 3.0));
+        let _ = STATE.take();
+    }
+
+    #[test]
+    fn protected_modifier_with_only_group_flags_keeps_its_physical_up() {
+        const SHIFT: u64 = 1 << 17;
+        let (gate, _events) = callback_gate();
+        let epoch = gate.enter_receiving().unwrap();
+        assert!(flags_changed(0xe1, SHIFT, false));
+        assert!(!flags_changed(0xe1, 0, true));
+        assert_eq!(gate.held_inputs(), 1);
+        assert!(suppressed_modifiers_held());
+        // An injected modifier can keep the aggregate bit set on the physical Up.
+        assert!(flags_changed(0xe1, SHIFT, false));
+        assert_eq!(gate.held_inputs(), 0);
+        assert!(!suppressed_modifiers_held());
+        assert!(gate.leave_receiving(epoch, false));
+        let _ = STATE.take();
+    }
 }
 
 #[cfg(test)]
@@ -961,5 +1207,48 @@ mod display_layout_tests {
         assert!(display_metrics(19, rect, 45.0, 700, 1400).is_err());
         assert!(display_metrics(19, rect, 0.0, 0, 1400).is_err());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fractional_wheel_tests {
+    use super::*;
+
+    fn epoch(generation: u64) -> CaptureEpoch {
+        CaptureEpoch {
+            instance: 1,
+            generation,
+        }
+    }
+
+    #[test]
+    fn sub_line_scroll_accumulates_independent_axes_and_preserves_sign() {
+        let mut wheel = FractionalWheel::new();
+        let route = CaptureRoute::Remote(epoch(1));
+        let fixed = [-ONE_LINE / 2, ONE_LINE / 4];
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [-1, 0]);
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(route, true, [0; 2], fixed), [-1, 1]);
+    }
+
+    #[test]
+    fn routing_discrete_input_and_ambiguous_fixed_values_reset_remainders() {
+        let mut wheel = FractionalWheel::new();
+        let first = CaptureRoute::Remote(epoch(1));
+        let next = CaptureRoute::Remote(epoch(2));
+        let local = CaptureRoute::Local(epoch(3));
+        let fixed = [ONE_LINE / 2, -ONE_LINE / 2];
+        assert_eq!(wheel.steps(first, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(local, true, [2, 3], fixed), [2, 3]);
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(wheel.steps(next, false, [4, -5], fixed), [4, -5]);
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
+        assert_eq!(
+            wheel.steps(next, true, [0; 2], [i64::MAX, i64::MIN]),
+            [0, 0]
+        );
+        assert_eq!(wheel.steps(next, true, [0; 2], fixed), [0, 0]);
     }
 }

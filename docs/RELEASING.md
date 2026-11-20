@@ -23,6 +23,39 @@
 - `tools/package.py` 优先使用 `LINKO_VERSION`（格式不符即报错），未设置时由 git 计算，git 不可用时回退到 `Cargo.toml` 的 workspace version（该值不随提交修改）。
 - 发布标签仍按上文 `vX.Y.Z-dev` 规则，与构建版本号相互独立。
 
+## 包内来源
+
+ZIP 根目录的 `BUILD_SOURCE.json` 记录版本、平台、架构和实际
+Git 提交及源码树。PR 工作流同时记录受审提交，GitHub 合成提交
+可与受审提交有不同编号。生成验收包时核对各平台的源码树与
+提交来源。来源字段和 SHA-256 需从可信 CI 或发布记录核对，
+本地 ad-hoc 校验和 ZIP 来源文件不提供发布者身份。
+
+## 便携版本选择与回滚
+
+`tools/portable_update.py` 使用用户指定且已存在的独立版本目录。
+`stage` 需要 ZIP、从可信 CI 或发布记录取得的 SHA-256 及预期
+来源 JSON。成功时输出本次暂存编号和收据摘要。`activate` 用这两个
+摘要复查已暂存内容后选择版本。`current` 复查并显示入口，
+`rollback` 复查前一版后恢复选择。工具输出入口，实际启动由
+用户操作。更新目录之外的应用配置、已配对身份和授权由应用继续管理。
+
+```text
+python tools/portable_update.py --versions PATH stage --archive ZIP --archive-sha256 SHA --expected-source SOURCE_JSON
+python tools/portable_update.py --versions PATH activate --label LABEL --archive-sha256 SHA --receipt-sha256 RECEIPT_SHA
+python tools/portable_update.py --versions PATH current
+python tools/portable_update.py --versions PATH rollback
+```
+
+版本目录保留旧包内容。切换记录以同目录替换，回读时验证收据和
+文件内容。系统级安装、后台服务、代码签名、公证及真实更新后的
+系统权限继续分别授权和验收。
+
+同仓库 PR 的 GitHub Actions 在临时目录暂存并选择当轮成品，运行同包
+worker 的版本入口。找到同分支或基线分支中来源匹配、尚未过期的上一轮
+通过产物时，作业还会验证损坏版本被拒绝及恢复旧版入口。缺少上一版时
+记录跳过回滚，暂存与选择仍须通过。
+
 ## 首个预览的来源
 
 0.3.16-dev 程序来自 `cb27bce72ece205f138180fd1b6ef0c8cbf0764f`、CI `42382394527`。首个公开包仅替换 ZIP 根目录的 README／SECURITY，程序和 App 内成员保持原样。标签的 Rust 源码须与该基线一致。新 ZIP 有独立摘要，不能混用原始 CI artifact 外层摘要。

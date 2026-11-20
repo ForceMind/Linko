@@ -1,0 +1,1042 @@
+//! Explicit one-shot clipboard transfer. OS clipboard effects stay on the local owner.
+use crate::{
+    data,
+    file_drop_link::{ClipboardKind, ClipboardReceipt},
+    Identity,
+};
+use anyhow::{ensure, Context, Result};
+use peerglide_protocol::peer_destination;
+use peerglide_transfer::{
+    clipboard::{Backend, WriteResult, MAX_TEXT_BYTES},
+    clipboard_image::{Image, ImageBackend, MAX_PNG_BYTES},
+    data_policy::Permissions,
+};
+pub use peerglide_transfer::{
+    clipboard::{Classification, Origin},
+    codec::TextOutcome,
+};
+use quinn::Connection;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    sync::{mpsc, Arc},
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+use tokio::sync::{oneshot, watch};
+
+const CONTROL_BYTES: u64 = 1024;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
+const LISTEN_TIMEOUT: Duration = Duration::from_secs(30);
+const DECISION_TIMEOUT: Duration = Duration::from_secs(35);
+const GRANT_MS: u64 = 60_000;
+
+type Wake = Arc<dyn Fn() + Send + Sync>;
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Text,
+    Image,
+}
+
+impl Mode {
+    fn copy_kind(self) -> ClipboardKind {
+        match self {
+            Self::Text => ClipboardKind::Text,
+            Self::Image => ClipboardKind::Png,
+        }
+    }
+
+    fn capabilities(self) -> data::Capabilities {
+        data::Capabilities {
+            text: self == Self::Text,
+            files: false,
+            images: self == Self::Image,
+        }
+    }
+
+    fn budget(self) -> u64 {
+        let bytes = match self {
+            Self::Text => MAX_TEXT_BYTES,
+            Self::Image => MAX_PNG_BYTES,
+        };
+        bytes as u64 + 1024
+    }
+
+    fn permissions(self, sending: bool) -> Permissions {
+        Permissions {
+            text_send: self == Self::Text && sending,
+            text_receive: self == Self::Text && !sending,
+            image_send: self == Self::Image && sending,
+            image_receive: self == Self::Image && !sending,
+            ..Permissions::default()
+        }
+    }
+}
+
+pub enum Event {
+    Listening(SocketAddr),
+    PeerReceived,
+    WaitingForImageResult,
+    Pending(Box<PendingClipboard>),
+    Disconnected,
+    Finished {
+        outcome: TextOutcome,
+        copy_receipt: Option<ClipboardReceipt>,
+        receive_bind: Option<SocketAddr>,
+    },
+    Stopped,
+    Failed(String),
+}
+
+enum PendingFrame {
+    Text(data::AdmittedFrame),
+    Image(data::AdmittedImage),
+}
+
+pub struct PendingClipboard {
+    consent: data::Consent,
+    frame: PendingFrame,
+    for_drop: bool,
+}
+
+/// Validated content from an explicitly accepted clipboard import or copy preparation.
+pub enum DragPayload {
+    Text(String),
+    Png(Vec<u8>),
+}
+
+struct DragImport<'a, B> {
+    backend: &'a mut B,
+    payload: Option<DragPayload>,
+}
+
+impl<B: Backend> Backend for DragImport<'_, B> {
+    fn compare_and_write(&mut self, revision: u64, text: &str) -> WriteResult {
+        let result = self.backend.compare_and_write(revision, text);
+        if result == WriteResult::Submitted {
+            self.payload = Some(DragPayload::Text(text.to_owned()));
+        }
+        result
+    }
+}
+
+impl<B: ImageBackend> ImageBackend for DragImport<'_, B> {
+    fn compare_and_write_image(&mut self, revision: u64, image: &Image) -> WriteResult {
+        let result = self.backend.compare_and_write_image(revision, image);
+        if result == WriteResult::Submitted {
+            self.payload = Some(DragPayload::Png(image.as_png().to_vec()));
+        }
+        result
+    }
+}
+
+impl PendingClipboard {
+    pub fn dimensions(&self) -> Option<(u32, u32)> {
+        match &self.frame {
+            PendingFrame::Text(_) => None,
+            PendingFrame::Image(image) => Some(image.dimensions()),
+        }
+    }
+
+    pub fn import(mut self, backend: &mut (impl Backend + ImageBackend)) -> Result<Completion> {
+        ensure!(
+            !self.for_drop,
+            "copy preparation cannot write the system clipboard"
+        );
+        let result = match self.frame {
+            PendingFrame::Text(frame) => {
+                CompletedFrame::Text(self.consent.apply_text(frame, backend)?)
+            }
+            PendingFrame::Image(frame) => {
+                CompletedFrame::Image(self.consent.apply_image(frame, backend)?)
+            }
+        };
+        Ok(Completion {
+            consent: self.consent,
+            result,
+        })
+    }
+
+    /// Capture the accepted payload without rereading the system clipboard.
+    pub fn import_for_drag(
+        self,
+        backend: &mut (impl Backend + ImageBackend),
+    ) -> Result<(Completion, Option<DragPayload>)> {
+        let mut capture = DragImport {
+            backend,
+            payload: None,
+        };
+        let completion = self.import(&mut capture)?;
+        Ok((completion, capture.payload))
+    }
+
+    pub fn prepare_drop(mut self) -> Result<(Completion, DragPayload)> {
+        ensure!(
+            self.for_drop,
+            "the peer did not agree to prepare a copy drag"
+        );
+        let (result, payload) = match self.frame {
+            PendingFrame::Text(frame) => {
+                let (result, text) = self.consent.take_text_for_drop(frame)?;
+                (CompletedFrame::Text(result), DragPayload::Text(text))
+            }
+            PendingFrame::Image(frame) => {
+                let (result, png) = self.consent.take_image_for_drop(frame)?;
+                (CompletedFrame::Image(result), DragPayload::Png(png))
+            }
+        };
+        Ok((
+            Completion {
+                consent: self.consent,
+                result,
+            },
+            payload,
+        ))
+    }
+
+    pub fn decline(mut self) -> Result<Completion> {
+        let result = match self.frame {
+            PendingFrame::Text(frame) => CompletedFrame::Text(self.consent.decline_text(frame)?),
+            PendingFrame::Image(frame) => CompletedFrame::Image(self.consent.decline_image(frame)?),
+        };
+        Ok(Completion {
+            consent: self.consent,
+            result,
+        })
+    }
+}
+
+enum CompletedFrame {
+    Text(data::ClipboardCompletion),
+    Image(data::ImageCompletion),
+}
+
+pub struct Completion {
+    consent: data::Consent,
+    result: CompletedFrame,
+}
+
+impl Completion {
+    pub fn outcome(&self) -> TextOutcome {
+        match &self.result {
+            CompletedFrame::Text(result) => result.outcome(),
+            CompletedFrame::Image(result) => result.outcome(),
+        }
+    }
+}
+
+pub struct Job {
+    stop: watch::Sender<bool>,
+    events: mpsc::Receiver<Event>,
+    decision: Option<oneshot::Sender<Completion>>,
+    owner: JoinHandle<()>,
+}
+
+impl Job {
+    pub fn poll(&mut self) -> Option<Event> {
+        self.events.try_recv().ok()
+    }
+
+    pub fn complete(&mut self, completion: Completion) -> Result<()> {
+        self.decision
+            .take()
+            .context("clipboard import is no longer pending")?
+            .send(completion)
+            .map_err(|_| anyhow::anyhow!("clipboard result could not be reported"))
+    }
+
+    pub fn stop(&self) {
+        self.stop.send_replace(true);
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.owner.is_finished()
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+pub struct LocalText {
+    pub text: String,
+    pub classification: Classification,
+    pub origin: Origin,
+}
+
+pub enum LocalPayload {
+    Text(LocalText),
+    Image { png: Vec<u8>, origin: Origin },
+}
+
+enum PreparedPayload {
+    Text(LocalText),
+    Image(Image),
+}
+
+impl LocalPayload {
+    async fn prepare(self) -> Result<(Mode, PreparedPayload)> {
+        match self {
+            Self::Text(text) => Ok((Mode::Text, PreparedPayload::Text(text))),
+            Self::Image { png, origin } => {
+                ensure!(origin == Origin::Local, "imported images stay local");
+                let image = tokio::task::spawn_blocking(move || Image::normalize(&png)).await??;
+                Ok((Mode::Image, PreparedPayload::Image(image)))
+            }
+        }
+    }
+}
+
+enum Operation {
+    Send {
+        target: SocketAddr,
+        payload: LocalPayload,
+        for_drop: bool,
+    },
+    Receive {
+        bind: data::ReceiveBind,
+        revision: Option<u64>,
+        mode: Mode,
+        decision: oneshot::Receiver<Completion>,
+    },
+}
+
+pub fn send(
+    target: SocketAddr,
+    identity: Identity,
+    pinned_peer: Vec<u8>,
+    payload: LocalPayload,
+    for_drop: bool,
+    wake: Wake,
+) -> Result<Job> {
+    let target = peer_destination(target).context("invalid clipboard destination")?;
+    spawn(
+        Operation::Send {
+            target,
+            payload,
+            for_drop,
+        },
+        identity,
+        pinned_peer,
+        None,
+        wake,
+    )
+}
+
+/// A revision selects ordinary clipboard import. With no revision, only
+/// explicitly negotiated in-memory copy preparation is allowed.
+pub fn receive(
+    bind: data::ReceiveBind,
+    identity: Identity,
+    pinned_peer: Vec<u8>,
+    revision: Option<u64>,
+    mode: Mode,
+    wake: Wake,
+) -> Result<Job> {
+    let (decide, decision) = oneshot::channel();
+    spawn(
+        Operation::Receive {
+            bind,
+            revision,
+            mode,
+            decision,
+        },
+        identity,
+        pinned_peer,
+        Some(decide),
+        wake,
+    )
+}
+
+struct Events {
+    tx: mpsc::SyncSender<Event>,
+    wake: Wake,
+}
+
+impl Events {
+    fn post(&self, event: Event) -> Result<()> {
+        self.tx
+            .try_send(event)
+            .map_err(|_| anyhow::anyhow!("clipboard controller unavailable"))?;
+        (self.wake)();
+        Ok(())
+    }
+}
+
+fn spawn(
+    operation: Operation,
+    identity: Identity,
+    pinned_peer: Vec<u8>,
+    decision: Option<oneshot::Sender<Completion>>,
+    wake: Wake,
+) -> Result<Job> {
+    let (tx, events) = mpsc::sync_channel(4);
+    let (stop, mut stopped) = watch::channel(false);
+    let owner = thread::Builder::new()
+        .name("linko-clipboard-data".into())
+        .spawn(move || {
+            let events = Events { tx, wake };
+            let result = (|| -> Result<()> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .max_blocking_threads(1)
+                    .enable_all()
+                    .build()?;
+                runtime.block_on(async {
+                    let result = tokio::select! {
+                        biased;
+                        _ = stopped.wait_for(|stopped| *stopped) => None,
+                        result = run(operation, identity, pinned_peer, &events) => Some(result),
+                    };
+                    match result {
+                        Some(result) => result,
+                        None => events.post(Event::Stopped),
+                    }
+                })
+            })();
+            if let Err(error) = result {
+                let _ = events.post(Event::Failed(error.to_string()));
+            }
+        })?;
+    Ok(Job {
+        stop,
+        events,
+        decision,
+        owner,
+    })
+}
+
+/// Cancellation also closes the connection while the GUI owns an admitted frame.
+struct OwnedConnection(Connection);
+
+impl Drop for OwnedConnection {
+    fn drop(&mut self) {
+        self.0.close(0u8.into(), b"clipboard operation ended");
+    }
+}
+
+async fn run(
+    operation: Operation,
+    identity: Identity,
+    pinned_peer: Vec<u8>,
+    events: &Events,
+) -> Result<()> {
+    let (outcome, copy_receipt, receive_bind) = match operation {
+        Operation::Send {
+            target,
+            payload,
+            for_drop,
+        } => {
+            let (mode, payload) = payload.prepare().await?;
+            let bind = match target.ip() {
+                IpAddr::V4(_) => SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)),
+                IpAddr::V6(_) => SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)),
+            };
+            let endpoint = data::endpoint(bind, &identity, &pinned_peer)?;
+            let connecting = endpoint.connect(target, "peerglide.local")?;
+            let connection = OwnedConnection(
+                tokio::time::timeout(CONNECT_TIMEOUT, connecting)
+                    .await
+                    .context("clipboard connection timed out")??,
+            );
+            let stream = if for_drop {
+                data::open_for_drop(&connection.0, &pinned_peer, mode.capabilities()).await?
+            } else {
+                data::open(&connection.0, &pinned_peer, mode.capabilities()).await?
+            };
+            let (mut consent, mut send, mut receive) =
+                stream.into_session(mode.budget(), CONTROL_BYTES)?;
+            consent.grant(mode.permissions(true), GRANT_MS)?;
+            let (sequence, outcome) = match payload {
+                PreparedPayload::Text(text) => {
+                    let sequence = send
+                        .write_text(&text.text, text.classification, text.origin)
+                        .await?;
+                    receive.wait_text_receipt(sequence).await?;
+                    events.post(Event::PeerReceived)?;
+                    (sequence, receive.wait_text_result(sequence).await?)
+                }
+                PreparedPayload::Image(image) => {
+                    let sequence = send.write_image(image, Origin::Local).await?;
+                    events.post(Event::WaitingForImageResult)?;
+                    (sequence, receive.wait_image_result(sequence).await?)
+                }
+            };
+            let receipt = if for_drop && outcome == TextOutcome::Submitted {
+                Some(ClipboardReceipt::from_data(
+                    &connection.0,
+                    &pinned_peer,
+                    mode.copy_kind(),
+                    sequence,
+                )?)
+            } else {
+                None
+            };
+            (outcome, receipt, None)
+        }
+        Operation::Receive {
+            bind,
+            revision,
+            mode,
+            decision,
+        } => {
+            let endpoint = bind.endpoint(&identity, &pinned_peer)?;
+            let bound = endpoint.local_addr()?;
+            events.post(Event::Listening(bound))?;
+            let connection = OwnedConnection(
+                data::accept_pinned(&endpoint, &pinned_peer, LISTEN_TIMEOUT).await?,
+            );
+            let for_drop = revision.is_none();
+            let stream = if for_drop {
+                data::accept_for_drop(&connection.0, &pinned_peer, mode.capabilities()).await?
+            } else {
+                data::accept(&connection.0, &pinned_peer, mode.capabilities()).await?
+            };
+            let (mut consent, mut send, mut receive) =
+                stream.into_session(CONTROL_BYTES, mode.budget())?;
+            consent.grant(mode.permissions(false), GRANT_MS)?;
+            let frame = match (mode, revision) {
+                (Mode::Text, revision) => {
+                    let mut frame = if revision.is_some() {
+                        receive.read(revision).await?
+                    } else {
+                        receive.read_text_for_drop().await?
+                    };
+                    send.acknowledge_text(&mut frame).await?;
+                    PendingFrame::Text(frame)
+                }
+                (Mode::Image, Some(revision)) => {
+                    PendingFrame::Image(receive.read_image(revision).await?)
+                }
+                (Mode::Image, None) => PendingFrame::Image(receive.read_image_for_drop().await?),
+            };
+            events.post(Event::Pending(Box::new(PendingClipboard {
+                consent,
+                frame,
+                for_drop,
+            })))?;
+            let completion = tokio::select! {
+                biased;
+                _ = connection.0.closed() => return events.post(Event::Disconnected),
+                completion = tokio::time::timeout(DECISION_TIMEOUT, decision) => {
+                    completion.context("clipboard import decision timed out")??
+                }
+            };
+            let outcome = completion.outcome();
+            let receipt = if for_drop && outcome == TextOutcome::Submitted {
+                let sequence = match &completion.result {
+                    CompletedFrame::Text(result) => result.sequence(),
+                    CompletedFrame::Image(result) => result.sequence(),
+                };
+                Some(ClipboardReceipt::from_data(
+                    &connection.0,
+                    &pinned_peer,
+                    mode.copy_kind(),
+                    sequence,
+                )?)
+            } else {
+                None
+            };
+            match completion.result {
+                CompletedFrame::Text(result) => send.report_text_result(result).await?,
+                CompletedFrame::Image(result) => send.report_image_result(result).await?,
+            }
+            // Keep the endpoint and consent alive until the source reads its
+            // terminal result and closes. This does not retry any OS effect.
+            let _ = tokio::time::timeout(Duration::from_secs(5), connection.0.closed()).await;
+            drop(completion.consent);
+            let receive_bind = bind.reservation_address(bound, connection.0.remote_address());
+            (outcome, receipt, Some(receive_bind))
+        }
+    };
+    events.post(Event::Finished {
+        outcome,
+        copy_receipt,
+        receive_bind,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Memory {
+        revision: u64,
+        text: String,
+        images: usize,
+    }
+
+    impl Backend for Memory {
+        fn compare_and_write(&mut self, revision: u64, text: &str) -> WriteResult {
+            if revision != self.revision {
+                return WriteResult::Changed;
+            }
+            self.text = text.into();
+            self.revision += 1;
+            WriteResult::Submitted
+        }
+    }
+
+    impl ImageBackend for Memory {
+        fn compare_and_write_image(&mut self, revision: u64, _: &Image) -> WriteResult {
+            if revision != self.revision {
+                return WriteResult::Changed;
+            }
+            self.revision += 1;
+            self.images += 1;
+            WriteResult::Submitted
+        }
+    }
+
+    #[test]
+    fn two_workers_keep_consent_until_local_import_and_report_the_result() -> Result<()> {
+        loopback(Mode::Text, Decision::Import)
+    }
+
+    #[test]
+    fn stopping_the_receiver_invalidates_an_already_admitted_frame() -> Result<()> {
+        loopback(Mode::Text, Decision::Stop)
+    }
+
+    #[test]
+    fn image_worker_waits_for_the_local_import_and_reports_the_result() -> Result<()> {
+        loopback(Mode::Image, Decision::Import)
+    }
+
+    #[test]
+    fn stopping_the_receiver_invalidates_a_validated_image() -> Result<()> {
+        loopback(Mode::Image, Decision::Stop)
+    }
+
+    #[test]
+    fn successful_drag_import_keeps_only_the_accepted_text_or_png() -> Result<()> {
+        loopback(Mode::Text, Decision::PrepareDrag)?;
+        loopback(Mode::Image, Decision::PrepareDrag)
+    }
+
+    #[test]
+    fn changing_the_clipboard_prevents_import_and_drag_preparation() -> Result<()> {
+        loopback(Mode::Text, Decision::ClipboardChanged)?;
+        loopback(Mode::Image, Decision::ClipboardChanged)
+    }
+
+    #[test]
+    fn direct_copy_preparation_never_changes_the_system_clipboard() -> Result<()> {
+        loopback(Mode::Text, Decision::ReceiveDrop)?;
+        loopback(Mode::Image, Decision::ReceiveDrop)
+    }
+
+    #[test]
+    fn mismatched_copy_negotiation_closes_before_payload_admission() -> Result<()> {
+        loopback(Mode::Text, Decision::DropToImport)?;
+        loopback(Mode::Image, Decision::ImportToDrop)
+    }
+
+    #[test]
+    fn stopping_a_copy_session_invalidates_its_pending_payload() -> Result<()> {
+        loopback(Mode::Text, Decision::StopDrop)?;
+        loopback(Mode::Image, Decision::StopDrop)
+    }
+
+    #[test]
+    fn stopping_the_sender_ends_pending_import_and_copy_preparation() -> Result<()> {
+        for mode in [Mode::Text, Mode::Image] {
+            loopback(mode, Decision::StopSource)?;
+            loopback(mode, Decision::StopSourceDrop)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn declining_copy_preparation_reports_no_payload_effect() -> Result<()> {
+        loopback(Mode::Text, Decision::DeclineDrop)?;
+        loopback(Mode::Image, Decision::DeclineDrop)
+    }
+
+    #[test]
+    fn declining_import_reports_to_both_ends_and_preserves_the_clipboard() -> Result<()> {
+        loopback(Mode::Text, Decision::DeclineImport)?;
+        loopback(Mode::Image, Decision::DeclineImport)
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Decision {
+        Import,
+        PrepareDrag,
+        ClipboardChanged,
+        Stop,
+        ReceiveDrop,
+        StopDrop,
+        StopSource,
+        StopSourceDrop,
+        DeclineImport,
+        DeclineDrop,
+        DropToImport,
+        ImportToDrop,
+    }
+
+    #[test]
+    fn explicit_clipboard_workers_import_text_and_png_over_ipv6() -> Result<()> {
+        let bind = "[::1]:0".parse()?;
+        loopback_at(Mode::Text, Decision::Import, bind, false, false)?;
+        loopback_at(Mode::Image, Decision::Import, bind, false, false)
+    }
+
+    #[test]
+    fn clipboard_worker_imports_from_a_mapped_ipv4_target() -> Result<()> {
+        let bind = "127.0.0.1:0".parse()?;
+        loopback_at(Mode::Text, Decision::Import, bind, true, false)?;
+        loopback_at(Mode::Image, Decision::Import, bind, true, false)
+    }
+
+    #[test]
+    fn default_clipboard_listener_accepts_only_the_paired_peer_on_either_family() -> Result<()> {
+        for address in ["127.0.0.1:0", "[::1]:0"] {
+            let address = address.parse()?;
+            loopback_at(Mode::Text, Decision::Import, address, false, true)?;
+            loopback_at(Mode::Image, Decision::Import, address, false, true)?;
+        }
+        Ok(())
+    }
+
+    fn loopback(mode: Mode, decision: Decision) -> Result<()> {
+        loopback_at(mode, decision, "127.0.0.1:0".parse()?, false, false)
+    }
+
+    fn loopback_at(
+        mode: Mode,
+        decision: Decision,
+        dial: SocketAddr,
+        mapped: bool,
+        automatic: bool,
+    ) -> Result<()> {
+        let source = Identity::generate()?;
+        let destination = Identity::generate()?;
+        let lease_fixture = (decision == Decision::ReceiveDrop)
+            .then(|| LeaseFixture::new(&source, &destination))
+            .transpose()?;
+        let source_cert = source.certificate.clone();
+        let destination_cert = destination.certificate.clone();
+        let wake: Wake = Arc::new(|| {});
+        let mut backend = Memory {
+            revision: 5,
+            text: String::new(),
+            images: 0,
+        };
+        let drop_session = matches!(
+            decision,
+            Decision::ReceiveDrop
+                | Decision::StopDrop
+                | Decision::StopSourceDrop
+                | Decision::DeclineDrop
+        );
+        let receive_for_drop = drop_session || decision == Decision::ImportToDrop;
+        let send_for_drop = drop_session || decision == Decision::DropToImport;
+        let bind = if automatic {
+            data::ReceiveBind::Automatic(0)
+        } else {
+            data::ReceiveBind::Explicit(dial)
+        };
+        let mut receiving = receive(
+            bind,
+            destination,
+            source_cert,
+            (!receive_for_drop).then_some(backend.revision),
+            mode,
+            wake.clone(),
+        )?;
+        let Event::Listening(bound) = receiving.events.recv_timeout(Duration::from_secs(5))? else {
+            anyhow::bail!("expected clipboard listener readiness");
+        };
+        let payload = match mode {
+            Mode::Text => LocalPayload::Text(LocalText {
+                text: "屏跃".into(),
+                classification: Classification::ShareableText,
+                origin: Origin::Local,
+            }),
+            Mode::Image => LocalPayload::Image {
+                png: data::TEST_PNG.to_vec(),
+                origin: Origin::Local,
+            },
+        };
+        let address = SocketAddr::new(dial.ip(), bound.port());
+        if automatic {
+            data::attempt_untrusted_handshake(address, &destination_cert)?;
+        }
+        let target = match (address, mapped) {
+            (SocketAddr::V4(v4), true) => (v4.ip().to_ipv6_mapped(), v4.port()).into(),
+            _ => address,
+        };
+        let sending = send(
+            target,
+            source,
+            destination_cert,
+            payload,
+            send_for_drop,
+            wake,
+        )?;
+        if send_for_drop != receive_for_drop {
+            assert!(matches!(
+                receiving.events.recv_timeout(Duration::from_secs(5))?,
+                Event::Failed(_)
+            ));
+            assert!(matches!(
+                sending.events.recv_timeout(Duration::from_secs(5))?,
+                Event::Failed(_)
+            ));
+            return Ok(());
+        }
+        let Event::Pending(pending) = receiving.events.recv_timeout(Duration::from_secs(8))? else {
+            anyhow::bail!("expected an admitted clipboard frame");
+        };
+        let notice = sending.events.recv_timeout(Duration::from_secs(5))?;
+        assert!(matches!(
+            (mode, notice),
+            (Mode::Text, Event::PeerReceived) | (Mode::Image, Event::WaitingForImageResult)
+        ));
+        assert_eq!(
+            pending.dimensions(),
+            (mode == Mode::Image).then_some((1, 1))
+        );
+        assert!(backend.text.is_empty());
+        assert_eq!(backend.images, 0);
+        let stop_source = matches!(decision, Decision::StopSource | Decision::StopSourceDrop);
+        if stop_source || matches!(decision, Decision::Stop | Decision::StopDrop) {
+            let (local, peer) = if stop_source {
+                (&sending, &receiving)
+            } else {
+                (&receiving, &sending)
+            };
+            local.stop();
+            assert!(matches!(
+                local.events.recv_timeout(Duration::from_secs(5))?,
+                Event::Stopped
+            ));
+            let peer_event = peer.events.recv_timeout(Duration::from_secs(5))?;
+            assert!(matches!(
+                (stop_source, peer_event),
+                (true, Event::Disconnected) | (false, Event::Failed(_))
+            ));
+            if receive_for_drop {
+                assert!(pending.prepare_drop().is_err());
+            } else {
+                assert!(pending.import(&mut backend).is_err());
+            }
+            assert_eq!(backend.revision, 5);
+            assert!(backend.text.is_empty());
+            assert_eq!(backend.images, 0);
+            return Ok(());
+        }
+        let expected = match decision {
+            Decision::ClipboardChanged => {
+                backend.revision += 1;
+                TextOutcome::Changed
+            }
+            Decision::DeclineImport | Decision::DeclineDrop => TextOutcome::Declined,
+            _ => TextOutcome::Submitted,
+        };
+        let completion = if decision == Decision::Import {
+            pending.import(&mut backend)?
+        } else if expected == TextOutcome::Declined {
+            pending.decline()?
+        } else if decision == Decision::ReceiveDrop {
+            let (completion, payload) = pending.prepare_drop()?;
+            match (mode, payload) {
+                (Mode::Text, DragPayload::Text(text)) => assert_eq!(text, "屏跃"),
+                (Mode::Image, DragPayload::Png(png)) => {
+                    assert_eq!(png, Image::normalize(&data::TEST_PNG)?.as_png());
+                }
+                _ => anyhow::bail!("unexpected direct copy drag payload"),
+            }
+            assert_eq!(backend.revision, 5);
+            completion
+        } else {
+            let (completion, payload) = pending.import_for_drag(&mut backend)?;
+            match (decision, mode, payload) {
+                (Decision::PrepareDrag, Mode::Text, Some(DragPayload::Text(text))) => {
+                    assert_eq!(text, "屏跃");
+                }
+                (Decision::PrepareDrag, Mode::Image, Some(DragPayload::Png(png))) => {
+                    assert_eq!(png, Image::normalize(&data::TEST_PNG)?.as_png());
+                }
+                (Decision::ClipboardChanged, _, None) => (),
+                _ => anyhow::bail!("unexpected clipboard drag payload"),
+            }
+            completion
+        };
+        assert_eq!(completion.outcome(), expected);
+        receiving.complete(completion)?;
+        if expected == TextOutcome::Submitted && !receive_for_drop {
+            match mode {
+                Mode::Text => assert_eq!(backend.text, "屏跃"),
+                Mode::Image => assert_eq!(backend.images, 1),
+            }
+        } else {
+            assert!(backend.text.is_empty());
+            assert_eq!(backend.images, 0);
+        }
+        if expected == TextOutcome::Declined {
+            assert_eq!(backend.revision, 5);
+        }
+        let (sender, send_bind) = finished(&sending, expected)?;
+        let (receiver, receive_bind) = finished(&receiving, expected)?;
+        assert!(send_bind.is_none());
+        let receive_bind = receive_bind.context("missing clipboard reservation address")?;
+        assert_eq!(receive_bind.port(), address.port());
+        assert_eq!(receive_bind.is_ipv4(), address.is_ipv4());
+        if automatic {
+            assert!(receive_bind.ip().is_unspecified());
+        } else {
+            assert_eq!(receive_bind, address);
+        }
+        match (lease_fixture, sender, receiver) {
+            (Some(fixture), Some(sender), Some(receiver)) => fixture.verify(sender, receiver)?,
+            (None, None, None) => (),
+            _ => anyhow::bail!("unexpected clipboard copy proof"),
+        }
+        Ok(())
+    }
+
+    fn finished(
+        job: &Job,
+        expected: TextOutcome,
+    ) -> Result<(Option<ClipboardReceipt>, Option<SocketAddr>)> {
+        let Event::Finished {
+            outcome,
+            copy_receipt,
+            receive_bind,
+        } = job.events.recv_timeout(Duration::from_secs(8))?
+        else {
+            anyhow::bail!("clipboard completion was not received");
+        };
+        assert_eq!(outcome, expected);
+        Ok((copy_receipt, receive_bind))
+    }
+
+    struct LeaseFixture {
+        runtime: tokio::runtime::Runtime,
+        input: (quinn::Endpoint, quinn::Endpoint),
+        sidecar: (quinn::Endpoint, quinn::Endpoint),
+        sender_pin: Vec<u8>,
+        receiver_pin: Vec<u8>,
+    }
+
+    impl LeaseFixture {
+        fn new(sender: &Identity, receiver: &Identity) -> Result<Self> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let guard = runtime.enter();
+            let address = "127.0.0.1:0".parse()?;
+            let sender_pin = sender.certificate.clone();
+            let receiver_pin = receiver.certificate.clone();
+            let input = (
+                crate::endpoint(address, sender, &receiver_pin)?,
+                crate::endpoint(address, receiver, &sender_pin)?,
+            );
+            let sidecar = (
+                crate::layout_reservation::endpoint(address, sender, &receiver_pin)?,
+                crate::layout_reservation::endpoint(address, receiver, &sender_pin)?,
+            );
+            drop(guard);
+            Ok(Self {
+                runtime,
+                input,
+                sidecar,
+                sender_pin,
+                receiver_pin,
+            })
+        }
+
+        fn verify(self, sent: ClipboardReceipt, received: ClipboardReceipt) -> Result<()> {
+            use crate::file_drop_link::{
+                accept_worker, reserve_for_worker, SentReceipt, WorkerSlot,
+            };
+            use std::time::Instant;
+
+            const LEASE: u64 = 27;
+            assert!(sent.matches_peer(&crate::fingerprint(&self.receiver_pin)));
+            assert!(received.matches_peer(&crate::fingerprint(&self.sender_pin)));
+            assert!(!sent.matches_peer(&crate::fingerprint(&self.sender_pin)));
+            let (sent, _) = sent.into_local_worker()?;
+            let (received, expires) = received.into_local_worker()?;
+            let remaining = u32::try_from(
+                expires
+                    .saturating_duration_since(Instant::now())
+                    .as_millis(),
+            )?;
+            let slot = WorkerSlot::from_local_arm(&received, remaining, &self.sender_pin)?;
+
+            self.runtime.block_on(async {
+                let (input_out, input_in) = connect(&self.input).await?;
+                let (wrong_input, _wrong_receiver) = connect(&self.input).await?;
+                let (side_out, side_in) = connect(&self.sidecar).await?;
+                let replay = SentReceipt::from_local_worker(&sent, &self.receiver_pin)?;
+                let (reservation, published) = tokio::try_join!(
+                    reserve_for_worker(&side_out, &wrong_input, &self.receiver_pin, replay, LEASE),
+                    accept_worker(&side_in, &input_in, &self.sender_pin, &slot, || true),
+                )?;
+                assert!(reservation.is_none());
+                assert!(!published);
+                assert!(slot
+                    .begin_claim(&input_in, &self.sender_pin, LEASE, true)?
+                    .is_none());
+
+                let (side_out, side_in) = connect(&self.sidecar).await?;
+                let receipt = SentReceipt::from_local_worker(&sent, &self.receiver_pin)?;
+                let claim = async {
+                    let pending = reserve_for_worker(
+                        &side_out,
+                        &input_out,
+                        &self.receiver_pin,
+                        receipt,
+                        LEASE,
+                    )
+                    .await?
+                    .context("approved clipboard copy was not reserved")?;
+                    assert!(slot
+                        .begin_claim(&input_in, &self.sender_pin, LEASE + 1, true)?
+                        .is_none());
+                    let accepted = slot
+                        .begin_claim(&input_in, &self.sender_pin, LEASE, true)?
+                        .context("clipboard copy was not available to its own lease")?;
+                    assert!(accepted.confirm());
+                    pending.confirm().await?;
+                    assert!(slot
+                        .begin_claim(&input_in, &self.sender_pin, LEASE, true)?
+                        .is_none());
+                    Ok(())
+                };
+                let (_, published) = tokio::try_join!(
+                    claim,
+                    accept_worker(&side_in, &input_in, &self.sender_pin, &slot, || true),
+                )?;
+                assert!(published);
+                Ok(())
+            })
+        }
+    }
+
+    async fn connect(
+        pair: &(quinn::Endpoint, quinn::Endpoint),
+    ) -> Result<(Connection, Connection)> {
+        tokio::try_join!(
+            async {
+                Ok(pair
+                    .0
+                    .connect(pair.1.local_addr()?, "peerglide.local")?
+                    .await?)
+            },
+            async {
+                Ok(pair
+                    .1
+                    .accept()
+                    .await
+                    .context("test listener closed")?
+                    .await?)
+            },
+        )
+    }
+}
