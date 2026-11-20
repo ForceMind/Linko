@@ -155,6 +155,9 @@ def main():
                         click_control("nav_sharing")
                         time.sleep(0.4)
                         capture_workspace(gui, dest / "peerglide-sharing-files.png")
+                        click_control("nav_gestures")
+                        time.sleep(0.4)
+                        capture_workspace(gui, dest / "peerglide-gesture-practice.png")
                         click_control("nav_settings")
                         # Keep the pointer away from the appearance control in both captures.
                         run_external(["xdotool", "mousemove", "--window", window, "2", "54"], check=True)

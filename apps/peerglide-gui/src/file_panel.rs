@@ -531,7 +531,12 @@ impl Panel {
         let paired = data_access::ready(app);
         let ready = paired && !self.handoff_active();
         if !paired {
-            ui.weak("请先完成设备配对并打开可写窗口。");
+            super::visual_assets::handoff_art(ui, super::icons::Icon::Folder);
+            ui.label("文件共享需要已配对的电脑及可写窗口。");
+            let action = app.workspace_view().action;
+            if action == super::desktop_state::Action::AddDevice && ui.button("添加电脑").clicked() {
+                app.workspace_action(action);
+            }
         }
         if ready && self.active.is_none() && !self.edge_active() {
             let dropped = ui.input(|input| {
@@ -545,10 +550,13 @@ impl Panel {
                 self.source = path;
             }
         }
-        if self.active.is_none() {
+        if paired && self.active.is_none() && self.paused.is_none() {
             self.file_request_controls(app, ui, ready);
         }
         self.transfer_controls(app, ui, ready);
+        if paired && self.active.is_none() && self.paused.is_some() {
+            ui.collapsing("其他文件任务", |ui| self.file_request_controls(app, ui, ready));
+        }
     }
 
     fn file_request_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool) {
