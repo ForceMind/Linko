@@ -541,7 +541,7 @@ impl App {
             SettingsSection::General => {
                 desktop_style::card(ui).show(ui, |ui| {
                     ui.set_min_width(ui.available_width().min(680.0));
-                    ui.strong("外观与连接");
+                    ui.add_space(10.0);
                     ui.add_enabled_ui(self.writable(), |ui| {
                         let mut dark = self.config.dark;
                         appearance_choices(ui, &mut dark);
@@ -1383,7 +1383,7 @@ impl App {
                 let rail = &mut ui.style_mut().visuals;
                 *rail = egui::Visuals::dark();
                 rail.override_text_color = Some(egui::Color32::from_rgb(231, 232, 247));
-                self.sidebar(ui, sidebar_mix);
+                ui.add_enabled_ui(!self.pairing_panel.open, |ui| self.sidebar(ui, sidebar_mix));
             });
         if self.page != Page::GestureLab && self.page != Page::GestureRules
             || self.child.is_some()
@@ -1411,6 +1411,13 @@ impl App {
             )
             .show(root, |ui| {
                 ui.multiply_opacity(shell_ui::view_alpha(progress));
+                if self.pairing_panel.open {
+                    let mut pairing = std::mem::take(&mut self.pairing_panel);
+                    pairing.ui(self, ui);
+                    self.pairing_open = pairing.blocks_actions();
+                    self.pairing_panel = pairing;
+                    return;
+                }
                 if matches!(self.page, Page::GestureLab | Page::GestureRules) {
                     self.subpage_header(ui, "手势", Page::Shortcuts);
                 }
@@ -1436,10 +1443,7 @@ impl App {
         }
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
-        let mut pairing = std::mem::take(&mut self.pairing_panel);
-        pairing.ui(self, &ctx);
-        self.pairing_open = pairing.blocks_actions();
-        self.pairing_panel = pairing;
+        self.pairing_open = self.pairing_panel.blocks_actions();
         // Report ordinary geometry only while the sidebar rests, so scripted clicks land on
         // controls that keep their place.
         let report = if self.layout_report.is_none() {
@@ -1570,10 +1574,10 @@ const SETTINGS_SECTIONS: [(SettingsSection, Icon, &str); 3] = [
 /// Selectable miniature windows use the same foreground and surface tokens as the app.
 fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
     ui.horizontal(|ui| {
-        let width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).min(156.0);
+        let width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).min(294.0);
         for (dark, label) in [(false, "浅色"), (true, "深色")] {
             let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(width, 72.0), egui::Sense::click());
+                ui.allocate_exact_size(egui::vec2(width, width * 0.55), egui::Sense::click());
             let selected = *current == dark;
             response.widget_info(|| {
                 egui::WidgetInfo::selected(
@@ -1587,9 +1591,14 @@ fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
             let ink = tokens::text_color(dark);
             painter.rect_filled(rect, 8.0, tokens::surface_color(dark));
             let mut rail = rect.shrink(5.0);
-            rail.set_width(13.0);
+            rail.set_width(width * 0.14);
             painter.rect_filled(rail, 4.0, egui::Color32::from_rgb(54, 54, 94));
-            let start = rect.min + egui::vec2(25.0, 12.0);
+            let start = rect.min + egui::vec2(width * 0.2, 16.0);
+            let content = egui::Rect::from_min_max(
+                start + egui::vec2(0.0, 30.0),
+                rect.right_bottom() - egui::vec2(12.0, 34.0),
+            );
+            painter.rect_filled(content, 5.0, tokens::line_color(dark));
             for (dy, fraction) in [(0.0, 0.46), (10.0, 0.33)] {
                 let row = egui::Rect::from_min_size(
                     start + egui::vec2(0.0, dy),

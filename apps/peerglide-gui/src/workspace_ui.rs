@@ -56,46 +56,14 @@ impl App {
             card(ui).show(ui, |ui| self.device_permissions(ui));
             return;
         }
-        let width = ui.available_width();
-        if width >= 600.0 {
-            let compact = width < 780.0;
-            let details = if compact {
-                228.0
-            } else {
-                (width * 0.32).clamp(290.0, 340.0)
-            };
-            let gap = if compact { 16.0 } else { 24.0 };
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                ui.vertical(|ui| {
-                    ui.set_width(width - details - gap);
-                    self.workspace_screen_card(ui);
-                });
-                ui.vertical(|ui| {
-                    ui.set_width(details);
-                    self.workspace_device_detail(ui);
-                });
-            });
-        } else {
-            self.workspace_screen_card(ui);
-            ui.add_space(12.0);
-            self.workspace_device_detail(ui);
-        }
-    }
-
-    fn workspace_screen_card(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.available_width() < 500.0;
-        let margin = if compact { 12.0 } else { 16.0 };
-        card(ui).inner_margin(margin).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            // The details switch is the context column's info button now.
-            ui.horizontal_wrapped(|ui| self.workspace_zoom_controls(ui));
-            self.workspace_canvas(ui);
+        ui.horizontal_wrapped(|ui| self.workspace_zoom_controls(ui));
+        self.workspace_canvas(ui);
+        ui.horizontal_wrapped(|ui| {
             self.workspace_direction_controls(ui);
-            // Explains the selector directly above, so it stays in the first viewport.
             ui.small(self.workspace_direction_note());
-            self.layout_hint_row(ui);
         });
+        self.layout_hint_row(ui);
+        self.workspace_device_detail(ui);
     }
 
     /// Icon-only zoom buttons around the zoom level; each keeps its name for assistive use.
@@ -366,9 +334,29 @@ impl App {
             }
         } else {
             state.peer_badge.observe_appearance(false, now, pop);
-            let add = egui::Rect::from_center_size(peer.center(), Vec2::new(peer.width(), 66.0));
+            let add = egui::Rect::from_center_size(
+                peer.center() - egui::vec2(0.0, peer.height() * 0.13),
+                Vec2::new(peer.width() * 0.92, peer.width() * 0.54),
+            );
+            let ink = tokens::accent_color(self.config.dark).gamma_multiply(0.58);
+            let stroke = egui::Stroke::new(1.5, ink);
+            let outline = [
+                add.left_top(),
+                add.right_top(),
+                add.right_bottom(),
+                add.left_bottom(),
+                add.left_top(),
+            ];
+            devices.extend(egui::Shape::dashed_line(&outline, stroke, 6.0, 5.0));
+            let stem = add.center_bottom();
+            let foot = stem + egui::vec2(0.0, add.height() * 0.13);
+            devices.line_segment([stem, foot], stroke);
+            devices.line_segment(
+                [foot - egui::vec2(20.0, 0.0), foot + egui::vec2(20.0, 0.0)],
+                stroke,
+            );
             ui.add_enabled_ui(self.idle_writable(), |ui| {
-                let response = ui.put(add, egui::Button::new("＋\n添加另一台电脑"));
+                let response = ui.put(add, egui::Button::new("＋\n添加另一台电脑").frame(false));
                 self.record_layout_control("add_device", &response, ui.clip_rect());
                 if response.clicked() {
                     self.open_setup();
@@ -398,25 +386,28 @@ impl App {
     /// Full sentences are each row's hover and accessible name; warning, consent,
     /// permission and recovery sentences stay visible text.
     fn workspace_device_detail(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.available_width() < 270.0;
-        let margin = if compact { 12.0 } else { 16.0 };
-        let gap = if compact { 8.0 } else { 12.0 };
-        card(ui).inner_margin(margin).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.spacing_mut().item_spacing.x = tokens::SPACE_SM;
-            ui.spacing_mut().item_spacing.y = tokens::SPACE_XS;
+        ui.add_space(4.0);
+        ui.separator();
+        if ui.available_width() >= 620.0 {
+            ui.columns(3, |columns| {
+                self.context_header(&mut columns[0]);
+                self.context_primary(&mut columns[0]);
+                if columns[0].small_button("文件与剪贴板").clicked() {
+                    self.navigate_to(Page::Transfers);
+                }
+                self.context_rows(&mut columns[1]);
+                self.context_attention(&mut columns[2]);
+            });
+        } else {
             self.context_header(ui);
-            ui.separator();
-            self.context_rows(ui);
-            self.context_attention(ui);
-            ui.add_space(tokens::SPACE_XS);
             self.context_primary(ui);
-        });
-        ui.add_space(gap);
-        if ui.small_button("文件与剪贴板").clicked() {
-            self.navigate_to(Page::Transfers);
+            self.context_attention(ui);
+            self.context_rows(ui);
+            if ui.small_button("文件与剪贴板").clicked() {
+                self.navigate_to(Page::Transfers);
+            }
         }
-        self.details_drawer(ui, gap, margin);
+        self.details_drawer(ui, 8.0, 12.0);
     }
 
     /// Name of the selected device and the switch of the details drawer.

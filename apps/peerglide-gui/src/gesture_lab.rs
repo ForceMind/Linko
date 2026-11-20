@@ -254,10 +254,31 @@ impl GestureLab {
                 }
             }
         }
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width().max(1.), 260.),
-            Sense::click_and_drag(),
-        );
+        let height = if self.export_open {
+            260.0
+        } else {
+            (ui.ctx().viewport_rect().height() * 0.49).clamp(240.0, 450.0)
+        };
+        let (rect, response) = ui.horizontal_top(|ui| {
+            let canvas = ui.allocate_exact_size(
+                egui::vec2((ui.available_width() - 64.0).max(1.0), height),
+                Sense::click_and_drag(),
+            );
+            ui.vertical(|ui| {
+                let clear = super::shell_ui::icon_button(ui, super::icons::Icon::Recover, "清空画布", false);
+                if clear.clicked() {
+                    self.cancel();
+                    self.samples.clear();
+                    self.result = None;
+                    self.completed = false;
+                    self.saved = false;
+                }
+                if super::shell_ui::icon_button(ui, super::icons::Icon::Folder, "样本标注与导出", false).clicked() {
+                    self.set_export_open(!self.export_open);
+                }
+            });
+            canvas
+        }).inner;
         crate::desktop_style::canvas_wash(ui.painter(), rect, ui.visuals().dark_mode);
         let (time, focused, escape, events) = ui.ctx().input(|i| {
             (
@@ -347,13 +368,7 @@ impl GestureLab {
                 });
             }
         }
-        if ui.button("清空画布").clicked() {
-            self.cancel();
-            self.samples.clear();
-            self.result = None;
-            self.completed = false;
-            self.saved = false;
-        }
+
         let mut save_rect = None;
         let export = egui::CollapsingHeader::new("样本标注与导出 · 可选")
             .open(Some(self.export_open))

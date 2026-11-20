@@ -531,13 +531,18 @@ impl Panel {
         let paired = data_access::ready(app);
         let ready = paired && !self.handoff_active();
         if !paired {
-            super::visual_assets::handoff_art(ui, super::icons::Icon::Folder);
-            ui.label("文件共享需要已配对的电脑及可写窗口。");
-            let action = app.workspace_view().action;
-            if action == super::desktop_state::Action::AddDevice && ui.button("添加电脑").clicked()
-            {
-                app.workspace_action(action);
-            }
+            ui.vertical_centered(|ui| {
+                super::visual_assets::handoff_art(ui, super::icons::Icon::Folder);
+                ui.add_space(10.0);
+                ui.label("文件共享需要已配对的电脑及可写窗口。");
+                let action = app.workspace_view().action;
+                if action == super::desktop_state::Action::AddDevice
+                    && ui.add(super::desktop_style::primary("添加电脑")).clicked()
+                {
+                    app.workspace_action(action);
+                }
+                ui.add_space(12.0);
+            });
         }
         if ready && self.active.is_none() && !self.edge_active() {
             let dropped = ui.input(|input| {
