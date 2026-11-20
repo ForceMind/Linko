@@ -14,7 +14,7 @@ const EDGES: [(&str, Direction); 4] = [
 /// Side of the square toolbar buttons and height of the direction buttons, in points.
 const CANVAS_BUTTON_SIDE: f32 = 32.0;
 /// Opacity of the screens while the layout cannot be edited.
-const LOCKED_OPACITY: f32 = 0.45;
+const LOCKED_OPACITY: f32 = 0.68;
 /// Radius of a screen status badge at full size, in points.
 const BADGE_RADIUS: f32 = 10.0;
 /// Height of the canvas chips and their distance from the canvas corner, in points.
@@ -1246,12 +1246,18 @@ fn draw_workspace_device(
     let label_height = node.height() * 0.26;
     let image_area =
         egui::Rect::from_min_max(node.min, egui::pos2(node.max.x, node.max.y - label_height));
-    let artwork = visual_assets::device_art(ui.ctx(), kind);
+    // The arrangement shows a display, even when the other computer's chassis is unknown.
+    let artwork_kind = if kind == visual_assets::DeviceKind::Unknown {
+        visual_assets::DeviceKind::Desktop
+    } else {
+        kind
+    };
+    let artwork = visual_assets::device_art(ui.ctx(), artwork_kind);
     let aspect = artwork.as_ref().map_or(4.0 / 3.0, |asset| asset.aspect);
     let illustration_scale = match kind {
         visual_assets::DeviceKind::Laptop => 0.70,
         visual_assets::DeviceKind::Desktop => 1.0,
-        visual_assets::DeviceKind::Unknown => 0.85,
+        visual_assets::DeviceKind::Unknown => 0.94,
     };
     let width = image_area.width().min(image_area.height() * aspect) * illustration_scale;
     let size = Vec2::new(width, width / aspect);
@@ -1259,9 +1265,9 @@ fn draw_workspace_device(
         egui::pos2(image_area.center().x, image_area.max.y - size.y / 2.0),
         size,
     );
-    let selected_frame = if kind == visual_assets::DeviceKind::Unknown {
+    let selected_frame = if artwork.is_none() {
         image_rect.shrink(5.0)
-    } else if kind == visual_assets::DeviceKind::Desktop {
+    } else if artwork_kind == visual_assets::DeviceKind::Desktop {
         egui::Rect::from_min_max(
             image_rect.min,
             egui::pos2(
@@ -1291,7 +1297,7 @@ fn draw_workspace_device(
             egui::Color32::WHITE,
         );
     } else {
-        // A generic pair of outlines is a symbol, not an identified chassis.
+        // Preserve a visible target if a bundled illustration could not be decoded.
         generic_device_symbol(
             painter,
             image_rect.shrink(4.0),
