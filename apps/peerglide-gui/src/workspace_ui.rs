@@ -415,7 +415,7 @@ impl App {
                 self.navigate_to(Page::Transfers);
             }
         }
-        self.details_drawer(ui, 8.0, 12.0);
+        self.details_drawer(ui);
     }
 
     /// Name of the selected device and the switch of the details drawer.
@@ -623,50 +623,63 @@ impl App {
         }
     }
 
-    /// Details drawer under the column: the former connection and identity card with
-    /// discovery. Opening and closing play one slide and fade of `EXPAND_SECS` (M4) on a
-    /// fixed id and then paint statically; closed, it paints nothing.
-    fn details_drawer(&mut self, ui: &mut egui::Ui, gap: f32, margin: f32) {
+    /// The inspector overlays the canvas so its status and controls stay reachable.
+    fn details_drawer(&mut self, ui: &mut egui::Ui) {
         let id = context_control_id("details-drawer");
         let open = self.connection_details_open;
         let amount = motion::expand_amount(ui.ctx(), id, open);
         if amount <= 0.0 {
             return;
         }
-        ui.add_space(gap + motion::lerp(tokens::VIEW_SLIDE_PX, 0.0, amount));
-        ui.scope(|ui| {
-            ui.multiply_opacity(amount);
-            card(ui).inner_margin(margin).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.strong("连接与身份详情");
-                self.selected_device_metadata(ui);
-                #[cfg(any(windows, target_os = "macos"))]
-                if !self.workspace_peer_selected {
-                    let enabled = open
-                        && !self.resource_check_mode
-                        && !self.quit_check_mode
-                        && self.layout_report.is_none();
-                    let can_choose = enabled
-                        && self.layout_editable()
-                        && self.active_mode != Some(SessionMode::Native)
-                        && self.pending_start != Some(SessionMode::Native);
-                    self.display_inventory
-                        .ui(ui, enabled, can_choose, &self.wake_ui);
-                    if enabled {
-                        let mut editor = std::mem::take(&mut self.route_plan);
-                        editor.ui(self, ui);
-                        self.route_plan = editor;
-                    }
-                }
-                ui.separator();
-                self.connection_details(ui);
-                if open {
-                    let mut profiles = std::mem::take(&mut self.layout_profiles);
-                    profiles.ui(self, ui);
-                    self.layout_profiles = profiles;
-                }
+        let clip = ui.clip_rect();
+        let width = (clip.width() - 28.0).clamp(1.0, 360.0);
+        let slide = motion::lerp(tokens::VIEW_SLIDE_PX, 0.0, amount);
+        let origin = egui::pos2(clip.right() - width - 12.0 + slide, clip.top() + 48.0);
+        egui::Area::new(id.with("inspector"))
+            .order(egui::Order::Middle)
+            .fixed_pos(origin)
+            .show(ui.ctx(), |ui| {
+                ui.multiply_opacity(amount);
+                ui.add_enabled_ui(open, |ui| {
+                    card(ui).inner_margin(12.0).show(ui, |ui| {
+                        ui.set_width((width - 24.0).max(1.0));
+                        ui.strong("连接与身份详情");
+                        egui::ScrollArea::vertical()
+                            .max_height((clip.height() * 0.5).min(350.0))
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| self.inspector_body(ui, open));
+                    });
+                });
             });
-        });
+    }
+
+    fn inspector_body(&mut self, ui: &mut egui::Ui, open: bool) {
+        self.selected_device_metadata(ui);
+        #[cfg(any(windows, target_os = "macos"))]
+        if !self.workspace_peer_selected {
+            let enabled = open
+                && !self.resource_check_mode
+                && !self.quit_check_mode
+                && self.layout_report.is_none();
+            let can_choose = enabled
+                && self.layout_editable()
+                && self.active_mode != Some(SessionMode::Native)
+                && self.pending_start != Some(SessionMode::Native);
+            self.display_inventory
+                .ui(ui, enabled, can_choose, &self.wake_ui);
+            if enabled {
+                let mut editor = std::mem::take(&mut self.route_plan);
+                editor.ui(self, ui);
+                self.route_plan = editor;
+            }
+        }
+        ui.separator();
+        self.connection_details(ui);
+        if open {
+            let mut profiles = std::mem::take(&mut self.layout_profiles);
+            profiles.ui(self, ui);
+            self.layout_profiles = profiles;
+        }
     }
 
     fn selected_device_metadata(&self, ui: &mut egui::Ui) {
