@@ -1,6 +1,6 @@
 //! Explicit, window-local drawing only. Never installs hooks or dispatches actions.
 use anyhow::{Context, Result};
-use eframe::egui::{self, Color32, Event, PointerButton, Rect, Sense, Stroke as PaintStroke};
+use eframe::egui::{self, Event, PointerButton, Rect, Sense, Stroke as PaintStroke};
 use peerglide_gestures::{
     starter_templates, Config, Match, Point, Recognizer, Rejection, Sample, Stroke,
 };
@@ -232,9 +232,8 @@ impl GestureLab {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, worker_running: bool) -> Option<Rect> {
         self.inspection = None;
-        ui.strong("录制与本窗口测试");
-        ui.label("按住右键在画布内绘制，Esc 取消。");
-        ui.weak("仅限此画布，不捕获全局输入、不执行动作。只有点击保存才会写入文件。");
+        ui.label("按住右键试画 · Esc 取消");
+        ui.small("仅本窗口，不执行动作；手动保存才写入文件。");
         if worker_running {
             self.cancel();
             ui.label("设备会话运行期间暂停画布录制。请先停止设备会话，再进行窗口内测试。");
@@ -259,8 +258,7 @@ impl GestureLab {
             egui::vec2(ui.available_width().max(1.), 260.),
             Sense::click_and_drag(),
         );
-        ui.painter()
-            .rect_filled(rect, 8, ui.visuals().extreme_bg_color);
+        crate::desktop_style::canvas_wash(ui.painter(), rect, ui.visuals().dark_mode);
         let (time, focused, escape, events) = ui.ctx().input(|i| {
             (
                 i.time,
@@ -317,11 +315,15 @@ impl GestureLab {
             }
         }
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        let position = |s: &Sample| rect.min + egui::vec2(s.point.x as f32, s.point.y as f32);
+        let ink = crate::desktop_style::tokens::accent_color(ui.visuals().dark_mode);
+        if let Some(first) = self.samples.first() {
+            painter.circle_filled(position(first), 4.0, ink);
+        }
         for pair in self.samples.windows(2) {
-            let position = |s: &Sample| rect.min + egui::vec2(s.point.x as f32, s.point.y as f32);
             painter.line_segment(
                 [position(&pair[0]), position(&pair[1])],
-                PaintStroke::new(2.5_f32, Color32::from_rgb(80, 175, 230)),
+                PaintStroke::new(2.5_f32, ink),
             );
         }
         if self.active.is_some() {

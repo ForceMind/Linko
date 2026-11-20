@@ -379,25 +379,12 @@ impl App {
             self.use_recorded_gesture(ui);
             return;
         }
-        ui.weak("离线配置：录制、测试并保存规则，不执行系统动作。");
-        ui.add_space(14.0);
-        egui::Frame::group(ui.style())
-            .inner_margin(14.0)
-            .show(ui, |ui| {
-                let mut enabled = false;
-                ui.add_enabled(
-                    false,
-                    egui::Checkbox::new(&mut enabled, "全局鼠标手势 · 开发与实机验收中"),
-                );
-                ui.weak(
-                    "默认关闭。当前平台没有可在本GUI启用的全局手势，保存规则不授予捕获或动作权限。",
-                );
-            });
-        ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.mouse_tab, MouseTab::Rules, "规则与应用");
-            ui.selectable_value(&mut self.mouse_tab, MouseTab::Practice, "录制与本窗口测试");
-        });
+        let tabs = [
+            (MouseTab::Practice, Icon::Gesture, "练习"),
+            (MouseTab::Rules, Icon::Sliders, "规则与应用"),
+        ];
+        segmented(ui, &mut self.mouse_tab, &tabs);
+        ui.small("仅本窗口预览 · 全局捕获与动作关闭");
         ui.add_space(14.0);
         let writable = self.idle_writable();
         match self.mouse_tab {
@@ -558,20 +545,16 @@ impl App {
                     ui.strong("外观与连接");
                     ui.add_enabled_ui(self.writable(), |ui| {
                         let mut dark = self.config.dark;
-                        ui.horizontal(|ui| {
-                            ui.label("外观");
-                            segmented(ui, &mut dark, &APPEARANCES);
-                        });
+                        appearance_choices(ui, &mut dark);
                         if dark != self.config.dark {
                             self.config.dark = dark;
                             self.theme(ctx);
                             self.save();
                         }
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("界面语言");
-                            ui.weak("简体中文");
-                        });
                     });
+                    if ui.small_button("查看快捷键").clicked() {
+                        self.navigate_to(Page::Shortcuts);
+                    }
                     ui.add_enabled_ui(self.writable() && self.desktop_store.is_some(), |ui| {
                         let mut preferences = self.desktop_preferences;
                         if ui
@@ -1209,6 +1192,11 @@ impl App {
         ui.separator();
         if dialog == Dialog::Recovery {
             ui.strong(self.input_label());
+            ui.horizontal(|ui| {
+                for key in ["Ctrl", "Alt", "Esc"] {
+                    keycap(ui, key);
+                }
+            });
         }
         for point in dialog_points(dialog) {
             safety_point(ui, *point);
@@ -1578,9 +1566,51 @@ const SETTINGS_SECTIONS: [(SettingsSection, Icon, &str); 3] = [
     (SettingsSection::Permissions, Icon::Lock, "系统权限"),
     (SettingsSection::Advanced, Icon::Log, "诊断与资料"),
 ];
-/// Appearance choices; the value is the stored dark mode flag.
-const APPEARANCES: [(bool, Icon, &str); 2] =
-    [(false, Icon::Sun, "浅色"), (true, Icon::Moon, "深色")];
+/// Selectable miniature windows use the same foreground and surface tokens as the app.
+fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
+    ui.horizontal(|ui| {
+        let width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).min(156.0);
+        for (dark, label) in [(false, "浅色"), (true, "深色")] {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(width, 72.0), egui::Sense::click());
+            let selected = *current == dark;
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), selected, label)
+            });
+            let painter = ui.painter();
+            let ink = tokens::text_color(dark);
+            painter.rect_filled(rect, 8.0, tokens::surface_color(dark));
+            let mut rail = rect.shrink(5.0);
+            rail.set_width(13.0);
+            painter.rect_filled(rail, 4.0, egui::Color32::from_rgb(54, 54, 94));
+            let start = rect.min + egui::vec2(25.0, 12.0);
+            for (dy, fraction) in [(0.0, 0.46), (10.0, 0.33)] {
+                let row = egui::Rect::from_min_size(
+                    start + egui::vec2(0.0, dy),
+                    egui::vec2(width * fraction, 4.0),
+                );
+                painter.rect_filled(row, 2.0, tokens::line_color(dark));
+            }
+            let at = egui::pos2(start.x, rect.bottom() - 9.0);
+            painter.text(at, egui::Align2::LEFT_BOTTOM, label, egui::FontId::proportional(14.0), ink);
+            let accent = tokens::accent_color(ui.visuals().dark_mode);
+            let stroke = if selected || response.has_focus() || response.hovered() {
+                egui::Stroke::new(2.0, accent)
+            } else {
+                egui::Stroke::new(1.0, tokens::line_color(ui.visuals().dark_mode))
+            };
+            painter.rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Inside);
+            if selected {
+                let center = rect.right_top() + egui::vec2(-14.0, 14.0);
+                let check = egui::Rect::from_center_size(center, egui::Vec2::splat(16.0));
+                Icon::Check.paint(painter, check, ink);
+            }
+            if response.clicked() {
+                *current = dark;
+            }
+        }
+    });
+}
 
 /// Segmented control. Every segment shows its icon and its label, and the label is its
 /// accessible name, so an icon never stands alone. Returns true when a click changed
