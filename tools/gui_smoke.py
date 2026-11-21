@@ -204,6 +204,21 @@ def main():
                         raise RuntimeError("isolated GUI cleanup did not finish") from cleanup_error
         capture([], "home")
         capture(["--gesture-lab"], "gesture-lab")
+        # Both peers use the exact release CLI and disposable loopback identities.
+        # Only the empty eight-cell input and the post-authentication views are captured.
+        result = run_external([
+            "cargo", "test", "-p", "peerglide-gui", "--locked",
+            "pairing_panel::tests::captures::capture_real_pairing_views",
+            "--", "--exact", "--ignored",
+        ], cwd=root, env={
+            **env,
+            "PEERGLIDE_PAIRING_TEST_WORKER": str(root / "target/release/peerglide"),
+            "LINKO_PAIRING_CAPTURE_DIR": str(root / "dist"),
+        }, timeout=150, capture_output=True, text=True)
+        print(result.stdout, end="")
+        print(result.stderr, end="", file=sys.stderr)
+        if result.returncode or "1 passed; 0 failed; 0 ignored" not in result.stdout:
+            raise RuntimeError("real pairing capture did not run exactly once")
     return 0
 
 

@@ -1,0 +1,224 @@
+//! Draw the actual pairing panel over two disposable loopback profiles on the CI X server.
+use super::{pump, worker, App, Identity, Mode, Panel, Phase};
+use anyhow::{Context, Result};
+use eframe::{egui, icon_data::IconDataExt};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{mpsc, Arc},
+    time::{Duration, Instant},
+};
+use winit::platform::x11::EventLoopBuilderExtX11;
+
+const SHOTS: [&str; 4] = [
+    "peerglide-pairing-code-entry-compact.png",
+    "peerglide-pairing-host-confirm-compact.png",
+    "peerglide-pairing-guest-confirm-compact.png",
+    "peerglide-pairing-host-waiting-compact.png",
+];
+type Screenshot = Arc<egui::ColorImage>;
+
+struct Capture {
+    host: App,
+    guest: App,
+    offer: Panel,
+    join: Panel,
+    binary: PathBuf,
+    frames: Vec<Screenshot>,
+    pending: Option<mpsc::Receiver<Screenshot>>,
+    result: Option<mpsc::Sender<Result<Vec<Screenshot>>>>,
+    settled: Instant,
+    deadline: Instant,
+}
+
+impl Capture {
+    fn start_loopback(&mut self, ctx: &egui::Context) -> Result<()> {
+        self.offer.start(
+            &self.host,
+            ctx,
+            Mode::Offer("127.0.0.1:0".parse()?),
+            None,
+            &self.binary,
+        )?;
+        pump(
+            &mut self.host,
+            &mut self.guest,
+            &mut self.offer,
+            &mut self.join,
+            ctx,
+            |_, _, offer, _| offer.supervisor.displayed_code().is_some(),
+        )?;
+        // Copy the live code directly into the real join worker. No rendered frame is
+        // captured while either panel holds an unmasked code.
+        let (code, address) = self
+            .offer
+            .supervisor
+            .displayed_code()
+            .context("loopback offer did not produce a pairing code")?;
+        let mode = Mode::connect(address, code.to_owned())?;
+        self.join
+            .start(&self.guest, ctx, mode, Some(address), &self.binary)?;
+        pump(
+            &mut self.host,
+            &mut self.guest,
+            &mut self.offer,
+            &mut self.join,
+            ctx,
+            |_, _, offer, join| {
+                offer.supervisor.phase() == Phase::Verified
+                    && join.supervisor.phase() == Phase::Verified
+            },
+        )
+    }
+
+    fn advance(&mut self, ctx: &egui::Context) -> Result<()> {
+        match self.frames.len() {
+            1 => self.start_loopback(ctx)?,
+            3 => {
+                self.offer.approve(&self.host)?;
+                anyhow::ensure!(self.offer.supervisor.phase() == Phase::WaitingPeer);
+                anyhow::ensure!(self.join.supervisor.phase() == Phase::Verified);
+            }
+            _ => {}
+        }
+        for endpoint in [&self.host, &self.guest] {
+            anyhow::ensure!(
+                endpoint.config.fingerprint.is_none()
+                    && !endpoint.config.native
+                    && !endpoint.config.allow
+                    && !endpoint.config.reconnect
+                    && endpoint.child.is_none()
+                    && !endpoint.dir.join("trusted-peer.crt.der").exists(),
+                "a single confirmation must not save trust or start input"
+            );
+        }
+        self.settled = Instant::now();
+        Ok(())
+    }
+
+    fn finish(&mut self, ctx: &egui::Context, result: Result<Vec<Screenshot>>) {
+        if let Some(sender) = self.result.take() {
+            let _ = sender.send(result);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+}
+
+impl eframe::App for Capture {
+    fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        if self.result.is_none() {
+            return;
+        }
+        if Instant::now() >= self.deadline {
+            self.finish(&ctx, Err(anyhow::anyhow!("pairing capture timed out")));
+            return;
+        }
+        if let Some(frame) = self.pending.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.pending = None;
+            self.frames.push(frame);
+            if let Err(error) = self.advance(&ctx) {
+                self.finish(&ctx, Err(error));
+                return;
+            }
+            if self.frames.len() == SHOTS.len() {
+                let frames = std::mem::take(&mut self.frames);
+                self.finish(&ctx, Ok(frames));
+                return;
+            }
+        }
+        let (app, panel, phase) = match self.frames.len() {
+            0 => (&mut self.guest, &mut self.join, Phase::Idle),
+            1 => (&mut self.host, &mut self.offer, Phase::Verified),
+            2 => (&mut self.guest, &mut self.join, Phase::Verified),
+            _ => (&mut self.host, &mut self.offer, Phase::WaitingPeer),
+        };
+        if panel.supervisor.phase() != phase || !panel.code.is_empty() {
+            self.finish(&ctx, Err(anyhow::anyhow!("unexpected pairing capture state")));
+            return;
+        }
+        std::mem::swap(&mut app.pairing_panel, panel);
+        app.desktop(ui);
+        std::mem::swap(&mut app.pairing_panel, panel);
+        if self.pending.is_none() && self.settled.elapsed() >= Duration::from_millis(320) {
+            let (tx, rx) = mpsc::sync_channel(1);
+            ctx.request_screenshot(move |image| {
+                let _ = tx.send(image);
+            });
+            self.pending = Some(rx);
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+}
+
+fn write_shot(path: &Path, image: &egui::ColorImage) -> Result<()> {
+    anyhow::ensure!(image.size == [920, 700], "unexpected pairing capture size");
+    let icon = egui::IconData {
+        width: 920,
+        height: 700,
+        rgba: image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect(),
+    };
+    let png = icon.to_png_bytes().map_err(anyhow::Error::msg)?;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(&png)?;
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires exact release CLI and the isolated CI X server"]
+fn capture_real_pairing_views() -> Result<()> {
+    anyhow::ensure!(std::env::var("CI").as_deref() == Ok("true"));
+    let output = PathBuf::from(
+        std::env::var_os("LINKO_PAIRING_CAPTURE_DIR").context("capture directory required")?,
+    );
+    let fixture = crate::tests::Fixture::new()?;
+    let host = App::load(fixture.path.join("host"));
+    let guest = App::load(fixture.path.join("guest"));
+    Identity::create(&host.identity_dir())?;
+    Identity::create(&guest.identity_dir())?;
+    let mut offer = Panel::default();
+    offer.open("测试电脑 B", "");
+    let mut join = Panel::default();
+    join.open("测试电脑 A", "127.0.0.1");
+    join.select_entry(true);
+    let binary = worker()?;
+    let (tx, rx) = mpsc::channel();
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([920.0, 700.0]),
+        event_loop_builder: Some(Box::new(|builder| {
+            builder.with_any_thread(true);
+        })),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "Linko / 屏跃",
+        options,
+        Box::new(move |cc| {
+            host.theme(&cc.egui_ctx);
+            Ok(Box::new(Capture {
+                host,
+                guest,
+                offer,
+                join,
+                binary,
+                frames: Vec::new(),
+                pending: None,
+                result: Some(tx),
+                settled: Instant::now(),
+                deadline: Instant::now() + Duration::from_secs(90),
+            }))
+        }),
+    )
+    .map_err(|error| anyhow::anyhow!("native pairing capture: {error}"))?;
+    let frames = rx.try_recv().context("pairing capture did not finish")??;
+    anyhow::ensure!(frames.len() == SHOTS.len());
+    for (file, image) in SHOTS.into_iter().zip(frames) {
+        write_shot(&output.join(file), &image)?;
+    }
+    fixture.close()?;
+    Ok(())
+}

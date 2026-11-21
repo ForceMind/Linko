@@ -430,17 +430,20 @@ impl Panel {
         .min((ctx.viewport_rect().height() - 72.0).max(1.0));
         let body_id = match phase {
             Phase::Listening => "pairing-code",
-            Phase::Verified => "pairing-confirm",
+            Phase::Verified | Phase::WaitingPeer => "pairing-confirm",
             _ => "pairing-body",
         };
         let width = ui.available_width().min(660.0);
         let room = ui.available_height();
         let top_gap = ((room - height - 108.0) * 0.45).clamp(8.0, 72.0);
         let body_height = (height + 12.0).min(room - top_gap - 128.0).max(1.0);
+        let footer_width = if phase == Phase::Verified { 320.0 } else { 220.0 };
         ui.vertical_centered(|ui| {
             ui.add_space(top_gap);
             let title = match phase {
+                Phase::Listening => "配对码",
                 Phase::Verified => "确认设备",
+                Phase::WaitingPeer => "等待另一台确认",
                 Phase::Completed => "已配对",
                 _ => "配对",
             };
@@ -460,7 +463,7 @@ impl Panel {
                         });
                     ui.add_space(16.0);
                     ui.allocate_ui_with_layout(
-                        egui::vec2(220.0, 40.0),
+                        egui::vec2(footer_width, 40.0),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| self.footer(app, ui, needs_identity),
                     );
@@ -471,7 +474,7 @@ impl Panel {
 
     fn body(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64, needs_identity: bool) {
         let symbol = match self.supervisor.phase() {
-            Phase::Completed => Icon::Check,
+            Phase::Verified | Phase::Completed => Icon::Check,
             Phase::Failed(_) | Phase::Stopped(_) => Icon::Warning,
             _ => Icon::Link,
         };
@@ -541,32 +544,11 @@ impl Panel {
             let glyph = self.feedback.glyph(ui.ctx(), self.supervisor.needs_poll());
             status_row(ui, glyph, phase_text(phase));
         }
-        let approvals = match phase {
-            Phase::Verified => Some(("本机待确认", "另一台待回执")),
-            Phase::WaitingPeer => Some(("本机已确认", "等待另一台确认")),
-            Phase::SaveReady => Some(("本机保存中", "两端已确认")),
-            Phase::AwaitingPeerSaved => Some(("本机已保存", "另一台待回执")),
-            Phase::ReceiptReady | Phase::Finishing | Phase::Completed => {
-                Some(("本机已保存", "另一台已保存"))
-            }
-            _ => None,
-        };
-        if let Some((local, peer)) = approvals {
-            ui.horizontal_wrapped(|ui| {
-                desktop_style::pill(ui, local, Tone::Neutral);
-                desktop_style::pill(ui, peer, Tone::Neutral);
-            });
-        }
+        approval_row(ui, phase);
         if phase == Phase::Verified {
             ui.label("两台分别确认。接收、键鼠和自动重连仍关闭。");
             if app.config.fingerprint.is_some() {
                 ui.weak("若身份不同，这会替换原设备登记。");
-            }
-            if ui.add(desktop_style::primary("记住这台设备")).clicked() {
-                if let Err(error) = self.approve(app) {
-                    self.cancel();
-                    self.message = format!("未确认：{error:#}");
-                }
             }
         }
         if app.pairing_pending() {
@@ -665,6 +647,14 @@ impl Panel {
         {
             self.prepare_identity(app, ui);
         }
+        if self.supervisor.phase() == Phase::Verified
+            && ui.add(desktop_style::primary("记住这台设备")).clicked()
+        {
+            if let Err(error) = self.approve(app) {
+                self.cancel();
+                self.message = format!("未确认：{error:#}");
+            }
+        }
         if self.supervisor.phase() == Phase::Completed
             && ui.add(desktop_style::primary("排列屏幕")).clicked()
         {
@@ -693,13 +683,39 @@ impl Panel {
         }
         match self.supervisor.phase() {
             Phase::Listening => 510.0,
-            Phase::Verified => 320.0,
+            Phase::Verified | Phase::WaitingPeer => 340.0,
             Phase::Completed => 240.0,
             _ if self.supervisor.needs_poll() => 260.0,
             _ if self.join_entry => 510.0,
             _ => 330.0,
         }
     }
+}
+
+/// Two independent states: a local click never marks the other computer as confirmed.
+fn approval_row(ui: &mut egui::Ui, phase: Phase) {
+    let (local, peer) = match phase {
+        Phase::Verified => (("待确认", Tone::Accent), ("需独立确认", Tone::Neutral)),
+        Phase::WaitingPeer => (("已确认", Tone::Good), ("待确认", Tone::Neutral)),
+        Phase::SaveReady => (("保存中", Tone::Accent), ("已确认", Tone::Good)),
+        Phase::AwaitingPeerSaved => (("已保存", Tone::Good), ("待回执", Tone::Neutral)),
+        Phase::ReceiptReady | Phase::Finishing | Phase::Completed => {
+            (("已保存", Tone::Good), ("已保存", Tone::Good))
+        }
+        _ => return,
+    };
+    ui.add_space(8.0);
+    desktop_style::card(ui).inner_margin(8.0).show(ui, |ui| {
+        ui.columns(2, |columns| {
+            let sides = [(0, "本机", local), (1, "另一台", peer)];
+            for (column, name, (status, tone)) in sides {
+                columns[column].vertical_centered(|ui| {
+                    ui.strong(name);
+                    desktop_style::pill(ui, status, tone);
+                });
+            }
+        });
+    });
 }
 
 /// Give the window time to expand before revealing the transient short code.
@@ -1197,6 +1213,8 @@ fn warning_line(ui: &mut egui::Ui, text: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    mod captures;
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     fn key(key: egui::Key, pressed: bool) -> egui::Event {
