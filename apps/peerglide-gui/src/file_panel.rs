@@ -556,10 +556,26 @@ impl Panel {
                 self.source = path;
             }
         }
+        let idle_result = self.active.is_none()
+            && self.paused.is_none()
+            && (self.progress.is_some() || !self.notice.is_empty());
+        if idle_result {
+            super::desktop_style::card(ui).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.strong("传输结果");
+                if let Some(progress) = self.progress {
+                    progress_meter(ui, progress, false);
+                }
+                if !self.notice.is_empty() {
+                    ui.label(&self.notice);
+                }
+            });
+            ui.add_space(12.0);
+        }
         if paired && self.active.is_none() && self.paused.is_none() {
             self.file_request_controls(app, ui, ready);
         }
-        self.transfer_controls(app, ui, ready);
+        self.transfer_controls(app, ui, ready, idle_result);
         if paired && self.active.is_none() && self.paused.is_some() {
             ui.collapsing("其他文件任务", |ui| {
                 self.file_request_controls(app, ui, ready)
@@ -627,7 +643,7 @@ impl Panel {
         });
     }
 
-    fn transfer_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool) {
+    fn transfer_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool, idle_result: bool) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if let Some(offer) = &self.edge {
             if ui.button("取消边沿发送").clicked() {
@@ -673,10 +689,8 @@ impl Panel {
         }
         if self.active.is_some() {
             super::desktop_style::card(ui).show(ui, |ui| self.active_ui(app, ui));
-        } else if let Some(progress) = self.progress.filter(|_| self.paused.is_none()) {
-            progress_meter(ui, progress, false);
         }
-        if !self.notice.is_empty() {
+        if !idle_result && !self.notice.is_empty() {
             ui.label(&self.notice);
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]

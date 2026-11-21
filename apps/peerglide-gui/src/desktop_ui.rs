@@ -1176,13 +1176,16 @@ impl App {
             Dialog::ForceStop => "强制停止工作进程",
             Dialog::Recovery => "停止与恢复状态",
         };
-        egui::Window::new(title)
+        let mut window = egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .default_width(580.0)
             .default_height(540.0)
-            .vscroll(true)
-            .show(ctx, |ui| self.dialog_contents(ui, dialog));
+            .vscroll(true);
+        if dialog == Dialog::Recovery {
+            window = window.anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO);
+        }
+        window.show(ctx, |ui| self.dialog_contents(ui, dialog));
         if !open {
             self.dialog = None;
         }

@@ -129,11 +129,13 @@ def main():
                         assert report["false_matches"] == 1 and not report["human_acceptance"]
                         print("PASS: synthetic canvas drawing stayed in memory, then explicit Save exported one labelled sample")
                         print("PASS: offline evaluator preserves the independent negative label and reports its false match")
+                        sketch_x = int(cx + cw * 0.27)
+                        sketch_y = int(cy + ch * 0.80)
                         run_external(["xdotool", "mousemove", "--window", window,
-                                      str(start_x), str(start_y), "mousedown", "3"], check=True)
-                        for dx, dy in ((40, 0), (80, 0), (120, 0), (120, -35), (120, -70), (120, -100)):
+                                      str(sketch_x), str(sketch_y), "mousedown", "3"], check=True)
+                        for dx, dy in ((0, -35), (0, -80), (0, -120), (35, -120), (80, -120), (120, -120)):
                             run_external(["xdotool", "mousemove", "--window", window,
-                                          str(start_x + dx), str(start_y + dy)], check=True)
+                                          str(sketch_x + dx), str(sketch_y + dy)], check=True)
                             time.sleep(0.06)
                         run_external(["xdotool", "mouseup", "3"], check=True)
                         capture_workspace(gui, root / "dist" / "peerglide-gesture-stroke.png")

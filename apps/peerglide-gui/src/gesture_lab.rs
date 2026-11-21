@@ -378,8 +378,14 @@ impl GestureLab {
                     .map(|sample| end - position(sample))
                     .find(|delta| delta.length_sq() >= 64.0)
                 {
-                    let head = delta.normalized() * 14.0;
-                    painter.arrow(end - head, head, PaintStroke::new(4.0, ink));
+                    let direction = delta.normalized();
+                    let base = end - direction * 14.0;
+                    let side = egui::vec2(-direction.y, direction.x) * 7.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![end, base + side, base - side],
+                        ink,
+                        PaintStroke::NONE,
+                    ));
                 }
             }
         }
