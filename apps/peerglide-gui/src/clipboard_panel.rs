@@ -386,13 +386,13 @@ impl Panel {
             .filter(|active| active.pending.is_some() && !active.stopping)
         {
             let for_drop = active.for_drop;
-            let kind = match self.mode {
-                Mode::Text => "纯文本",
-                Mode::Image => "PNG 图片",
+            let (kind, icon) = match self.mode {
+                Mode::Text => ("纯文本", super::icons::Icon::Log),
+                Mode::Image => ("PNG 图片", super::icons::Icon::Image),
             };
             ui.vertical_centered(|ui| {
                 ui.add_space(20.0);
-                super::visual_assets::handoff_art(ui, super::icons::Icon::Log);
+                super::visual_assets::handoff_art(ui, icon);
                 ui.heading(kind);
                 ui.label(if for_drop {
                     "同意后仅准备本机拖放。"
@@ -400,17 +400,21 @@ impl Panel {
                     "导入后会替换本机剪贴板。"
                 });
                 ui.add_space(20.0);
-                ui.horizontal_wrapped(|ui| {
-                    if let Some(decision) = pending_decision(app, ui, for_drop) {
-                        if let Err(error) = self.decide(app, decision) {
-                            self.stop();
-                            self.notice = error.to_string();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width().min(410.0), 40.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        if let Some(decision) = pending_decision(app, ui, for_drop) {
+                            if let Err(error) = self.decide(app, decision) {
+                                self.stop();
+                                self.notice = error.to_string();
+                            }
                         }
-                    }
-                    if ui.button("停止本次共享").clicked() {
-                        self.stop();
-                    }
-                });
+                    },
+                );
+                if ui.small_button("停止本次共享").clicked() {
+                    self.stop();
+                }
                 if !self.notice.is_empty() {
                     ui.label(&self.notice);
                 }
@@ -576,6 +580,9 @@ impl Panel {
 }
 
 fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Decision> {
+    if ui.button("拒绝").clicked() {
+        return Some(Decision::Decline);
+    }
     if for_drop {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if ui
@@ -587,7 +594,7 @@ fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Dec
         {
             return Some(Decision::PrepareDrop);
         }
-        return ui.button("拒绝").clicked().then_some(Decision::Decline);
+        return None;
     }
     let import = ui
         .add(super::desktop_style::primary("导入"))
@@ -601,7 +608,6 @@ fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Dec
         )
         .on_hover_text("导入到本机剪贴板，并准备一次本机复制拖放。")
         .clicked();
-    let decline = ui.button("拒绝").clicked();
     if import {
         return Some(Decision::Import);
     }
@@ -609,7 +615,7 @@ fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Dec
     if prepare_drag {
         return Some(Decision::ImportForDrag);
     }
-    decline.then_some(Decision::Decline)
+    None
 }
 
 fn outcome_label(outcome: TextOutcome, for_drop: bool) -> &'static str {

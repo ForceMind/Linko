@@ -584,7 +584,7 @@ impl App {
                     }
                     ui.separator();
                     ui.horizontal_wrapped(|ui| {
-                        if ui.small_button("查看快捷键").clicked() {
+                        if shell_ui::icon_button(ui, Icon::Shield, "恢复快捷键", true).clicked() {
                             self.navigate_to(Page::Shortcuts);
                         }
                         for key in SHORTCUTS[1].keys {
@@ -1189,18 +1189,28 @@ impl App {
 
     /// W4: the stop control first, then icon points, then the one explicit action.
     fn dialog_contents(&mut self, ui: &mut egui::Ui, dialog: Dialog) {
-        if ui.button("立即停止并恢复本机").clicked() {
+        if dialog == Dialog::Recovery {
+            ui.vertical_centered(|ui| {
+                let (icon, _) = ui.allocate_exact_size(Vec2::splat(48.0), egui::Sense::hover());
+                Icon::Shield.paint(ui.painter(), icon, tokens::accent_color(self.config.dark));
+                ui.heading(self.input_label());
+                ui.allocate_ui_with_layout(
+                    Vec2::new(160.0, 36.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        for key in ["Ctrl", "Alt", "Esc"] {
+                            keycap(ui, key);
+                        }
+                    },
+                );
+                if ui.add(desktop_style::primary("立即停止并恢复本机")).clicked() {
+                    self.stop();
+                }
+            });
+        } else if ui.button("立即停止并恢复本机").clicked() {
             self.stop();
         }
         ui.separator();
-        if dialog == Dialog::Recovery {
-            ui.strong(self.input_label());
-            ui.horizontal(|ui| {
-                for key in ["Ctrl", "Alt", "Esc"] {
-                    keycap(ui, key);
-                }
-            });
-        }
         for point in dialog_points(dialog) {
             safety_point(ui, *point);
         }
@@ -1618,7 +1628,13 @@ fn motion_switch(ui: &mut egui::Ui, enabled: &mut bool) -> egui::Response {
 
 fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
     ui.horizontal(|ui| {
-        let width = ((ui.available_width() - ui.spacing().item_spacing.x) * 0.5).min(294.0);
+        let gap = 14.0;
+        let width = ((ui.available_width() - gap) * 0.5).clamp(1.0, 294.0);
+        let leading = (ui.available_width() - gap - 2.0 * width) * 0.5;
+        ui.spacing_mut().item_spacing.x = gap;
+        if leading > 0.0 {
+            ui.add_space(leading);
+        }
         for (dark, label) in [(false, "浅色"), (true, "深色")] {
             let (rect, response) =
                 ui.allocate_exact_size(egui::vec2(width, width * 0.55), egui::Sense::click());

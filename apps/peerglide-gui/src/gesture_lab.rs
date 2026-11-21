@@ -352,14 +352,36 @@ impl GestureLab {
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
         let position = |s: &Sample| rect.min + egui::vec2(s.point.x as f32, s.point.y as f32);
         let ink = crate::desktop_style::tokens::accent_color(ui.visuals().dark_mode);
+        let line = crate::desktop_style::tokens::line_color(ui.visuals().dark_mode);
+        painter.rect_stroke(
+            rect,
+            9.0,
+            PaintStroke::new(1.0, line),
+            egui::StrokeKind::Inside,
+        );
         if let Some(first) = self.samples.first() {
-            painter.circle_filled(position(first), 4.0, ink);
+            painter.circle_filled(position(first), 5.0, ink);
         }
         for pair in self.samples.windows(2) {
             painter.line_segment(
                 [position(&pair[0]), position(&pair[1])],
-                PaintStroke::new(2.5_f32, ink),
+                PaintStroke::new(4.0, ink),
             );
+        }
+        if self.completed {
+            if let Some(last) = self.samples.last() {
+                let end = position(last);
+                if let Some(delta) = self
+                    .samples
+                    .iter()
+                    .rev()
+                    .map(|sample| end - position(sample))
+                    .find(|delta| delta.length_sq() >= 64.0)
+                {
+                    let head = delta.normalized() * 14.0;
+                    painter.arrow(end - head, head, PaintStroke::new(4.0, ink));
+                }
+            }
         }
         if self.active.is_some() {
             ui.ctx().request_repaint();

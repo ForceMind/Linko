@@ -642,23 +642,18 @@ impl Panel {
         if let Some(paused) = self.paused.as_ref().filter(|_| self.active.is_none()) {
             let name = task_label(&paused.request).to_owned();
             super::desktop_style::card(ui).show(ui, |ui| {
-                ui.label(super::desktop_style::semibold(name, 18.0));
+                let enable_resume = ready && !self.edge_active();
+                let resume = task_header(ui, &name, super::icons::Icon::Play, "继续", enable_resume);
+                if resume {
+                    if let Err(error) = self.resume_paused(app) {
+                        self.notice = error.to_string();
+                    }
+                }
                 if let Some(progress) = self.progress {
-                    progress_meter(ui, progress);
+                    progress_meter(ui, progress, true);
                 }
                 ui.horizontal_wrapped(|ui| {
                     super::desktop_style::pill(ui, "已暂停", super::desktop_style::Tone::Neutral);
-                    if ui
-                        .add_enabled(
-                            ready && !self.edge_active(),
-                            super::desktop_style::primary("继续"),
-                        )
-                        .clicked()
-                    {
-                        if let Err(error) = self.resume_paused(app) {
-                            self.notice = error.to_string();
-                        }
-                    }
                     if ui.button("结束暂停任务").clicked() {
                         self.paused = None;
                         self.notice = "已结束暂停任务，接收端已暂存的数据保留。".into();
@@ -678,7 +673,7 @@ impl Panel {
         if self.active.is_some() {
             super::desktop_style::card(ui).show(ui, |ui| self.active_ui(app, ui));
         } else if let Some(progress) = self.progress.filter(|_| self.paused.is_none()) {
-            progress_meter(ui, progress);
+            progress_meter(ui, progress, false);
         }
         if !self.notice.is_empty() {
             ui.label(&self.notice);
@@ -751,16 +746,17 @@ impl Panel {
         };
         let stopping = active.stopping;
         let can_pause = self.can_pause();
-        ui.label(super::desktop_style::semibold(
-            task_label(&active.request),
-            18.0,
-        ));
+        let name = active
+            .offer
+            .as_ref()
+            .map_or_else(|| task_label(&active.request), |offer| offer.name.as_str());
+        let pause = task_header(ui, name, super::icons::Icon::Pause, "暂停", can_pause);
         if let Some(progress) = self.progress {
-            progress_meter(ui, progress);
+            progress_meter(ui, progress, false);
         }
         if let Some(offer) = &active.offer {
             ui.separator();
-            ui.label(format!("{} · {} 字节", offer.name, offer.size));
+            ui.label(format!("{} 字节", offer.size));
             ui.label(format!("续传编号 {}", encode_id(offer.id)));
             ui.weak("每个接收目录累计配额 8 GiB。已存在的文件会保留。");
             ui.add(
@@ -782,11 +778,7 @@ impl Panel {
                 }
             });
         }
-        if ui
-            .add_enabled(can_pause, egui::Button::new("暂停"))
-            .on_hover_text("暂停文件传输")
-            .clicked()
-        {
+        if pause {
             self.pause(app);
         }
         if ui
@@ -808,13 +800,45 @@ fn task_label(request: &Request) -> &str {
     }
 }
 
-fn progress_meter(ui: &mut egui::Ui, progress: Progress) {
+fn task_header(
+    ui: &mut egui::Ui,
+    name: &str,
+    action: super::icons::Icon,
+    label: &str,
+    enabled: bool,
+) -> bool {
+    let size = egui::vec2(ui.available_width(), 42.0);
+    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(38.0), egui::Sense::hover());
+        let (fill, ink) = super::desktop_style::selection_colors(ui);
+        ui.painter().rect_filled(rect, 8.0, fill);
+        super::icons::Icon::Log.paint(ui.painter(), rect.shrink(8.0), ink);
+        let title_width = (ui.available_width() - 72.0).max(1.0);
+        super::desktop_ui::left_text_slot(
+            ui,
+            title_width,
+            38.0,
+            super::desktop_style::semibold(name, 18.0),
+        )
+        .on_hover_text(name);
+        ui.add_enabled_ui(enabled, |ui| super::shell_ui::icon_button(ui, action, label, true))
+            .inner
+            .clicked()
+    })
+    .inner
+}
+
+fn progress_meter(ui: &mut egui::Ui, progress: Progress, paused: bool) {
     let ratio = if progress.total == 0 {
         1.0
     } else {
         (progress.bytes as f32 / progress.total as f32).clamp(0.0, 1.0)
     };
-    ui.add(egui::ProgressBar::new(ratio).show_percentage());
+    let mut bar = egui::ProgressBar::new(ratio).show_percentage();
+    if paused {
+        bar = bar.fill(super::desktop_style::tokens::muted_color(ui.visuals().dark_mode));
+    }
+    ui.add(bar);
     let label = if progress.verified_locally {
         "本机已校验"
     } else {
