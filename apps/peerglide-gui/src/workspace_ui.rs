@@ -43,7 +43,7 @@ const CONTEXT_LABEL_W: f32 = 60.0;
 const STOP_WORD: &str = "断开";
 
 impl App {
-    /// Home view: the screen canvas with the device context column. The device list lives
+    /// Home view: the screen canvas with a compact action bar. The device list lives
     /// in the sidebar, so the former device and layout pages share this one view; the
     /// layout tab that pairing and setup still select opens this same canvas.
     pub(super) fn device_workspace(&mut self, ui: &mut egui::Ui) {
@@ -171,19 +171,14 @@ impl App {
 
     fn workspace_canvas(&mut self, ui: &mut egui::Ui) {
         let registered = self.config.fingerprint.is_some();
-        // Leave room for the recovery banner, locked-direction note and controls.
-        let limit = if self.recovery_blocked || self.stopping.is_some() {
-            280.0
+        // The remaining viewport already accounts for any recovery banner above the canvas.
+        let footer_height = if self.workspace_attention().is_some() {
+            176.0
         } else {
-            420.0
+            124.0
         };
-        let viewport = ui.ctx().viewport_rect();
-        let status_room = if viewport.height() < 760.0 {
-            426.0
-        } else {
-            400.0
-        };
-        let height = (viewport.height() - status_room).clamp(180.0, limit);
+        let visible_height = ui.clip_rect().bottom() - ui.cursor().min.y;
+        let height = (visible_height - footer_height).clamp(180.0, 600.0);
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::hover(),
@@ -387,67 +382,44 @@ impl App {
         }
     }
 
-    /// Context column: the selected device with the details switch, four status rows of an
-    /// icon and a short word, then the attention sentences and the one primary button.
-    /// Full sentences are each row's hover and accessible name; warning, consent,
-    /// permission and recovery sentences stay visible text.
+    /// Keep the main action and details entry in view without reserving columns below the canvas.
     fn workspace_device_detail(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.separator();
-        if ui.available_width() >= 620.0 {
-            ui.columns(3, |columns| {
-                columns[0].with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                    self.context_header(ui);
-                    self.context_primary(ui);
-                    if ui.small_button("文件与剪贴板").clicked() {
-                        self.navigate_to(Page::Transfers);
-                    }
-                });
-                self.context_rows(&mut columns[1]);
-                self.context_attention(&mut columns[2]);
-            });
-        } else {
-            self.context_header(ui);
+        ui.horizontal_wrapped(|ui| {
             self.context_primary(ui);
-            self.context_attention(ui);
-            self.context_rows(ui);
-            if ui.small_button("文件与剪贴板").clicked() {
-                self.navigate_to(Page::Transfers);
-            }
-        }
-        self.details_drawer(ui);
-    }
-
-    /// Name of the selected device and the switch of the details drawer.
-    fn context_header(&mut self, ui: &mut egui::Ui) {
-        let name = if self.routed_active {
-            "分段键鼠".to_owned()
-        } else if self.workspace_peer_selected && self.config.fingerprint.is_some() {
-            self.config.peer_name.clone()
-        } else {
-            desktop_ui::local_device_name().to_owned()
-        };
-        let size = Vec2::new(ui.available_width(), CANVAS_BUTTON_SIDE);
-        let layout = egui::Layout::left_to_right(egui::Align::Center);
-        ui.allocate_ui_with_layout(size, layout, |ui| {
-            let icon_size = Vec2::splat(tokens::ICON_MEDIUM);
-            let (rect, _) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
-            Icon::Device.paint(ui.painter(), rect, ui.visuals().text_color());
-            let width = ui.available_width() - CANVAS_BUTTON_SIDE - tokens::SPACE_SM;
-            let title = desktop_style::semibold(&name, 16.0);
-            desktop_ui::left_text_slot(ui, width.max(1.0), CANVAS_BUTTON_SIDE, title)
-                .on_hover_text(format!("所选设备：{name}"));
             let open = self.connection_details_open;
             let label = if open {
                 "收起连接详情"
             } else {
                 "连接与身份详情"
             };
-            let id = context_control_id("details");
-            if canvas_button(ui, id, Icon::Info, label, None, open).clicked() {
+            let response = canvas_button(
+                ui,
+                context_control_id("details"),
+                Icon::Info,
+                label,
+                Some("设备详情"),
+                open,
+            );
+            self.record_layout_control("workspace_details", &response, ui.clip_rect());
+            if response.clicked() {
                 self.connection_details_open = !open;
             }
+            if ui.button("文件与剪贴板").clicked() {
+                self.connection_details_open = false;
+                self.navigate_to(Page::Transfers);
+            }
         });
+        if let Some(view) = self.workspace_attention() {
+            ui.label(desktop_style::status_text(
+                view.title,
+                self.config.dark,
+                view.tone,
+            ));
+            ui.label(view.detail);
+        }
+        self.details_drawer(ui);
     }
 
     /// Connection, input, receive control and local permission rows.
@@ -537,6 +509,7 @@ impl App {
             },
         );
         if receive_settings {
+            self.connection_details_open = false;
             self.device_tab = DeviceTab::Permissions;
         }
         let readiness = self.worker_permissions.readiness();
@@ -565,38 +538,24 @@ impl App {
             },
         );
         if permission_details {
+            self.connection_details_open = false;
             self.navigate_to(Page::Settings);
             self.settings_section = SettingsSection::Permissions;
         }
     }
 
-    /// Title and detail of states that need attention or offer no primary button, and the
-    /// consent boundary. These stay visible text, never only a hover.
-    fn context_attention(&mut self, ui: &mut egui::Ui) {
+    /// Reserve room beside the canvas for states whose explanation needs to stay visible.
+    fn workspace_attention(&self) -> Option<desktop_state::View> {
         let view = self.workspace_view();
         let needs_attention = matches!(view.tone, Tone::Warning | Tone::Danger)
             || view.action == desktop_state::Action::None
             || self.last_failure
             || self.peer_wait_expired
             || self.pairing_pending();
-        if needs_attention {
-            ui.separator();
-            ui.label(desktop_style::status_text(
-                view.title,
-                self.config.dark,
-                view.tone,
-            ));
-            ui.label(view.detail);
-        }
-        let consent = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
-            "另一台的接收许可由它单独设置；开启键鼠仍需本次明确确认。"
-        } else {
-            "开启键鼠仍需本次明确确认。"
-        };
-        ui.label(RichText::new(consent).small().weak());
+        needs_attention.then_some(view)
     }
 
-    /// The only primary button of the column. Gate, label, hover and action are unchanged.
+    /// The primary action remains guarded by the current workspace and session state.
     fn context_primary(&mut self, ui: &mut egui::Ui) {
         let view = self.workspace_view();
         let allowed = match view.action {
@@ -654,7 +613,23 @@ impl App {
     }
 
     fn inspector_body(&mut self, ui: &mut egui::Ui, open: bool) {
+        let name = if self.routed_active {
+            "分段键鼠"
+        } else if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+            &self.config.peer_name
+        } else {
+            desktop_ui::local_device_name()
+        };
+        ui.strong(name);
         self.selected_device_metadata(ui);
+        ui.separator();
+        self.context_rows(ui);
+        let consent = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+            "另一台的接收许可由它单独设置；开启键鼠仍需本次明确确认。"
+        } else {
+            "开启键鼠仍需本次明确确认。"
+        };
+        ui.label(RichText::new(consent).small().weak());
         #[cfg(any(windows, target_os = "macos"))]
         if !self.workspace_peer_selected {
             let enabled = open
@@ -1469,7 +1444,7 @@ mod tests {
                 Vec2::new(1180.0, 820.0),
                 Vec2::new(1280.0, 800.0),
             ] {
-                // The details switch is an icon now; its fixed id is read inside the pass.
+                // Read the details control by ID inside the pass.
                 let mut details = None;
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -1482,10 +1457,7 @@ mod tests {
                     },
                 );
                 let controls: Vec<_> = [
-                    "连接",
-                    "键鼠",
-                    "接收控制",
-                    "本机权限",
+                    "设备详情",
                     "文件与剪贴板",
                     "两台主屏的相对方向；另一端需设置相反方向。",
                 ]
@@ -1512,7 +1484,16 @@ mod tests {
                     .shapes
                     .iter()
                     .find_map(|s| text_rect(&s.shape, "100%"));
-                for label in ["系统", "登记", "设备", "会话"] {
+                for label in [
+                    "系统",
+                    "登记",
+                    "设备",
+                    "会话",
+                    "连接",
+                    "键鼠",
+                    "接收控制",
+                    "本机权限",
+                ] {
                     assert!(
                         !painted(&output, label),
                         "{label} should stay in the closed details drawer at {size:?}"
@@ -1552,6 +1533,10 @@ mod tests {
                 assert!(
                     viewport.contains_rect(details.rect),
                     "details switch left the first viewport at {size:?}"
+                );
+                assert!(
+                    details.rect.center().y - toolbar.center().y >= size.y * 0.65,
+                    "the canvas and its direction controls should dominate the first viewport"
                 );
                 assert!(app.child.is_none() && !app.config.native && !app.config.allow);
             }
@@ -1935,12 +1920,13 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn context_rows_pair_each_icon_with_its_label_and_value() -> Result<()> {
+    fn opened_device_details_pairs_each_status_icon_with_its_label_and_value() -> Result<()> {
         use egui::epaint::Shape;
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let original = app.config.clone();
         let ctx = crate::tests::ui_context();
+        app.connection_details_open = true;
         app.theme(&ctx);
         let rows = [
             ("connection", "连接"),
@@ -1950,6 +1936,10 @@ mod tests {
         ];
         for paired in [false, true] {
             app.config.fingerprint = paired.then(|| "context-rows-presentation-only".into());
+            // The floating area and its scroll clip need a layout pass before inspection.
+            for _ in 0..2 {
+                frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+            }
             let mut found = Vec::new();
             let output = ctx.run_ui(wide_input(), |root| {
                 app.desktop(root);
@@ -2082,7 +2072,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn context_column_paints_one_primary_button_and_keeps_its_gate() -> Result<()> {
+    fn workspace_bar_paints_one_primary_button_and_keeps_its_gate() -> Result<()> {
         use crate::desktop_state::Action;
         let labels = [
             Action::AddDevice,

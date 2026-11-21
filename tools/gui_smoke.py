@@ -152,6 +152,10 @@ def main():
                             x, y, width, height = rect
                             run_external(["xdotool", "mousemove", "--window", window,
                                           str(round(x + width / 2)), str(round(y + height / 2)), "click", "1"], check=True)
+                        click_control("workspace_details")
+                        capture_workspace(gui, dest / "peerglide-workspace-details.png")
+                        assert not (profile / "identity").exists(), "viewing details must not create identity"
+                        click_control("workspace_details")
                         click_control("nav_sharing")
                         time.sleep(0.4)
                         capture_workspace(gui, dest / "peerglide-sharing-files.png")
