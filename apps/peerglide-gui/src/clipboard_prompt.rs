@@ -45,7 +45,10 @@ pub(super) fn pending(
                 egui::vec2(ui.available_width().min(255.0), 40.0),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    if ui.add_sized([102.0, 38.0], egui::Button::new("拒绝")).clicked() {
+                    if ui
+                        .add_sized([102.0, 38.0], egui::Button::new("拒绝"))
+                        .clicked()
+                    {
                         return Some(Decision::Decline);
                     }
                     if !for_drop

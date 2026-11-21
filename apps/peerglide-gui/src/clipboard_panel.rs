@@ -17,7 +17,6 @@ use transport::clipboard_worker::DragPayload;
 
 const PORT: u16 = 24872;
 
-
 struct Active {
     pin: Pin,
     job: Job,
@@ -556,7 +555,6 @@ impl Panel {
         true
     }
 }
-
 
 fn outcome_label(outcome: TextOutcome, for_drop: bool) -> &'static str {
     if for_drop {
