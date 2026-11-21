@@ -437,7 +437,11 @@ impl Panel {
         let room = ui.available_height();
         let top_gap = ((room - height - 108.0) * 0.45).clamp(8.0, 72.0);
         let body_height = (height + 12.0).min(room - top_gap - 128.0).max(1.0);
-        let footer_width = if phase == Phase::Verified { 320.0 } else { 220.0 };
+        let footer_width = if phase == Phase::Verified {
+            320.0
+        } else {
+            220.0
+        };
         ui.vertical_centered(|ui| {
             ui.add_space(top_gap);
             let title = match phase {

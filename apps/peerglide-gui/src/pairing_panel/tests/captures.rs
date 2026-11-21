@@ -135,7 +135,10 @@ impl eframe::App for Capture {
             _ => (&mut self.host, &mut self.offer, Phase::WaitingPeer),
         };
         if panel.supervisor.phase() != phase || !panel.code.is_empty() {
-            self.finish(&ctx, Err(anyhow::anyhow!("unexpected pairing capture state")));
+            self.finish(
+                &ctx,
+                Err(anyhow::anyhow!("unexpected pairing capture state")),
+            );
             return;
         }
         std::mem::swap(&mut app.pairing_panel, panel);
@@ -157,7 +160,11 @@ fn write_shot(path: &Path, image: &egui::ColorImage) -> Result<()> {
     let icon = egui::IconData {
         width: 920,
         height: 700,
-        rgba: image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect(),
+        rgba: image
+            .pixels
+            .iter()
+            .flat_map(|pixel| pixel.to_array())
+            .collect(),
     };
     let png = icon.to_png_bytes().map_err(anyhow::Error::msg)?;
     OpenOptions::new()
