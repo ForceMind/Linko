@@ -643,7 +643,13 @@ impl Panel {
         });
     }
 
-    fn transfer_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool, idle_result: bool) {
+    fn transfer_controls(
+        &mut self,
+        app: &mut App,
+        ui: &mut egui::Ui,
+        ready: bool,
+        idle_result: bool,
+    ) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if let Some(offer) = &self.edge {
             if ui.button("取消边沿发送").clicked() {
