@@ -22,6 +22,7 @@ const SHOTS: &[&str] = &[
     "peerglide-recovery-unconfirmed-compact.png",
     "peerglide-sharing-clipboard-linux-compact.png",
     "peerglide-sharing-audio-linux-compact.png",
+    "peerglide-clipboard-consent-preview-compact.png",
 ];
 
 struct Peer {
@@ -85,7 +86,12 @@ impl Peer {
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
             self.files.tick(&mut self.app, ctx);
-            if let Some(offer) = self.files.active.as_ref().and_then(|job| job.offer.as_ref()) {
+            if let Some(offer) = self
+                .files
+                .active
+                .as_ref()
+                .and_then(|job| job.offer.as_ref())
+            {
                 return Ok(offer.id);
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -174,11 +180,23 @@ fn capture_file_settings_and_recovery_review() -> Result<()> {
                     sender.app.recovery_blocked = false;
                     sender.app.navigate_to(Page::Clipboard);
                 }
-                _ => sender.app.navigate_to(Page::Audio),
+                7 => sender.app.navigate_to(Page::Audio),
+                _ => {}
             }
             last = Some(index);
         }
-        if matches!(index, 0 | 3) {
+        if index == 8 {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.heading("剪贴板 · 组件预览");
+                ui.small("示例请求，仅渲染界面");
+                let _ = crate::clipboard_prompt::pending(
+                    ui,
+                    peerglide_transport::clipboard_worker::Mode::Image,
+                    false,
+                    false,
+                );
+            });
+        } else if matches!(index, 0 | 3) {
             receiver.draw(ui);
         } else {
             sender.draw(ui);

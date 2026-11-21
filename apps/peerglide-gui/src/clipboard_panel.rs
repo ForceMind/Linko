@@ -1,5 +1,6 @@
 //! One-shot clipboard controls. Rendering and polling never access the system clipboard.
 use super::{
+    clipboard_prompt::{self, Decision},
     data_access::{self, Pin},
     egui, transport, App,
 };
@@ -16,14 +17,6 @@ use transport::clipboard_worker::DragPayload;
 
 const PORT: u16 = 24872;
 
-enum Decision {
-    Import,
-    Decline,
-    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-    ImportForDrag,
-    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-    PrepareDrop,
-}
 
 struct Active {
     pin: Pin,
@@ -386,39 +379,24 @@ impl Panel {
             .filter(|active| active.pending.is_some() && !active.stopping)
         {
             let for_drop = active.for_drop;
-            let (kind, icon) = match self.mode {
-                Mode::Text => ("纯文本", super::icons::Icon::Log),
-                Mode::Image => ("PNG 图片", super::icons::Icon::Image),
-            };
-            ui.vertical_centered(|ui| {
-                ui.add_space(20.0);
-                super::visual_assets::handoff_art(ui, icon);
-                ui.heading(kind);
-                ui.label(if for_drop {
-                    "同意后仅准备本机拖放。"
-                } else {
-                    "导入后会替换本机剪贴板。"
-                });
-                ui.add_space(20.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width().min(410.0), 40.0),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        if let Some(decision) = pending_decision(app, ui, for_drop) {
-                            if let Err(error) = self.decide(app, decision) {
-                                self.stop();
-                                self.notice = error.to_string();
-                            }
-                        }
-                    },
-                );
-                if ui.small_button("停止本次共享").clicked() {
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            let drag_ready =
+                clipboard_drop::eligible(app, ui.ctx()) && clipboard_drop::focused(ui.ctx());
+            #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
+            let drag_ready = false;
+            let (decision, stop) = clipboard_prompt::pending(ui, self.mode, for_drop, drag_ready);
+            if let Some(decision) = decision {
+                if let Err(error) = self.decide(app, decision) {
                     self.stop();
+                    self.notice = error.to_string();
                 }
-                if !self.notice.is_empty() {
-                    ui.label(&self.notice);
-                }
-            });
+            }
+            if stop {
+                self.stop();
+            }
+            if !self.notice.is_empty() {
+                ui.label(&self.notice);
+            }
             return;
         }
         super::visual_assets::handoff_art(ui, super::icons::Icon::Log);
@@ -579,44 +557,6 @@ impl Panel {
     }
 }
 
-fn pending_decision(_app: &App, ui: &mut egui::Ui, for_drop: bool) -> Option<Decision> {
-    if ui.button("拒绝").clicked() {
-        return Some(Decision::Decline);
-    }
-    if for_drop {
-        #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-        if ui
-            .add_enabled(
-                clipboard_drop::eligible(_app, ui.ctx()) && clipboard_drop::focused(ui.ctx()),
-                egui::Button::new("同意准备拖放"),
-            )
-            .clicked()
-        {
-            return Some(Decision::PrepareDrop);
-        }
-        return None;
-    }
-    let import = ui
-        .add(super::desktop_style::primary("导入"))
-        .on_hover_text("导入到本机剪贴板")
-        .clicked();
-    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-    let prepare_drag = ui
-        .add_enabled(
-            clipboard_drop::eligible(_app, ui.ctx()) && clipboard_drop::focused(ui.ctx()),
-            egui::Button::new("导入并准备拖放"),
-        )
-        .on_hover_text("导入到本机剪贴板，并准备一次本机复制拖放。")
-        .clicked();
-    if import {
-        return Some(Decision::Import);
-    }
-    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-    if prepare_drag {
-        return Some(Decision::ImportForDrag);
-    }
-    None
-}
 
 fn outcome_label(outcome: TextOutcome, for_drop: bool) -> &'static str {
     if for_drop {

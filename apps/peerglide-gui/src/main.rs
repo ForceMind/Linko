@@ -8,6 +8,8 @@ mod clipboard_drop;
 mod clipboard_handoff;
 #[cfg(any(windows, target_os = "macos"))]
 mod clipboard_panel;
+#[cfg(any(windows, target_os = "macos", all(test, target_os = "linux")))]
+mod clipboard_prompt;
 mod config_store;
 mod connection_info;
 mod cursor_overlay;

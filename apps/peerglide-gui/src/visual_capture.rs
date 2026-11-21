@@ -126,7 +126,9 @@ pub(super) fn capture_views(
         }),
     )
     .map_err(|error| anyhow::anyhow!("native review capture: {error}"))?;
-    let frames = rx.try_recv().context("native review capture incomplete")??;
+    let frames = rx
+        .try_recv()
+        .context("native review capture incomplete")??;
     anyhow::ensure!(frames.len() == count);
     for (name, frame) in names.iter().zip(frames) {
         write_shot(&output.join(name), &frame)?;

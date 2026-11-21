@@ -43,6 +43,7 @@ impl Source {
 struct Job {
     child: Child,
     pin: data_access::Pin,
+    mode: Mode,
     stop_deadline: Option<Instant>,
     forced: bool,
 }
@@ -298,6 +299,7 @@ impl Panel {
         self.job = Some(Job {
             child: command.spawn()?,
             pin,
+            mode,
             stop_deadline: None,
             forced: false,
         });
@@ -317,6 +319,16 @@ impl Panel {
         super::visual_assets::handoff_art(ui, super::icons::Icon::Audio);
         ui.label(self.status);
         if running {
+            let playback = self
+                .job
+                .as_ref()
+                .is_some_and(|job| matches!(job.mode, Mode::Playback));
+            if playback {
+                let ratio = f32::from(self.volume) / 100.0;
+                let meter =
+                    egui::ProgressBar::new(ratio).text(format!("播放音量 {}%", self.volume));
+                ui.add(meter);
+            }
             if ui.button("停止音频").clicked() {
                 self.stop();
             }
