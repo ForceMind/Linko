@@ -671,9 +671,7 @@ impl Panel {
         {
             self.prepare_identity(app, ui);
         }
-        if entering_code
-            && self.join_entry
-            && ui.add(desktop_style::primary("核验设备")).clicked()
+        if entering_code && self.join_entry && ui.add(desktop_style::primary("核验设备")).clicked()
         {
             self.verify_join(app, ui.ctx(), now);
         }
