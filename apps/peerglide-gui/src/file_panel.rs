@@ -643,7 +643,8 @@ impl Panel {
             let name = task_label(&paused.request).to_owned();
             super::desktop_style::card(ui).show(ui, |ui| {
                 let enable_resume = ready && !self.edge_active();
-                let resume = task_header(ui, &name, super::icons::Icon::Play, "继续", enable_resume);
+                let resume =
+                    task_header(ui, &name, super::icons::Icon::Play, "继续", enable_resume);
                 if resume {
                     if let Err(error) = self.resume_paused(app) {
                         self.notice = error.to_string();
@@ -808,23 +809,29 @@ fn task_header(
     enabled: bool,
 ) -> bool {
     let size = egui::vec2(ui.available_width(), 42.0);
-    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(38.0), egui::Sense::hover());
-        let (fill, ink) = super::desktop_style::selection_colors(ui);
-        ui.painter().rect_filled(rect, 8.0, fill);
-        super::icons::Icon::Log.paint(ui.painter(), rect.shrink(8.0), ink);
-        let title_width = (ui.available_width() - 72.0).max(1.0);
-        super::desktop_ui::left_text_slot(
-            ui,
-            title_width,
-            38.0,
-            super::desktop_style::semibold(name, 18.0),
-        )
-        .on_hover_text(name);
-        ui.add_enabled_ui(enabled, |ui| super::shell_ui::icon_button(ui, action, label, true))
+    ui.allocate_ui_with_layout(
+        size,
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(38.0), egui::Sense::hover());
+            let (fill, ink) = super::desktop_style::selection_colors(ui);
+            ui.painter().rect_filled(rect, 8.0, fill);
+            super::icons::Icon::Log.paint(ui.painter(), rect.shrink(8.0), ink);
+            let title_width = (ui.available_width() - 72.0).max(1.0);
+            super::desktop_ui::left_text_slot(
+                ui,
+                title_width,
+                38.0,
+                super::desktop_style::semibold(name, 18.0),
+            )
+            .on_hover_text(name);
+            ui.add_enabled_ui(enabled, |ui| {
+                super::shell_ui::icon_button(ui, action, label, true)
+            })
             .inner
             .clicked()
-    })
+        },
+    )
     .inner
 }
 
@@ -836,7 +843,9 @@ fn progress_meter(ui: &mut egui::Ui, progress: Progress, paused: bool) {
     };
     let mut bar = egui::ProgressBar::new(ratio).show_percentage();
     if paused {
-        bar = bar.fill(super::desktop_style::tokens::muted_color(ui.visuals().dark_mode));
+        bar = bar.fill(super::desktop_style::tokens::muted_color(
+            ui.visuals().dark_mode,
+        ));
     }
     ui.add(bar);
     let label = if progress.verified_locally {
@@ -948,6 +957,8 @@ fn outcome_label(outcome: FileOutcome, receiving: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    mod captures;
     use super::*;
     use std::time::{Duration, Instant};
     use transport::data::ReceiveBind;

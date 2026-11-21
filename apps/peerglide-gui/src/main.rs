@@ -45,6 +45,8 @@ mod route_plan;
 mod route_projection;
 mod shell_ui;
 mod visual_assets;
+#[cfg(all(test, target_os = "linux"))]
+mod visual_capture;
 mod worker_output;
 mod worker_permissions;
 mod workspace_ui;

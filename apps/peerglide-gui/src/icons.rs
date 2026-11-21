@@ -115,7 +115,12 @@ impl Icon {
             }
             Icon::Image => {
                 let frame = Rect::from_min_max(grid.at(1.0, 2.0), grid.at(15.0, 14.0));
-                painter.rect_stroke(frame, grid.unit, line_stroke(color), egui::StrokeKind::Inside);
+                painter.rect_stroke(
+                    frame,
+                    grid.unit,
+                    line_stroke(color),
+                    egui::StrokeKind::Inside,
+                );
                 painter.circle_filled(grid.at(11.5, 5.2), grid.unit, color);
                 paint_path(
                     painter,

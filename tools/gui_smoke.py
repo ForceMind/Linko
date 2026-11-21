@@ -215,19 +215,23 @@ def main():
         capture(["--gesture-lab"], "gesture-lab")
         # Both peers use the exact release CLI and disposable loopback identities.
         # Only the empty eight-cell input and the post-authentication views are captured.
-        result = run_external([
-            "cargo", "test", "-p", "peerglide-gui", "--locked",
-            "pairing_panel::tests::captures::capture_real_pairing_views",
-            "--", "--exact", "--ignored",
-        ], cwd=root, env={
+        capture_env = {
             **env,
             "PEERGLIDE_PAIRING_TEST_WORKER": str(root / "target/release/peerglide"),
-            "LINKO_PAIRING_CAPTURE_DIR": str(root / "dist"),
-        }, timeout=150, capture_output=True, text=True)
-        print(result.stdout, end="")
-        print(result.stderr, end="", file=sys.stderr)
-        if result.returncode or "1 passed; 0 failed; 0 ignored" not in result.stdout:
-            raise RuntimeError("real pairing capture did not run exactly once")
+            "LINKO_UI_CAPTURE_DIR": str(root / "dist"),
+        }
+        for name in (
+            "pairing_panel::tests::captures::capture_real_pairing_views",
+            "file_panel::tests::captures::capture_file_settings_and_recovery_review",
+        ):
+            result = run_external([
+                "cargo", "test", "-p", "peerglide-gui", "--locked", name,
+                "--", "--exact", "--ignored",
+            ], cwd=root, env=capture_env, timeout=90, capture_output=True, text=True)
+            print(result.stdout, end="")
+            print(result.stderr, end="", file=sys.stderr)
+            if result.returncode or "1 passed; 0 failed; 0 ignored" not in result.stdout:
+                raise RuntimeError(f"native capture did not run exactly once: {name}")
     return 0
 
 

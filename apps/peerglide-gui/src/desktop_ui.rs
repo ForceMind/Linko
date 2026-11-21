@@ -584,7 +584,8 @@ impl App {
                     }
                     ui.separator();
                     ui.horizontal_wrapped(|ui| {
-                        if shell_ui::icon_button(ui, Icon::Shield, "恢复快捷键", true).clicked() {
+                        if shell_ui::icon_button(ui, Icon::Shield, "恢复快捷键", true).clicked()
+                        {
                             self.navigate_to(Page::Shortcuts);
                         }
                         for key in SHORTCUTS[1].keys {
@@ -1203,7 +1204,10 @@ impl App {
                         }
                     },
                 );
-                if ui.add(desktop_style::primary("立即停止并恢复本机")).clicked() {
+                if ui
+                    .add(desktop_style::primary("立即停止并恢复本机"))
+                    .clicked()
+                {
                     self.stop();
                 }
             });

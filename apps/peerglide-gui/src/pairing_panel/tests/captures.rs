@@ -1,15 +1,13 @@
 //! Draw the actual pairing panel over two disposable loopback profiles on the CI X server.
 use super::{pump, worker, App, Identity, Mode, Panel, Phase, CODE_CELLS_ID};
+use crate::visual_capture;
 use anyhow::{Context, Result};
-use eframe::{egui, icon_data::IconDataExt};
+use eframe::egui;
 use std::{
-    fs::OpenOptions,
-    io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{mpsc, Arc},
     time::{Duration, Instant},
 };
-use winit::platform::x11::EventLoopBuilderExtX11;
 
 const SHOTS: [&str; 4] = [
     "peerglide-pairing-code-entry-compact.png",
@@ -162,33 +160,10 @@ impl eframe::App for Capture {
     }
 }
 
-fn write_shot(path: &Path, image: &egui::ColorImage) -> Result<()> {
-    anyhow::ensure!(image.size == [920, 700], "unexpected pairing capture size");
-    let icon = egui::IconData {
-        width: 920,
-        height: 700,
-        rgba: image
-            .pixels
-            .iter()
-            .flat_map(|pixel| pixel.to_array())
-            .collect(),
-    };
-    let png = icon.to_png_bytes().map_err(anyhow::Error::msg)?;
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?
-        .write_all(&png)?;
-    Ok(())
-}
-
 #[test]
 #[ignore = "requires exact release CLI and the isolated CI X server"]
 fn capture_real_pairing_views() -> Result<()> {
-    anyhow::ensure!(std::env::var("CI").as_deref() == Ok("true"));
-    let output = PathBuf::from(
-        std::env::var_os("LINKO_PAIRING_CAPTURE_DIR").context("capture directory required")?,
-    );
+    let output = visual_capture::output_dir()?;
     let fixture = crate::tests::Fixture::new()?;
     let host = App::load(fixture.path.join("host"));
     let guest = App::load(fixture.path.join("guest"));
@@ -201,16 +176,9 @@ fn capture_real_pairing_views() -> Result<()> {
     join.select_entry(true);
     let binary = worker()?;
     let (tx, rx) = mpsc::channel();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([920.0, 700.0]),
-        event_loop_builder: Some(Box::new(|builder| {
-            builder.with_any_thread(true);
-        })),
-        ..Default::default()
-    };
     eframe::run_native(
         "Linko / 屏跃",
-        options,
+        visual_capture::options(),
         Box::new(move |cc| {
             host.theme(&cc.egui_ctx);
             Ok(Box::new(Capture {
@@ -231,7 +199,7 @@ fn capture_real_pairing_views() -> Result<()> {
     let frames = rx.try_recv().context("pairing capture did not finish")??;
     anyhow::ensure!(frames.len() == SHOTS.len());
     for (file, image) in SHOTS.into_iter().zip(frames) {
-        write_shot(&output.join(file), &image)?;
+        visual_capture::write_shot(&output.join(file), &image)?;
     }
     fixture.close()?;
     Ok(())
