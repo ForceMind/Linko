@@ -66,8 +66,12 @@ fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
 
 /// Illustrates the two ends of a handoff. Runtime state is reported by the caller.
 pub(super) fn handoff_art(ui: &mut egui::Ui, symbol: super::icons::Icon) {
+    handoff_art_with_height(ui, symbol, 194.0);
+}
+
+pub(super) fn handoff_art_with_height(ui: &mut egui::Ui, symbol: super::icons::Icon, max: f32) {
     let width = ui.available_width();
-    let height = (width * 0.27).clamp(88.0, 194.0);
+    let height = (width * 0.27).max(88.0).min(max);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let center = rect.center();
     let offset = (rect.width() * 0.26).min(190.0);

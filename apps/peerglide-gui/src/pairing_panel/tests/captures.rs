@@ -1,5 +1,5 @@
 //! Draw the actual pairing panel over two disposable loopback profiles on the CI X server.
-use super::{pump, worker, App, Identity, Mode, Panel, Phase};
+use super::{pump, worker, App, Identity, Mode, Panel, Phase, CODE_CELLS_ID};
 use anyhow::{Context, Result};
 use eframe::{egui, icon_data::IconDataExt};
 use std::{
@@ -145,6 +145,13 @@ impl eframe::App for Capture {
         app.desktop(ui);
         std::mem::swap(&mut app.pairing_panel, panel);
         if self.pending.is_none() && self.settled.elapsed() >= Duration::from_millis(320) {
+            let cells_visible = ctx
+                .read_response(egui::Id::unique(CODE_CELLS_ID))
+                .is_some_and(|response| response.interact_rect == response.rect);
+            if phase == Phase::Idle && !cells_visible {
+                self.finish(&ctx, Err(anyhow::anyhow!("the code cells need scrolling")));
+                return;
+            }
             let (tx, rx) = mpsc::sync_channel(1);
             ctx.request_screenshot(move |image| {
                 let _ = tx.send(image);

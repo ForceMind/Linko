@@ -416,6 +416,10 @@ impl Panel {
         let now = ctx.input(|input| input.time);
         let phase = self.supervisor.phase();
         let needs_identity = app.local_fingerprint().is_none();
+        let entering_code = self.join_entry
+            && !needs_identity
+            && !self.supervisor.needs_poll()
+            && phase != Phase::Completed;
         self.feedback.observe(phase, self.join_entry, now);
         self.code_reveal.observe_appearance(
             phase == Phase::Listening && self.supervisor.displayed_code().is_some(),
@@ -449,6 +453,7 @@ impl Panel {
                 Phase::Verified => "确认设备",
                 Phase::WaitingPeer => "等待另一台确认",
                 Phase::Completed => "已配对",
+                _ if entering_code => "输入八位码",
                 _ => "配对",
             };
             ui.label(egui::RichText::new(title).size(34.0).strong());
@@ -463,26 +468,38 @@ impl Panel {
                         .max_height(body_height)
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            ui.vertical_centered(|ui| self.body(app, ui, now, needs_identity));
+                            ui.vertical_centered(|ui| self.body(app, ui, needs_identity));
                         });
+                    if phase == Phase::Verified {
+                        ui.label("两台分别确认。接收、键鼠和自动重连仍关闭。");
+                        if app.config.fingerprint.is_some() {
+                            ui.weak("若身份不同，这会替换原设备登记。");
+                        }
+                    }
                     ui.add_space(16.0);
                     ui.allocate_ui_with_layout(
                         egui::vec2(footer_width, 40.0),
                         egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| self.footer(app, ui, needs_identity),
+                        |ui| self.footer(app, ui, now, needs_identity, entering_code),
                     );
                 },
             );
         });
     }
 
-    fn body(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64, needs_identity: bool) {
-        let symbol = match self.supervisor.phase() {
+    fn body(&mut self, app: &mut App, ui: &mut egui::Ui, needs_identity: bool) {
+        let phase = self.supervisor.phase();
+        let symbol = match phase {
             Phase::Verified | Phase::Completed => Icon::Check,
             Phase::Failed(_) | Phase::Stopped(_) => Icon::Warning,
             _ => Icon::Link,
         };
-        super::visual_assets::handoff_art(ui, symbol);
+        let art_height = match phase {
+            Phase::Verified | Phase::WaitingPeer => 124.0,
+            _ if self.join_entry && !needs_identity => 76.0,
+            _ => 194.0,
+        };
+        super::visual_assets::handoff_art_with_height(ui, symbol, art_height);
         if !self.supervisor.needs_poll() && self.supervisor.phase() != Phase::Completed {
             if needs_identity {
                 ui.label("先创建本机安全身份，协同仍关闭。");
@@ -497,7 +514,7 @@ impl Panel {
                 ui.label("设备名称");
                 ui.text_edit_singleline(&mut self.name);
                 if self.join_entry {
-                    self.join_controls(app, ui, now);
+                    self.join_fields(app, ui);
                 } else {
                     self.offer_controls(app, ui);
                 }
@@ -548,13 +565,7 @@ impl Panel {
             let glyph = self.feedback.glyph(ui.ctx(), self.supervisor.needs_poll());
             status_row(ui, glyph, phase_text(phase));
         }
-        approval_row(ui, phase);
-        if phase == Phase::Verified {
-            ui.label("两台分别确认。接收、键鼠和自动重连仍关闭。");
-            if app.config.fingerprint.is_some() {
-                ui.weak("若身份不同，这会替换原设备登记。");
-            }
-        }
+        approval_row(ui, phase, &self.name);
         if app.pairing_pending() {
             ui.colored_label(
                 egui::Color32::from_rgb(185, 110, 25),
@@ -613,10 +624,7 @@ impl Panel {
         }
     }
 
-    fn join_controls(&mut self, app: &mut App, ui: &mut egui::Ui, now: f64) {
-        if let Some(address) = self.discovery.ui(ui, app.local_fingerprint(), None, true) {
-            self.select_address(address);
-        }
+    fn join_fields(&mut self, app: &App, ui: &mut egui::Ui) {
         ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("另一台的 IP 地址"));
         ui.label(CODE_LABEL);
         let offset = self.feedback.shake_offset(ui.ctx());
@@ -624,32 +632,50 @@ impl Panel {
         if edited {
             self.feedback.code_error = false;
         }
-        if ui.add(desktop_style::primary("核验设备")).clicked() {
-            let input = (|| -> Result<(SocketAddr, Mode)> {
-                let address = parse_address(&self.address)?;
-                let mode = Mode::connect(address, std::mem::take(&mut self.code))?;
-                Ok((address, mode))
-            })();
-            let result = match input {
-                Err(error) => {
-                    self.feedback.reject(now);
-                    Err(error)
-                }
-                Ok((address, mode)) => Self::worker()
-                    .and_then(|worker| self.start(app, ui.ctx(), mode, Some(address), &worker)),
-            };
-            if let Err(error) = result {
-                self.message = format!("尚未开始：{error:#}");
-            }
+        if let Some(address) = self.discovery.ui(ui, app.local_fingerprint(), None, true) {
+            self.select_address(address);
         }
     }
 
-    fn footer(&mut self, app: &mut App, ui: &mut egui::Ui, needs_identity: bool) {
+    fn verify_join(&mut self, app: &App, ctx: &egui::Context, now: f64) {
+        let input = (|| -> Result<(SocketAddr, Mode)> {
+            let address = parse_address(&self.address)?;
+            let mode = Mode::connect(address, std::mem::take(&mut self.code))?;
+            Ok((address, mode))
+        })();
+        let result = match input {
+            Err(error) => {
+                self.feedback.reject(now);
+                Err(error)
+            }
+            Ok((address, mode)) => {
+                Self::worker().and_then(|worker| self.start(app, ctx, mode, Some(address), &worker))
+            }
+        };
+        if let Err(error) = result {
+            self.message = format!("尚未开始：{error:#}");
+        }
+    }
+
+    fn footer(
+        &mut self,
+        app: &mut App,
+        ui: &mut egui::Ui,
+        now: f64,
+        needs_identity: bool,
+        entering_code: bool,
+    ) {
         if needs_identity
             && !self.supervisor.needs_poll()
             && self.supervisor.phase() != Phase::Completed
         {
             self.prepare_identity(app, ui);
+        }
+        if entering_code
+            && self.join_entry
+            && ui.add(desktop_style::primary("核验设备")).clicked()
+        {
+            self.verify_join(app, ui.ctx(), now);
         }
         if self.supervisor.phase() == Phase::Verified
             && ui.add(desktop_style::primary("记住这台设备")).clicked()
@@ -697,7 +723,7 @@ impl Panel {
 }
 
 /// Two independent states: a local click never marks the other computer as confirmed.
-fn approval_row(ui: &mut egui::Ui, phase: Phase) {
+fn approval_row(ui: &mut egui::Ui, phase: Phase, name: &str) {
     let (local, peer) = match phase {
         Phase::Verified => (("待确认", Tone::Accent), ("需独立确认", Tone::Neutral)),
         Phase::WaitingPeer => (("已确认", Tone::Good), ("待确认", Tone::Neutral)),
@@ -711,10 +737,15 @@ fn approval_row(ui: &mut egui::Ui, phase: Phase) {
     ui.add_space(8.0);
     desktop_style::card(ui).inner_margin(8.0).show(ui, |ui| {
         ui.columns(2, |columns| {
-            let sides = [(0, "本机", local), (1, "另一台", peer)];
-            for (column, name, (status, tone)) in sides {
+            let peer_name = if name.trim().is_empty() {
+                "另一台".into()
+            } else {
+                format!("另一台 · {name}")
+            };
+            let sides = [(0, "本机", local), (1, peer_name.as_str(), peer)];
+            for (column, label, (status, tone)) in sides {
                 columns[column].vertical_centered(|ui| {
-                    ui.strong(name);
+                    ui.add(egui::Label::new(egui::RichText::new(label).strong()).truncate());
                     desktop_style::pill(ui, status, tone);
                 });
             }
