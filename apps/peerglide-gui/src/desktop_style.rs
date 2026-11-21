@@ -235,6 +235,11 @@ pub(super) fn card(ui: &egui::Ui) -> egui::Frame {
 pub(super) fn canvas_wash(painter: &egui::Painter, rect: egui::Rect, dark: bool) {
     let colors = palette(dark);
     painter.rect_filled(rect, 9.0, colors.canvas);
+    let dots = if dark {
+        Color32::from_rgb(82, 91, 136)
+    } else {
+        Color32::from_rgb(180, 184, 231)
+    };
     let step = 20.0_f32.max((rect.area() / 1600.0).sqrt());
     let mut mesh = egui::Mesh::default();
     let mut y = rect.top() + step * 0.5;
@@ -242,7 +247,7 @@ pub(super) fn canvas_wash(painter: &egui::Painter, rect: egui::Rect, dark: bool)
         let mut x = rect.left() + step * 0.5;
         while x < rect.right() {
             let dot = egui::Rect::from_center_size(egui::pos2(x, y), egui::Vec2::splat(1.5));
-            mesh.add_colored_rect(dot, colors.line);
+            mesh.add_colored_rect(dot, dots);
             x += step;
         }
         y += step;

@@ -246,7 +246,7 @@ impl RuleEditor {
     }
     pub fn preview_ui(&mut self, ui: &mut egui::Ui, gesture: Option<u32>) {
         ui.separator();
-        ui.strong("生效预览 · 本窗口测试，不执行动作");
+        ui.strong("匹配预览");
         ui.label("匹配顺序：排除优先 → 精确应用 → 应用组 → 全局兜底。");
         ui.horizontal(|ui| {
             ui.label("测试应用标识");
@@ -254,7 +254,7 @@ impl RuleEditor {
                 egui::TextEdit::singleline(&mut self.application).hint_text("手动填入真实应用标识"),
             );
         });
-        ui.weak("应用选择器尚未实现。此字段仅供手动测试，不会读取或切换当前应用。");
+        ui.weak("手动测试，不读取或切换应用。");
         if let Some(id) = gesture {
             ui.label(match self.preview(id) {
                 Ok(Resolution::Selected { rule_id, action }) => {
@@ -281,10 +281,7 @@ impl RuleEditor {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, dir: &Path, writable: bool) {
         ui.strong("轨迹、范围与动作");
-        ui.label("保存的是本机规则。全局手势 G1 仍关闭，勾选规则仅用于匹配预览。");
-        ui.weak("Windows 已实现最小化 / 最大化 / 关闭窗口的 Native 库。");
-        ui.weak("macOS 已实现最小化 / 关闭窗口；Linux 暂无。");
-        ui.weak("均未在此 GUI 接通执行，真实效果未验收。");
+        ui.small("仅本机预览 · 全局捕获与动作关闭");
         if !writable {
             ui.label("当前配置只读，可以查看与测试，不能编辑或保存。");
         }

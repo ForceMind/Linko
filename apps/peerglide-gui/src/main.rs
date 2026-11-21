@@ -8,6 +8,8 @@ mod clipboard_drop;
 mod clipboard_handoff;
 #[cfg(any(windows, target_os = "macos"))]
 mod clipboard_panel;
+#[cfg(any(windows, target_os = "macos", all(test, target_os = "linux")))]
+mod clipboard_prompt;
 mod config_store;
 mod connection_info;
 mod cursor_overlay;
@@ -45,6 +47,8 @@ mod route_plan;
 mod route_projection;
 mod shell_ui;
 mod visual_assets;
+#[cfg(all(test, target_os = "linux"))]
+mod visual_capture;
 mod worker_output;
 mod worker_permissions;
 mod workspace_ui;
@@ -567,7 +571,7 @@ struct App {
     #[cfg(any(windows, target_os = "macos"))]
     route_plan: route_plan::Panel,
     /// Explicit sidebar choice; None follows the window width.
-    sidebar_pref: Option<bool>,
+    sidebar_open: bool,
     page_motion: motion::Retrigger<u8>,
     capsule_motion: motion::Retrigger<(&'static str, desktop_style::Tone)>,
     notice_details: bool,
@@ -721,7 +725,7 @@ impl App {
             display_inventory: display_inventory::Panel::default(),
             #[cfg(any(windows, target_os = "macos"))]
             route_plan: route_plan::Panel::default(),
-            sidebar_pref: None,
+            sidebar_open: false,
             page_motion: motion::Retrigger::default(),
             capsule_motion: motion::Retrigger::default(),
             notice_details: false,

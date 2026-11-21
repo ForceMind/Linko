@@ -69,6 +69,9 @@ pub(super) enum Icon {
     /// Page with text lines, for diagnostics and logs.
     Log,
     Folder,
+    Image,
+    Pause,
+    Play,
     Audio,
     Gesture,
 }
@@ -109,6 +112,33 @@ impl Icon {
                     points.map(|(x, y)| grid.at(x as f32, y as f32)).to_vec(),
                     color,
                 );
+            }
+            Icon::Image => {
+                let frame = Rect::from_min_max(grid.at(1.0, 2.0), grid.at(15.0, 14.0));
+                painter.rect_stroke(
+                    frame,
+                    grid.unit,
+                    line_stroke(color),
+                    egui::StrokeKind::Inside,
+                );
+                painter.circle_filled(grid.at(11.5, 5.2), grid.unit, color);
+                paint_path(
+                    painter,
+                    vec![grid.at(2.5, 11.5), grid.at(6.0, 7.5), grid.at(12.5, 12.5)],
+                    color,
+                );
+            }
+            Icon::Pause => {
+                for x in [5.5, 10.5] {
+                    painter.line_segment([grid.at(x, 3.0), grid.at(x, 13.0)], line_stroke(color));
+                }
+            }
+            Icon::Play => {
+                painter.add(egui::Shape::convex_polygon(
+                    vec![grid.at(5.0, 3.0), grid.at(13.0, 8.0), grid.at(5.0, 13.0)],
+                    color,
+                    Stroke::NONE,
+                ));
             }
             Icon::Audio => {
                 for (x, height) in [(2.0, 2.0), (5.0, 4.0), (8.0, 6.0), (11.0, 3.5), (14.0, 1.5)] {

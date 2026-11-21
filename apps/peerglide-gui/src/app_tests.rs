@@ -352,8 +352,13 @@ fn workspace_pointer_drag_and_direction_buttons_commit_only_editable_layout() ->
         .iter()
         .find_map(|paint| text_center(&paint.shape, "B"))
         .context("peer screen label not painted")?;
+    let local = output
+        .shapes
+        .iter()
+        .find_map(|paint| text_center(&paint.shape, desktop_ui::local_device_name()))
+        .context("local screen label not painted")?;
     output.drop_without_applying_deltas();
-    let end = start - Vec2::new(260.0, 0.0);
+    let end = egui::pos2(local.x - (start.x - local.x) * 0.65, start.y);
     step(&mut app, &ctx, 0.2, press(start));
     step(&mut app, &ctx, 0.3, vec![egui::Event::PointerMoved(end)]);
     assert!(

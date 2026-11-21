@@ -12,8 +12,6 @@ const DISPLAY_VERSION: &str = match option_env!("LINKO_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
-/// Without an explicit choice, windows at least this wide show the expanded sidebar.
-const SIDEBAR_AUTO_EXPAND_MIN_W: f32 = 1100.0;
 /// Horizontal inner margin of the sidebar; the collapsed content column is 48 points wide.
 pub(super) const SIDEBAR_MARGIN: i8 = 8;
 /// Distance from a sidebar row's left edge to its icon center, centered when collapsed.
@@ -26,12 +24,6 @@ const LABEL_PADDING: f32 = tokens::ICON_SMALL + tokens::SPACE_SM + 2.0 * tokens:
 const MIN_FADE_ALPHA: f32 = 0.35;
 
 impl App {
-    /// Sidebar state for this window width: the user's last choice, else wide windows expand.
-    pub(super) fn sidebar_expanded(&self, window_width: f32) -> bool {
-        self.sidebar_pref
-            .unwrap_or(window_width >= SIDEBAR_AUTO_EXPAND_MIN_W)
-    }
-
     fn on_home(&self) -> bool {
         matches!(self.page, Page::Devices | Page::Displays)
     }
@@ -39,7 +31,7 @@ impl App {
     /// Title bar: sidebar switch and brand, status capsule, then the fixed safety controls.
     pub(super) fn title_bar(&mut self, ui: &mut egui::Ui, window_width: f32) {
         ui.spacing_mut().item_spacing.x = tokens::SPACE_SM;
-        let expanded = self.sidebar_expanded(window_width);
+        let expanded = self.sidebar_open;
         ui.allocate_ui_with_layout(
             Vec2::new(ui.available_width(), 40.0),
             egui::Layout::left_to_right(egui::Align::Center),
@@ -52,7 +44,7 @@ impl App {
                 let toggle = icon_button(ui, Icon::Sidebar, label, false);
                 self.record_layout_control("nav_sidebar", &toggle, ui.clip_rect());
                 if toggle.clicked() {
-                    self.sidebar_pref = Some(!expanded);
+                    self.sidebar_open = !expanded;
                 }
                 desktop_style::brand_mark(ui);
                 ui.label(desktop_style::semibold("屏跃", 17.0));
@@ -221,10 +213,7 @@ impl App {
         };
         for (page, icon, label, key) in entries {
             let selected = match page {
-                Page::Shortcuts => matches!(
-                    self.page,
-                    Page::Shortcuts | Page::Home | Page::GestureLab | Page::GestureRules
-                ),
+                Page::Shortcuts => matches!(self.page, Page::Shortcuts | Page::Home),
                 _ => self.page == page,
             };
             let response = icon_control(ui, icon, label, expanded, selected, false);
@@ -503,6 +492,8 @@ mod tests {
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let original = app.config.clone();
+        assert!(!app.sidebar_open);
+        app.sidebar_open = true;
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
         let mut time = 0.0;
@@ -518,7 +509,7 @@ mod tests {
         run_frames(&mut app, &ctx, &mut time, 60);
         assert_eq!(requests.load(Ordering::SeqCst), 0);
         // Collapse the sidebar and switch view: both play once and then stop.
-        app.sidebar_pref = Some(false);
+        app.sidebar_open = false;
         app.navigate_to(Page::Settings);
         run_frames(&mut app, &ctx, &mut time, 60);
         assert!(requests.load(Ordering::SeqCst) > 0, "motion never ran");
@@ -526,7 +517,7 @@ mod tests {
         let settled = requests.load(Ordering::SeqCst);
         run_frames(&mut app, &ctx, &mut time, 120);
         assert_eq!(requests.load(Ordering::SeqCst), settled);
-        assert!(app.page == Page::Settings && !app.sidebar_expanded(1280.0));
+        assert!(app.page == Page::Settings && !app.sidebar_open);
         assert!(app.config == original && app.child.is_none() && !app.pairing_open);
         assert!(
             !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
