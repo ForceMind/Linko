@@ -113,6 +113,10 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 #endif
 }
 
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+@synthesize networkPreview = _networkPreview;
+#endif
+
 - (instancetype)init {
     self = [super init];
     if (self) {
