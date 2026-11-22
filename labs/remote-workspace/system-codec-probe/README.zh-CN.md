@@ -4,7 +4,7 @@ Actions 使用 Windows 的 Media Foundation 软件编码器和解码器处理连
 
 macOS 使用 VideoToolbox 验证一帧并记录实际选中的软硬件路径。
 
-Windows 另用双端低延迟配置处理连续 90 帧 1920×1080 NV12。输入带 30 fps 时间戳并尽快送入编解码器，检查两处亮度、尺寸、时间戳和最大积压。日志报告提交到解码输出的 P50/P95/P99 和不按时间戳节流的吞吐量。测量涵盖编解码，真实窗口采集、网络和显示耗时待独立验证。
+Windows 另用双端低延迟配置处理连续 90 帧 1920×1080 NV12。输入带 30 fps 时间戳并尽快送入编解码器，检查两处亮度、可见区域尺寸、时间戳和最大积压。日志报告缓冲区与可见区域各自的尺寸、提交到解码输出的 P50/P95/P99 和不按时间戳节流的吞吐量。测量涵盖编解码，真实窗口采集、网络和显示耗时待独立验证。[Media Foundation 可见区域](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mt-minimum-display-aperture-attribute)
 
 这里验证系统编解码入口。Windows 硬件编码、WebRTC codec factory 接线、端到端延迟、完整许可及实际 GPU 性能仍待验证。
 

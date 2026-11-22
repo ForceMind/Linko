@@ -170,6 +170,24 @@ ComPtr<IMFTransform> startDecoder(IMFMediaType* type, bool lowLatency) {
     return decoder;
 }
 
+MFVideoArea displayArea(IMFMediaType* layout, UINT32 width, UINT32 height) {
+    MFVideoArea area{};
+    UINT32 bytes{};
+    auto status = layout->GetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, reinterpret_cast<UINT8*>(&area),
+                                  sizeof(area), &bytes);
+    if (status == MF_E_ATTRIBUTENOTFOUND) {
+        status = layout->GetBlob(MF_MT_GEOMETRIC_APERTURE, reinterpret_cast<UINT8*>(&area),
+                                 sizeof(area), &bytes);
+    }
+    if (status == MF_E_ATTRIBUTENOTFOUND) {
+        area.Area = {static_cast<LONG>(width), static_cast<LONG>(height)};
+        return area;
+    }
+    check(status, "read decoder display area");
+    check(bytes == sizeof(area) ? S_OK : E_UNEXPECTED, "check decoder display area length");
+    return area;
+}
+
 void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const& fixture, UINT32 index) {
     check(sample && index < fixture.frames ? S_OK : E_UNEXPECTED, "check decoded sample count");
     DWORD length{};
@@ -181,9 +199,22 @@ void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const&
     UINT32 decodedWidth{}, decodedHeight{};
     check(MFGetAttributeSize(layout.Get(), MF_MT_FRAME_SIZE, &decodedWidth, &decodedHeight),
           "read decoded frame size");
+    const auto area = displayArea(layout.Get(), decodedWidth, decodedHeight);
     const bool layoutMatches = subtype == MFVideoFormat_NV12 && length >= fixture.nv12Bytes() &&
-                               decodedWidth == fixture.width && decodedHeight == fixture.height;
-    check(layoutMatches ? S_OK : E_UNEXPECTED, "check decoded sample layout");
+                               decodedWidth >= fixture.width && decodedHeight >= fixture.height &&
+                               area.OffsetX.value == 0 && area.OffsetX.fract == 0 &&
+                               area.OffsetY.value == 0 && area.OffsetY.fract == 0 &&
+                               area.Area.cx == static_cast<LONG>(fixture.width) &&
+                               area.Area.cy == static_cast<LONG>(fixture.height);
+    if (!layoutMatches) {
+        std::fprintf(stderr, "Decoded layout: %ux%u, display area %ldx%ld, %lu bytes.\n",
+                     decodedWidth, decodedHeight, area.Area.cx, area.Area.cy, length);
+        check(E_UNEXPECTED, "check decoded sample layout");
+    }
+    if (index == 0) {
+        std::printf("Decoded NV12 storage %ux%u, visible %ldx%ld.\n",
+                    decodedWidth, decodedHeight, area.Area.cx, area.Area.cy);
+    }
 
     LONGLONG timestamp{};
     check(sample->GetSampleTime(&timestamp), "read decoded timestamp");
