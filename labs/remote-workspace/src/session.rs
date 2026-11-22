@@ -122,7 +122,10 @@ impl SessionGate {
     pub(crate) fn begin_media(&mut self, now: u64) -> Result<u64, Error> {
         self.check_time(now)?;
         self.can_view(now)?;
-        self.media_generation = self.media_generation.checked_add(1).ok_or(Error::Capacity)?;
+        self.media_generation = self
+            .media_generation
+            .checked_add(1)
+            .ok_or(Error::Capacity)?;
         Ok(self.media_generation)
     }
 

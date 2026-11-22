@@ -139,7 +139,10 @@ fn rejects_old_attempts_after_rebuild_and_old_grants_after_reconsent() {
     );
 
     gate.revoke_all(4).unwrap();
-    assert_eq!(restarted.ready(&gate, second, 4), Err(Error::PermissionDenied));
+    assert_eq!(
+        restarted.ready(&gate, second, 4),
+        Err(Error::PermissionDenied)
+    );
     gate.grant_view(5, 99).unwrap();
     assert_eq!(guard.begin(&mut gate, 5), Err(Error::StaleTarget));
     let mut replacement = Negotiation::new(&gate, 5).unwrap();
