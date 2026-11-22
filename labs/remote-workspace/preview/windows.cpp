@@ -25,6 +25,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef LINKO_RW04_WGC_CODEC_CI
+#include "../system-codec-probe/windows_fixture.h"
+#endif
+
 using namespace winrt;
 using namespace winrt::Windows::Graphics;
 using namespace winrt::Windows::Graphics::Capture;
@@ -378,6 +382,12 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 #ifdef LINKO_RW03_CI
+#ifdef LINKO_RW04_WGC_CODEC_CI
+WgcFixtureFrame capturedFixtureFrame(Frame const& frame) {
+    return {frame.pixels, static_cast<unsigned>(frame.width), static_cast<unsigned>(frame.height)};
+}
+#endif
+
 LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
@@ -432,6 +442,12 @@ int smoke(HINSTANCE instance) {
     std::shared_ptr<Frame const> first;
     if (!wait([&] {
         first = preview.view().second;
+#ifdef LINKO_RW04_WGC_CODEC_CI
+        if (!first || !hasWgcFixtureColor(capturedFixtureFrame(*first), false)) {
+            InvalidateRect(fixture, nullptr, FALSE);
+            return false;
+        }
+#endif
         return first != nullptr;
     })) {
         ::fwprintf(stderr, L"WGC fixture did not deliver a frame: %ls\n", preview.view().first);
@@ -440,14 +456,27 @@ int smoke(HINSTANCE instance) {
     }
     auto previous = first->width;
     std::printf("WGC first fixture frame: %dx%d\n", first->width, first->height);
+#ifdef LINKO_RW04_WGC_CODEC_CI
+    std::shared_ptr<Frame const> resized;
+#else
     first.reset();
+#endif
     if (!SetWindowPos(fixture, nullptr, 0, 0, 450, 300, SWP_NOMOVE | SWP_NOZORDER)) {
         return 13;
     }
     RedrawWindow(fixture, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     if (!wait([&] {
         auto frame = preview.view().second;
+#ifdef LINKO_RW04_WGC_CODEC_CI
+        if (!frame || frame->width <= previous || !hasWgcFixtureColor(capturedFixtureFrame(*frame), true)) {
+            InvalidateRect(fixture, nullptr, FALSE);
+            return false;
+        }
+        resized = std::move(frame);
+        return true;
+#else
         return frame && frame->width > previous;
+#endif
     })) {
         auto [state, frame] = preview.view();
         ::fwprintf(stderr, L"WGC fixture did not resize: %ls (%d)\n", state, frame ? frame->width : 0);
@@ -462,7 +491,14 @@ int smoke(HINSTANCE instance) {
     }
     preview.stop();
     std::puts("WGC fixture start, resize, source close and stop passed.");
-    return preview.view().second ? 15 : 0;
+    if (preview.view().second) {
+        return 15;
+    }
+#ifdef LINKO_RW04_WGC_CODEC_CI
+    return checkWgcCodec(capturedFixtureFrame(*first), capturedFixtureFrame(*resized));
+#else
+    return 0;
+#endif
 }
 #endif
 } // namespace

@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'labs/remote-workspace/system-codec-probe/**'
+      - 'labs/remote-workspace/preview/windows.cpp'
       - '.github/workflows/workspace-codec-probe.yml'
 permissions:
   contents: read
@@ -31,6 +32,14 @@ jobs:
           cl /nologo /std:c++20 /W4 /WX /EHsc /O2 "%GITHUB_WORKSPACE%\labs\remote-workspace\system-codec-probe\windows.cpp" mfplat.lib mfuuid.lib wmcodecdspuuid.lib ole32.lib /link /out:rw04-h264.exe
           if errorlevel 1 exit /b 1
           rw04-h264.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /W4 /WX /EHsc /utf-8 /DUNICODE /D_UNICODE /DLINKO_RW03_CI /DLINKO_RW04_WGC_CODEC_CI /O2 /c "%GITHUB_WORKSPACE%\labs\remote-workspace\preview\windows.cpp" /Fo:rw04-wgc.obj
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /W4 /WX /EHsc /DLINKO_RW04_WGC_CODEC_CI /O2 /c "%GITHUB_WORKSPACE%\labs\remote-workspace\system-codec-probe\windows.cpp" /Fo:rw04-system-codec.obj
+          if errorlevel 1 exit /b 1
+          link /nologo /out:rw04-wgc-h264.exe rw04-wgc.obj rw04-system-codec.obj d3d11.lib dwmapi.lib user32.lib gdi32.lib windowsapp.lib mfplat.lib mfuuid.lib wmcodecdspuuid.lib ole32.lib
+          if errorlevel 1 exit /b 1
+          rw04-wgc-h264.exe
       - name: Roundtrip a synthetic frame through VideoToolbox
         if: runner.os == 'macOS'
         shell: bash
