@@ -15,8 +15,10 @@
 #include "loopback_preview.h"
 
 @interface RW04NetworkPreview : NSObject
-- (void)submit:(CVPixelBufferRef)pixels;
+- (BOOL)submit:(CVPixelBufferRef)pixels;
 - (CVPixelBufferRef)copyFrame CF_RETURNS_RETAINED;
+- (void)revoke;
+- (BOOL)wasClosed;
 @end
 
 @implementation RW04NetworkPreview {
@@ -38,12 +40,20 @@
     linko_rw04_loopback_close(_session);
 }
 
-- (void)submit:(CVPixelBufferRef)pixels {
-    linko_rw04_loopback_submit(_session, pixels);
+- (BOOL)submit:(CVPixelBufferRef)pixels {
+    return linko_rw04_loopback_submit(_session, pixels);
 }
 
 - (CVPixelBufferRef)copyFrame {
     return linko_rw04_loopback_take(_session);
+}
+
+- (void)revoke {
+    linko_rw04_loopback_revoke(_session);
+}
+
+- (BOOL)wasClosed {
+    return linko_rw04_loopback_was_closed(_session);
 }
 @end
 #endif
@@ -92,6 +102,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @property(nonatomic, readonly) BOOL ended;
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @property(strong) RW04NetworkPreview *networkPreview;
+- (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
 #endif
 - (void)discard;
 - (void)publish:(NSImage *)image;
@@ -132,6 +143,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     _image = nil;
     [_lock unlock];
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+    RW04NetworkPreview *network = self.networkPreview;
+    [network revoke];
     self.networkPreview = nil;
 #endif
 }
@@ -315,6 +328,10 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (void)beginCapture:(SCWindow *)source;
 - (NSImage *)displayedFrame;
 - (BOOL)hasStream;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+- (CaptureOutput *)activeCaptureOutput;
+- (void)stopButton:(id)sender;
+#endif
 #ifdef LINKO_RW04_COLOR_PREVIEW
 - (BOOL)showsFixtureColorRed:(BOOL)red;
 #endif
@@ -506,8 +523,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         return;
     }
     _stopRequested = YES;
-    [_output discard];
     _image.image = nil;
+    [_output discard];
     _status.stringValue = message;
     _stop.enabled = NO;
     if (!_starting) {
@@ -579,6 +596,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (BOOL)hasStream {
     return _stream != nil;
 }
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+- (CaptureOutput *)activeCaptureOutput {
+    return _output;
+}
+#endif
 #endif
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -718,6 +740,42 @@ static int checkNativeCapture(void) {
         return 7;
     }
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+    CaptureOutput *retiredOutput = [preview activeCaptureOutput];
+    RW04NetworkPreview *retiredNetwork = retiredOutput.networkPreview;
+    NSImage *retiredImage = preview.displayedFrame;
+    CGImageRef retainedImage = [retiredImage CGImageForProposedRect:NULL context:nil hints:nil];
+    CIImage *decoded = retainedImage ? [CIImage imageWithCGImage:retainedImage] : nil;
+    CVPixelBufferRef delayedPixels = decoded
+        ? [retiredOutput copyCroppedFrame:decoded pixels:decoded.extent]
+        : NULL;
+    if (!delayedPixels) {
+        fputs("macOS loopback fixture could not retain a decoded frame for the revoke test.\n", stderr);
+        [pulse invalidate];
+        return 10;
+    }
+
+    [preview stopButton:nil];
+    BOOL stopped = !preview.displayedFrame && [retiredNetwork wasClosed] &&
+                   waitFor(^BOOL { return !preview.hasStream; });
+    if (stopped) {
+        red = YES;
+        [preview beginCapture:source];
+    }
+    [retiredOutput publish:retiredImage];
+    BOOL accepted = [retiredNetwork submit:delayedPixels];
+    CVPixelBufferRelease(delayedPixels);
+    CVPixelBufferRef residualPixels = [retiredNetwork copyFrame];
+    BOOL discarded = !accepted && !residualPixels && ![retiredOutput currentAt:uptime()];
+    if (residualPixels) {
+        CVPixelBufferRelease(residualPixels);
+    }
+    if (!stopped || !discarded || preview.displayedFrame ||
+        !waitFor(^BOOL { return [preview showsFixtureColorRed:YES]; })) {
+        fputs("macOS loopback fixture failed to revoke, reject an old frame, or reopen.\n", stderr);
+        [pulse invalidate];
+        return 11;
+    }
+    puts("Loopback revoke: closed old peers, rejected delayed pixels, and rendered the reopened source.");
     [pulse invalidate];
 #endif
     [fixture close];
