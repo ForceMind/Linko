@@ -3123,7 +3123,28 @@ Windows 和 macOS 原生适配器编译。实际目标应用、鼠标事件交�
 
 ## 集中验收清单
 
-当前开发在 [草稿集成 PR180](https://github.com/ForceMind/Linko/pull/180) 中。此清单随集成更新，包的范围以各自的源码树为准。
+### 当前候选（2026-11-22 核对）
+
+[核心集成 PR #180](https://github.com/ForceMind/Linko/pull/180) 和 [桌面改版 PR #320](https://github.com/ForceMind/Linko/pull/320) 均为草稿。`3790a80` 是 `408549a` 的祖先。统一验收可使用 PR #320 同一行的 Windows 与 macOS 包，PR #180 的包可用于对照。
+
+| 候选 | GitHub Actions | 三端便携包 | 隔离升级回滚起点 |
+| --- | --- | --- | --- |
+| 核心 `2026.11.20-1322`／`3790a80` | [Rust CI](https://github.com/ForceMind/Linko/actions/runs/44680582417) · [GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44680582560) · [配对上游](https://github.com/ForceMind/Linko/actions/runs/44680582391) | [Windows x64](https://github.com/ForceMind/Linko/actions/runs/44680582417/artifacts/14604148971) · [macOS arm64](https://github.com/ForceMind/Linko/actions/runs/44680582417/artifacts/14604791633) · [Linux x64](https://github.com/ForceMind/Linko/actions/runs/44680582417/artifacts/14604936034) | `2026.11.20-1232` |
+| 改版 `2026.11.21-1408`／`408549a` | [Rust CI](https://github.com/ForceMind/Linko/actions/runs/44874134595) · [GUI 资源](https://github.com/ForceMind/Linko/actions/runs/44874134555) · [配对上游](https://github.com/ForceMind/Linko/actions/runs/44874134552) | [Windows x64](https://github.com/ForceMind/Linko/actions/runs/44874134595/artifacts/14695202915) · [macOS arm64](https://github.com/ForceMind/Linko/actions/runs/44874134595/artifacts/14695816871) · [Linux x64](https://github.com/ForceMind/Linko/actions/runs/44874134595/artifacts/14695124886) | `2026.11.21-1350` |
+
+**已验证（Actions）**：两个候选各通过 11 项检查。三端均启动了升级后的 worker，拒绝篡改的回滚包并恢复原包。核心回归覆盖剪贴板断开后拒绝导入旧文本或 PNG、文件暂停与断开后的显式续传、Windows 注入按键和鼠标按钮的释放。改版的 Linux 隔离窗口记录了两实例配对和真实文件收发，剪贴板授权截图使用生产界面和示例状态。[改版截图](https://github.com/ForceMind/Linko/actions/runs/44874134595/artifacts/14695916093) · [已连接界面](https://github.com/ForceMind/Linko/actions/runs/44874134555/artifacts/14695805312)
+
+| 180 秒空闲采样 | macOS 峰值 RSS／暖机后最大增长 | macOS 已有身份平均单核 CPU | Ubuntu 峰值 RSS／暖机后最大增长 |
+| --- | --- | --- | --- |
+| `3790a80` | 99.453／0.250 MiB | 0.283% | 139.887／0 MiB |
+| `408549a` | 105.375／0 MiB | 0.467% | 139.789／0 MiB |
+
+RSS 与增长列取空白、已有身份场景的各自最大值。两个候选均通过 512 MiB 峰值和 64 MiB 增长门槛。下文约 0.764% CPU、119.078 MiB 的基线采自 macOS 普通窗口仅通信场景。空闲采样与该场景的负载和时长不同。[核心 macOS 报告](https://github.com/ForceMind/Linko/actions/runs/44680582560/artifacts/14605235216) · [核心 Ubuntu 报告](https://github.com/ForceMind/Linko/actions/runs/44680582560/artifacts/14605285652) · [改版 macOS 报告](https://github.com/ForceMind/Linko/actions/runs/44874134555/artifacts/14695202526) · [改版 Ubuntu 报告](https://github.com/ForceMind/Linko/actions/runs/44874134555/artifacts/14695348360)
+
+**待真机**：Windows ↔ macOS 双向键鼠、剪贴板及文件继续留在 [#3／C06](https://github.com/ForceMind/Linko/issues/3) 统一验收。历史第一次 `native receive service: Timeout` 的真实触发链仍待同一候选的两端 `KVM-DIAG/5` 核对。下面保留物理回报步骤及历次证据。
+
+### 历次候选证据
+
 
 候选 `b581714`（`2026.11.17-1613`）通过 11 项 GitHub Actions 检查。三端从 `1549` 隔离升级，
 启动新包 worker，拒绝被篡改的回滚包并恢复原包。该候选覆盖剪贴板断开撤下确认、文件在
