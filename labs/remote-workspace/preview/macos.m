@@ -115,6 +115,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (instancetype)initWithRenderingContext:(CIContext *)context;
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @property(strong) RW04NetworkPreview *networkPreview;
+- (BOOL)usesLoopback;
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
 #endif
 - (void)discard;
@@ -140,6 +141,10 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @synthesize networkPreview = _networkPreview;
+
+- (BOOL)usesLoopback {
+    return YES;
+}
 #endif
 
 - (instancetype)initWithRenderingContext:(CIContext *)context {
@@ -292,7 +297,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         return;
     }
     if (status && status.integerValue == SCFrameStatusIdle) {
-#ifndef LINKO_RW04_NETWORK_PREVIEW
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+        if (![self usesLoopback]) {
+            [self stillCurrent];
+        }
+#else
         [self stillCurrent];
 #endif
         return;
@@ -313,15 +322,18 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     // ScreenCaptureKit reports a top-left content rectangle. Core Image uses bottom-left coordinates.
     pixels.origin.y = CGRectGetHeight(frame.extent) - CGRectGetMaxY(pixels);
 #ifdef LINKO_RW04_NETWORK_PREVIEW
-    RW04NetworkPreview *network = self.networkPreview;
-    if (network) {
-        CVPixelBufferRef input = [self copyCroppedFrame:frame pixels:pixels];
-        if (input) {
-            [network submit:input];
-            CVPixelBufferRelease(input);
+    if ([self usesLoopback]) {
+        RW04NetworkPreview *network = self.networkPreview;
+        if (network) {
+            CVPixelBufferRef input = [self copyCroppedFrame:frame pixels:pixels];
+            if (input) {
+                [network submit:input];
+                CVPixelBufferRelease(input);
+            }
         }
+        return;
     }
-#else
+#endif
 #ifdef LINKO_RW04_CODEC_PREVIEW
     CVPixelBufferRef decoded = [self copyDecodedFrame:frame pixels:pixels];
     if (!decoded) {
@@ -340,12 +352,12 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         CGImageRelease(result);
     }
     [self publish:image];
-#endif
 }
 @end
 
 @interface PreviewApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
 - (CIContext *)contextForCapture;
+- (CaptureOutput *)makeCaptureOutput;
 #ifdef LINKO_RW03_CI
 - (void)beginCapture:(SCWindow *)source;
 - (NSImage *)displayedFrame;
@@ -488,6 +500,17 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     return _renderingContext;
 }
 
+- (CaptureOutput *)makeCaptureOutput {
+    CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:[self contextForCapture]];
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    output.networkPreview = [RW04NetworkPreview new];
+    if (!output.networkPreview) {
+        return nil;
+    }
+#endif
+    return output;
+}
+
 - (void)beginCapture:(SCWindow *)source {
     if (_stream || _stopping || !CGPreflightScreenCaptureAccess() ||
         !sourceExists(source.windowID, source.owningApplication.processID)) {
@@ -506,14 +529,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     settings.ignoreShadowsSingleWindow = YES;
     settings.preservesAspectRatio = YES;
 
-    CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:[self contextForCapture]];
-#ifdef LINKO_RW04_NETWORK_PREVIEW
-    output.networkPreview = [RW04NetworkPreview new];
-    if (!output.networkPreview) {
-        _status.stringValue = @"无法建立回环预览。";
+    CaptureOutput *output = [self makeCaptureOutput];
+    if (!output) {
+        _status.stringValue = @"无法建立预览。";
         return;
     }
-#endif
     SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:settings delegate:output];
     dispatch_queue_t queue = dispatch_queue_create("app.linko.rw03.frames", DISPATCH_QUEUE_SERIAL);
     NSError *error = nil;
@@ -692,12 +712,21 @@ static BOOL waitFor(BOOL (^predicate)(void)) {
 }
 
 #ifdef LINKO_RW04_NETWORK_PREVIEW
-@interface FreshContextFixtureApp : PreviewApp
+@interface CaptureOnlyOutput : CaptureOutput
 @end
 
-@implementation FreshContextFixtureApp
-- (CIContext *)contextForCapture {
-    return makeRenderingContext();
+@implementation CaptureOnlyOutput
+- (BOOL)usesLoopback {
+    return NO;
+}
+@end
+
+@interface CaptureOnlyFixtureApp : PreviewApp
+@end
+
+@implementation CaptureOnlyFixtureApp
+- (CaptureOutput *)makeCaptureOutput {
+    return [[CaptureOnlyOutput alloc] initWithRenderingContext:[self contextForCapture]];
 }
 @end
 
@@ -725,14 +754,33 @@ static int sampleStoppedProcess(unsigned cycle) {
     return fdCount;
 }
 
-static BOOL stopFixtureCycle(PreviewApp *preview) {
+static BOOL checkStoppedSample(unsigned cycle, int *warmDescriptors) {
+    if (cycle != 0 && cycle != 10 && cycle % 25 != 0) {
+        return YES;
+    }
+    int descriptors = sampleStoppedProcess(cycle);
+    if (descriptors < 0) {
+        return NO;
+    }
+    if (cycle == 10) {
+        *warmDescriptors = descriptors;
+    }
+    if (cycle == 100 && descriptors > *warmDescriptors) {
+        fputs("Loopback cycles: open descriptors grew after warm-up.\n", stderr);
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL stopFixtureCycle(PreviewApp *preview, BOOL usesLoopback) {
     __weak CaptureOutput *retiredOutput;
     @autoreleasepool {
         CaptureOutput *output = [preview activeCaptureOutput];
         retiredOutput = output;
         RW04NetworkPreview *network = output.networkPreview;
         [preview stopButton:nil];
-        if (preview.displayedFrame || preview.hasFrameTimer || !network.wasClosed) {
+        BOOL mediaStopped = usesLoopback ? network.wasClosed : network == nil;
+        if (preview.displayedFrame || preview.hasFrameTimer || !mediaStopped) {
             return NO;
         }
     }
@@ -742,40 +790,92 @@ static BOOL stopFixtureCycle(PreviewApp *preview) {
     return waitFor(^BOOL { return !retiredOutput; });
 }
 
-static BOOL checkCaptureCycles(PreviewApp *preview, SCWindow *source) {
-    if (!stopFixtureCycle(preview) || sampleStoppedProcess(0) < 0) {
+static BOOL checkCaptureCycles(PreviewApp *preview, SCWindow *source, BOOL usesLoopback) {
+    int warmDescriptors = -1;
+    if (!stopFixtureCycle(preview, usesLoopback) || !checkStoppedSample(0, &warmDescriptors)) {
         return NO;
     }
-    int warmDescriptors = -1;
     for (unsigned cycle = 1; cycle <= 100; ++cycle) {
         @autoreleasepool {
             [preview beginCapture:source];
             if (!preview.hasFrameTimer || !waitFor(^BOOL { return preview.displayedFrame != nil; }) ||
-                !stopFixtureCycle(preview)) {
+                !stopFixtureCycle(preview, usesLoopback)) {
                 fprintf(stderr, "Loopback cycles: open, render or cleanup failed at cycle %u.\n", cycle);
                 return NO;
             }
         }
-        if (cycle == 10 || cycle % 25 == 0) {
-            int descriptors = sampleStoppedProcess(cycle);
-            if (descriptors < 0) {
-                return NO;
+        if (!checkStoppedSample(cycle, &warmDescriptors)) {
+            return NO;
+        }
+    }
+    printf("Loopback cycles: 100 %s start/stop cycles passed.\n",
+           usesLoopback ? "capture and media" : "capture-only");
+    return YES;
+}
+
+static BOOL exerciseMedia(CVPixelBufferRef input) {
+    RW04NetworkPreview *network = [RW04NetworkPreview new];
+    if (!network) {
+        return NO;
+    }
+    BOOL received = NO;
+    for (unsigned attempt = 0; attempt < 100 && !received; ++attempt) {
+        @autoreleasepool {
+            if (![network submit:input]) {
+                break;
             }
-            if (cycle == 10) {
-                warmDescriptors = descriptors;
-            }
-            if (cycle == 100 && descriptors > warmDescriptors) {
-                fputs("Loopback cycles: open descriptors grew after warm-up.\n", stderr);
-                return NO;
+            [NSThread sleepForTimeInterval:0.04];
+            CVPixelBufferRef output = [network copyFrameReceivedAt:NULL];
+            if (output) {
+                received = CVPixelBufferGetWidth(output) == CVPixelBufferGetWidth(input) &&
+                           CVPixelBufferGetHeight(output) == CVPixelBufferGetHeight(input);
+                CVPixelBufferRelease(output);
             }
         }
     }
-    puts("Loopback cycles: 100 native capture and media start/stop cycles released their resources.");
-    return YES;
+    [network revoke];
+    return received && network.wasClosed;
+}
+
+static int checkMediaCycles(void) {
+    puts("Loopback cycles: path=media-only");
+    CVPixelBufferRef input = NULL;
+    NSDictionary *attributes = @{(__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{}};
+    if (CVPixelBufferCreate(kCFAllocatorDefault, 224, 144, kCVPixelFormatType_32BGRA,
+                            (__bridge CFDictionaryRef)attributes, &input) != kCVReturnSuccess) {
+        return 16;
+    }
+    CIImage *pixels = [[CIImage imageWithColor:[CIColor colorWithRed:0.8 green:0.1 blue:0.1]]
+        imageByCroppingToRect:CGRectMake(0, 0, 224, 144)];
+    [makeRenderingContext() render:pixels toCVPixelBuffer:input];
+    int warmDescriptors = -1;
+    int result = checkStoppedSample(0, &warmDescriptors) ? 0 : 17;
+    for (unsigned cycle = 1; cycle <= 100 && result == 0; ++cycle) {
+        @autoreleasepool {
+            if (!exerciseMedia(input)) {
+                fprintf(stderr, "Loopback cycles: media-only frame or cleanup failed at cycle %u.\n", cycle);
+                result = 17;
+            }
+        }
+        if (result == 0 && !checkStoppedSample(cycle, &warmDescriptors)) {
+            result = 17;
+        }
+    }
+    CVPixelBufferRelease(input);
+    if (result == 0) {
+        puts("Loopback cycles: 100 media-only start/stop cycles passed.");
+    }
+    return result;
 }
 #endif
 
 static int checkNativeCapture(void) {
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
+    if ([arguments containsObject:@"--media-only"]) {
+        return checkMediaCycles();
+    }
+#endif
     if (!CGPreflightScreenCaptureAccess()) {
         puts("macOS hosted permission unavailable; native capture was not exercised.");
 #ifdef LINKO_RW04_COLOR_PREVIEW
@@ -787,9 +887,9 @@ static int checkNativeCapture(void) {
     [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
     [NSApp finishLaunching];
 #ifdef LINKO_RW04_NETWORK_PREVIEW
-    BOOL freshContext = [NSProcessInfo.processInfo.arguments containsObject:@"--fresh-context"];
-    PreviewApp *preview = freshContext ? [FreshContextFixtureApp new] : [PreviewApp new];
-    printf("Loopback cycles: context_mode=%s\n", freshContext ? "per-capture" : "shared");
+    BOOL captureOnly = [arguments containsObject:@"--capture-only"];
+    PreviewApp *preview = captureOnly ? [CaptureOnlyFixtureApp new] : [PreviewApp new];
+    printf("Loopback cycles: path=%s\n", captureOnly ? "capture-only" : "full");
 #else
     PreviewApp *preview = [PreviewApp new];
 #endif
@@ -889,6 +989,12 @@ static int checkNativeCapture(void) {
         return 7;
     }
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+    if (captureOnly) {
+        BOOL passed = checkCaptureCycles(preview, source, NO);
+        [pulse invalidate];
+        [fixture close];
+        return passed ? 0 : 14;
+    }
     CaptureOutput *retiredOutput = [preview activeCaptureOutput];
     RW04NetworkPreview *retiredNetwork = retiredOutput.networkPreview;
     NSImage *retiredImage = preview.displayedFrame;
@@ -925,7 +1031,7 @@ static int checkNativeCapture(void) {
         return 11;
     }
     puts("Loopback revoke: closed old peers, rejected delayed pixels, and rendered the reopened source.");
-    if (!checkCaptureCycles(preview, source)) {
+    if (!checkCaptureCycles(preview, source, YES)) {
         [pulse invalidate];
         return 14;
     }
