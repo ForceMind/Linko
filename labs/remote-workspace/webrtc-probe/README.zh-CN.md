@@ -14,6 +14,8 @@ macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建�
 
 回环解码和 AppKit 层共用单调时钟。一帧从接收端解码回调起保留两秒。等待取帧、像素转换和重复绘制均计入期限。测试分别检查取出帧时保留原始时间，以及 AppKit 的过期清理。
 
+启停回归在同一托管 macOS 窗口上重复 100 次真实采集、传输及呈现。每次停止均检查 ScreenCaptureKit 回执、旧输出销毁、WebRTC 端点关闭、清屏和停止轮询。报告记录停止后的 RSS、线程和描述符数，检查预热后的描述符增长。
+
 该实验调用系统 H.264。WebRTC 内建 H.264 和专有软件 codec 仍关闭。Windows codec factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
 
 - [固定 WebRTC 提交](https://webrtc.googlesource.com/src/+/692e07f2cb2f3602af5a8083b695f4f3bc2c9a6f)

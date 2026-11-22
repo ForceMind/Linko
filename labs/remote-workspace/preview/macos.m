@@ -12,6 +12,8 @@
 #include "h264_probe.h"
 #endif
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+#include <libproc.h>
+#include <unistd.h>
 #include "loopback_preview.h"
 
 @interface RW04NetworkPreview : NSObject
@@ -340,9 +342,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (void)beginCapture:(SCWindow *)source;
 - (NSImage *)displayedFrame;
 - (BOOL)hasStream;
+- (BOOL)hasFrameTimer;
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 - (CaptureOutput *)activeCaptureOutput;
 - (void)stopButton:(id)sender;
+- (BOOL)captureStopAcknowledged;
 #endif
 #ifdef LINKO_RW04_COLOR_PREVIEW
 - (BOOL)showsFixtureColorRed:(BOOL)red;
@@ -366,6 +370,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     BOOL _stopRequested;
     BOOL _stopping;
     BOOL _quitting;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    BOOL _captureStopAcknowledged;
+#endif
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -400,8 +407,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     [_window center];
     [_window makeKeyAndOrderFront:nil];
     [NSApp activate];
-    _timer = [NSTimer scheduledTimerWithTimeInterval:0.1 target:self
-                                           selector:@selector(updateFrame:) userInfo:nil repeats:YES];
+}
+
+- (void)stopFrameTimer {
+    [_timer invalidate];
+    _timer = nil;
 }
 
 - (void)pickWindow:(id)sender {
@@ -501,13 +511,20 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     _output = output;
     _stream = stream;
     _starting = YES;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    _captureStopAcknowledged = NO;
+#endif
     _pick.enabled = NO;
     _stop.enabled = YES;
     _status.stringValue = @"正在打开预览。";
+    _timer = [NSTimer scheduledTimerWithTimeInterval:0.1 target:self
+                                           selector:@selector(updateFrame:) userInfo:nil repeats:YES];
     [stream startCaptureWithCompletionHandler:^(NSError *startError) {
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_starting = NO;
             if (startError) {
+                [self stopFrameTimer];
+                self->_image.image = nil;
                 [output discard];
                 [stream removeStreamOutput:output type:SCStreamOutputTypeScreen error:NULL];
                 self->_stream = nil;
@@ -535,6 +552,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         return;
     }
     _stopRequested = YES;
+    [self stopFrameTimer];
     _image.image = nil;
     [_output discard];
     _status.stringValue = message;
@@ -551,6 +569,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     [stream removeStreamOutput:output type:SCStreamOutputTypeScreen error:NULL];
     [stream stopCaptureWithCompletionHandler:^(NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+            self->_captureStopAcknowledged = error == nil;
+#endif
             self->_stream = nil;
             self->_output = nil;
             self->_stopRequested = NO;
@@ -608,15 +629,21 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (BOOL)hasStream {
     return _stream != nil;
 }
+- (BOOL)hasFrameTimer {
+    return _timer.isValid;
+}
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 - (CaptureOutput *)activeCaptureOutput {
     return _output;
+}
+- (BOOL)captureStopAcknowledged {
+    return _captureStopAcknowledged;
 }
 #endif
 #endif
 
 - (void)windowWillClose:(NSNotification *)notification {
-    [_timer invalidate];
+    [self stopFrameTimer];
     [NSApp terminate:nil];
 }
 
@@ -648,6 +675,73 @@ static BOOL waitFor(BOOL (^predicate)(void)) {
     return NO;
 }
 
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+static int sampleStoppedProcess(unsigned cycle) {
+    struct proc_taskinfo task = {0};
+    struct proc_fdinfo descriptors[512];
+    int taskBytes = proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &task, (int)sizeof(task));
+    int fdBytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, descriptors, (int)sizeof(descriptors));
+    if (taskBytes != (int)sizeof(task) || fdBytes <= 0 || fdBytes >= (int)sizeof(descriptors) ||
+        fdBytes % (int)sizeof(struct proc_fdinfo) != 0) {
+        fputs("Loopback cycles: could not measure the stopped process.\n", stderr);
+        return -1;
+    }
+    int fdCount = fdBytes / (int)sizeof(struct proc_fdinfo);
+    printf("Loopback cycles: stopped=%u rss_bytes=%llu threads=%d fds=%d\n",
+           cycle, (unsigned long long)task.pti_resident_size, task.pti_threadnum, fdCount);
+    return fdCount;
+}
+
+static BOOL stopFixtureCycle(PreviewApp *preview) {
+    __weak CaptureOutput *retiredOutput;
+    @autoreleasepool {
+        CaptureOutput *output = [preview activeCaptureOutput];
+        retiredOutput = output;
+        RW04NetworkPreview *network = output.networkPreview;
+        [preview stopButton:nil];
+        if (preview.displayedFrame || preview.hasFrameTimer || !network.wasClosed) {
+            return NO;
+        }
+    }
+    if (!waitFor(^BOOL { return !preview.hasStream; }) || !preview.captureStopAcknowledged) {
+        return NO;
+    }
+    return waitFor(^BOOL { return !retiredOutput; });
+}
+
+static BOOL checkCaptureCycles(PreviewApp *preview, SCWindow *source) {
+    if (!stopFixtureCycle(preview) || sampleStoppedProcess(0) < 0) {
+        return NO;
+    }
+    int warmDescriptors = -1;
+    for (unsigned cycle = 1; cycle <= 100; ++cycle) {
+        @autoreleasepool {
+            [preview beginCapture:source];
+            if (!preview.hasFrameTimer || !waitFor(^BOOL { return preview.displayedFrame != nil; }) ||
+                !stopFixtureCycle(preview)) {
+                fprintf(stderr, "Loopback cycles: open, render or cleanup failed at cycle %u.\n", cycle);
+                return NO;
+            }
+        }
+        if (cycle == 10 || cycle % 25 == 0) {
+            int descriptors = sampleStoppedProcess(cycle);
+            if (descriptors < 0) {
+                return NO;
+            }
+            if (cycle == 10) {
+                warmDescriptors = descriptors;
+            }
+            if (cycle == 100 && descriptors > warmDescriptors) {
+                fputs("Loopback cycles: open descriptors grew after warm-up.\n", stderr);
+                return NO;
+            }
+        }
+    }
+    puts("Loopback cycles: 100 native capture and media start/stop cycles released their resources.");
+    return YES;
+}
+#endif
+
 static int checkNativeCapture(void) {
     if (!CGPreflightScreenCaptureAccess()) {
         puts("macOS hosted permission unavailable; native capture was not exercised.");
@@ -662,6 +756,10 @@ static int checkNativeCapture(void) {
     PreviewApp *preview = [PreviewApp new];
     [preview applicationDidFinishLaunching:
         [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+    if (preview.hasFrameTimer) {
+        fputs("macOS preview scheduled frame polling while idle.\n", stderr);
+        return 13;
+    }
     NSWindow *fixture = [[NSWindow alloc] initWithContentRect:NSMakeRect(50, 50, 220, 140)
                                                    styleMask:NSWindowStyleMaskTitled
                                                      backing:NSBackingStoreBuffered defer:NO];
@@ -788,11 +886,23 @@ static int checkNativeCapture(void) {
         return 11;
     }
     puts("Loopback revoke: closed old peers, rejected delayed pixels, and rendered the reopened source.");
+    if (!checkCaptureCycles(preview, source)) {
+        [pulse invalidate];
+        return 14;
+    }
+    [preview beginCapture:source];
+    if (!waitFor(^BOOL { return [preview showsFixtureColorRed:YES]; })) {
+        fputs("macOS loopback fixture did not render after the repeated cycle check.\n", stderr);
+        [pulse invalidate];
+        return 15;
+    }
     [pulse invalidate];
 #endif
     [fixture close];
     fixture = nil;
-    if (!waitFor(^BOOL { return !preview.displayedFrame && !preview.hasStream; })) {
+    if (!waitFor(^BOOL {
+        return !preview.displayedFrame && !preview.hasStream && !preview.hasFrameTimer;
+    })) {
         fputs("macOS preview did not clear and release the closed fixture.\n", stderr);
         return 8;
     }
