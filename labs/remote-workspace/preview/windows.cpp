@@ -1,5 +1,8 @@
 #define NOMINMAX
 #include <windows.h>
+#ifdef LINKO_RW03_CI
+#include <psapi.h>
+#endif
 #include <d3d11.h>
 #include <dwmapi.h>
 #include <windows.graphics.capture.interop.h>
@@ -421,6 +424,31 @@ bool showsFixtureColor(Frame const& frame, bool blue) {
     return blue ? blueValue > red + 40 : red > blueValue + 40;
 }
 
+struct ProcessUsage {
+    DWORD handles{};
+    DWORD gdi{};
+};
+
+bool sampleStoppedProcess(unsigned cycle, ProcessUsage& usage) {
+    auto process = GetCurrentProcess();
+    PROCESS_MEMORY_COUNTERS memory{};
+    memory.cb = static_cast<DWORD>(sizeof(memory));
+    if (!GetProcessHandleCount(process, &usage.handles) ||
+        !K32GetProcessMemoryInfo(process, &memory, memory.cb)) {
+        std::fprintf(stderr, "WGC cycles: process measurement failed (%lu).\n", GetLastError());
+        return false;
+    }
+    usage.gdi = GetGuiResources(process, GR_GDIOBJECTS);
+    if (!usage.gdi) {
+        std::fputs("WGC cycles: GDI object measurement unavailable.\n", stderr);
+        return false;
+    }
+    std::printf("WGC cycles: stopped=%u working_set_bytes=%llu handles=%lu gdi=%lu\n",
+                cycle, static_cast<unsigned long long>(memory.WorkingSetSize),
+                usage.handles, usage.gdi);
+    return true;
+}
+
 LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
@@ -569,24 +597,56 @@ int smoke(HINSTANCE instance) {
         return 18;
     }
     auto otherThread = GetWindowThreadProcessId(alternate.handle, &process);
-    preview.start({alternate.handle, process, otherThread, caption});
-    if (!wait([&] {
+    Source secondSource{alternate.handle, process, otherThread, caption};
+    auto showsSecond = [&] {
         auto frame = preview.view().second;
-        return frame && showsFixtureColor(*frame, false);
-    })) {
+        return frame && showsFixtureColor(*frame, false) && displaysStatus(L"正在本机预览。");
+    };
+    preview.start(secondSource);
+    if (!wait(showsSecond)) {
         std::fputs("WGC did not switch to the explicitly selected same-title fixture.\n", stderr);
         return 19;
     }
-    auto const paintsBeforeStop = previewPaints;
-    SendMessageW(host.handle, WM_COMMAND, stopId, 0);
-    if (!wait([&] {
-        return !preview.view().second && previewPaints > paintsBeforeStop && displaysStatus(L"预览已停止。");
-    }) || !observeIdle()) {
+    auto stopFromView = [&] {
+        auto const paintsBeforeStop = previewPaints;
+        SendMessageW(host.handle, WM_COMMAND, stopId, 0);
+        return wait([&] {
+            return !preview.view().second && previewPaints > paintsBeforeStop && displaysStatus(L"预览已停止。");
+        });
+    };
+    if (!stopFromView() || !observeIdle()) {
         std::fputs("WGC preview did not repaint on stop or stopped with an active timer.\n", stderr);
         return 20;
     }
     std::puts("WGC preview UI: frame and stop repaints arrived without idle timer messages.");
     std::puts("WGC fixture: resize, minimize, explicit reselection, same-title isolation, and close passed.");
+
+    ProcessUsage usage;
+    if (!sampleStoppedProcess(0, usage)) {
+        return 22;
+    }
+    ProcessUsage warm;
+    for (unsigned cycle = 1; cycle <= 100; ++cycle) {
+        preview.start(secondSource);
+        RedrawWindow(alternate.handle, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        if (!wait(showsSecond) || !stopFromView()) {
+            std::fprintf(stderr, "WGC cycles: open, render or stop failed at cycle %u.\n", cycle);
+            return 23;
+        }
+        if (cycle == 10 || cycle % 25 == 0) {
+            if (!observeIdle() || !sampleStoppedProcess(cycle, usage)) {
+                return 24;
+            }
+            if (cycle == 10) {
+                warm = usage;
+            }
+        }
+    }
+    if (usage.handles > warm.handles || usage.gdi > warm.gdi) {
+        std::fputs("WGC cycles: outstanding handles or GDI objects grew after warm-up.\n", stderr);
+        return 25;
+    }
+    std::puts("WGC cycles: 100 capture and stop cycles passed without handle or GDI growth.");
     return 0;
 }
 #endif
