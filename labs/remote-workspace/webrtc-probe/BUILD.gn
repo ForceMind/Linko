@@ -1,6 +1,33 @@
 import("//webrtc.gni")
 
+group("linko_rw04_all_probes") {
+  deps = [ ":linko_rw04_probe" ]
+  if (is_mac) {
+    deps += [ ":linko_rw04_macos_h264" ]
+  }
+}
+
 rtc_executable("linko_rw04_probe") {
   sources = [ "frame_probe.cc" ]
   deps = [ "//api/video:video_frame" ]
+}
+
+if (is_mac) {
+  rtc_executable("linko_rw04_macos_h264") {
+    sources = [
+      "h264_probe_main.c",
+      "h264_probe.h",
+      "h264_probe.mm",
+    ]
+    configs += [ "//:common_objc" ]
+    include_dirs = [ "//sdk/objc", "//sdk/objc/base" ]
+    frameworks = [ "Foundation.framework" ]
+    deps = [
+      "//api/environment:environment_factory",
+      "//api/video:video_frame",
+      "//api/video_codecs:video_codecs_api",
+      "//sdk:native_api",
+      "//sdk:videotoolbox_objc",
+    ]
+  }
 }
