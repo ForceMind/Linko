@@ -34,8 +34,7 @@ using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
 
 namespace {
-constexpr int maximumEdge = 4096;
-constexpr int maximumPixels = maximumEdge * 2160;
+constexpr SizeInt32 captureLimit{4096, 2160};
 constexpr int refreshId = 100;
 constexpr int startId = 101;
 constexpr int stopId = 102;
@@ -72,8 +71,7 @@ struct Frame {
 
 bool valid(SizeInt32 size) {
     return size.Width > 0 && size.Height > 0 &&
-           size.Width <= maximumEdge && size.Height <= maximumEdge &&
-           size.Width * size.Height <= maximumPixels;
+           size.Width <= captureLimit.Width && size.Height <= captureLimit.Height;
 }
 
 class Preview {
@@ -124,7 +122,9 @@ class Preview {
         check_hresult(CreateDirect3D11DeviceFromDXGIDevice(device.as<IDXGIDevice>().get(), inspectable.put()));
         auto direct = inspectable.as<IDirect3DDevice>();
         constexpr auto format = DirectXPixelFormat::B8G8R8A8UIntNormalized;
-        auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(direct, format, 2, size);
+        // Keep the capture surfaces stable. Recreating the pool can drop the only
+        // frame emitted by a static window after resizing.
+        auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(direct, format, 2, captureLimit);
         auto session = pool.CreateCaptureSession(item);
         com_ptr<ID3D11Texture2D> staging;
         session.StartCapture();
@@ -146,22 +146,21 @@ class Preview {
             }
             if (next.Width != size.Width || next.Height != size.Height) {
                 publish(L"正在调整预览尺寸。");
-                captured.Close();
                 staging = nullptr;
-                pool.Recreate(direct, format, 2, next);
                 size = next;
-                continue;
             }
             auto access = captured.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
             com_ptr<ID3D11Texture2D> texture;
             check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
             D3D11_TEXTURE2D_DESC desc{};
             texture->GetDesc(&desc);
-            if (desc.Width != static_cast<UINT>(size.Width) || desc.Height != static_cast<UINT>(size.Height)) {
+            if (desc.Width < static_cast<UINT>(size.Width) || desc.Height < static_cast<UINT>(size.Height)) {
                 publish(L"正在等待新尺寸的画面。");
                 continue;
             }
             if (!staging) {
+                desc.Width = static_cast<UINT>(size.Width);
+                desc.Height = static_cast<UINT>(size.Height);
                 desc.Usage = D3D11_USAGE_STAGING;
                 desc.BindFlags = 0;
                 desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -173,7 +172,8 @@ class Preview {
             frame->height = size.Height;
             auto const row = static_cast<std::size_t>(size.Width) * 4;
             frame->pixels.resize(row * static_cast<std::size_t>(size.Height));
-            context->CopyResource(staging.get(), texture.get());
+            D3D11_BOX const content{0, 0, 0, static_cast<UINT>(size.Width), static_cast<UINT>(size.Height), 1};
+            context->CopySubresourceRegion(staging.get(), 0, 0, 0, 0, texture.get(), 0, &content);
             D3D11_MAPPED_SUBRESOURCE mapped{};
             check_hresult(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
             for (int y = 0; y < size.Height; ++y) {
