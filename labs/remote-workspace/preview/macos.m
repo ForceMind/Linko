@@ -12,6 +12,10 @@ static const size_t MaxWidth = 1920;
 static const size_t MaxHeight = 1080;
 static const NSTimeInterval FrameLifetime = 2.0;
 
+static CIContext *makeRenderingContext(void) {
+    return [CIContext contextWithOptions:@{kCIContextCacheIntermediates: @NO}];
+}
+
 static NSTimeInterval uptime(void) {
     return NSProcessInfo.processInfo.systemUptime;
 }
@@ -47,6 +51,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 
 @interface CaptureOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, readonly) BOOL ended;
+- (instancetype)initWithRenderingContext:(CIContext *)context;
 - (void)discard;
 - (void)publish:(NSImage *)image;
 - (void)stillCurrent;
@@ -61,11 +66,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     BOOL _ended;
 }
 
-- (instancetype)init {
+- (instancetype)initWithRenderingContext:(CIContext *)context {
     self = [super init];
     if (self) {
         _lock = [NSLock new];
-        _context = [CIContext contextWithOptions:@{kCIContextCacheIntermediates: @NO}];
+        _context = context;
     }
     return self;
 }
@@ -118,9 +123,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     [self discard];
 }
 
-- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample
-        ofType:(SCStreamOutputType)type {
-    if (self.ended || type != SCStreamOutputTypeScreen) {
+- (void)handleScreenSample:(CMSampleBufferRef)sample {
+    if (self.ended) {
         return;
     }
     NSArray<NSDictionary *> *values = (__bridge NSArray *)CMSampleBufferGetSampleAttachmentsArray(sample, false);
@@ -155,13 +159,25 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
     [self publish:image];
 }
+
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample
+        ofType:(SCStreamOutputType)type {
+    if (type == SCStreamOutputTypeScreen) {
+        @autoreleasepool {
+            [self handleScreenSample:sample];
+        }
+    }
+}
 @end
 
 @interface PreviewApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
 #ifdef LINKO_RW03_CI
 - (void)beginCapture:(SCWindow *)source;
+- (void)stopButton:(id)sender;
 - (NSImage *)displayedFrame;
 - (BOOL)hasStream;
+- (BOOL)hasFrameTimer;
+- (BOOL)captureStopAcknowledged;
 #endif
 @end
 
@@ -171,6 +187,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     NSButton *_stop;
     NSTextField *_status;
     NSImageView *_image;
+    CIContext *_renderingContext;
+    dispatch_queue_t _captureQueue;
     NSTimer *_timer;
     SCStream *_stream;
     CaptureOutput *_output;
@@ -181,6 +199,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     BOOL _stopRequested;
     BOOL _stopping;
     BOOL _quitting;
+#ifdef LINKO_RW03_CI
+    BOOL _captureStopAcknowledged;
+#endif
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -215,8 +236,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     [_window center];
     [_window makeKeyAndOrderFront:nil];
     [NSApp activate];
-    _timer = [NSTimer scheduledTimerWithTimeInterval:0.1 target:self
-                                           selector:@selector(updateFrame:) userInfo:nil repeats:YES];
+}
+
+- (void)stopFrameTimer {
+    [_timer invalidate];
+    _timer = nil;
 }
 
 - (void)pickWindow:(id)sender {
@@ -295,11 +319,18 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     settings.ignoreShadowsSingleWindow = YES;
     settings.preservesAspectRatio = YES;
 
-    CaptureOutput *output = [CaptureOutput new];
+    if (!_renderingContext) {
+        _renderingContext = makeRenderingContext();
+    }
+    CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:_renderingContext];
     SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:settings delegate:output];
-    dispatch_queue_t queue = dispatch_queue_create("app.linko.rw03.frames", DISPATCH_QUEUE_SERIAL);
+    if (!_captureQueue) {
+        dispatch_queue_attr_t attributes = dispatch_queue_attr_make_with_autorelease_frequency(
+            DISPATCH_QUEUE_SERIAL, DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM);
+        _captureQueue = dispatch_queue_create("app.linko.rw03.frames", attributes);
+    }
     NSError *error = nil;
-    if (![stream addStreamOutput:output type:SCStreamOutputTypeScreen sampleHandlerQueue:queue error:&error]) {
+    if (![stream addStreamOutput:output type:SCStreamOutputTypeScreen sampleHandlerQueue:_captureQueue error:&error]) {
         _status.stringValue = @"无法初始化窗口预览。";
         return;
     }
@@ -309,13 +340,20 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     _output = output;
     _stream = stream;
     _starting = YES;
+#ifdef LINKO_RW03_CI
+    _captureStopAcknowledged = NO;
+#endif
     _pick.enabled = NO;
     _stop.enabled = YES;
     _status.stringValue = @"正在打开预览。";
+    _timer = [NSTimer scheduledTimerWithTimeInterval:0.1 target:self
+                                           selector:@selector(updateFrame:) userInfo:nil repeats:YES];
     [stream startCaptureWithCompletionHandler:^(NSError *startError) {
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_starting = NO;
             if (startError) {
+                [self stopFrameTimer];
+                self->_image.image = nil;
                 [output discard];
                 [stream removeStreamOutput:output type:SCStreamOutputTypeScreen error:NULL];
                 self->_stream = nil;
@@ -343,8 +381,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         return;
     }
     _stopRequested = YES;
-    [_output discard];
+    [self stopFrameTimer];
     _image.image = nil;
+    [_output discard];
     _status.stringValue = message;
     _stop.enabled = NO;
     if (!_starting) {
@@ -352,21 +391,33 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
 }
 
+- (void)captureDidStop:(NSError *)error {
+#ifdef LINKO_RW03_CI
+    _captureStopAcknowledged = error == nil;
+#else
+    (void)error;
+#endif
+    _stream = nil;
+    _output = nil;
+    _stopRequested = NO;
+    _stopping = NO;
+    _pick.enabled = YES;
+    if (_quitting) {
+        [NSApp replyToApplicationShouldTerminate:YES];
+    }
+}
+
 - (void)finishStop {
     _stopping = YES;
     SCStream *stream = _stream;
     CaptureOutput *output = _output;
+    dispatch_queue_t queue = _captureQueue;
     [stream removeStreamOutput:output type:SCStreamOutputTypeScreen error:NULL];
     [stream stopCaptureWithCompletionHandler:^(NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self->_stream = nil;
-            self->_output = nil;
-            self->_stopRequested = NO;
-            self->_stopping = NO;
-            self->_pick.enabled = YES;
-            if (self->_quitting) {
-                [NSApp replyToApplicationShouldTerminate:YES];
-            }
+        dispatch_async(queue, ^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self captureDidStop:error];
+            });
         });
     }];
 }
@@ -395,10 +446,16 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (BOOL)hasStream {
     return _stream != nil;
 }
+- (BOOL)hasFrameTimer {
+    return _timer.isValid;
+}
+- (BOOL)captureStopAcknowledged {
+    return _captureStopAcknowledged;
+}
 #endif
 
 - (void)windowWillClose:(NSNotification *)notification {
-    [_timer invalidate];
+    [self stopFrameTimer];
     [NSApp terminate:nil];
 }
 
@@ -440,6 +497,10 @@ static int checkNativeCapture(void) {
     PreviewApp *preview = [PreviewApp new];
     [preview applicationDidFinishLaunching:
         [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+    if (preview.hasFrameTimer) {
+        fputs("macOS preview scheduled frame polling while idle.\n", stderr);
+        return 9;
+    }
     NSWindow *fixture = [[NSWindow alloc] initWithContentRect:NSMakeRect(50, 50, 220, 140)
                                                    styleMask:NSWindowStyleMaskTitled
                                                      backing:NSBackingStoreBuffered defer:NO];
@@ -491,19 +552,32 @@ static int checkNativeCapture(void) {
         fputs("macOS ScreenCaptureKit fixture did not deliver the resized frame.\n", stderr);
         return 7;
     }
+    [preview stopButton:nil];
+    if (preview.displayedFrame || preview.hasFrameTimer ||
+        !waitFor(^BOOL { return !preview.hasStream; }) || !preview.captureStopAcknowledged) {
+        fputs("macOS preview did not clear and stop polling on explicit stop.\n", stderr);
+        return 10;
+    }
+    [preview beginCapture:source];
+    if (!waitFor(^BOOL { return preview.displayedFrame.size.width > width; })) {
+        fputs("macOS preview did not render the explicitly selected window again.\n", stderr);
+        return 11;
+    }
     [fixture close];
     fixture = nil;
-    if (!waitFor(^BOOL { return !preview.displayedFrame && !preview.hasStream; })) {
+    if (!waitFor(^BOOL {
+        return !preview.displayedFrame && !preview.hasStream && !preview.hasFrameTimer;
+    })) {
         fputs("macOS preview did not clear and release the closed fixture.\n", stderr);
         return 8;
     }
-    puts("ScreenCaptureKit fixture start, resize and source close passed.");
+    puts("ScreenCaptureKit fixture: start, resize, stop, reopen, source close and no idle polling passed.");
     return 0;
 }
 
 int main(void) {
     @autoreleasepool {
-        CaptureOutput *output = [CaptureOutput new];
+        CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:makeRenderingContext()];
         NSImage *fixture = [[NSImage alloc] initWithSize:NSMakeSize(20, 10)];
         [output publish:fixture];
         if ([output currentAt:uptime()] != fixture || [output currentAt:uptime() + 3]) {
