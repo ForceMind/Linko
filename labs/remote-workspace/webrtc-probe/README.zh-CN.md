@@ -18,6 +18,8 @@ macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建�
 
 预览复用一个 Core Image 渲染上下文。[上下文对照](https://github.com/ForceMind/Linko/actions/runs/45065522785/artifacts/14771209787)记录了两种模式的差异。当前 Actions 在同一 runner 的独立进程分三组各运行 100 次，覆盖整链路、真实单窗口采集加本机绘制、固定合成帧经 H.264 加密回环。报告记录 RSS、物理内存占用、在用堆、分配区容量、线程及描述符。后两组只用于诊断资源变化。
 
+完整回环的采集端用 Core Video 池复用送编 BGRA 缓冲。当前尺寸的池最多分配六个缓冲，全部占用时跳过本帧。尺寸变化时替换池，仍被编解码器持有的旧帧按系统引用生命周期释放。停止时旧采集对象释放池并拒绝继续分配。
+
 该实验调用系统 H.264。WebRTC 内建 H.264 和专有软件 codec 仍关闭。Windows codec factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
 
 - [固定 WebRTC 提交](https://webrtc.googlesource.com/src/+/692e07f2cb2f3602af5a8083b695f4f3bc2c9a6f)
