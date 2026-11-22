@@ -120,7 +120,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @property(strong) RW04NetworkPreview *networkPreview;
 @property(strong) CIContext *encoderInputContext;
-- (BOOL)usesLoopback;
+- (BOOL)usesEncoderInput;
+- (void)handleEncoderInput:(CIImage *)frame pixels:(CGRect)pixels;
 - (BOOL)consumeDecodedFrameWithoutRendering;
 - (CVPixelBufferRef)copyInputWithWidth:(size_t)width height:(size_t)height CF_RETURNS_RETAINED;
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
@@ -156,8 +157,20 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @synthesize networkPreview = _networkPreview;
 @synthesize encoderInputContext = _encoderInputContext;
 
-- (BOOL)usesLoopback {
+- (BOOL)usesEncoderInput {
     return YES;
+}
+
+- (void)handleEncoderInput:(CIImage *)frame pixels:(CGRect)pixels {
+    RW04NetworkPreview *network = self.networkPreview;
+    if (!network) {
+        return;
+    }
+    CVPixelBufferRef input = [self copyCroppedFrame:frame pixels:pixels];
+    if (input) {
+        [network submit:input];
+        CVPixelBufferRelease(input);
+    }
 }
 
 - (BOOL)consumeDecodedFrameWithoutRendering {
@@ -385,7 +398,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
     if (status && status.integerValue == SCFrameStatusIdle) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
-        if (![self usesLoopback]) {
+        if (![self usesEncoderInput]) {
             [self stillCurrent];
         }
 #else
@@ -409,15 +422,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     // ScreenCaptureKit reports a top-left content rectangle. Core Image uses bottom-left coordinates.
     pixels.origin.y = CGRectGetHeight(frame.extent) - CGRectGetMaxY(pixels);
 #ifdef LINKO_RW04_NETWORK_PREVIEW
-    if ([self usesLoopback]) {
-        RW04NetworkPreview *network = self.networkPreview;
-        if (network) {
-            CVPixelBufferRef input = [self copyCroppedFrame:frame pixels:pixels];
-            if (input) {
-                [network submit:input];
-                CVPixelBufferRelease(input);
-            }
-        }
+    if ([self usesEncoderInput]) {
+        [self handleEncoderInput:frame pixels:pixels];
         return;
     }
 #endif
@@ -896,7 +902,7 @@ static BOOL checkInputPool(void) {
 @end
 
 @implementation CaptureOnlyOutput
-- (BOOL)usesLoopback {
+- (BOOL)usesEncoderInput {
     return NO;
 }
 @end
@@ -916,6 +922,43 @@ static BOOL checkInputPool(void) {
 @implementation GpuCropFixtureApp
 - (CIContext *)contextForEncoderInput {
     return [self contextForCapture];
+}
+@end
+
+@interface CropOnlyOutput : CaptureOutput
+@property(atomic) BOOL producedFixtureInput;
+@end
+
+@implementation CropOnlyOutput
+@synthesize producedFixtureInput = _producedFixtureInput;
+
+- (void)handleEncoderInput:(CIImage *)frame pixels:(CGRect)pixels {
+    CVPixelBufferRef input = [self copyCroppedFrame:frame pixels:pixels];
+    if (input) {
+        BOOL cropped = CVPixelBufferGetWidth(input) == (((size_t)CGRectGetWidth(pixels)) & ~(size_t)1) &&
+                       CVPixelBufferGetHeight(input) == (((size_t)CGRectGetHeight(pixels)) & ~(size_t)1) &&
+                       CVPixelBufferGetPixelFormatType(input) == kCVPixelFormatType_32BGRA;
+        CVPixelBufferRelease(input);
+        if (cropped) {
+            self.producedFixtureInput = YES;
+        }
+    }
+}
+@end
+
+@interface CropOnlyFixtureApp : GpuCropFixtureApp
+@end
+
+@implementation CropOnlyFixtureApp
+- (CaptureOutput *)makeCaptureOutput {
+    CropOnlyOutput *output = [[CropOnlyOutput alloc] initWithRenderingContext:[self contextForCapture]];
+    output.encoderInputContext = [self contextForEncoderInput];
+    return output;
+}
+
+- (BOOL)receivedFixtureFrame {
+    CropOnlyOutput *output = (CropOnlyOutput *)[self activeCaptureOutput];
+    return output.producedFixtureInput;
 }
 @end
 
@@ -1108,9 +1151,13 @@ static int checkNativeCapture(void) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     BOOL captureOnly = [arguments containsObject:@"--capture-only"];
     BOOL drainOnly = [arguments containsObject:@"--drain-only"];
+    BOOL cropOnly = [arguments containsObject:@"--crop-only"];
     PreviewApp *preview;
     const char *path;
-    if (drainOnly) {
+    if (cropOnly) {
+        preview = [CropOnlyFixtureApp new];
+        path = "crop-only";
+    } else if (drainOnly) {
         preview = [DrainOnlyFixtureApp new];
         path = "drain-only";
     } else if (captureOnly) {
@@ -1124,7 +1171,7 @@ static int checkNativeCapture(void) {
         path = "full";
     }
     printf("Loopback cycles: path=%s\n", path);
-    if (!captureOnly && !drainOnly) {
+    if (!captureOnly && !drainOnly && !cropOnly) {
         if (!checkInputPool()) {
             fputs("Loopback input pool: allocation bound, recycling, resize, or stop failed.\n", stderr);
             return 18;
@@ -1197,16 +1244,16 @@ static int checkNativeCapture(void) {
         solid.layer.backgroundColor =
             [NSColor colorWithSRGBRed:red ? level : 0 green:red ? 0 : level blue:0 alpha:1].CGColor;
     }];
-    if (drainOnly) {
+    if (drainOnly || cropOnly) {
         [fixture setContentSize:NSMakeSize(350, 230)];
         [fixture displayIfNeeded];
         [preview beginCapture:source];
         BOOL passed = waitFor(^BOOL { return preview.receivedFixtureFrame; }) &&
-                      checkCaptureCycles(preview, source, YES);
+                      checkCaptureCycles(preview, source, !cropOnly);
         [pulse invalidate];
         [fixture close];
         if (!passed) {
-            fputs("macOS decoded-frame drain did not pass the native cycle check.\n", stderr);
+            fprintf(stderr, "macOS %s did not pass the native cycle check.\n", path);
         }
         return passed ? 0 : 19;
     }

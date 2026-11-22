@@ -114,6 +114,8 @@ if ($IsMacOS) {
         Tee-Object -FilePath (Join-Path $reports 'macos-window-loopback-gpu-crop.txt')
     Invoke-Checked $windowPreview @('--drain-only') |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-drain-only.txt')
+    Invoke-Checked $windowPreview @('--crop-only') |
+        Tee-Object -FilePath (Join-Path $reports 'macos-window-crop-only.txt')
     Invoke-Checked $windowPreview @('--capture-only') |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-capture-only.txt')
     Invoke-Checked $windowPreview @('--media-only') |
