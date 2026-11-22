@@ -135,10 +135,13 @@ class FrameSink final : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 
     unsigned matches() const { return matches_.load(); }
 
-    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> Take() {
+    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> Take(Clock::time_point& received_at) {
         std::lock_guard lock(mutex_);
         if (latest_ && Clock::now() - arrived_ >= 2s) {
             latest_ = nullptr;
+        }
+        if (latest_) {
+            received_at = arrived_;
         }
         return std::exchange(latest_, nullptr);
     }
@@ -418,6 +421,19 @@ class Runtime {
 };
 
 #ifndef LINKO_RW04_NETWORK_PREVIEW
+bool KeepsReceiptTime() {
+    FrameSink sink(0, true);
+    auto frame = webrtc::VideoFrame::Builder()
+                     .set_video_frame_buffer(webrtc::I420Buffer::Create(kWidth, kHeight))
+                     .build();
+    const auto before = Clock::now();
+    sink.OnFrame(frame);
+    const auto after = Clock::now();
+    std::this_thread::sleep_for(10ms);
+    Clock::time_point received;
+    return sink.Take(received) && received >= before && received <= after;
+}
+
 bool Exercise(Runtime& runtime, uint8_t color, std::string& offer) {
     Endpoint sending(*runtime.signaling, 0);
     Endpoint receiving(*runtime.signaling, color);
@@ -457,6 +473,11 @@ std::string IceUser(const std::string& sdp) {
 }
 
 int Run() {
+    if (!KeepsReceiptTime()) {
+        std::fputs("loopback: dequeue replaced the decoded frame timestamp\n", stderr);
+        return 7;
+    }
+    std::puts("Loopback decode queue: dequeue preserves the original receipt timestamp.");
     Runtime runtime;
     if (!runtime.Start()) {
         return 1;
@@ -537,13 +558,23 @@ extern "C" bool linko_rw04_loopback_submit(LinkoLoopbackPreview* preview, CVPixe
     return true;
 }
 
-extern "C" CVPixelBufferRef linko_rw04_loopback_take(LinkoLoopbackPreview* preview) {
+static double ClockSeconds(Clock::time_point time) {
+    return std::chrono::duration<double>(time.time_since_epoch()).count();
+}
+
+extern "C" double linko_rw04_loopback_now(void) {
+    return ClockSeconds(Clock::now());
+}
+
+extern "C" CVPixelBufferRef linko_rw04_loopback_take(LinkoLoopbackPreview* preview,
+                                                      double* received_at) {
     std::lock_guard lock(preview->mutex);
     if (!preview->runtime) {
         return nullptr;
     }
     auto& observer = preview->receiving->observer;
-    auto frame = observer.sink.Take();
+    Clock::time_point receipt;
+    auto frame = observer.sink.Take(receipt);
     if (!frame || observer.invalid() || preview->sending->observer.invalid()) {
         return nullptr;
     }
@@ -552,6 +583,9 @@ extern "C" CVPixelBufferRef linko_rw04_loopback_take(LinkoLoopbackPreview* previ
         return nullptr;
     }
     CVPixelBufferRef pixels = ((RTC_OBJC_TYPE(RTCCVPixelBuffer)*)image).pixelBuffer;
+    if (pixels && received_at) {
+        *received_at = ClockSeconds(receipt);
+    }
     return pixels ? CVPixelBufferRetain(pixels) : nullptr;
 }
 #else

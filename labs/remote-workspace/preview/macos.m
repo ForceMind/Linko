@@ -16,7 +16,7 @@
 
 @interface RW04NetworkPreview : NSObject
 - (BOOL)submit:(CVPixelBufferRef)pixels;
-- (CVPixelBufferRef)copyFrame CF_RETURNS_RETAINED;
+- (CVPixelBufferRef)copyFrameReceivedAt:(NSTimeInterval *)receivedAt CF_RETURNS_RETAINED;
 - (void)revoke;
 - (BOOL)wasClosed;
 @end
@@ -44,8 +44,8 @@
     return linko_rw04_loopback_submit(_session, pixels);
 }
 
-- (CVPixelBufferRef)copyFrame {
-    return linko_rw04_loopback_take(_session);
+- (CVPixelBufferRef)copyFrameReceivedAt:(NSTimeInterval *)receivedAt {
+    return linko_rw04_loopback_take(_session, receivedAt);
 }
 
 - (void)revoke {
@@ -66,7 +66,11 @@ static const size_t MaxHeight = 1080;
 static const NSTimeInterval FrameLifetime = 2.0;
 
 static NSTimeInterval uptime(void) {
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    return linko_rw04_loopback_now();
+#else
     return NSProcessInfo.processInfo.systemUptime;
+#endif
 }
 
 static CGRect visiblePixels(id value, CGSize frameSize) {
@@ -106,6 +110,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 #endif
 - (void)discard;
 - (void)publish:(NSImage *)image;
+- (void)publish:(NSImage *)image receivedAt:(NSTimeInterval)receivedAt;
 - (void)stillCurrent;
 - (NSImage *)currentAt:(NSTimeInterval)now;
 @end
@@ -157,10 +162,14 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 }
 
 - (void)publish:(NSImage *)image {
+    [self publish:image receivedAt:uptime()];
+}
+
+- (void)publish:(NSImage *)image receivedAt:(NSTimeInterval)receivedAt {
     [_lock lock];
     if (!_ended) {
         _image = image;
-        _lastFrame = uptime();
+        _lastFrame = receivedAt;
     }
     [_lock unlock];
 }
@@ -178,19 +187,22 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 
 - (NSImage *)currentAt:(NSTimeInterval)now {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
-    CVPixelBufferRef pixels = [self.networkPreview copyFrame];
+    NSTimeInterval receipt = 0;
+    CVPixelBufferRef pixels = [self.networkPreview copyFrameReceivedAt:&receipt];
     if (pixels) {
         CIImage *frame = [CIImage imageWithCVPixelBuffer:pixels];
         CGImageRef result = [_context createCGImage:frame fromRect:frame.extent];
         if (result) {
-            [self publish:[[NSImage alloc] initWithCGImage:result size:NSZeroSize]];
+            [self publish:[[NSImage alloc] initWithCGImage:result size:NSZeroSize] receivedAt:receipt];
             CGImageRelease(result);
         }
         CVPixelBufferRelease(pixels);
     }
+    // Include time spent converting a native frame to an AppKit image.
+    now = fmax(now, uptime());
 #endif
     [_lock lock];
-    if (now - _lastFrame > FrameLifetime) {
+    if (now - _lastFrame >= FrameLifetime) {
         _image = nil;
     }
     NSImage *image = _image;
@@ -764,7 +776,7 @@ static int checkNativeCapture(void) {
     [retiredOutput publish:retiredImage];
     BOOL accepted = [retiredNetwork submit:delayedPixels];
     CVPixelBufferRelease(delayedPixels);
-    CVPixelBufferRef residualPixels = [retiredNetwork copyFrame];
+    CVPixelBufferRef residualPixels = [retiredNetwork copyFrameReceivedAt:NULL];
     BOOL discarded = !accepted && !residualPixels && ![retiredOutput currentAt:uptime()];
     if (residualPixels) {
         CVPixelBufferRelease(residualPixels);
@@ -802,6 +814,17 @@ int main(void) {
         if ([output currentAt:uptime()] != fixture || [output currentAt:uptime() + 3]) {
             return 1;
         }
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+        const NSTimeInterval receipt = uptime() - 1.0;
+        [output publish:fixture receivedAt:receipt];
+        if ([output currentAt:receipt + 1.5] != fixture ||
+            [output currentAt:receipt + FrameLifetime] ||
+            [output currentAt:receipt + FrameLifetime + 0.1]) {
+            fputs("macOS preview extended an already received image past its original deadline.\n", stderr);
+            return 12;
+        }
+        puts("AppKit frame expiry: repeated presentation preserves the decoded receipt deadline.");
+#endif
         [output publish:fixture];
         [output discard];
         [output publish:fixture];
