@@ -68,6 +68,9 @@
 static const size_t MaxWidth = 1920;
 static const size_t MaxHeight = 1080;
 static const NSTimeInterval FrameLifetime = 2.0;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+static const NSUInteger InputPoolLimit = 6;
+#endif
 
 static CIContext *makeRenderingContext(void) {
     return [CIContext contextWithOptions:@{kCIContextCacheIntermediates: @NO}];
@@ -116,6 +119,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @property(strong) RW04NetworkPreview *networkPreview;
 - (BOOL)usesLoopback;
+- (CVPixelBufferRef)copyInputWithWidth:(size_t)width height:(size_t)height CF_RETURNS_RETAINED;
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
 #endif
 - (void)discard;
@@ -131,6 +135,12 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     NSImage *_image;
     NSTimeInterval _lastFrame;
     BOOL _ended;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    CVPixelBufferPoolRef _inputPool;
+    size_t _inputWidth;
+    size_t _inputHeight;
+    NSDictionary *_inputAllocationLimits;
+#endif
 #ifdef LINKO_RW04_CODEC_PREVIEW
     LinkoH264Session *_codec;
     size_t _codecWidth;
@@ -152,6 +162,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     if (self) {
         _lock = [NSLock new];
         _context = context;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+        _inputAllocationLimits = @{
+            (__bridge NSString *)kCVPixelBufferPoolAllocationThresholdKey: @(InputPoolLimit)
+        };
+#endif
     }
     return self;
 }
@@ -160,6 +175,12 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     [_lock lock];
     _ended = YES;
     _image = nil;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    if (_inputPool) {
+        CFRelease(_inputPool);
+        _inputPool = NULL;
+    }
+#endif
     [_lock unlock];
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     RW04NetworkPreview *network = self.networkPreview;
@@ -224,6 +245,47 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     return image;
 }
 
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+- (void)dealloc {
+    if (_inputPool) {
+        CFRelease(_inputPool);
+    }
+}
+
+- (CVPixelBufferRef)copyInputWithWidth:(size_t)width height:(size_t)height {
+    [_lock lock];
+    if (_ended) {
+        [_lock unlock];
+        return NULL;
+    }
+    if (!_inputPool || _inputWidth != width || _inputHeight != height) {
+        NSDictionary *attributes = @{
+            (__bridge NSString *)kCVPixelBufferWidthKey: @(width),
+            (__bridge NSString *)kCVPixelBufferHeightKey: @(height),
+            (__bridge NSString *)kCVPixelBufferPixelFormatTypeKey: @(kCVPixelFormatType_32BGRA),
+            (__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{}
+        };
+        CVPixelBufferPoolRef replacement = NULL;
+        if (CVPixelBufferPoolCreate(kCFAllocatorDefault, NULL,
+                                    (__bridge CFDictionaryRef)attributes, &replacement) != kCVReturnSuccess) {
+            [_lock unlock];
+            return NULL;
+        }
+        if (_inputPool) {
+            CFRelease(_inputPool);
+        }
+        _inputPool = replacement;
+        _inputWidth = width;
+        _inputHeight = height;
+    }
+    CVPixelBufferRef input = NULL;
+    CVReturn status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(
+        kCFAllocatorDefault, _inputPool, (__bridge CFDictionaryRef)_inputAllocationLimits, &input);
+    [_lock unlock];
+    return status == kCVReturnSuccess ? input : NULL;
+}
+#endif
+
 #ifdef LINKO_RW04_COLOR_PREVIEW
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels {
     const size_t width = ((size_t)CGRectGetWidth(pixels)) & ~(size_t)1;
@@ -231,12 +293,19 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     if (width < 64 || height < 64 || width > MaxWidth || height > MaxHeight) {
         return NULL;
     }
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    CVPixelBufferRef input = [self copyInputWithWidth:width height:height];
+    if (!input) {
+        return NULL;
+    }
+#else
     CVPixelBufferRef input = NULL;
     NSDictionary *attributes = @{(__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{}};
     if (CVPixelBufferCreate(NULL, width, height, kCVPixelFormatType_32BGRA,
                             (__bridge CFDictionaryRef)attributes, &input) != kCVReturnSuccess) {
         return NULL;
     }
+#endif
     CGRect crop = CGRectMake(pixels.origin.x, pixels.origin.y, width, height);
     CGAffineTransform origin = CGAffineTransformMakeTranslation(-crop.origin.x, -crop.origin.y);
     CIImage *cropped = [[frame imageByCroppingToRect:crop] imageByApplyingTransform:origin];
@@ -712,6 +781,45 @@ static BOOL waitFor(BOOL (^predicate)(void)) {
 }
 
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+static BOOL checkInputPool(void) {
+    @autoreleasepool {
+        CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:makeRenderingContext()];
+        NSMutableArray *held = [NSMutableArray arrayWithCapacity:InputPoolLimit];
+        for (NSUInteger index = 0; index < InputPoolLimit; ++index) {
+            CVPixelBufferRef pixel = [output copyInputWithWidth:128 height:96];
+            if (!pixel) {
+                return NO;
+            }
+            [held addObject:(__bridge id)pixel];
+            CVPixelBufferRelease(pixel);
+        }
+        CVPixelBufferRef overflow = [output copyInputWithWidth:128 height:96];
+        if (overflow) {
+            CVPixelBufferRelease(overflow);
+            return NO;
+        }
+        [held removeLastObject];
+        CVPixelBufferRef recycled = [output copyInputWithWidth:128 height:96];
+        CVPixelBufferRef resized = [output copyInputWithWidth:144 height:112];
+        BOOL passed = recycled && resized && CVPixelBufferGetWidth(recycled) == 128 &&
+                      CVPixelBufferGetWidth(resized) == 144 &&
+                      CVPixelBufferGetHeight(resized) == 112;
+        if (recycled) {
+            CVPixelBufferRelease(recycled);
+        }
+        if (resized) {
+            CVPixelBufferRelease(resized);
+        }
+        [output discard];
+        CVPixelBufferRef revoked = [output copyInputWithWidth:144 height:112];
+        if (revoked) {
+            CVPixelBufferRelease(revoked);
+            return NO;
+        }
+        return passed;
+    }
+}
+
 @interface CaptureOnlyOutput : CaptureOutput
 @end
 
@@ -890,6 +998,13 @@ static int checkNativeCapture(void) {
     BOOL captureOnly = [arguments containsObject:@"--capture-only"];
     PreviewApp *preview = captureOnly ? [CaptureOnlyFixtureApp new] : [PreviewApp new];
     printf("Loopback cycles: path=%s\n", captureOnly ? "capture-only" : "full");
+    if (!captureOnly) {
+        if (!checkInputPool()) {
+            fputs("Loopback input pool: allocation bound, recycling, resize, or stop failed.\n", stderr);
+            return 18;
+        }
+        puts("Loopback input pool: six buffers, recycling, resize and stop passed.");
+    }
 #else
     PreviewApp *preview = [PreviewApp new];
 #endif
