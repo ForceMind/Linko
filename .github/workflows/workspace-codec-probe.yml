@@ -21,7 +21,7 @@ jobs:
       - name: Derive build version from commit time (UTC+08:00)
         shell: bash
         run: python tools/build_version.py >> "$GITHUB_ENV"
-      - name: Roundtrip a synthetic frame through Media Foundation
+      - name: Roundtrip a synthetic stream through Media Foundation
         if: runner.os == 'Windows'
         shell: cmd
         working-directory: ${{ runner.temp }}

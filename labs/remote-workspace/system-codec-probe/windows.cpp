@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include <windows.h>
 #include <codecapi.h>
 #include <mfapi.h>
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 using Microsoft::WRL::ComPtr;
@@ -19,6 +21,14 @@ constexpr UINT32 height = 96;
 constexpr UINT32 luma = width * height;
 constexpr UINT32 nv12Bytes = luma * 3 / 2;
 constexpr LONGLONG frameDuration = 10'000'000 / 30;
+constexpr UINT32 frameCount = 24;
+constexpr UINT32 maxLowLatencyBacklog = 2;
+
+enum class LatencyMode { Default, DecoderOnly, EncoderAndDecoder };
+
+int fixtureLuma(UINT32 index) {
+    return 24 + 8 * static_cast<int>(index);
+}
 
 void check(HRESULT result, char const* operation) {
     if (FAILED(result)) {
@@ -47,16 +57,16 @@ ComPtr<IMFSample> sampleWithBuffer(DWORD size, DWORD alignment, ComPtr<IMFMediaB
     return sample;
 }
 
-void submitFrame(IMFTransform* encoder) {
+void submitFrame(IMFTransform* encoder, UINT32 index) {
     ComPtr<IMFMediaBuffer> buffer;
     auto sample = sampleWithBuffer(nv12Bytes, MF_1_BYTE_ALIGNMENT, buffer);
     BYTE* pixels{};
     check(buffer->Lock(&pixels, nullptr, nullptr), "lock NV12 buffer");
-    std::memset(pixels, 16, luma);
+    std::memset(pixels, fixtureLuma(index), luma);
     std::memset(pixels + luma, 128, nv12Bytes - luma);
     check(buffer->Unlock(), "unlock NV12 buffer");
     check(buffer->SetCurrentLength(nv12Bytes), "commit NV12 buffer");
-    check(sample->SetSampleTime(0), "set sample timestamp");
+    check(sample->SetSampleTime(frameDuration * (index + 1)), "set sample timestamp");
     check(sample->SetSampleDuration(frameDuration), "set sample duration");
     check(encoder->ProcessInput(0, sample.Get(), 0), "encode NV12 sample");
 }
@@ -105,41 +115,114 @@ void selectDecodedType(IMFTransform* decoder) {
     check(MF_E_INVALIDMEDIATYPE, "find NV12 decoder output");
 }
 
-bool decodeFrame(IMFMediaType* type, IMFSample* encoded) {
+ComPtr<IMFTransform> startDecoder(IMFMediaType* type, bool lowLatency) {
     ComPtr<IMFTransform> decoder;
     check(CoCreateInstance(CLSID_CMSH264DecoderMFT, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&decoder)), "activate system H.264 decoder");
+    if (lowLatency) {
+        ComPtr<IMFAttributes> attributes;
+        check(decoder->GetAttributes(&attributes), "read H.264 decoder attributes");
+        check(attributes->SetUINT32(MF_LOW_LATENCY, TRUE), "enable H.264 low-latency decoding");
+    }
     check(decoder->SetInputType(0, type, 0), "configure H.264 decoder input");
     selectDecodedType(decoder.Get());
     check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0), "start decoder streaming");
     check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0), "start decoder stream");
-    check(decoder->ProcessInput(0, encoded, 0), "submit H.264 sample");
-    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark decoder input complete");
-    check(decoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain decoder");
-    auto decoded = readOutput(decoder.Get());
-    if (decoded.status == MF_E_TRANSFORM_STREAM_CHANGE) {
-        selectDecodedType(decoder.Get());
-        decoded = readOutput(decoder.Get());
-    }
-    check(decoded.status, "read decoded frame");
-    if (!decoded.sample) {
-        return false;
-    }
+    return decoder;
+}
+
+void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, UINT32 index) {
+    check(sample && index < frameCount ? S_OK : E_UNEXPECTED, "check decoded sample count");
     DWORD length{};
-    check(decoded.sample->GetTotalLength(&length), "read decoded NV12 length");
+    check(sample->GetTotalLength(&length), "read decoded NV12 length");
     ComPtr<IMFMediaType> layout;
     check(decoder->GetOutputCurrentType(0, &layout), "read decoded video layout");
+    GUID subtype{};
+    check(layout->GetGUID(MF_MT_SUBTYPE, &subtype), "read decoded video format");
     UINT32 decodedWidth{}, decodedHeight{};
     check(MFGetAttributeSize(layout.Get(), MF_MT_FRAME_SIZE, &decodedWidth, &decodedHeight),
           "read decoded frame size");
-    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish decoder streaming");
-    return length >= nv12Bytes && decodedWidth == width && decodedHeight == height;
+    const bool layoutMatches = subtype == MFVideoFormat_NV12 && length >= nv12Bytes &&
+                               decodedWidth == width && decodedHeight == height;
+    check(layoutMatches ? S_OK : E_UNEXPECTED, "check decoded sample layout");
+
+    LONGLONG timestamp{};
+    check(sample->GetSampleTime(&timestamp), "read decoded timestamp");
+    ComPtr<IMFMediaBuffer> buffer;
+    check(sample->ConvertToContiguousBuffer(&buffer), "read contiguous decoded buffer");
+    BYTE* pixels{};
+    DWORD currentLength{};
+    check(buffer->Lock(&pixels, nullptr, &currentLength), "lock decoded buffer");
+    const int brightness = currentLength >= nv12Bytes ? pixels[width / 2] : -1;
+    check(buffer->Unlock(), "unlock decoded buffer");
+    if (timestamp != frameDuration * (index + 1) ||
+        std::abs(brightness - fixtureLuma(index)) > 6) {
+        std::fprintf(stderr, "Decoded frame %u: timestamp %lld, luma %d\n", index, timestamp, brightness);
+        check(E_UNEXPECTED, "check decoded frame order and content");
+    }
 }
 
-int probe() {
+void readDecodedFrames(IMFTransform* decoder, UINT32& decodedCount) {
+    for (;;) {
+        auto decoded = readOutput(decoder);
+        if (decoded.status == MF_E_TRANSFORM_STREAM_CHANGE) {
+            selectDecodedType(decoder);
+            decoded = readOutput(decoder);
+        }
+        if (decoded.status == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+            return;
+        }
+        check(decoded.status, "read decoded frame");
+        verifyDecodedFrame(decoder, decoded.sample.Get(), decodedCount);
+        ++decodedCount;
+    }
+}
+
+void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder,
+                       UINT32& encodedCount, UINT32& decodedCount, bool lowLatency) {
+    for (;;) {
+        auto encoded = readOutput(encoder);
+        if (encoded.status == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+            return;
+        }
+        check(encoded.status, "read H.264 sample");
+        check(encoded.sample && encodedCount < frameCount ? S_OK : E_UNEXPECTED,
+              "check H.264 sample count");
+        DWORD size{};
+        check(encoded.sample->GetTotalLength(&size), "read H.264 length");
+        check(size != 0 ? S_OK : E_UNEXPECTED, "check H.264 sample length");
+        if (!decoder) {
+            ComPtr<IMFMediaType> actual;
+            check(encoder->GetOutputCurrentType(0, &actual), "read negotiated output");
+            GUID subtype{};
+            check(actual->GetGUID(MF_MT_SUBTYPE, &subtype), "read negotiated codec");
+            check(subtype == MFVideoFormat_H264 ? S_OK : E_UNEXPECTED, "check negotiated codec");
+            decoder = startDecoder(actual.Get(), lowLatency);
+        }
+        check(decoder->ProcessInput(0, encoded.sample.Get(), 0), "submit H.264 sample");
+        ++encodedCount;
+        readDecodedFrames(decoder.Get(), decodedCount);
+    }
+}
+
+int probe(LatencyMode mode, char const* modeName) {
     ComPtr<IMFTransform> encoder;
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&encoder)), "activate system H.264 encoder");
+    const bool lowLatencyEncoder = mode == LatencyMode::EncoderAndDecoder;
+    const bool lowLatencyDecoder = mode != LatencyMode::Default;
+    if (lowLatencyEncoder) {
+        ComPtr<ICodecAPI> settings;
+        check(encoder.As(&settings), "read H.264 encoder settings");
+        VARIANT enabled{};
+        enabled.vt = VT_BOOL;
+        enabled.boolVal = VARIANT_TRUE;
+        check(settings->SetValue(&CODECAPI_AVLowLatencyMode, &enabled), "enable H.264 low-latency encoding");
+        VARIANT threads{};
+        threads.vt = VT_UI4;
+        threads.ulVal = 1;
+        check(settings->SetValue(&CODECAPI_AVEncNumWorkerThreads, &threads), "configure one encoder worker");
+    }
     auto outputType = videoType(MFVideoFormat_H264);
     check(outputType->SetUINT32(MF_MT_AVG_BITRATE, 200'000), "set output bitrate");
     check(outputType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base), "set H.264 profile");
@@ -149,29 +232,38 @@ int probe() {
 
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0), "start media streaming");
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0), "start media stream");
-    submitFrame(encoder.Get());
+    ComPtr<IMFTransform> decoder;
+    UINT32 encodedCount{};
+    UINT32 decodedCount{};
+    UINT32 maxBacklog{};
+    for (UINT32 index = 0; index < frameCount; ++index) {
+        submitFrame(encoder.Get(), index);
+        readEncodedFrames(encoder.Get(), decoder, encodedCount, decodedCount, lowLatencyDecoder);
+        maxBacklog = std::max(maxBacklog, index + 1 - decodedCount);
+    }
+    const UINT32 encodedBeforeDrain = encodedCount;
+    const UINT32 framesBeforeDrain = decodedCount;
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark input complete");
     check(encoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain encoder");
-    auto encoded = readOutput(encoder.Get());
-    check(encoded.status, "read H.264 sample");
-    DWORD size{};
-    if (encoded.sample) {
-        check(encoded.sample->GetTotalLength(&size), "read H.264 length");
-    }
+    readEncodedFrames(encoder.Get(), decoder, encodedCount, decodedCount, lowLatencyDecoder);
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish media streaming");
-
-    ComPtr<IMFMediaType> actual;
-    check(encoder->GetOutputCurrentType(0, &actual), "read negotiated output");
-    GUID subtype{};
-    check(actual->GetGUID(MF_MT_SUBTYPE, &subtype), "read negotiated codec");
-    if (subtype != MFVideoFormat_H264 || size == 0) {
+    if (!decoder) {
         return 2;
     }
-    std::printf("Media Foundation system software H.264 encoder: %lu bytes\n", size);
-    if (!decodeFrame(actual.Get(), encoded.sample.Get())) {
+    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark decoder input complete");
+    check(decoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain decoder");
+    readDecodedFrames(decoder.Get(), decodedCount);
+    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish decoder streaming");
+    std::printf("Media Foundation system software H.264 (%s): %u encoded and %u decoded before drain, "
+                "%u encoded and %u decoded total, maximum backlog %u.\n",
+                modeName, encodedBeforeDrain,
+                framesBeforeDrain, encodedCount, decodedCount, maxBacklog);
+    if (encodedCount != frameCount || decodedCount != frameCount || !framesBeforeDrain ||
+        (lowLatencyEncoder && maxBacklog > maxLowLatencyBacklog)) {
         return 3;
     }
-    std::printf("Media Foundation decoded the %ux%u NV12 frame.\n", width, height);
+    std::printf("Media Foundation verified %ux%u NV12 frames, timestamps and changing brightness.\n",
+                width, height);
     return 0;
 }
 }
@@ -186,7 +278,13 @@ int main() {
         struct MediaScope {
             ~MediaScope() { MFShutdown(); }
         } media;
-        return probe();
+        const int baseline = probe(LatencyMode::Default, "default");
+        if (baseline != 0) {
+            return baseline;
+        }
+        const int decoderOnly = probe(LatencyMode::DecoderOnly, "low-latency decoder");
+        return decoderOnly == 0 ? probe(LatencyMode::EncoderAndDecoder, "low-latency encoder and decoder")
+                                : decoderOnly;
     } catch (HRESULT) {
         return 1;
     }
