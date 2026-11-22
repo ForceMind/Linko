@@ -94,5 +94,5 @@ Add-Content -LiteralPath $report -Value 'Synthetic I420 VideoFrame and RTP times
 
 if ($IsMacOS) {
     Invoke-Checked (Join-Path (Join-Path $source $out) 'linko_rw04_macos_h264') @()
-    Add-Content -LiteralPath $report -Value 'C ABI and native WebRTC VideoToolbox H.264 roundtrip passed.' -Encoding utf8
+    Add-Content -LiteralPath $report -Value 'C ABI and native WebRTC VideoToolbox H.264 continuous stream passed.' -Encoding utf8
 }
