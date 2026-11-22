@@ -162,6 +162,20 @@ static OSStatus deliverSamples(struct Probe *probe, VTDecompressionSessionRef *d
     return noErr;
 }
 
+static OSStatus deliverUntil(struct Probe *probe, VTDecompressionSessionRef *decoder, unsigned *next,
+                             uint64_t deadline) {
+    for (;;) {
+        OSStatus status = deliverSamples(probe, decoder, next);
+        uint64_t now = nowNs();
+        if (status != noErr || now >= deadline || deadline == 0) {
+            return status;
+        }
+        const uint64_t left = deadline - now;
+        const struct timespec poll = {.tv_nsec = (long)(left < 1000000 ? left : 1000000)};
+        nanosleep(&poll, NULL);
+    }
+}
+
 static const char *hardwareMode(VTSessionRef session, CFStringRef key) {
     CFPropertyListRef value = NULL;
     OSStatus status = VTSessionCopyProperty(session, key, NULL, &value);
@@ -181,7 +195,7 @@ static int compareLatency(const void *left, const void *right) {
     return (a > b) - (a < b);
 }
 
-static bool report(struct Probe const *probe, unsigned beforeDrain, unsigned delivered, uint64_t elapsed) {
+static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain, unsigned delivered, uint64_t elapsed) {
     if (delivered != probe->frames || elapsed == 0 || (probe->frames > 1 && beforeDrain == 0)) {
         return false;
     }
@@ -194,15 +208,16 @@ static bool report(struct Probe const *probe, unsigned beforeDrain, unsigned del
         latency[index] = (double)(received - probe->submittedAt[index]) / 1000000.0;
     }
     qsort(latency, probe->frames, sizeof(latency[0]), compareLatency);
-    printf("VideoToolbox %dx%d: %u decoded, %u decoded before drain, throughput %.1f frames/s.\n",
-           probe->width, probe->height, probe->frames, beforeDrain, probe->frames * 1000000000.0 / elapsed);
+    printf("VideoToolbox %dx%d (%s): %u decoded, %u decoded before drain, throughput %.1f frames/s.\n",
+           probe->width, probe->height, paced ? "30 fps" : "unpaced", probe->frames, beforeDrain,
+           probe->frames * 1000000000.0 / elapsed);
     printf("VideoToolbox submit-to-decode in ms: p50=%.3f p95=%.3f p99=%.3f max=%.3f.\n",
            latency[(probe->frames * 50 + 99) / 100 - 1], latency[(probe->frames * 95 + 99) / 100 - 1],
            latency[(probe->frames * 99 + 99) / 100 - 1], latency[probe->frames - 1]);
     return true;
 }
 
-static bool run(int width, int height, unsigned frames) {
+static bool run(int width, int height, unsigned frames, bool paced) {
     struct Probe probe = {.width = width, .height = height, .frames = frames};
     VTCompressionSessionRef encoder = NULL;
     VTDecompressionSessionRef decoder = NULL;
@@ -221,7 +236,8 @@ static bool run(int width, int height, unsigned frames) {
     for (unsigned index = 0; index < frames && status == noErr; ++index) {
         status = submit(&probe, encoder, index);
         if (status == noErr) {
-            status = deliverSamples(&probe, &decoder, &delivered);
+            const uint64_t deadline = paced ? started + (index + 1) * 1000000000ull / FramesPerSecond : 0;
+            status = deliverUntil(&probe, &decoder, &delivered, deadline);
         }
     }
     unsigned beforeDrain = 0;
@@ -256,7 +272,7 @@ static bool run(int width, int height, unsigned frames) {
     }
     OSStatus callbackError = atomic_load(&probe.callbackError);
     if (status != noErr || callbackError != noErr || strcmp(encodeMode, "unknown") == 0 ||
-        !report(&probe, beforeDrain, delivered, elapsed)) {
+        !report(&probe, paced, beforeDrain, delivered, elapsed)) {
         fprintf(stderr, "H.264 %dx%d result: status=%d callback=%d delivered=%u before_drain=%u\n",
                 width, height, (int)status, (int)callbackError, delivered, beforeDrain);
         return false;
@@ -265,5 +281,6 @@ static bool run(int width, int height, unsigned frames) {
 }
 
 int main(void) {
-    return run(128, 96, 1) && run(1920, 1080, MaxFrames) ? 0 : 1;
+    return run(128, 96, 1, false) && run(1920, 1080, MaxFrames, false) &&
+           run(1920, 1080, MaxFrames, true) ? 0 : 1;
 }
