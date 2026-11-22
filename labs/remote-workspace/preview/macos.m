@@ -17,6 +17,7 @@
 #include <malloc/malloc.h>
 #include <unistd.h>
 #include "loopback_preview.h"
+#include "vm_probe.h"
 
 @interface RW04NetworkPreview : NSObject
 - (BOOL)submit:(CVPixelBufferRef)pixels;
@@ -944,6 +945,10 @@ static BOOL checkStoppedSample(unsigned cycle, int *warmDescriptors) {
     }
     if (cycle == 10) {
         *warmDescriptors = descriptors;
+    }
+    if ((cycle == 10 || cycle == 100) && !linko_rw04_sample_vm_regions(cycle == 10)) {
+        fputs("Loopback VM: could not measure allocation tags.\n", stderr);
+        return NO;
     }
     if (cycle == 100 && descriptors > *warmDescriptors) {
         fputs("Loopback cycles: open descriptors grew after warm-up.\n", stderr);

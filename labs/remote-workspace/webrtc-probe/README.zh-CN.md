@@ -24,6 +24,8 @@ macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建�
 
 每个预览复用一条串行采样队列，每次屏幕采样回调有独立的自动释放作用域。停止时先关闭旧输出，等待 ScreenCaptureKit 停止回执和已排队的采样，再开放下一次选择。100 轮验证同时检查采样队列复用。
 
+探针按 macOS 虚拟内存分配标签汇总第 10 和第 100 轮停止后的区域及映射页差值。报告只记录标签、区域数量和字节总数，共享映射可能包含同一物理页。这组差值用于定位增长类别。
+
 该实验调用系统 H.264。WebRTC 内建 H.264 和专有软件 codec 仍关闭。Windows codec factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
 
 - [固定 WebRTC 提交](https://webrtc.googlesource.com/src/+/692e07f2cb2f3602af5a8083b695f4f3bc2c9a6f)
