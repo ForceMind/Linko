@@ -7,6 +7,7 @@
 //! run poll while idle, and acknowledge actual effects rather than queued work.
 use std::collections::BTreeMap;
 
+use crate::frame_binding::FrameMatch;
 use crate::geometry::{Camera, MappedPoint, Point, Rect, SourceGeometry};
 use crate::handoff::{Command, Handoff, State};
 use crate::media::{LatestFrame, RawFrame, MAX_FRAME_BYTES, MAX_QUEUE_AGE_MS};
@@ -340,16 +341,47 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Read-only policy for a trusted media adapter. Only the coordinator can
+    /// grant, revoke or advance this view's policy.
+    pub fn view_gate(&self, view: ViewId) -> Result<&SessionGate, Error> {
+        Ok(&self.surface(view)?.gate)
+    }
+
     /// Metadata for a trusted capture/decoder adapter, NOT permission to capture.
     pub fn frame_stamp(&self, view: ViewId, sequence: u64) -> Result<FrameStamp, Error> {
-        Ok(self.surface(view)?.gate.frame_stamp(sequence))
+        Ok(self.view_gate(view)?.frame_stamp(sequence))
     }
 
     pub fn receive(&mut self, view: ViewId, frame: RawFrame, now: u64) -> Result<bool, Error> {
+        self.receive_at(view, frame, now, now)
+    }
+
+    /// Queue the decoded buffer matched by the adapter. Use the first local
+    /// arrival so that matching, decoder and renderer delays share one budget.
+    pub fn receive_matched(
+        &mut self,
+        view: ViewId,
+        frame: RawFrame,
+        matched: FrameMatch,
+        now: u64,
+    ) -> Result<bool, Error> {
+        if frame.stamp() != matched.stamp() {
+            return Err(Error::InvalidFrame);
+        }
+        self.receive_at(view, frame, matched.first_seen(), now)
+    }
+
+    fn receive_at(
+        &mut self,
+        view: ViewId,
+        frame: RawFrame,
+        received_at: u64,
+        now: u64,
+    ) -> Result<bool, Error> {
         self.poll(now)?;
         let s = self.surface_mut(view)?;
-        let replaced = s.frames.push(frame, &s.gate, now)?;
-        s.queued_at = Some(now);
+        let replaced = s.frames.push_observed(frame, &s.gate, received_at, now)?;
+        s.queued_at = Some(received_at);
         Ok(replaced)
     }
 

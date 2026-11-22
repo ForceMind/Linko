@@ -2,7 +2,8 @@
 //! The caller owns frame buffers and actual presentation. This model grants no
 //! authority and never treats a match as a presentation acknowledgement.
 
-use crate::session::{FrameStamp, SessionGate, FRAME_FRESHNESS_MS};
+use crate::media::MAX_QUEUE_AGE_MS;
+use crate::session::{FrameStamp, SessionGate};
 use crate::{advance, Error};
 
 const MAX_PENDING: usize = 64;
@@ -23,11 +24,21 @@ pub struct MediaFrame {
     pub timestamp: u32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Match produced by the bound adapter. This is not a presentation receipt.
+#[derive(Debug, Eq, PartialEq)]
 pub struct FrameMatch {
-    pub stamp: FrameStamp,
-    /// Deadline on the viewer's monotonic clock, from the first arrival.
-    pub valid_until: u64,
+    stamp: FrameStamp,
+    first_seen: u64,
+}
+
+impl FrameMatch {
+    pub fn stamp(&self) -> FrameStamp {
+        self.stamp
+    }
+
+    pub(crate) fn first_seen(&self) -> u64 {
+        self.first_seen
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -94,7 +105,7 @@ impl FrameMatcher {
         if let Some(expired) = self
             .pending
             .iter()
-            .filter(|entry| now - entry.first_seen > FRAME_FRESHNESS_MS)
+            .filter(|entry| now - entry.first_seen >= MAX_QUEUE_AGE_MS)
             .map(|entry| entry.timestamp)
             .max()
         {
@@ -191,14 +202,14 @@ impl FrameMatcher {
         let Some(stamp) = entry.stamp.filter(|_| entry.decoded) else {
             return Ok(None);
         };
-        let valid_until = entry.first_seen.saturating_add(FRAME_FRESHNESS_MS);
+        let first_seen = entry.first_seen;
         // Late descriptions and decoded frames cannot revive an earlier candidate.
         self.retire_through(timestamp);
         if stamp.sequence <= self.last_sequence {
             return Err(Error::StaleFrame);
         }
         self.last_sequence = stamp.sequence;
-        Ok(Some(FrameMatch { stamp, valid_until }))
+        Ok(Some(FrameMatch { stamp, first_seen }))
     }
 
     fn retire_through(&mut self, timestamp: u64) {
@@ -243,7 +254,7 @@ mod tests {
             frames.describe(&gate, before, gate.frame_stamp(1), 21),
             Ok(Some(FrameMatch {
                 stamp: gate.frame_stamp(1),
-                valid_until: 2010,
+                first_seen: 10,
             }))
         );
         assert_eq!(
@@ -254,7 +265,7 @@ mod tests {
             frames.decoded(&gate, after, 25),
             Ok(Some(FrameMatch {
                 stamp: gate.frame_stamp(2),
-                valid_until: 2024,
+                first_seen: 24,
             }))
         );
         assert_eq!(frames.decoded(&gate, before, 26), Err(Error::StaleFrame));
@@ -308,14 +319,14 @@ mod tests {
             Ok(None)
         );
         assert_eq!(
-            frames.decoded(&gate, packet(110), 2001),
+            frames.decoded(&gate, packet(110), 2000),
             Ok(Some(FrameMatch {
                 stamp: gate.frame_stamp(1),
-                valid_until: 2002,
+                first_seen: 2,
             }))
         );
         assert_eq!(
-            frames.decoded(&gate, packet(140), 2002),
+            frames.decoded(&gate, packet(140), 2001),
             Err(Error::StaleFrame)
         );
         assert_eq!(
