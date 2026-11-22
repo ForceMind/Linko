@@ -19,7 +19,9 @@
 #include "linko_probe/h264_probe.h"
 #include "sdk/objc/components/video_codec/RTCVideoDecoderFactoryH264.h"
 #include "sdk/objc/components/video_codec/RTCVideoEncoderFactoryH264.h"
+#include "sdk/objc/components/video_frame_buffer/RTCCVPixelBuffer.h"
 #include "sdk/objc/native/api/video_decoder_factory.h"
+#include "sdk/objc/native/api/video_frame_buffer.h"
 #include "sdk/objc/native/api/video_encoder_factory.h"
 
 namespace {
@@ -75,11 +77,17 @@ class EncodedFrame final : public webrtc::EncodedImageCallback {
     bool dropped_ = false;
 };
 
+struct DecodedOutput {
+    LinkoH264StreamResult summary;
+    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> pixels;
+};
+
 class DecodedFrame final : public webrtc::DecodedImageCallback {
  public:
-    void Expect(uint32_t timestamp) {
+    void Expect(uint32_t timestamp, bool keep_pixels) {
         std::lock_guard lock(mutex_);
         expected_ = timestamp;
+        keep_pixels_ = keep_pixels;
         decoded_.reset();
     }
 
@@ -88,19 +96,26 @@ class DecodedFrame final : public webrtc::DecodedImageCallback {
         if (expected_ != frame.rtp_timestamp() || decoded_) {
             return 0;
         }
-        auto planar = frame.video_frame_buffer()->ToI420ForInspection();
-        if (!planar || !planar->DataY()) {
-            return 0;
+        DecodedOutput output{
+            {{static_cast<uint32_t>(frame.width()), static_cast<uint32_t>(frame.height()),
+              frame.rtp_timestamp(), 0},
+             0, 0},
+            nullptr};
+        if (keep_pixels_) {
+            output.pixels = frame.video_frame_buffer();
+        } else {
+            auto planar = frame.video_frame_buffer()->ToI420ForInspection();
+            if (!planar || !planar->DataY()) {
+                return 0;
+            }
+            output.summary.decoded_luma = *planar->DataY();
         }
-        decoded_ = LinkoH264StreamResult{
-            {static_cast<uint32_t>(frame.width()), static_cast<uint32_t>(frame.height()),
-             frame.rtp_timestamp(), 0},
-            *planar->DataY(), 0};
+        decoded_ = std::move(output);
         ready_.notify_one();
         return 0;
     }
 
-    std::optional<LinkoH264StreamResult> Wait() {
+    std::optional<DecodedOutput> Wait() {
         std::unique_lock lock(mutex_);
         ready_.wait_for(lock, 5s, [&] { return decoded_.has_value(); });
         expected_.reset();
@@ -111,7 +126,8 @@ class DecodedFrame final : public webrtc::DecodedImageCallback {
     std::mutex mutex_;
     std::condition_variable ready_;
     std::optional<uint32_t> expected_;
-    std::optional<LinkoH264StreamResult> decoded_;
+    std::optional<DecodedOutput> decoded_;
+    bool keep_pixels_ = false;
 };
 
 template <typename Codec>
@@ -175,9 +191,15 @@ struct LinkoH264Session {
         return LINKO_H264_OK;
     }
 
-    int Submit(uint32_t timestamp, uint8_t luma, LinkoH264StreamResult& result) {
+    int Submit(uint32_t timestamp, uint8_t luma, LinkoH264StreamResult& result,
+               CVPixelBufferRef source = nullptr, CVPixelBufferRef* preview = nullptr) {
         if (failed_) {
             return LINKO_H264_SESSION_FAILED;
+        }
+        if (source && (CVPixelBufferGetWidth(source) != request_.width ||
+                       CVPixelBufferGetHeight(source) != request_.height ||
+                       CVPixelBufferGetPixelFormatType(source) != kCVPixelFormatType_32BGRA)) {
+            return LINKO_H264_BAD_REQUEST;
         }
         const bool first = !last_timestamp_;
         const uint32_t advance = timestamp - last_timestamp_.value_or(request_.rtp_timestamp);
@@ -195,10 +217,19 @@ struct LinkoH264Session {
         failed_ = true;
         const int width = static_cast<int>(request_.width);
         const int height = static_cast<int>(request_.height);
-        const std::vector<uint8_t> luminance(static_cast<size_t>(width * height), luma);
-        const std::vector<uint8_t> chroma(static_cast<size_t>((width / 2) * (height / 2)), 128);
-        auto buffer = webrtc::I420Buffer::Copy(width, height, luminance.data(), width,
-                                               chroma.data(), width / 2, chroma.data(), width / 2);
+        webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer;
+        if (source) {
+            buffer = webrtc::ObjCToNativeVideoFrameBuffer(
+                [[RTC_OBJC_TYPE(RTCCVPixelBuffer) alloc] initWithPixelBuffer:source]);
+        } else {
+            const std::vector<uint8_t> luminance(static_cast<size_t>(width * height), luma);
+            const std::vector<uint8_t> chroma(static_cast<size_t>((width / 2) * (height / 2)), 128);
+            buffer = webrtc::I420Buffer::Copy(width, height, luminance.data(), width,
+                                             chroma.data(), width / 2, chroma.data(), width / 2);
+        }
+        if (!buffer) {
+            return LINKO_H264_ENCODE_FAILED;
+        }
         auto frame = webrtc::VideoFrame::Builder()
                          .set_video_frame_buffer(buffer)
                          .set_rtp_timestamp(timestamp)
@@ -215,7 +246,7 @@ struct LinkoH264Session {
         if (!encoded || !encoded->size() || encoded->size() > std::numeric_limits<uint32_t>::max()) {
             return LINKO_H264_ENCODE_FAILED;
         }
-        decoded_.Expect(timestamp);
+        decoded_.Expect(timestamp, preview != nullptr);
         if (decoder_->Decode(*encoded, 0) != 0) {
             return LINKO_H264_DECODE_FAILED;
         }
@@ -223,13 +254,25 @@ struct LinkoH264Session {
         if (!decoded) {
             return LINKO_H264_DECODE_FAILED;
         }
-        if (decoded->frame.width != request_.width || decoded->frame.height != request_.height ||
-            decoded->frame.rtp_timestamp != timestamp) {
+        if (decoded->summary.frame.width != request_.width || decoded->summary.frame.height != request_.height ||
+            decoded->summary.frame.rtp_timestamp != timestamp) {
             return LINKO_H264_FRAME_MISMATCH;
         }
-        decoded->frame.encoded_bytes = static_cast<uint32_t>(encoded->size());
-        decoded->key_frame = encoded->IsKey();
-        result = *decoded;
+        decoded->summary.frame.encoded_bytes = static_cast<uint32_t>(encoded->size());
+        decoded->summary.key_frame = encoded->IsKey();
+        if (preview) {
+            id image = webrtc::NativeToObjCVideoFrameBuffer(decoded->pixels);
+            if (![image isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
+                return LINKO_H264_DECODE_FAILED;
+            }
+            auto* native = (RTC_OBJC_TYPE(RTCCVPixelBuffer)*)image;
+            CVPixelBufferRef pixels = native.pixelBuffer;
+            if (!pixels) {
+                return LINKO_H264_DECODE_FAILED;
+            }
+            *preview = CVPixelBufferRetain(pixels);
+        }
+        result = decoded->summary;
         last_timestamp_ = timestamp;
         failed_ = false;
         return LINKO_H264_OK;
@@ -282,6 +325,22 @@ extern "C" int linko_rw04_h264_submit(LinkoH264Session* session, uint32_t timest
     @autoreleasepool {
         @try {
             return session->Submit(timestamp, luma, *result);
+        } @catch (NSException* exception) {
+            (void)exception;
+            return LINKO_H264_PLATFORM_ERROR;
+        }
+    }
+}
+
+extern "C" int linko_rw04_h264_submit_pixels(LinkoH264Session* session, uint32_t timestamp,
+                                              CVPixelBufferRef source, CVPixelBufferRef* decoded) {
+    if (!session || !source || !decoded || *decoded) {
+        return LINKO_H264_BAD_REQUEST;
+    }
+    LinkoH264StreamResult result{};
+    @autoreleasepool {
+        @try {
+            return session->Submit(timestamp, 0, result, source, decoded);
         } @catch (NSException* exception) {
             (void)exception;
             return LINKO_H264_PLATFORM_ERROR;

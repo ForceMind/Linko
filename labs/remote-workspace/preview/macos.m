@@ -8,6 +8,10 @@
 #include <math.h>
 #include <string.h>
 
+#ifdef LINKO_RW04_CODEC_PREVIEW
+#include "h264_probe.h"
+#endif
+
 static const size_t MaxWidth = 1920;
 static const size_t MaxHeight = 1080;
 static const NSTimeInterval FrameLifetime = 2.0;
@@ -59,6 +63,12 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     NSImage *_image;
     NSTimeInterval _lastFrame;
     BOOL _ended;
+#ifdef LINKO_RW04_CODEC_PREVIEW
+    LinkoH264Session *_codec;
+    size_t _codecWidth;
+    size_t _codecHeight;
+    uint32_t _codecTimestamp;
+#endif
 }
 
 - (instancetype)init {
@@ -114,6 +124,54 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     return image;
 }
 
+#ifdef LINKO_RW04_CODEC_PREVIEW
+- (void)dealloc {
+    linko_rw04_h264_close(&_codec);
+}
+
+// This bridge is called only on the SCStream's serial sample queue. Recreate
+// it when the cropped geometry changes, before admitting another frame.
+- (CVPixelBufferRef)copyDecodedFrame:(CIImage *)frame pixels:(CGRect)pixels {
+    const size_t width = ((size_t)CGRectGetWidth(pixels)) & ~(size_t)1;
+    const size_t height = ((size_t)CGRectGetHeight(pixels)) & ~(size_t)1;
+    if (width < 64 || height < 64 || width > MaxWidth || height > MaxHeight) {
+        return NULL;
+    }
+    if (!_codec || _codecWidth != width || _codecHeight != height) {
+        if (linko_rw04_h264_close(&_codec) != LINKO_H264_OK) {
+            return NULL;
+        }
+        LinkoH264Request request = {LINKO_H264_PROBE_V1, (uint32_t)width, (uint32_t)height, 0};
+        if (linko_rw04_h264_open(&request, &_codec) != LINKO_H264_OK) {
+            return NULL;
+        }
+        _codecWidth = width;
+        _codecHeight = height;
+        _codecTimestamp = 0;
+    }
+
+    CVPixelBufferRef input = NULL;
+    NSDictionary *attributes = @{(__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{}};
+    if (CVPixelBufferCreate(NULL, width, height, kCVPixelFormatType_32BGRA,
+                            (__bridge CFDictionaryRef)attributes, &input) != kCVReturnSuccess) {
+        return NULL;
+    }
+    CGRect crop = CGRectMake(pixels.origin.x, pixels.origin.y, width, height);
+    CGAffineTransform origin = CGAffineTransformMakeTranslation(-crop.origin.x, -crop.origin.y);
+    CIImage *cropped = [[frame imageByCroppingToRect:crop] imageByApplyingTransform:origin];
+    [_context render:cropped toCVPixelBuffer:input];
+    CVPixelBufferRef decoded = NULL;
+    int status = linko_rw04_h264_submit_pixels(_codec, _codecTimestamp, input, &decoded);
+    CVPixelBufferRelease(input);
+    if (status != LINKO_H264_OK) {
+        linko_rw04_h264_close(&_codec);
+        return NULL;
+    }
+    _codecTimestamp += 3000;
+    return decoded;
+}
+#endif
+
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
     [self discard];
 }
@@ -148,7 +206,19 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
     // ScreenCaptureKit reports a top-left content rectangle. Core Image uses bottom-left coordinates.
     pixels.origin.y = CGRectGetHeight(frame.extent) - CGRectGetMaxY(pixels);
+#ifdef LINKO_RW04_CODEC_PREVIEW
+    CVPixelBufferRef decoded = [self copyDecodedFrame:frame pixels:pixels];
+    if (!decoded) {
+        [self publish:nil];
+        return;
+    }
+    frame = [CIImage imageWithCVPixelBuffer:decoded];
+    pixels = frame.extent;
     CGImageRef result = [_context createCGImage:frame fromRect:pixels];
+    CVPixelBufferRelease(decoded);
+#else
+    CGImageRef result = [_context createCGImage:frame fromRect:pixels];
+#endif
     NSImage *image = result ? [[NSImage alloc] initWithCGImage:result size:NSZeroSize] : nil;
     if (result) {
         CGImageRelease(result);
@@ -162,6 +232,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (void)beginCapture:(SCWindow *)source;
 - (NSImage *)displayedFrame;
 - (BOOL)hasStream;
+#ifdef LINKO_RW04_CODEC_PREVIEW
+- (BOOL)showsFixtureColorRed:(BOOL)red;
+#endif
 #endif
 @end
 
@@ -392,6 +465,27 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (NSImage *)displayedFrame {
     return _image.image;
 }
+#ifdef LINKO_RW04_CODEC_PREVIEW
+- (BOOL)showsFixtureColorRed:(BOOL)red {
+    if (!_image.image) {
+        return NO;
+    }
+    NSRect bounds = _image.bounds;
+    NSBitmapImageRep *bitmap = [_image bitmapImageRepForCachingDisplayInRect:bounds];
+    if (!bitmap || bitmap.pixelsWide < 1 || bitmap.pixelsHigh < 1) {
+        return NO;
+    }
+    [_image cacheDisplayInRect:bounds toBitmapImageRep:bitmap];
+    NSColor *color = [[bitmap colorAtX:bitmap.pixelsWide / 2 y:bitmap.pixelsHigh / 2]
+        colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    if (!color) {
+        return NO;
+    }
+    const CGFloat expected = red ? color.redComponent : color.greenComponent;
+    const CGFloat other = red ? color.greenComponent : color.redComponent;
+    return expected > other + 0.25 && expected > color.blueComponent + 0.25;
+}
+#endif
 - (BOOL)hasStream {
     return _stream != nil;
 }
@@ -433,7 +527,11 @@ static BOOL waitFor(BOOL (^predicate)(void)) {
 static int checkNativeCapture(void) {
     if (!CGPreflightScreenCaptureAccess()) {
         puts("macOS hosted permission unavailable; native capture was not exercised.");
+#ifdef LINKO_RW04_CODEC_PREVIEW
+        return 9;
+#else
         return 0;
+#endif
     }
     [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
     [NSApp finishLaunching];
@@ -446,7 +544,15 @@ static int checkNativeCapture(void) {
     fixture.releasedWhenClosed = NO;
     fixture.title = @"Linko RW03 fixture";
     fixture.backgroundColor = NSColor.systemRedColor;
+#ifdef LINKO_RW04_CODEC_PREVIEW
+    NSView *solid = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 220, 140)];
+    solid.wantsLayer = YES;
+    solid.layer.backgroundColor = NSColor.redColor.CGColor;
+    solid.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    fixture.contentView = solid;
+#else
     fixture.contentView = [NSTextField labelWithString:@"RW03"];
+#endif
     [fixture makeKeyAndOrderFront:nil];
     [fixture orderFrontRegardless];
     [fixture displayIfNeeded];
@@ -480,14 +586,30 @@ static int checkNativeCapture(void) {
         return 5;
     }
     [preview beginCapture:source];
-    if (!waitFor(^BOOL { return preview.displayedFrame != nil; })) {
+    if (!waitFor(^BOOL {
+#ifdef LINKO_RW04_CODEC_PREVIEW
+        return [preview showsFixtureColorRed:YES];
+#else
+        return preview.displayedFrame != nil;
+#endif
+    })) {
         fputs("macOS ScreenCaptureKit fixture did not deliver a viewable frame.\n", stderr);
         return 6;
     }
     CGFloat width = preview.displayedFrame.size.width;
     [fixture setContentSize:NSMakeSize(350, 230)];
+#ifdef LINKO_RW04_CODEC_PREVIEW
+    solid.layer.backgroundColor = NSColor.greenColor.CGColor;
+    [solid setNeedsDisplay:YES];
+#endif
     [fixture displayIfNeeded];
-    if (!waitFor(^BOOL { return preview.displayedFrame.size.width > width; })) {
+    if (!waitFor(^BOOL {
+#ifdef LINKO_RW04_CODEC_PREVIEW
+        return preview.displayedFrame.size.width > width && [preview showsFixtureColorRed:NO];
+#else
+        return preview.displayedFrame.size.width > width;
+#endif
+    })) {
         fputs("macOS ScreenCaptureKit fixture did not deliver the resized frame.\n", stderr);
         return 7;
     }
@@ -497,7 +619,11 @@ static int checkNativeCapture(void) {
         fputs("macOS preview did not clear and release the closed fixture.\n", stderr);
         return 8;
     }
+#ifdef LINKO_RW04_CODEC_PREVIEW
+    puts("ScreenCaptureKit -> WebRTC H.264 -> AppKit: rendered colors, resize and source close passed.");
+#else
     puts("ScreenCaptureKit fixture start, resize and source close passed.");
+#endif
     return 0;
 }
 

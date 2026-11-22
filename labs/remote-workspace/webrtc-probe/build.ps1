@@ -79,13 +79,19 @@ $null = New-Item -ItemType Directory -Path $out, linko_probe -Force
 foreach ($file in @('BUILD.gn', 'frame_probe.cc', 'h264_probe.h', 'h264_probe_main.c', 'h264_probe.mm')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination linko_probe
 }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'args.gn') -Destination (Join-Path $out 'args.gn')
-Copy-Item -LiteralPath (Join-Path $out 'args.gn') -Destination $reports
+$buildArgs = Join-Path $out 'args.gn'
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'args.gn') -Destination $buildArgs
+if ($IsMacOS) {
+    $capture = Join-Path $PSScriptRoot '../preview/macos.m'
+    Copy-Item -LiteralPath $capture -Destination 'linko_probe/macos_capture.m'
+    Add-Content -LiteralPath $buildArgs -Value 'mac_deployment_target = "14.0"' -Encoding utf8
+}
+Copy-Item -LiteralPath $buildArgs -Destination $reports
 Invoke-Checked $gn @('gen', $out, '--fail-on-unused-args', '--root-target=//linko_probe:linko_rw04_all_probes')
 $exe = if ($IsWindows) { 'linko_rw04_probe.exe' } else { 'linko_rw04_probe' }
 $targets = @('-C', $out, $exe)
 if ($IsMacOS) {
-    $targets += 'linko_rw04_macos_h264'
+    $targets += @('linko_rw04_macos_h264', 'linko_rw04_macos_window')
 }
 Invoke-Checked $autoninja $targets
 $program = Join-Path (Join-Path $source $out) $exe
@@ -95,4 +101,6 @@ Add-Content -LiteralPath $report -Value 'Synthetic I420 VideoFrame and RTP times
 if ($IsMacOS) {
     Invoke-Checked (Join-Path (Join-Path $source $out) 'linko_rw04_macos_h264') @()
     Add-Content -LiteralPath $report -Value 'C ABI and native WebRTC VideoToolbox H.264 continuous stream passed.' -Encoding utf8
+    Invoke-Checked (Join-Path (Join-Path $source $out) 'linko_rw04_macos_window') @()
+    Add-Content -LiteralPath $report -Value 'Single-window ScreenCaptureKit H.264 encode/decode and rendered AppKit fixture passed.' -Encoding utf8
 }
