@@ -219,10 +219,7 @@ impl LatestFrame {
         }
         self.watermark = frame.stamp.sequence;
         let replaced = self.queued.is_some();
-        self.queued = Some(Queued {
-            frame,
-            received_at,
-        });
+        self.queued = Some(Queued { frame, received_at });
         Ok(replaced)
     }
 

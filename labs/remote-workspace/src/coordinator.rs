@@ -7,9 +7,9 @@
 //! run poll while idle, and acknowledge actual effects rather than queued work.
 use std::collections::BTreeMap;
 
+use crate::frame_binding::FrameMatch;
 use crate::geometry::{Camera, MappedPoint, Point, Rect, SourceGeometry};
 use crate::handoff::{Command, Handoff, State};
-use crate::frame_binding::FrameMatch;
 use crate::media::{LatestFrame, RawFrame, MAX_FRAME_BYTES, MAX_QUEUE_AGE_MS};
 use crate::routing::{InputRouter, InputTicket, Placement, PointerSample, ReleaseRequest};
 use crate::session::{ContentCheck, ControlScope, FrameStamp, SessionGate, SurfaceKind};
