@@ -110,6 +110,8 @@ if ($IsMacOS) {
     $windowPreview = Join-Path (Join-Path $source $out) 'linko_rw04_macos_window_loopback'
     Invoke-Checked $windowPreview @() |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-loopback.txt')
+    Invoke-Checked $windowPreview @('--gpu-crop') |
+        Tee-Object -FilePath (Join-Path $reports 'macos-window-loopback-gpu-crop.txt')
     Invoke-Checked $windowPreview @('--drain-only') |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-drain-only.txt')
     Invoke-Checked $windowPreview @('--capture-only') |
