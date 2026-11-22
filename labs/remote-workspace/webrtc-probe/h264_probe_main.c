@@ -92,5 +92,5 @@ int main(void) {
         return 3;
     }
     puts("C ABI -> WebRTC VideoToolbox H.264 -> decoded dimensions and RTP timestamps passed.");
-    return 0;
+    return check_stream();
 }
