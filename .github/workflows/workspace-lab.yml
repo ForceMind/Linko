@@ -41,3 +41,65 @@ jobs:
       - name: Release build
         if: always()
         run: cargo build --release --all-targets --locked --offline
+  native-preview:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Derive build version from commit time (UTC+08:00)
+        shell: bash
+        run: python tools/build_version.py >> "$GITHUB_ENV"
+      - name: Build Windows preview and its separate smoke executable
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: ${{ runner.temp }}
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          mkdir rw03-artifact
+          set "SOURCE=%GITHUB_WORKSPACE%\labs\remote-workspace\preview\windows.cpp"
+          set "LIBRARIES=d3d11.lib dwmapi.lib user32.lib gdi32.lib windowsapp.lib"
+          cl /nologo /std:c++20 /W4 /WX /EHsc /utf-8 /DUNICODE /D_UNICODE /O2 "%SOURCE%" %LIBRARIES% /link /subsystem:windows /out:"rw03-artifact\Linko-RW03-%LINKO_VERSION%-windows-x64.exe"
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /W4 /WX /EHsc /utf-8 /DUNICODE /D_UNICODE /DLINKO_RW03_CI /O2 "%SOURCE%" %LIBRARIES% /link /subsystem:console /out:rw03-smoke.exe
+          if errorlevel 1 exit /b 1
+          copy "%GITHUB_WORKSPACE%\LICENSE" rw03-artifact\LICENSE
+      - name: Capture, resize and close one hosted Windows fixture
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ${{ runner.temp }}
+        run: |
+          .\rw03-smoke.exe
+          Write-Host ('WGC smoke exit: 0x{0:X8}' -f $LASTEXITCODE)
+          exit $LASTEXITCODE
+      - name: Build and test macOS preview without requesting host permissions
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          source_path=labs/remote-workspace/preview/macos.m
+          app="$RUNNER_TEMP/Linko RW03.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$RUNNER_TEMP/rw03-artifact"
+          flags=(-mmacosx-version-min=14.0 -fobjc-arc -fblocks -Wall -Wextra -Werror -Wno-unused-parameter -O2)
+          frameworks=(-framework AppKit -framework CoreGraphics -framework CoreImage -framework CoreMedia -framework CoreVideo -framework QuartzCore -framework ScreenCaptureKit)
+          xcrun clang "${flags[@]}" "$source_path" "${frameworks[@]}" -o "$app/Contents/MacOS/LinkoRW03"
+          xcrun clang "${flags[@]}" -DLINKO_RW03_CI "$source_path" "${frameworks[@]}" -o "$RUNNER_TEMP/rw03-smoke"
+          "$RUNNER_TEMP/rw03-smoke"
+          cp labs/remote-workspace/preview/Info.plist "$app/Contents/Info.plist"
+          cp LICENSE "$app/Contents/Resources/LICENSE"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${LINKO_VERSION%-*}" "$app/Contents/Info.plist"
+          build_number=$(python -c 'import sys; sys.path.insert(0, "tools"); from build_version import bundle_versions_from_display; print(bundle_versions_from_display(sys.argv[1])[1])' "$LINKO_VERSION")
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
+          codesign --sign - --force "$app"
+          codesign --verify --strict "$app"
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/rw03-artifact/Linko-RW03-$LINKO_VERSION-macos.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linko-rw03-${{ matrix.os }}
+          path: ${{ runner.temp }}/rw03-artifact
+          if-no-files-found: error

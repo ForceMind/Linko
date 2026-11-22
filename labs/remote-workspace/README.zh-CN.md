@@ -2,7 +2,7 @@
 
 这是 Linko（原 PeerGlide）现有工程内的隔离研发包，不是另起一套应用。它实现并测试未来多设备远程工作空间的纯逻辑，不改变现有 eframe、QUIC、原生输入生命周期、v5 协议或 UI 分支。
 
-**当前增量：PR #286 的 RW02 协调器与跨模块故障测试。** 详细技术方案、API契约、失效矩阵、Windows/macOS接线步骤及剩余门槛见 [LINKO_REMOTE_WINDOW_RW02.zh-CN.md](../../docs/LINKO_REMOTE_WINDOW_RW02.zh-CN.md)，接手见 [远程研发交接](../../docs/LINKO_REMOTE_WORKSPACE_HANDOFF.zh-CN.md)。
+**当前增量为 RW03 本机单窗口预览，沿用 PR #286 的 RW02 协调器与跨模块故障测试。** 详细技术方案、API契约、失效矩阵、Windows/macOS接线步骤及剩余门槛见 [LINKO_REMOTE_WINDOW_RW02.zh-CN.md](../../docs/LINKO_REMOTE_WINDOW_RW02.zh-CN.md)，接手见 [远程研发交接](../../docs/LINKO_REMOTE_WORKSPACE_HANDOFF.zh-CN.md)。
 
 ## 当前已有代码
 
@@ -32,6 +32,18 @@ cargo build --manifest-path labs/remote-workspace/Cargo.toml --release --all-tar
 
 包使用独立 Cargo workspace/lockfile，避免更改并行研发中的主工作区。`.github/workflows/workspace-lab.yml` 独立检查 Windows/macOS/Linux；原有 Rust CI 保留。后续生产接线需先ADR，不能因实验通过就当作已上线功能。精确候选验证见 #286；代码基线 `a4f23e0178aade220f23186136ceadc0850b5a10` 的实验包 [run 43817627210](https://github.com/ForceMind/Linko/actions/runs/43817627210) 已核对三平台成功，后续HEAD必须检查自己的CI。
 
+## RW03 本机单窗口预览
+
+独立预览入口在本实验包的 `preview/`，由 GitHub Actions 的 `linko-rw03-windows-latest` 与 `linko-rw03-macos-latest` 提供。Windows 使用支持 Windows.Graphics.Capture 的桌面环境（系统接口要求 Windows 10 1903 或更新版本）。macOS 要求 14 或更新版本。
+
+1. 打开「屏跃 · 本机窗口预览」，从可见的本机窗口中选一个。macOS 第一次需在系统设置允许屏幕录制并重新打开预览。
+2. 在预览或原应用调整尺寸。预览保持画面比例，来源窗口继续正常使用。选择的窗口关闭、Windows 最小化或捕获出错时清掉画面。macOS 无有效帧时在两秒内清掉画面。
+3. 点「停止」或关闭预览窗口。每次开始都重新选源。画面留在进程内存，仅用于本机显示。
+
+Windows 用公开的单窗口 WGC 接口和后台 D3D11 回读，捕获池固定为 4096×2160，预览只读回实际窗口矩形。macOS 将所选 SCWindow 固定在单窗口过滤器内，1920×1080 内使用帧的内容矩形，不采集音频。两个后端都不写入截图、不发送媒体，也不授予或注入键鼠。实验产物没有正式签名或公证。系统拒绝时遵循正常的系统权限处理流程。
+
+Windows Actions 尝试在托管桌面采集临时的本机窗口并验证尺寸更新与关闭。macOS Actions 编译、链接 AppKit 和 ScreenCaptureKit，验证帧有效期、几何裁剪和停止后的拒绝更新。已有屏幕录制权限时也实采一个临时窗口，验证缩放和关闭。实际机型上的系统授权、最小化、全屏和混合 DPI 尚待单机验收。
+
 ## 必须遵守的边界
 
 1. `Binding`、`SurfaceKey`、ViewId和本地票据不是认证。真实适配层必须将其绑定到已验证身份和独立用户授权；不可从不可信报文直接赋予权限，不可使用测试常量。重连须由可信运行时产生新连接绑定，不得复活旧gate。
@@ -46,6 +58,6 @@ cargo build --manifest-path labs/remote-workspace/Cargo.toml --release --all-tar
 
 ## 尚未实现
 
-原生Windows/macOS采集、视频编解码、原生显示与窗口管理后端、生产安全媒体协议/传输、原生输入桥、来源侧多查看者全局仲裁、同源多View安全共享、实际scheduler接线、持久恢复账本、多会话GUI、移动客户端、NAT穿透/中继、虚拟显示驱动与真实双机验收仍未由本实验完成。缺少硬件不能掩盖这些软件尚需编写。
+视频编解码、远程画面显示与窗口管理后端、生产安全媒体协议/传输、原生输入桥、来源侧多查看者全局仲裁、同源多View安全共享、实际scheduler接线、持久恢复账本、多会话GUI、移动客户端、NAT穿透/中继、虚拟显示驱动与真实双机验收仍未由本实验完成。缺少硬件不能掩盖这些软件尚需编写。
 
 不安装工具/驱动，不改用户机器，不部署服务，不购买凭据，不自动上传用户屏幕，不更改许可证。保留的长期方案见 [LINKO_REMOTE_WORKSPACE_IMPLEMENTATION.zh-CN.md](../../docs/LINKO_REMOTE_WORKSPACE_IMPLEMENTATION.zh-CN.md)，其历史状态快照由本README及RW02详细方案补充。#286依赖#69，研究选型在独立#274；不要在main尚未合并时假定这些内容已经进入正式产品。
