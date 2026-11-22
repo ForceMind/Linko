@@ -2,7 +2,7 @@
 
 Actions 使用 Windows 的 Media Foundation 软件编码器和解码器处理连续 24 帧合成 NV12，逐帧核对尺寸、时间戳和亮度。每组新开编解码会话，对照默认配置、低延迟解码、低延迟解码加单线程低延迟编码。三组都报告排空前的编码、解码数和最大积压。两端均启用低延迟的组最多积压两帧。[Media Foundation 低延迟文档](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-low-latency)
 
-macOS 使用 VideoToolbox 验证一帧并记录实际选中的软硬件路径。
+macOS 使用 VideoToolbox 验证 128×96 单帧和 90 帧 1920×1080。每组使用同一对编解码器，核对时间戳、分辨率和两处亮度。记录实际软硬件路径、排空前的解码数、逐帧耗时分位数和吞吐量。
 
 Windows 另用双端低延迟配置处理连续 90 帧 1920×1080 NV12。输入带 30 fps 时间戳并尽快送入编解码器，检查两处亮度、可见区域尺寸、时间戳和最大积压。日志报告缓冲区与可见区域各自的尺寸、提交到解码输出的 P50/P95/P99 和不按时间戳节流的吞吐量。测量涵盖编解码，真实窗口采集、网络和显示耗时待独立验证。[Media Foundation 可见区域](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mt-minimum-display-aperture-attribute)
 
