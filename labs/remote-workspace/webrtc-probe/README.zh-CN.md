@@ -16,7 +16,7 @@ macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建�
 
 启停回归在同一托管 macOS 窗口上重复 100 次真实采集、传输及呈现。每次停止均检查 ScreenCaptureKit 回执、旧输出销毁、WebRTC 端点关闭、清屏和停止轮询。报告记录停止后的 RSS、线程和描述符数，检查预热后的描述符增长。
 
-预览复用一个 Core Image 渲染上下文。Actions 在同一 runner 的两个独立进程分别验证复用和每轮新建模式，并记录物理内存占用、在用堆和分配区容量，用于区分上下文开销与未释放的会话资源。每轮新建模式仅用于探针对照。
+预览复用一个 Core Image 渲染上下文。[上下文对照](https://github.com/ForceMind/Linko/actions/runs/45065522785/artifacts/14771209787)记录了两种模式的差异。当前 Actions 在同一 runner 的独立进程分三组各运行 100 次，覆盖整链路、真实单窗口采集加本机绘制、固定合成帧经 H.264 加密回环。报告记录 RSS、物理内存占用、在用堆、分配区容量、线程及描述符。后两组只用于诊断资源变化。
 
 该实验调用系统 H.264。WebRTC 内建 H.264 和专有软件 codec 仍关闭。Windows codec factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
 

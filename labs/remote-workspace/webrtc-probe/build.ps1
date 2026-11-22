@@ -109,7 +109,9 @@ if ($IsMacOS) {
     $windowPreview = Join-Path (Join-Path $source $out) 'linko_rw04_macos_window_loopback'
     Invoke-Checked $windowPreview @() |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-loopback.txt')
-    Invoke-Checked $windowPreview @('--fresh-context') |
-        Tee-Object -FilePath (Join-Path $reports 'macos-window-loopback-fresh-context.txt')
+    Invoke-Checked $windowPreview @('--capture-only') |
+        Tee-Object -FilePath (Join-Path $reports 'macos-window-capture-only.txt')
+    Invoke-Checked $windowPreview @('--media-only') |
+        Tee-Object -FilePath (Join-Path $reports 'macos-window-media-only.txt')
     Add-Content -LiteralPath $report -Value 'Real ScreenCaptureKit window traveled over loopback UDP/DTLS H.264 to AppKit; original receipt expiry, revocation, reopening and 100 native start/stop cycles passed.' -Encoding utf8
 }
