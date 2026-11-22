@@ -6,6 +6,7 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifdef LINKO_RW04_CODEC_PREVIEW
@@ -121,7 +122,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @property(strong) RW04NetworkPreview *networkPreview;
 @property(strong) CIContext *encoderInputContext;
 - (BOOL)usesEncoderInput;
-- (void)handleEncoderInput:(CIImage *)frame pixels:(CGRect)pixels;
+- (void)handleEncoderInput:(CVPixelBufferRef)source pixels:(CGRect)pixels;
+- (CVPixelBufferRef)copyEncoderFrame:(CVPixelBufferRef)source pixels:(CGRect)pixels CF_RETURNS_RETAINED;
 - (BOOL)consumeDecodedFrameWithoutRendering;
 - (CVPixelBufferRef)copyInputWithWidth:(size_t)width height:(size_t)height CF_RETURNS_RETAINED;
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
@@ -161,12 +163,18 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     return YES;
 }
 
-- (void)handleEncoderInput:(CIImage *)frame pixels:(CGRect)pixels {
+- (CVPixelBufferRef)copyEncoderFrame:(CVPixelBufferRef)source pixels:(CGRect)pixels {
+    CIImage *frame = [CIImage imageWithCVPixelBuffer:source];
+    pixels.origin.y = CGRectGetHeight(frame.extent) - CGRectGetMaxY(pixels);
+    return [self copyCroppedFrame:frame pixels:pixels];
+}
+
+- (void)handleEncoderInput:(CVPixelBufferRef)source pixels:(CGRect)pixels {
     RW04NetworkPreview *network = self.networkPreview;
     if (!network) {
         return;
     }
-    CVPixelBufferRef input = [self copyCroppedFrame:frame pixels:pixels];
+    CVPixelBufferRef input = [self copyEncoderFrame:source pixels:pixels];
     if (input) {
         [network submit:input];
         CVPixelBufferRelease(input);
@@ -413,20 +421,21 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         return;
     }
 
-    CIImage *frame = [CIImage imageWithCVPixelBuffer:buffer];
-    CGRect pixels = visiblePixels(values.firstObject[SCStreamFrameInfoContentRect], frame.extent.size);
+    CGSize bufferSize = CGSizeMake(CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer));
+    CGRect pixels = visiblePixels(values.firstObject[SCStreamFrameInfoContentRect], bufferSize);
     if (CGRectIsEmpty(pixels)) {
         [self publish:nil];
         return;
     }
-    // ScreenCaptureKit reports a top-left content rectangle. Core Image uses bottom-left coordinates.
-    pixels.origin.y = CGRectGetHeight(frame.extent) - CGRectGetMaxY(pixels);
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     if ([self usesEncoderInput]) {
-        [self handleEncoderInput:frame pixels:pixels];
+        [self handleEncoderInput:buffer pixels:pixels];
         return;
     }
 #endif
+    CIImage *frame = [CIImage imageWithCVPixelBuffer:buffer];
+    // ScreenCaptureKit reports a top-left content rectangle. Core Image uses bottom-left coordinates.
+    pixels.origin.y = CGRectGetHeight(frame.extent) - CGRectGetMaxY(pixels);
 #ifdef LINKO_RW04_CODEC_PREVIEW
     CVPixelBufferRef decoded = [self copyDecodedFrame:frame pixels:pixels];
     if (!decoded) {
@@ -461,6 +470,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (CIContext *)contextForCapture;
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 - (CIContext *)contextForEncoderInput;
+- (Class)captureOutputClass;
 #endif
 - (CaptureOutput *)makeCaptureOutput;
 - (NSImage *)frameForDisplay;
@@ -620,16 +630,22 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
     return _encoderInputContext;
 }
+
+- (Class)captureOutputClass {
+    return CaptureOutput.class;
+}
 #endif
 
 - (CaptureOutput *)makeCaptureOutput {
-    CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:[self contextForCapture]];
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+    CaptureOutput *output = [[[self captureOutputClass] alloc] initWithRenderingContext:[self contextForCapture]];
     output.networkPreview = [RW04NetworkPreview new];
     if (!output.networkPreview) {
         return nil;
     }
     output.encoderInputContext = [self contextForEncoderInput];
+#else
+    CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:[self contextForCapture]];
 #endif
     return output;
 }
@@ -925,6 +941,109 @@ static BOOL checkInputPool(void) {
 }
 @end
 
+static BOOL fitsPixelRows(CVPixelBufferRef buffer, size_t stride, size_t rows, size_t lastByte) {
+    return rows > 0 && lastByte > 0 && stride >= lastByte && (rows - 1) <= (SIZE_MAX - lastByte) / stride &&
+           (rows - 1) * stride + lastByte <= CVPixelBufferGetDataSize(buffer);
+}
+
+static BOOL copyBgraRegion(CVPixelBufferRef source, CVPixelBufferRef result, size_t left, size_t top) {
+    const size_t width = CVPixelBufferGetWidth(result);
+    const size_t height = CVPixelBufferGetHeight(result);
+    const size_t sourceWidth = CVPixelBufferGetWidth(source);
+    const size_t sourceHeight = CVPixelBufferGetHeight(source);
+    if (sourceWidth > MaxWidth || sourceHeight > MaxHeight || width > sourceWidth || height > sourceHeight ||
+        left > sourceWidth - width || top > sourceHeight - height ||
+        CVPixelBufferIsPlanar(source) || CVPixelBufferIsPlanar(result) ||
+        CVPixelBufferGetPixelFormatType(source) != kCVPixelFormatType_32BGRA ||
+        CVPixelBufferGetPixelFormatType(result) != kCVPixelFormatType_32BGRA ||
+        CVPixelBufferLockBaseAddress(source, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) {
+        return NO;
+    }
+
+    BOOL copied = NO;
+    if (CVPixelBufferLockBaseAddress(result, 0) == kCVReturnSuccess) {
+        const size_t sourceStride = CVPixelBufferGetBytesPerRow(source);
+        const size_t resultStride = CVPixelBufferGetBytesPerRow(result);
+        const uint8_t *sourceBytes = CVPixelBufferGetBaseAddress(source);
+        uint8_t *resultBytes = CVPixelBufferGetBaseAddress(result);
+        copied = sourceBytes && resultBytes && fitsPixelRows(source, sourceStride, top + height, (left + width) * 4) &&
+                 fitsPixelRows(result, resultStride, height, width * 4);
+        if (copied) {
+            for (size_t row = 0; row < height; ++row) {
+                memcpy(resultBytes + row * resultStride, sourceBytes + (top + row) * sourceStride + left * 4, width * 4);
+            }
+        }
+        copied = CVPixelBufferUnlockBaseAddress(result, 0) == kCVReturnSuccess && copied;
+    }
+    return CVPixelBufferUnlockBaseAddress(source, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess && copied;
+}
+
+@interface CpuCopyOutput : CaptureOutput
+@end
+
+@implementation CpuCopyOutput
+- (CVPixelBufferRef)copyEncoderFrame:(CVPixelBufferRef)source pixels:(CGRect)pixels {
+    const size_t width = ((size_t)CGRectGetWidth(pixels)) & ~(size_t)1;
+    const size_t height = ((size_t)CGRectGetHeight(pixels)) & ~(size_t)1;
+    if (width < 64 || height < 64 || width > MaxWidth || height > MaxHeight) {
+        return NULL;
+    }
+    const size_t left = (size_t)CGRectGetMinX(pixels);
+    // Match the existing Core Image crop when an odd height loses one row.
+    const size_t top = (size_t)CGRectGetMaxY(pixels) - height;
+    CVPixelBufferRef output = [self copyInputWithWidth:width height:height];
+    if (output && !copyBgraRegion(source, output, left, top)) {
+        CVPixelBufferRelease(output);
+        return NULL;
+    }
+    return output;
+}
+@end
+
+@interface CpuCopyFixtureApp : GpuCropFixtureApp
+@end
+
+@implementation CpuCopyFixtureApp
+- (Class)captureOutputClass {
+    return CpuCopyOutput.class;
+}
+@end
+
+static BOOL checkCpuCopy(void) {
+    enum { Side = 72, Stride = 296 };
+    uint8_t pixels[Side * Stride] = {0};
+    for (size_t row = 0; row < Side; ++row) {
+        pixels[row * Stride + 4 * 4] = (uint8_t)row;
+        pixels[row * Stride + 67 * 4] = (uint8_t)(row + 100);
+    }
+    CVPixelBufferRef source = NULL;
+    if (CVPixelBufferCreateWithBytes(NULL, Side, Side, kCVPixelFormatType_32BGRA, pixels, Stride,
+                                     NULL, NULL, NULL, &source) != kCVReturnSuccess) {
+        return NO;
+    }
+    CpuCopyOutput *output = [[CpuCopyOutput alloc] initWithRenderingContext:nil];
+    CVPixelBufferRef cropped = [output copyEncoderFrame:source pixels:CGRectMake(4, 4, 65, 65)];
+    CVPixelBufferRef invalid = [output copyEncoderFrame:source pixels:CGRectMake(12, 4, 65, 65)];
+    CVPixelBufferRelease(source);
+    BOOL matched = NO;
+    if (cropped && CVPixelBufferLockBaseAddress(cropped, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess) {
+        const size_t stride = CVPixelBufferGetBytesPerRow(cropped);
+        const uint8_t *bytes = CVPixelBufferGetBaseAddress(cropped);
+        matched = bytes && CVPixelBufferGetWidth(cropped) == 64 && CVPixelBufferGetHeight(cropped) == 64 &&
+                  fitsPixelRows(cropped, stride, 64, 64 * 4) &&
+                  bytes[0] == 5 && bytes[63 * stride + 63 * 4] == 168;
+        matched = CVPixelBufferUnlockBaseAddress(cropped, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess && matched;
+    }
+    if (cropped) {
+        CVPixelBufferRelease(cropped);
+    }
+    if (invalid) {
+        CVPixelBufferRelease(invalid);
+        return NO;
+    }
+    return matched;
+}
+
 @interface CropOnlyOutput : CaptureOutput
 @property(atomic) BOOL producedFixtureInput;
 @end
@@ -932,8 +1051,8 @@ static BOOL checkInputPool(void) {
 @implementation CropOnlyOutput
 @synthesize producedFixtureInput = _producedFixtureInput;
 
-- (void)handleEncoderInput:(CIImage *)frame pixels:(CGRect)pixels {
-    CVPixelBufferRef input = [self copyCroppedFrame:frame pixels:pixels];
+- (void)handleEncoderInput:(CVPixelBufferRef)source pixels:(CGRect)pixels {
+    CVPixelBufferRef input = [self copyEncoderFrame:source pixels:pixels];
     if (input) {
         BOOL cropped = CVPixelBufferGetWidth(input) == (((size_t)CGRectGetWidth(pixels)) & ~(size_t)1) &&
                        CVPixelBufferGetHeight(input) == (((size_t)CGRectGetHeight(pixels)) & ~(size_t)1) &&
@@ -1152,6 +1271,7 @@ static int checkNativeCapture(void) {
     BOOL captureOnly = [arguments containsObject:@"--capture-only"];
     BOOL drainOnly = [arguments containsObject:@"--drain-only"];
     BOOL cropOnly = [arguments containsObject:@"--crop-only"];
+    BOOL cpuCopy = [arguments containsObject:@"--cpu-copy"];
     PreviewApp *preview;
     const char *path;
     if (cropOnly) {
@@ -1163,6 +1283,14 @@ static int checkNativeCapture(void) {
     } else if (captureOnly) {
         preview = [CaptureOnlyFixtureApp new];
         path = "capture-only";
+    } else if (cpuCopy) {
+        if (!checkCpuCopy()) {
+            fputs("macOS BGRA copy: stride, crop alignment or bounds check failed.\n", stderr);
+            return 20;
+        }
+        puts("macOS BGRA copy: stride, crop alignment and bounds check passed.");
+        preview = [CpuCopyFixtureApp new];
+        path = "cpu-copy";
     } else if ([arguments containsObject:@"--gpu-crop"]) {
         preview = [GpuCropFixtureApp new];
         path = "gpu-crop";
