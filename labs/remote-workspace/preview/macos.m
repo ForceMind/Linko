@@ -119,6 +119,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @property(strong) RW04NetworkPreview *networkPreview;
 - (BOOL)usesLoopback;
+- (BOOL)consumeDecodedFrameWithoutRendering;
 - (CVPixelBufferRef)copyInputWithWidth:(size_t)width height:(size_t)height CF_RETURNS_RETAINED;
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
 #endif
@@ -154,6 +155,17 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 
 - (BOOL)usesLoopback {
     return YES;
+}
+
+- (BOOL)consumeDecodedFrameWithoutRendering {
+    CVPixelBufferRef pixels = [self.networkPreview copyFrameReceivedAt:NULL];
+    if (!pixels) {
+        return NO;
+    }
+    BOOL valid = CVPixelBufferGetWidth(pixels) >= 64 && CVPixelBufferGetWidth(pixels) <= MaxWidth &&
+                 CVPixelBufferGetHeight(pixels) >= 64 && CVPixelBufferGetHeight(pixels) <= MaxHeight;
+    CVPixelBufferRelease(pixels);
+    return valid;
 }
 #endif
 
@@ -427,6 +439,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @interface PreviewApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
 - (CIContext *)contextForCapture;
 - (CaptureOutput *)makeCaptureOutput;
+- (NSImage *)frameForDisplay;
 #ifdef LINKO_RW03_CI
 - (void)beginCapture:(SCWindow *)source;
 - (NSImage *)displayedFrame;
@@ -436,6 +449,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (CaptureOutput *)activeCaptureOutput;
 - (void)stopButton:(id)sender;
 - (BOOL)captureStopAcknowledged;
+- (BOOL)receivedFixtureFrame;
 #endif
 #ifdef LINKO_RW04_COLOR_PREVIEW
 - (BOOL)showsFixtureColorRed:(BOOL)red;
@@ -689,6 +703,10 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }];
 }
 
+- (NSImage *)frameForDisplay {
+    return [_output currentAt:uptime()];
+}
+
 - (void)updateFrame:(NSTimer *)timer {
     if (!_stream || _stopRequested) {
         return;
@@ -697,7 +715,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         [self stopCaptureWithMessage:@"窗口或权限已失效，预览已停止。"];
         return;
     }
-    NSImage *frame = [_output currentAt:uptime()];
+    NSImage *frame = [self frameForDisplay];
     if (_image.image != frame) {
         _image.image = frame;
     }
@@ -743,6 +761,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 }
 - (BOOL)captureStopAcknowledged {
     return _captureStopAcknowledged;
+}
+- (BOOL)receivedFixtureFrame {
+    return self.displayedFrame != nil;
 }
 #endif
 #endif
@@ -838,6 +859,30 @@ static BOOL checkInputPool(void) {
 }
 @end
 
+@interface DrainOnlyFixtureApp : PreviewApp
+@end
+
+@implementation DrainOnlyFixtureApp {
+    BOOL _received;
+}
+
+- (void)beginCapture:(SCWindow *)source {
+    _received = NO;
+    [super beginCapture:source];
+}
+
+- (NSImage *)frameForDisplay {
+    if ([[self activeCaptureOutput] consumeDecodedFrameWithoutRendering]) {
+        _received = YES;
+    }
+    return nil;
+}
+
+- (BOOL)receivedFixtureFrame {
+    return _received;
+}
+@end
+
 static int sampleStoppedProcess(unsigned cycle) {
     struct proc_taskinfo task = {0};
     struct proc_fdinfo descriptors[512];
@@ -906,7 +951,7 @@ static BOOL checkCaptureCycles(PreviewApp *preview, SCWindow *source, BOOL usesL
     for (unsigned cycle = 1; cycle <= 100; ++cycle) {
         @autoreleasepool {
             [preview beginCapture:source];
-            if (!preview.hasFrameTimer || !waitFor(^BOOL { return preview.displayedFrame != nil; }) ||
+            if (!preview.hasFrameTimer || !waitFor(^BOOL { return preview.receivedFixtureFrame; }) ||
                 !stopFixtureCycle(preview, usesLoopback)) {
                 fprintf(stderr, "Loopback cycles: open, render or cleanup failed at cycle %u.\n", cycle);
                 return NO;
@@ -916,8 +961,7 @@ static BOOL checkCaptureCycles(PreviewApp *preview, SCWindow *source, BOOL usesL
             return NO;
         }
     }
-    printf("Loopback cycles: 100 %s start/stop cycles passed.\n",
-           usesLoopback ? "capture and media" : "capture-only");
+    puts("Loopback cycles: 100 native start/stop cycles passed.");
     return YES;
 }
 
@@ -996,9 +1040,11 @@ static int checkNativeCapture(void) {
     [NSApp finishLaunching];
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     BOOL captureOnly = [arguments containsObject:@"--capture-only"];
-    PreviewApp *preview = captureOnly ? [CaptureOnlyFixtureApp new] : [PreviewApp new];
-    printf("Loopback cycles: path=%s\n", captureOnly ? "capture-only" : "full");
-    if (!captureOnly) {
+    BOOL drainOnly = [arguments containsObject:@"--drain-only"];
+    PreviewApp *preview = drainOnly ? [DrainOnlyFixtureApp new] :
+                          captureOnly ? [CaptureOnlyFixtureApp new] : [PreviewApp new];
+    printf("Loopback cycles: path=%s\n", drainOnly ? "drain-only" : captureOnly ? "capture-only" : "full");
+    if (!captureOnly && !drainOnly) {
         if (!checkInputPool()) {
             fputs("Loopback input pool: allocation bound, recycling, resize, or stop failed.\n", stderr);
             return 18;
@@ -1071,6 +1117,19 @@ static int checkNativeCapture(void) {
         solid.layer.backgroundColor =
             [NSColor colorWithSRGBRed:red ? level : 0 green:red ? 0 : level blue:0 alpha:1].CGColor;
     }];
+    if (drainOnly) {
+        [fixture setContentSize:NSMakeSize(350, 230)];
+        [fixture displayIfNeeded];
+        [preview beginCapture:source];
+        BOOL passed = waitFor(^BOOL { return preview.receivedFixtureFrame; }) &&
+                      checkCaptureCycles(preview, source, YES);
+        [pulse invalidate];
+        [fixture close];
+        if (!passed) {
+            fputs("macOS decoded-frame drain did not pass the native cycle check.\n", stderr);
+        }
+        return passed ? 0 : 19;
+    }
 #endif
     [preview beginCapture:source];
     if (!waitFor(^BOOL {
