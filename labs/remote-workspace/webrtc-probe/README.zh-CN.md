@@ -8,6 +8,8 @@ macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建�
 
 单机传输实验建立两个 WebRTC 端点，在 `127.0.0.1` 上以 UDP 和 DTLS 传送合成 H.264 视频。检查接收帧的尺寸与亮度，关闭端点后重新协商有新 ICE 凭据的连接。端点使用虚拟音频设备和本机生成的视频，测试不连接 STUN/TURN，也不接入用户设备配对。
 
+整链路探针把 ScreenCaptureKit 采集的测试窗口接到同一对回环端点。发送端只发视频，接收端只接视频。AppKit 从最新的解码帧绘制，测试核对绘制像素由红转绿、窗口尺寸变化和来源关闭后清屏。画面留在托管机内存，探针不打包成应用。
+
 该实验调用系统 H.264。WebRTC 内建 H.264 和专有软件 codec 仍关闭。Windows codec factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
 
 - [固定 WebRTC 提交](https://webrtc.googlesource.com/src/+/692e07f2cb2f3602af5a8083b695f4f3bc2c9a6f)

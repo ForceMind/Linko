@@ -7,6 +7,7 @@ group("linko_rw04_all_probes") {
       ":linko_rw04_macos_h264",
       ":linko_rw04_macos_window",
       ":linko_rw04_macos_loopback",
+      ":linko_rw04_macos_window_loopback",
     ]
   }
 }
@@ -28,6 +29,42 @@ if (is_mac) {
   objc_includes = [
     "//sdk/objc",
     "//sdk/objc/base",
+  ]
+  preview_frameworks = [
+    "AppKit.framework",
+    "CoreGraphics.framework",
+    "CoreImage.framework",
+    "CoreMedia.framework",
+    "CoreVideo.framework",
+    "Foundation.framework",
+    "QuartzCore.framework",
+    "ScreenCaptureKit.framework",
+  ]
+  loopback_deps = codec_deps + [
+    "//api:candidate",
+    "//api:create_modular_peer_connection_factory",
+    "//api:enable_media",
+    "//api:jsep",
+    "//api:media_stream_interface",
+    "//api:peer_connection_interface",
+    "//api:rtp_receiver_interface",
+    "//api:rtp_transceiver_interface",
+    "//api:set_local_description_observer_interface",
+    "//api:set_remote_description_observer_interface",
+    "//api/audio:audio_device",
+    "//api/audio_codecs:builtin_audio_decoder_factory",
+    "//api/audio_codecs:builtin_audio_encoder_factory",
+    "//api/video:video_broadcaster",
+    "//modules/audio_device:audio_device_impl",
+    "//p2p:basic_packet_socket_factory",
+    "//p2p:basic_port_allocator",
+    "//pc:video_track_source",
+    "//rtc_base:ip_address",
+    "//rtc_base:network",
+    "//rtc_base:socket_address",
+    "//rtc_base:socket_server",
+    "//rtc_base:ssl",
+    "//rtc_base:threading",
   ]
   rtc_executable("linko_rw04_macos_h264") {
     sources = [
@@ -55,48 +92,35 @@ if (is_mac) {
     ]
     configs += [ "//:common_objc" ]
     include_dirs = objc_includes
-    frameworks = [
-      "AppKit.framework",
-      "CoreGraphics.framework",
-      "CoreImage.framework",
-      "CoreMedia.framework",
-      "CoreVideo.framework",
-      "Foundation.framework",
-      "QuartzCore.framework",
-      "ScreenCaptureKit.framework",
-    ]
+    frameworks = preview_frameworks
     deps = codec_deps
   }
   rtc_executable("linko_rw04_macos_loopback") {
-    sources = [ "local_transport.mm" ]
+    sources = [
+      "local_transport.mm",
+      "loopback_preview.h",
+    ]
     configs += [ "//:common_objc" ]
     include_dirs = objc_includes
-    frameworks = [ "Foundation.framework" ]
-    deps = codec_deps + [
-      "//api:candidate",
-      "//api:create_modular_peer_connection_factory",
-      "//api:enable_media",
-      "//api:jsep",
-      "//api:media_stream_interface",
-      "//api:peer_connection_interface",
-      "//api:rtp_receiver_interface",
-      "//api:rtp_transceiver_interface",
-      "//api:set_local_description_observer_interface",
-      "//api:set_remote_description_observer_interface",
-      "//api/audio:audio_device",
-      "//api/audio_codecs:builtin_audio_decoder_factory",
-      "//api/audio_codecs:builtin_audio_encoder_factory",
-      "//api/video:video_broadcaster",
-      "//modules/audio_device:audio_device_impl",
-      "//p2p:basic_packet_socket_factory",
-      "//p2p:basic_port_allocator",
-      "//pc:video_track_source",
-      "//rtc_base:ip_address",
-      "//rtc_base:network",
-      "//rtc_base:socket_address",
-      "//rtc_base:socket_server",
-      "//rtc_base:ssl",
-      "//rtc_base:threading",
+    frameworks = [
+      "CoreVideo.framework",
+      "Foundation.framework",
     ]
+    deps = loopback_deps
+  }
+  rtc_executable("linko_rw04_macos_window_loopback") {
+    sources = [
+      "local_transport.mm",
+      "loopback_preview.h",
+      "macos_capture.m",
+    ]
+    defines = [
+      "LINKO_RW03_CI",
+      "LINKO_RW04_NETWORK_PREVIEW",
+    ]
+    configs += [ "//:common_objc" ]
+    include_dirs = objc_includes
+    frameworks = preview_frameworks
+    deps = loopback_deps
   }
 }
