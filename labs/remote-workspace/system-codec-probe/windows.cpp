@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <codecapi.h>
+#include <icodecapi.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
@@ -23,6 +24,8 @@ constexpr UINT32 nv12Bytes = luma * 3 / 2;
 constexpr LONGLONG frameDuration = 10'000'000 / 30;
 constexpr UINT32 frameCount = 24;
 constexpr UINT32 maxLowLatencyBacklog = 2;
+
+enum class LatencyMode { Default, DecoderOnly, EncoderAndDecoder };
 
 int fixtureLuma(UINT32 index) {
     return 24 + 8 * static_cast<int>(index);
@@ -203,10 +206,24 @@ void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder,
     }
 }
 
-int probe(bool lowLatency) {
+int probe(LatencyMode mode, char const* modeName) {
     ComPtr<IMFTransform> encoder;
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&encoder)), "activate system H.264 encoder");
+    const bool lowLatencyEncoder = mode == LatencyMode::EncoderAndDecoder;
+    const bool lowLatencyDecoder = mode != LatencyMode::Default;
+    if (lowLatencyEncoder) {
+        ComPtr<ICodecAPI> settings;
+        check(encoder.As(&settings), "read H.264 encoder settings");
+        VARIANT enabled{};
+        enabled.vt = VT_BOOL;
+        enabled.boolVal = VARIANT_TRUE;
+        check(settings->SetValue(&CODECAPI_AVLowLatencyMode, &enabled), "enable H.264 low-latency encoding");
+        VARIANT threads{};
+        threads.vt = VT_UI4;
+        threads.ulVal = 1;
+        check(settings->SetValue(&CODECAPI_AVEncNumWorkerThreads, &threads), "configure one encoder worker");
+    }
     auto outputType = videoType(MFVideoFormat_H264);
     check(outputType->SetUINT32(MF_MT_AVG_BITRATE, 200'000), "set output bitrate");
     check(outputType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base), "set H.264 profile");
@@ -222,14 +239,14 @@ int probe(bool lowLatency) {
     UINT32 maxBacklog{};
     for (UINT32 index = 0; index < frameCount; ++index) {
         submitFrame(encoder.Get(), index);
-        readEncodedFrames(encoder.Get(), decoder, encodedCount, decodedCount, lowLatency);
+        readEncodedFrames(encoder.Get(), decoder, encodedCount, decodedCount, lowLatencyDecoder);
         maxBacklog = std::max(maxBacklog, index + 1 - decodedCount);
     }
     const UINT32 encodedBeforeDrain = encodedCount;
     const UINT32 framesBeforeDrain = decodedCount;
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark input complete");
     check(encoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain encoder");
-    readEncodedFrames(encoder.Get(), decoder, encodedCount, decodedCount, lowLatency);
+    readEncodedFrames(encoder.Get(), decoder, encodedCount, decodedCount, lowLatencyDecoder);
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish media streaming");
     if (!decoder) {
         return 2;
@@ -240,10 +257,10 @@ int probe(bool lowLatency) {
     check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish decoder streaming");
     std::printf("Media Foundation system software H.264 (%s): %u encoded and %u decoded before drain, "
                 "%u encoded and %u decoded total, maximum backlog %u.\n",
-                lowLatency ? "low-latency decoder" : "default decoder", encodedBeforeDrain,
+                modeName, encodedBeforeDrain,
                 framesBeforeDrain, encodedCount, decodedCount, maxBacklog);
     if (encodedCount != frameCount || decodedCount != frameCount || !framesBeforeDrain ||
-        (lowLatency && maxBacklog > maxLowLatencyBacklog)) {
+        (lowLatencyEncoder && maxBacklog > maxLowLatencyBacklog)) {
         return 3;
     }
     std::printf("Media Foundation verified %ux%u NV12 frames, timestamps and changing brightness.\n",
@@ -262,8 +279,13 @@ int main() {
         struct MediaScope {
             ~MediaScope() { MFShutdown(); }
         } media;
-        const int baseline = probe(false);
-        return baseline == 0 ? probe(true) : baseline;
+        const int baseline = probe(LatencyMode::Default, "default");
+        if (baseline != 0) {
+            return baseline;
+        }
+        const int decoderOnly = probe(LatencyMode::DecoderOnly, "low-latency decoder");
+        return decoderOnly == 0 ? probe(LatencyMode::EncoderAndDecoder, "low-latency encoder and decoder")
+                                : decoderOnly;
     } catch (HRESULT) {
         return 1;
     }
