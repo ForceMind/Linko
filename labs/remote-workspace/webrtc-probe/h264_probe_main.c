@@ -8,6 +8,18 @@ _Static_assert(sizeof(LinkoH264Result) == 16, "result ABI");
 _Static_assert(offsetof(LinkoH264Request, rtp_timestamp) == 12, "request timestamp offset");
 _Static_assert(offsetof(LinkoH264Result, rtp_timestamp) == 8, "result timestamp offset");
 
+static int check_frame(LinkoH264Request request, uint32_t timestamp) {
+    LinkoH264Result frame = {0};
+    request.rtp_timestamp = timestamp;
+    int status = linko_rw04_h264_roundtrip(&request, &frame);
+    if (status != LINKO_H264_OK || frame.width != request.width || frame.height != request.height ||
+        frame.rtp_timestamp != request.rtp_timestamp || frame.encoded_bytes == 0) {
+        fprintf(stderr, "H.264 bridge result: status=%d timestamp=%u\n", status, (unsigned)timestamp);
+        return 3;
+    }
+    return 0;
+}
+
 int main(void) {
     LinkoH264Request request = {LINKO_H264_PROBE_V1, 128, 96, UINT32_MAX - 20};
     LinkoH264Result frame = {0};
@@ -23,15 +35,8 @@ int main(void) {
     if (linko_rw04_h264_roundtrip(&invalid, &frame) != LINKO_H264_BAD_REQUEST) {
         return 2;
     }
-    const uint32_t timestamps[] = { UINT32_MAX - 20, 12 };
-    for (size_t i = 0; i < sizeof(timestamps) / sizeof(timestamps[0]); ++i) {
-        request.rtp_timestamp = timestamps[i];
-        int status = linko_rw04_h264_roundtrip(&request, &frame);
-        if (status != LINKO_H264_OK || frame.width != request.width || frame.height != request.height ||
-            frame.rtp_timestamp != request.rtp_timestamp || frame.encoded_bytes == 0) {
-            fprintf(stderr, "H.264 bridge result: status=%d frame=%zu\n", status, i);
-            return 3;
-        }
+    if (check_frame(request, UINT32_MAX - 20) || check_frame(request, 12)) {
+        return 3;
     }
     puts("C ABI -> WebRTC VideoToolbox H.264 -> decoded dimensions and RTP timestamps passed.");
     return 0;
