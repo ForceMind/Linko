@@ -33,6 +33,7 @@
 | Windows/macOS 托管桌面实采本机单窗口，缩放后继续，关闭清屏 | [RW03 独立预览](https://github.com/ForceMind/Linko/actions/runs/45030757462) |
 | Windows 系统 H.264、macOS VideoToolbox 对合成帧编解码 | [系统 codec 实验](https://github.com/ForceMind/Linko/actions/runs/45032679504) |
 | macOS 连续 H.264 视频、真实窗口渲染，以及独立回环加密收帧和新连接恢复 | [固定源码 macOS 探针](https://github.com/ForceMind/Linko/actions/runs/45049600112/artifacts/14765711373) |
+| macOS 同一实际窗口经过加密回环后绘制、缩放、关闭清屏 | [单窗口整链路探针](https://github.com/ForceMind/Linko/actions/runs/45054864669/artifacts/14767188791) |
 | 观看信令代次、参数替换、撤权和过期负例 | [三平台离线故障回归](https://github.com/ForceMind/Linko/actions/runs/45050232648) |
 
-Windows 的系统 codec 结果独立于 libwebrtc 工厂。托管验证覆盖单机；真实设备信令、Windows WebRTC、本机完整链路与局域网双向观看分别在候选中补证据。三端应用的既有键鼠、剪贴板和文件授权路径继续独立验收。RW05 的整机控制需通过 C06 的双机输入与恢复验收，RW04 不提前打开输入。
+Windows 的系统 codec 结果独立于 libwebrtc 工厂。托管验证覆盖单机，真实设备信令、Windows WebRTC 与局域网双向观看分别在候选中补证据。三端应用的既有键鼠、剪贴板和文件授权路径继续独立验收。RW05 的整机控制需通过 C06 的双机输入与恢复验收，RW04 不提前打开输入。
