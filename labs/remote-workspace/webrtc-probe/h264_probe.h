@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 
+#include <CoreVideo/CoreVideo.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -49,6 +51,11 @@ int linko_rw04_h264_open(const LinkoH264Request* request, LinkoH264Session** ses
 // wrap the 32-bit clock and must be between 1 and 90000 ticks.
 int linko_rw04_h264_submit(LinkoH264Session* session, uint32_t timestamp, uint8_t luma,
                            LinkoH264StreamResult* result);
+
+// Borrows a same-size BGRA source. On success the caller owns the returned
+// decoded CVPixelBuffer and must release it. The output slot must start empty.
+int linko_rw04_h264_submit_pixels(LinkoH264Session* session, uint32_t timestamp,
+                                  CVPixelBufferRef source, CVPixelBufferRef* decoded);
 
 // Releases the handle and clears its caller-owned slot. An empty slot is safe.
 int linko_rw04_h264_close(LinkoH264Session** session);

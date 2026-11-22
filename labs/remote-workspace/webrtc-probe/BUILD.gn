@@ -3,7 +3,10 @@ import("//webrtc.gni")
 group("linko_rw04_all_probes") {
   deps = [ ":linko_rw04_probe" ]
   if (is_mac) {
-    deps += [ ":linko_rw04_macos_h264" ]
+    deps += [
+      ":linko_rw04_macos_h264",
+      ":linko_rw04_macos_window",
+    ]
   }
 }
 
@@ -13,21 +16,54 @@ rtc_executable("linko_rw04_probe") {
 }
 
 if (is_mac) {
+  codec_deps = [
+    "//api/environment:environment_factory",
+    "//api/video:video_frame",
+    "//api/video_codecs:video_codecs_api",
+    "//sdk:native_api",
+    "//sdk:videoframebuffer_objc",
+    "//sdk:videotoolbox_objc",
+  ]
+  objc_includes = [
+    "//sdk/objc",
+    "//sdk/objc/base",
+  ]
   rtc_executable("linko_rw04_macos_h264") {
     sources = [
-      "h264_probe_main.c",
       "h264_probe.h",
       "h264_probe.mm",
+      "h264_probe_main.c",
     ]
     configs += [ "//:common_objc" ]
-    include_dirs = [ "//sdk/objc", "//sdk/objc/base" ]
-    frameworks = [ "Foundation.framework" ]
-    deps = [
-      "//api/environment:environment_factory",
-      "//api/video:video_frame",
-      "//api/video_codecs:video_codecs_api",
-      "//sdk:native_api",
-      "//sdk:videotoolbox_objc",
+    include_dirs = objc_includes
+    frameworks = [
+      "CoreVideo.framework",
+      "Foundation.framework",
     ]
+    deps = codec_deps
+  }
+  rtc_executable("linko_rw04_macos_window") {
+    sources = [
+      "h264_probe.h",
+      "h264_probe.mm",
+      "macos_capture.m",
+    ]
+    defines = [
+      "LINKO_RW03_CI",
+      "LINKO_RW04_CODEC_PREVIEW",
+    ]
+    configs += [ "//:common_objc" ]
+    include_dirs = objc_includes
+    frameworks = [
+      "AppKit.framework",
+      "CoreGraphics.framework",
+      "CoreImage.framework",
+      "CoreMedia.framework",
+      "CoreVideo.framework",
+      "Foundation.framework",
+      "QuartzCore.framework",
+      "ScreenCaptureKit.framework",
+    ]
+    deps = codec_deps
   }
 }
