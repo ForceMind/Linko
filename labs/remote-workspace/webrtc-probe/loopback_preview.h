@@ -21,7 +21,12 @@ bool linko_rw04_loopback_was_closed(LinkoLoopbackPreview* preview);
 
 // One serial producer and one consumer. The producer does not wait for decoding.
 bool linko_rw04_loopback_submit(LinkoLoopbackPreview* preview, CVPixelBufferRef input);
-CVPixelBufferRef linko_rw04_loopback_take(LinkoLoopbackPreview* preview) CF_RETURNS_RETAINED;
+
+// Both timestamps use the same process-local monotonic clock. Polling a decoded
+// frame does not issue a new timestamp. received_at may be NULL.
+double linko_rw04_loopback_now(void);
+CVPixelBufferRef linko_rw04_loopback_take(LinkoLoopbackPreview* preview,
+                                         double* received_at) CF_RETURNS_RETAINED;
 
 #ifdef __cplusplus
 }
