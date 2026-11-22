@@ -14,6 +14,7 @@ pub mod media;
 pub mod routing;
 pub mod scheduling;
 pub mod session;
+pub mod signaling;
 
 /// Identity and connection generation supplied by the authenticated runtime.
 /// Never construct production identities from fixture IDs, PIDs, or timestamps.

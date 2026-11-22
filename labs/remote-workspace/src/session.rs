@@ -57,6 +57,7 @@ pub struct SessionGate {
     revision: u64,
     policy_epoch: u64,
     view_epoch: u64,
+    media_generation: u64,
     connected: bool,
     view_until: Option<u64>,
     control_until: Option<u64>,
@@ -85,6 +86,7 @@ impl SessionGate {
             revision,
             policy_epoch: 1,
             view_epoch: 1,
+            media_generation: 0,
             connected: true,
             view_until: None,
             control_until: None,
@@ -111,6 +113,20 @@ impl SessionGate {
 
     pub fn view_epoch(&self) -> u64 {
         self.view_epoch
+    }
+
+    pub(crate) fn media_generation(&self) -> u64 {
+        self.media_generation
+    }
+
+    pub(crate) fn begin_media(&mut self, now: u64) -> Result<u64, Error> {
+        self.check_time(now)?;
+        self.can_view(now)?;
+        self.media_generation = self
+            .media_generation
+            .checked_add(1)
+            .ok_or(Error::Capacity)?;
+        Ok(self.media_generation)
     }
 
     pub fn control_scope(&self) -> Option<ControlScope> {
