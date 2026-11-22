@@ -39,6 +39,7 @@ constexpr int refreshId = 100;
 constexpr int startId = 101;
 constexpr int stopId = 102;
 constexpr int listId = 103;
+constexpr auto unavailableSource = L"窗口已关闭、隐藏或最小化。请重新选择。";
 
 struct Source {
     HWND window{};
@@ -198,7 +199,7 @@ class Preview {
         onClosed.revoke();
         pool.Close();
         session.Close();
-        publish(stop.stop_requested() ? L"预览已停止。" : L"窗口已关闭、隐藏或最小化。请重新选择。");
+        publish(stop.stop_requested() ? L"预览已停止。" : unavailableSource);
     }
 
 public:
@@ -378,13 +379,36 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 #ifdef LINKO_RW03_CI
+struct FixtureWindow {
+    HWND handle{};
+    ~FixtureWindow() { close(); }
+    void close() {
+        if (handle) {
+            DestroyWindow(std::exchange(handle, nullptr));
+        }
+    }
+};
+
+bool showsFixtureColor(Frame const& frame, bool blue) {
+    const auto width = static_cast<std::size_t>(frame.width);
+    const auto height = static_cast<std::size_t>(frame.height);
+    const auto center = (height / 2 * width + width / 2) * 4;
+    if (center + 2 >= frame.pixels.size()) {
+        return false;
+    }
+    auto const red = std::to_integer<unsigned>(frame.pixels[center + 2]);
+    auto const blueValue = std::to_integer<unsigned>(frame.pixels[center]);
+    return blue ? blueValue > red + 40 : red > blueValue + 40;
+}
+
 LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
         RECT area{};
         auto dc = BeginPaint(window, &paint);
         GetClientRect(window, &area);
-        auto brush = CreateSolidBrush(area.right > 400 ? RGB(30, 70, 190) : RGB(190, 30, 70));
+        const bool blue = GetWindowLongPtrW(window, GWLP_USERDATA) != 0;
+        auto brush = CreateSolidBrush(blue ? RGB(30, 70, 190) : RGB(190, 30, 70));
         FillRect(dc, &area, brush);
         DeleteObject(brush);
         EndPaint(window, &paint);
@@ -405,17 +429,20 @@ int smoke(HINSTANCE instance) {
     if (!RegisterClassW(&fixtureType)) {
         return 11;
     }
-    auto fixture = CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, L"Linko RW03 fixture",
-                                    WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 320, 200,
-                                    nullptr, nullptr, instance, nullptr);
+    constexpr auto caption = L"Linko RW03 fixture";
+    FixtureWindow selected{CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, caption,
+                                          WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 320, 200,
+                                          nullptr, nullptr, instance, nullptr)};
+    auto fixture = selected.handle;
     if (!fixture) {
         return 11;
     }
     UpdateWindow(fixture);
     DWORD process{};
     auto thread = GetWindowThreadProcessId(fixture, &process);
+    Source firstSource{fixture, process, thread, caption};
     Preview preview;
-    preview.start({fixture, process, thread, title(fixture)});
+    preview.start(firstSource);
     auto wait = [](auto predicate) {
         for (int count = 0; count < 120; ++count) {
             MSG message{};
@@ -432,37 +459,84 @@ int smoke(HINSTANCE instance) {
     std::shared_ptr<Frame const> first;
     if (!wait([&] {
         first = preview.view().second;
-        return first != nullptr;
+        return first && showsFixtureColor(*first, false);
     })) {
         ::fwprintf(stderr, L"WGC fixture did not deliver a frame: %ls\n", preview.view().first);
-        DestroyWindow(fixture);
         return 12;
     }
     auto previous = first->width;
     std::printf("WGC first fixture frame: %dx%d\n", first->width, first->height);
     first.reset();
+    SetWindowLongPtrW(fixture, GWLP_USERDATA, 1);
     if (!SetWindowPos(fixture, nullptr, 0, 0, 450, 300, SWP_NOMOVE | SWP_NOZORDER)) {
         return 13;
     }
     RedrawWindow(fixture, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     if (!wait([&] {
         auto frame = preview.view().second;
-        return frame && frame->width > previous;
+        return frame && frame->width > previous && showsFixtureColor(*frame, true);
     })) {
         auto [state, frame] = preview.view();
         ::fwprintf(stderr, L"WGC fixture did not resize: %ls (%d)\n", state, frame ? frame->width : 0);
-        DestroyWindow(fixture);
         return 13;
     }
     std::puts("WGC resized frame confirmed.");
-    DestroyWindow(fixture);
-    if (!wait([&] { return preview.view().second == nullptr; })) {
-        std::fputs("WGC fixture remained visible after close.\n", stderr);
+
+    FixtureWindow alternate{CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, caption,
+                                           WS_OVERLAPPEDWINDOW | WS_VISIBLE, 80, 80, 320, 200,
+                                           nullptr, nullptr, instance, nullptr)};
+    if (!alternate.handle) {
         return 14;
     }
+    UpdateWindow(alternate.handle);
+    ShowWindow(fixture, SW_MINIMIZE);
+    auto stopped = [&] {
+        auto [status, frame] = preview.view();
+        return !frame && std::wstring_view(status) == unavailableSource;
+    };
+    if (!IsIconic(fixture) || !wait(stopped)) {
+        std::fputs("WGC did not stop on minimize while the other fixture remained visible.\n", stderr);
+        return 15;
+    }
+    ShowWindow(fixture, SW_RESTORE);
+    RedrawWindow(fixture, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    auto until = Clock::now() + 400ms;
+    bool resumed = false;
+    if (!wait([&] {
+        resumed = !stopped();
+        return resumed || Clock::now() >= until;
+    }) || resumed) {
+        std::fputs("WGC resumed without an explicit selection.\n", stderr);
+        return 16;
+    }
+    preview.start(firstSource);
+    if (!wait([&] {
+        auto frame = preview.view().second;
+        return frame && showsFixtureColor(*frame, true);
+    })) {
+        std::fputs("WGC did not resume the reselected fixture.\n", stderr);
+        return 17;
+    }
+    selected.close();
+    if (!wait(stopped)) {
+        std::fputs("WGC fixture remained visible after close.\n", stderr);
+        return 18;
+    }
+    auto otherThread = GetWindowThreadProcessId(alternate.handle, &process);
+    preview.start({alternate.handle, process, otherThread, caption});
+    if (!wait([&] {
+        auto frame = preview.view().second;
+        return frame && showsFixtureColor(*frame, false);
+    })) {
+        std::fputs("WGC did not switch to the explicitly selected same-title fixture.\n", stderr);
+        return 19;
+    }
     preview.stop();
-    std::puts("WGC fixture start, resize, source close and stop passed.");
-    return preview.view().second ? 15 : 0;
+    if (preview.view().second) {
+        return 20;
+    }
+    std::puts("WGC fixture: resize, minimize, explicit reselection, same-title isolation, and close passed.");
+    return 0;
 }
 #endif
 } // namespace
