@@ -76,14 +76,23 @@ foreach ($file in @('DEPS', 'LICENSE', 'PATENTS')) {
 }
 $out = 'out/linko-rw04'
 $null = New-Item -ItemType Directory -Path $out, linko_probe -Force
-foreach ($file in @('BUILD.gn', 'frame_probe.cc')) {
+foreach ($file in @('BUILD.gn', 'frame_probe.cc', 'h264_probe.h', 'h264_probe.c', 'h264_probe.mm')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination linko_probe
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'args.gn') -Destination (Join-Path $out 'args.gn')
 Copy-Item -LiteralPath (Join-Path $out 'args.gn') -Destination $reports
-Invoke-Checked $gn @('gen', $out, '--fail-on-unused-args', '--root-target=//linko_probe:linko_rw04_probe')
+Invoke-Checked $gn @('gen', $out, '--fail-on-unused-args', '--root-target=//linko_probe:linko_rw04_all_probes')
 $exe = if ($IsWindows) { 'linko_rw04_probe.exe' } else { 'linko_rw04_probe' }
-Invoke-Checked $autoninja @('-C', $out, $exe)
+$targets = @('-C', $out, $exe)
+if ($IsMacOS) {
+    $targets += 'linko_rw04_macos_h264'
+}
+Invoke-Checked $autoninja $targets
 $program = Join-Path (Join-Path $source $out) $exe
 Invoke-Checked $program @()
 Add-Content -LiteralPath $report -Value 'Synthetic I420 VideoFrame and RTP timestamp roundtrip passed.' -Encoding utf8
+
+if ($IsMacOS) {
+    Invoke-Checked (Join-Path (Join-Path $source $out) 'linko_rw04_macos_h264') @()
+    Add-Content -LiteralPath $report -Value 'C ABI and native WebRTC VideoToolbox H.264 roundtrip passed.' -Encoding utf8
+}
