@@ -31,6 +31,13 @@ $report = Join-Path $reports 'revisions.txt'
 @("WebRTC $webrtcRevision", "depot_tools $depotRevision", "Runner $env:RUNNER_OS $env:RUNNER_ARCH", "Linko build $env:LINKO_VERSION") |
     Set-Content -LiteralPath $report -Encoding utf8
 
+if ($IsWindows) {
+    $sdk = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Include/10.0.28000.0/um/windows.h'
+    if (!(Test-Path -LiteralPath $sdk)) {
+        throw 'The pinned Chromium toolchain requires Windows SDK 10.0.28000.0 on the runner.'
+    }
+}
+
 $depot = Join-Path $buildRoot 'depot_tools'
 $workspace = Join-Path $buildRoot 'workspace'
 $null = New-Item -ItemType Directory -Path $workspace
@@ -74,9 +81,9 @@ foreach ($file in @('BUILD.gn', 'frame_probe.cc')) {
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'args.gn') -Destination (Join-Path $out 'args.gn')
 Copy-Item -LiteralPath (Join-Path $out 'args.gn') -Destination $reports
-Invoke-Checked $gn @('gen', $out, '--fail-on-unused-args')
-Invoke-Checked $autoninja @('-C', $out, 'linko_probe:linko_rw04_probe')
+Invoke-Checked $gn @('gen', $out, '--fail-on-unused-args', '--root-target=//linko_probe:linko_rw04_probe')
 $exe = if ($IsWindows) { 'linko_rw04_probe.exe' } else { 'linko_rw04_probe' }
+Invoke-Checked $autoninja @('-C', $out, $exe)
 $program = Join-Path (Join-Path $source $out) $exe
 Invoke-Checked $program @()
 Add-Content -LiteralPath $report -Value 'Synthetic I420 VideoFrame and RTP timestamp roundtrip passed.' -Encoding utf8
