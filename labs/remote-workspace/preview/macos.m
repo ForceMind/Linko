@@ -13,6 +13,8 @@
 #endif
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 #include <libproc.h>
+#include <mach/mach.h>
+#include <malloc/malloc.h>
 #include <unistd.h>
 #include "loopback_preview.h"
 
@@ -67,6 +69,10 @@ static const size_t MaxWidth = 1920;
 static const size_t MaxHeight = 1080;
 static const NSTimeInterval FrameLifetime = 2.0;
 
+static CIContext *makeRenderingContext(void) {
+    return [CIContext contextWithOptions:@{kCIContextCacheIntermediates: @NO}];
+}
+
 static NSTimeInterval uptime(void) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     return linko_rw04_loopback_now();
@@ -106,6 +112,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 
 @interface CaptureOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, readonly) BOOL ended;
+- (instancetype)initWithRenderingContext:(CIContext *)context;
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @property(strong) RW04NetworkPreview *networkPreview;
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
@@ -135,11 +142,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @synthesize networkPreview = _networkPreview;
 #endif
 
-- (instancetype)init {
+- (instancetype)initWithRenderingContext:(CIContext *)context {
     self = [super init];
     if (self) {
         _lock = [NSLock new];
-        _context = [CIContext contextWithOptions:@{kCIContextCacheIntermediates: @NO}];
+        _context = context;
     }
     return self;
 }
@@ -338,6 +345,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @end
 
 @interface PreviewApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
+- (CIContext *)contextForCapture;
 #ifdef LINKO_RW03_CI
 - (void)beginCapture:(SCWindow *)source;
 - (NSImage *)displayedFrame;
@@ -360,6 +368,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     NSButton *_stop;
     NSTextField *_status;
     NSImageView *_image;
+    CIContext *_renderingContext;
     NSTimer *_timer;
     SCStream *_stream;
     CaptureOutput *_output;
@@ -472,6 +481,13 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }];
 }
 
+- (CIContext *)contextForCapture {
+    if (!_renderingContext) {
+        _renderingContext = makeRenderingContext();
+    }
+    return _renderingContext;
+}
+
 - (void)beginCapture:(SCWindow *)source {
     if (_stream || _stopping || !CGPreflightScreenCaptureAccess() ||
         !sourceExists(source.windowID, source.owningApplication.processID)) {
@@ -490,7 +506,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     settings.ignoreShadowsSingleWindow = YES;
     settings.preservesAspectRatio = YES;
 
-    CaptureOutput *output = [CaptureOutput new];
+    CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:[self contextForCapture]];
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     output.networkPreview = [RW04NetworkPreview new];
     if (!output.networkPreview) {
@@ -676,19 +692,36 @@ static BOOL waitFor(BOOL (^predicate)(void)) {
 }
 
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+@interface FreshContextFixtureApp : PreviewApp
+@end
+
+@implementation FreshContextFixtureApp
+- (CIContext *)contextForCapture {
+    return makeRenderingContext();
+}
+@end
+
 static int sampleStoppedProcess(unsigned cycle) {
     struct proc_taskinfo task = {0};
     struct proc_fdinfo descriptors[512];
+    task_vm_info_data_t vm = {0};
+    mach_msg_type_number_t vmCount = TASK_VM_INFO_COUNT;
     int taskBytes = proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &task, (int)sizeof(task));
     int fdBytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, descriptors, (int)sizeof(descriptors));
+    kern_return_t vmStatus = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm, &vmCount);
     if (taskBytes != (int)sizeof(task) || fdBytes <= 0 || fdBytes >= (int)sizeof(descriptors) ||
-        fdBytes % (int)sizeof(struct proc_fdinfo) != 0) {
+        fdBytes % (int)sizeof(struct proc_fdinfo) != 0 ||
+        vmStatus != KERN_SUCCESS || vmCount < TASK_VM_INFO_REV1_COUNT) {
         fputs("Loopback cycles: could not measure the stopped process.\n", stderr);
         return -1;
     }
+    malloc_statistics_t heap;
+    malloc_zone_statistics(NULL, &heap);
     int fdCount = fdBytes / (int)sizeof(struct proc_fdinfo);
-    printf("Loopback cycles: stopped=%u rss_bytes=%llu threads=%d fds=%d\n",
-           cycle, (unsigned long long)task.pti_resident_size, task.pti_threadnum, fdCount);
+    printf("Loopback cycles: stopped=%u rss_bytes=%llu footprint_bytes=%llu "
+           "heap_live_bytes=%zu heap_allocated_bytes=%zu threads=%d fds=%d\n",
+           cycle, (unsigned long long)task.pti_resident_size, (unsigned long long)vm.phys_footprint,
+           heap.size_in_use, heap.size_allocated, task.pti_threadnum, fdCount);
     return fdCount;
 }
 
@@ -753,7 +786,13 @@ static int checkNativeCapture(void) {
     }
     [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
     [NSApp finishLaunching];
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    BOOL freshContext = [NSProcessInfo.processInfo.arguments containsObject:@"--fresh-context"];
+    PreviewApp *preview = freshContext ? [FreshContextFixtureApp new] : [PreviewApp new];
+    printf("Loopback cycles: context_mode=%s\n", freshContext ? "per-capture" : "shared");
+#else
     PreviewApp *preview = [PreviewApp new];
+#endif
     [preview applicationDidFinishLaunching:
         [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
     if (preview.hasFrameTimer) {
@@ -918,7 +957,7 @@ static int checkNativeCapture(void) {
 
 int main(void) {
     @autoreleasepool {
-        CaptureOutput *output = [CaptureOutput new];
+        CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:makeRenderingContext()];
         NSImage *fixture = [[NSImage alloc] initWithSize:NSMakeSize(20, 10)];
         [output publish:fixture];
         if ([output currentAt:uptime()] != fixture || [output currentAt:uptime() + 3]) {
