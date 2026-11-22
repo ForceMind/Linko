@@ -76,7 +76,8 @@ foreach ($file in @('DEPS', 'LICENSE', 'PATENTS')) {
 }
 $out = 'out/linko-rw04'
 $null = New-Item -ItemType Directory -Path $out, linko_probe -Force
-foreach ($file in @('BUILD.gn', 'frame_probe.cc', 'h264_probe.h', 'h264_probe_main.c', 'h264_probe.mm', 'local_transport.mm', 'loopback_preview.h')) {
+foreach ($file in @('BUILD.gn', 'frame_probe.cc', 'h264_probe.h', 'h264_probe_main.c', 'h264_probe.mm',
+                    'local_transport.mm', 'loopback_preview.h', 'vm_probe.cc', 'vm_probe.h')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination linko_probe
 }
 $buildArgs = Join-Path $out 'args.gn'

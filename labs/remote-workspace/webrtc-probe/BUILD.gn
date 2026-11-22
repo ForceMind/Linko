@@ -113,6 +113,8 @@ if (is_mac) {
       "local_transport.mm",
       "loopback_preview.h",
       "macos_capture.m",
+      "vm_probe.cc",
+      "vm_probe.h",
     ]
     defines = [
       "LINKO_RW03_CI",
