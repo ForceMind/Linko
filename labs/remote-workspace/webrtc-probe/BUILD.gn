@@ -19,10 +19,6 @@ if (is_mac) {
       "h264_probe.h",
       "h264_probe.mm",
     ]
-    allow_poison = [
-      "audio_codecs",
-      "environment_construction",
-    ]
     configs += [ "//:common_objc" ]
     include_dirs = [ "//sdk/objc", "//sdk/objc/base" ]
     frameworks = [ "Foundation.framework" ]
