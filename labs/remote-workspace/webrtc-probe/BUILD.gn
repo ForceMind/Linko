@@ -94,6 +94,7 @@ if (is_mac) {
       "//rtc_base:ip_address",
       "//rtc_base:network",
       "//rtc_base:socket_address",
+      "//rtc_base:socket_server",
       "//rtc_base:ssl",
       "//rtc_base:threading",
     ]

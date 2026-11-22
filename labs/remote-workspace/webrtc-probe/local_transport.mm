@@ -212,7 +212,6 @@ class Endpoint {
               const webrtc::Environment& environment,
               LoopbackNetwork& network, webrtc::BasicPacketSocketFactory& sockets) {
         auto allocator = std::make_unique<webrtc::BasicPortAllocator>(environment, &network, &sockets);
-        allocator->SetNetworkIgnoreMask(0);
         allocator->set_flags(webrtc::PORTALLOCATOR_DISABLE_STUN | webrtc::PORTALLOCATOR_DISABLE_RELAY |
                              webrtc::PORTALLOCATOR_DISABLE_TCP);
         webrtc::PeerConnectionDependencies dependencies(&observer);
@@ -376,6 +375,9 @@ int Run() {
     if (!factory) {
         return 3;
     }
+    webrtc::PeerConnectionFactoryInterface::Options options;
+    options.network_ignore_mask = 0;
+    factory->SetOptions(options);
     std::string first;
     std::string second;
     const bool passed = Exercise(*signaling, *factory, env, loopback, sockets, 55, first) &&
