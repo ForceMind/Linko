@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod coordinator;
+pub mod frame_binding;
 pub mod geometry;
 pub mod handoff;
 pub mod media;
