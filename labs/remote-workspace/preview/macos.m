@@ -436,6 +436,7 @@ static int checkNativeCapture(void) {
         return 0;
     }
     [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
+    [NSApp finishLaunching];
     PreviewApp *preview = [PreviewApp new];
     [preview applicationDidFinishLaunching:
         [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
@@ -445,14 +446,25 @@ static int checkNativeCapture(void) {
     fixture.releasedWhenClosed = NO;
     fixture.title = @"Linko RW03 fixture";
     fixture.backgroundColor = NSColor.systemRedColor;
+    fixture.contentView = [NSTextField labelWithString:@"RW03"];
     [fixture makeKeyAndOrderFront:nil];
+    [fixture orderFrontRegardless];
     [fixture displayIfNeeded];
     CGWindowID window = (CGWindowID)fixture.windowNumber;
+    BOOL visible = waitFor(^BOOL { return sourceExists(window, NSProcessInfo.processInfo.processIdentifier); });
+    if (!visible) {
+        fputs("macOS hosted WindowServer did not register the test window.\n", stderr);
+        return 5;
+    }
     __block SCWindow *source;
+    __block NSError *queryError;
+    __block NSUInteger count = 0;
     __block BOOL queried = NO;
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO
                                                completionHandler:^(SCShareableContent *content, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
+            queryError = error;
+            count = content.windows.count;
             for (SCWindow *candidate in content.windows) {
                 if (candidate.windowID == window) {
                     source = candidate;
@@ -463,7 +475,8 @@ static int checkNativeCapture(void) {
         });
     }];
     if (!waitFor(^BOOL { return queried; }) || !source) {
-        fputs("macOS hosted fixture missing from ScreenCaptureKit.\n", stderr);
+        fprintf(stderr, "macOS hosted fixture missing from ScreenCaptureKit (query completed=%d windows=%lu error=%ld).\n",
+                queried, (unsigned long)count, (long)queryError.code);
         return 5;
     }
     [preview beginCapture:source];

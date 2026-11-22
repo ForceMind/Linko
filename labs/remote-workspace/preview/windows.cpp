@@ -371,16 +371,40 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 #ifdef LINKO_RW03_CI
+LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        RECT area{};
+        auto dc = BeginPaint(window, &paint);
+        GetClientRect(window, &area);
+        auto brush = CreateSolidBrush(area.right > 400 ? RGB(30, 70, 190) : RGB(190, 30, 70));
+        FillRect(dc, &area, brush);
+        DeleteObject(brush);
+        EndPaint(window, &paint);
+        return 0;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
 int smoke(HINSTANCE instance) {
     if (valid({0, 16}) || valid({4096, 4096}) || !valid({1920, 1080})) {
         return 10;
     }
-    auto fixture = CreateWindowExW(WS_EX_TOPMOST, L"STATIC", L"Linko RW03 fixture",
+    WNDCLASSW fixtureType{};
+    fixtureType.hInstance = instance;
+    fixtureType.lpfnWndProc = fixtureProc;
+    fixtureType.style = CS_HREDRAW | CS_VREDRAW;
+    fixtureType.lpszClassName = L"LinkoRW03Fixture";
+    if (!RegisterClassW(&fixtureType)) {
+        return 11;
+    }
+    auto fixture = CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, L"Linko RW03 fixture",
                                     WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 320, 200,
                                     nullptr, nullptr, instance, nullptr);
     if (!fixture) {
         return 11;
     }
+    UpdateWindow(fixture);
     DWORD process{};
     auto thread = GetWindowThreadProcessId(fixture, &process);
     Preview preview;
@@ -408,17 +432,24 @@ int smoke(HINSTANCE instance) {
         return 12;
     }
     auto previous = first->width;
+    std::printf("WGC first fixture frame: %dx%d\n", first->width, first->height);
     first.reset();
-    SetWindowPos(fixture, nullptr, 0, 0, 450, 300, SWP_NOMOVE | SWP_NOZORDER);
+    if (!SetWindowPos(fixture, nullptr, 0, 0, 450, 300, SWP_NOMOVE | SWP_NOZORDER)) {
+        return 13;
+    }
+    RedrawWindow(fixture, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     if (!wait([&] {
         auto frame = preview.view().second;
         return frame && frame->width > previous;
     })) {
+        auto [state, frame] = preview.view();
+        ::fwprintf(stderr, L"WGC fixture did not resize: %ls (%d)\n", state, frame ? frame->width : 0);
         DestroyWindow(fixture);
         return 13;
     }
     DestroyWindow(fixture);
     if (!wait([&] { return preview.view().second == nullptr; })) {
+        std::fputs("WGC fixture remained visible after close.\n", stderr);
         return 14;
     }
     preview.stop();
