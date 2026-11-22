@@ -119,6 +119,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (instancetype)initWithRenderingContext:(CIContext *)context;
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @property(strong) RW04NetworkPreview *networkPreview;
+@property(strong) CIContext *encoderInputContext;
 - (BOOL)usesLoopback;
 - (BOOL)consumeDecodedFrameWithoutRendering;
 - (CVPixelBufferRef)copyInputWithWidth:(size_t)width height:(size_t)height CF_RETURNS_RETAINED;
@@ -153,6 +154,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 @synthesize networkPreview = _networkPreview;
+@synthesize encoderInputContext = _encoderInputContext;
 
 - (BOOL)usesLoopback {
     return YES;
@@ -322,7 +324,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     CGRect crop = CGRectMake(pixels.origin.x, pixels.origin.y, width, height);
     CGAffineTransform origin = CGAffineTransformMakeTranslation(-crop.origin.x, -crop.origin.y);
     CIImage *cropped = [[frame imageByCroppingToRect:crop] imageByApplyingTransform:origin];
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    [_encoderInputContext render:cropped toCVPixelBuffer:input];
+#else
     [_context render:cropped toCVPixelBuffer:input];
+#endif
     return input;
 }
 #endif
@@ -447,6 +453,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 
 @interface PreviewApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
 - (CIContext *)contextForCapture;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+- (CIContext *)contextForEncoderInput;
+#endif
 - (CaptureOutput *)makeCaptureOutput;
 - (NSImage *)frameForDisplay;
 #ifdef LINKO_RW03_CI
@@ -486,6 +495,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     BOOL _stopping;
     BOOL _quitting;
 #ifdef LINKO_RW04_NETWORK_PREVIEW
+    CIContext *_encoderInputContext;
     BOOL _captureStopAcknowledged;
 #endif
 }
@@ -594,6 +604,18 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     return _renderingContext;
 }
 
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+- (CIContext *)contextForEncoderInput {
+    if (!_encoderInputContext) {
+        _encoderInputContext = [CIContext contextWithOptions:@{
+            kCIContextUseSoftwareRenderer: @YES,
+            kCIContextCacheIntermediates: @NO,
+        }];
+    }
+    return _encoderInputContext;
+}
+#endif
+
 - (CaptureOutput *)makeCaptureOutput {
     CaptureOutput *output = [[CaptureOutput alloc] initWithRenderingContext:[self contextForCapture]];
 #ifdef LINKO_RW04_NETWORK_PREVIEW
@@ -601,6 +623,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     if (!output.networkPreview) {
         return nil;
     }
+    output.encoderInputContext = [self contextForEncoderInput];
 #endif
     return output;
 }
@@ -887,6 +910,15 @@ static BOOL checkInputPool(void) {
 }
 @end
 
+@interface GpuCropFixtureApp : PreviewApp
+@end
+
+@implementation GpuCropFixtureApp
+- (CIContext *)contextForEncoderInput {
+    return [self contextForCapture];
+}
+@end
+
 @interface DrainOnlyFixtureApp : PreviewApp
 @end
 
@@ -1076,9 +1108,22 @@ static int checkNativeCapture(void) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     BOOL captureOnly = [arguments containsObject:@"--capture-only"];
     BOOL drainOnly = [arguments containsObject:@"--drain-only"];
-    PreviewApp *preview = drainOnly ? [DrainOnlyFixtureApp new] :
-                          captureOnly ? [CaptureOnlyFixtureApp new] : [PreviewApp new];
-    printf("Loopback cycles: path=%s\n", drainOnly ? "drain-only" : captureOnly ? "capture-only" : "full");
+    PreviewApp *preview;
+    const char *path;
+    if (drainOnly) {
+        preview = [DrainOnlyFixtureApp new];
+        path = "drain-only";
+    } else if (captureOnly) {
+        preview = [CaptureOnlyFixtureApp new];
+        path = "capture-only";
+    } else if ([arguments containsObject:@"--gpu-crop"]) {
+        preview = [GpuCropFixtureApp new];
+        path = "gpu-crop";
+    } else {
+        preview = [PreviewApp new];
+        path = "full";
+    }
+    printf("Loopback cycles: path=%s\n", path);
     if (!captureOnly && !drainOnly) {
         if (!checkInputPool()) {
             fputs("Loopback input pool: allocation bound, recycling, resize, or stop failed.\n", stderr);
