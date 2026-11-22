@@ -21,6 +21,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Derive build version from commit time (UTC+08:00)
+        shell: bash
+        run: python tools/build_version.py >> "$GITHUB_ENV"
       - name: Build and run a pinned WebRTC VideoFrame probe
         shell: pwsh
         run: ./labs/remote-workspace/webrtc-probe/build.ps1

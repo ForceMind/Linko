@@ -28,7 +28,7 @@ $buildRoot = Join-Path $env:RUNNER_TEMP 'rw04-source'
 $reports = Join-Path $env:RUNNER_TEMP 'rw04-report'
 $null = New-Item -ItemType Directory -Path $buildRoot, $reports
 $report = Join-Path $reports 'revisions.txt'
-@("WebRTC $webrtcRevision", "depot_tools $depotRevision", "Runner $env:RUNNER_OS $env:RUNNER_ARCH") |
+@("WebRTC $webrtcRevision", "depot_tools $depotRevision", "Runner $env:RUNNER_OS $env:RUNNER_ARCH", "Linko build $env:LINKO_VERSION") |
     Set-Content -LiteralPath $report -Encoding utf8
 
 $depot = Join-Path $buildRoot 'depot_tools'
@@ -42,8 +42,13 @@ $env:PATH = $depot + [IO.Path]::PathSeparator + $env:PATH
 $env:DEPOT_TOOLS_UPDATE = '0'
 if ($IsWindows) {
     $env:DEPOT_TOOLS_WIN_TOOLCHAIN = '0'
+    Invoke-Checked (Join-Path $depot 'cipd_bin_setup.bat') @()
+    Invoke-Checked (Join-Path $depot 'bootstrap/win_tools.bat') @()
+} else {
+    Invoke-Checked bash @((Join-Path $depot 'ensure_bootstrap'))
 }
 $suffix = if ($IsWindows) { '.bat' } else { '' }
+Invoke-Checked (Join-Path $depot "python-bin/python3$suffix") @('--version')
 $gclient = Join-Path $depot "gclient$suffix"
 $gn = Join-Path $depot "gn$suffix"
 $autoninja = Join-Path $depot "autoninja$suffix"
