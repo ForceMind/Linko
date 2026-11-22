@@ -569,9 +569,18 @@ mod tests {
                 viewing_connection_nonce(&viewer_connection, &source.certificate, &role_context)?;
             let wrong_direction =
                 viewing_connection_nonce(&source_connection, &viewer.certificate, &swapped_roles)?;
-            anyhow::ensure!(at_source == at_viewer && at_source != [0; 16], "binding mismatch");
-            anyhow::ensure!(at_source != wrong_direction, "roles did not change the binding");
-            anyhow::ensure!(previous != Some(at_source), "reconnection reused the old binding");
+            anyhow::ensure!(
+                at_source == at_viewer && at_source != [0; 16],
+                "binding mismatch"
+            );
+            anyhow::ensure!(
+                at_source != wrong_direction,
+                "roles did not change the binding"
+            );
+            anyhow::ensure!(
+                previous != Some(at_source),
+                "reconnection reused the old binding"
+            );
             anyhow::ensure!(
                 viewing_connection_nonce(&source_connection, &source.certificate, &role_context)
                     .is_err(),
@@ -582,7 +591,8 @@ mod tests {
             viewer_connection.close(0u32.into(), b"fixture complete");
             anyhow::ensure!(
                 matches!(
-                    tokio::time::timeout(Duration::from_secs(5), source_connection.closed()).await?,
+                    tokio::time::timeout(Duration::from_secs(5), source_connection.closed())
+                        .await?,
                     quinn::ConnectionError::ApplicationClosed(_)
                 ),
                 "source did not observe the viewer closing"
