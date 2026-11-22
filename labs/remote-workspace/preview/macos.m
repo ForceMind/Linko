@@ -366,9 +366,8 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     [self discard];
 }
 
-- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample
-        ofType:(SCStreamOutputType)type {
-    if (self.ended || type != SCStreamOutputTypeScreen) {
+- (void)handleScreenSample:(CMSampleBufferRef)sample {
+    if (self.ended) {
         return;
     }
     NSArray<NSDictionary *> *values = (__bridge NSArray *)CMSampleBufferGetSampleAttachmentsArray(sample, false);
@@ -434,6 +433,15 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
     [self publish:image];
 }
+
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sample
+        ofType:(SCStreamOutputType)type {
+    if (type == SCStreamOutputTypeScreen) {
+        @autoreleasepool {
+            [self handleScreenSample:sample];
+        }
+    }
+}
 @end
 
 @interface PreviewApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
@@ -450,6 +458,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (void)stopButton:(id)sender;
 - (BOOL)captureStopAcknowledged;
 - (BOOL)receivedFixtureFrame;
+- (dispatch_queue_t)captureQueueForFixture;
 #endif
 #ifdef LINKO_RW04_COLOR_PREVIEW
 - (BOOL)showsFixtureColorRed:(BOOL)red;
@@ -464,6 +473,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     NSTextField *_status;
     NSImageView *_image;
     CIContext *_renderingContext;
+    dispatch_queue_t _captureQueue;
     NSTimer *_timer;
     SCStream *_stream;
     CaptureOutput *_output;
@@ -618,9 +628,13 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
         return;
     }
     SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:settings delegate:output];
-    dispatch_queue_t queue = dispatch_queue_create("app.linko.rw03.frames", DISPATCH_QUEUE_SERIAL);
+    if (!_captureQueue) {
+        dispatch_queue_attr_t attributes = dispatch_queue_attr_make_with_autorelease_frequency(
+            DISPATCH_QUEUE_SERIAL, DISPATCH_AUTORELEASE_FREQUENCY_WORK_ITEM);
+        _captureQueue = dispatch_queue_create("app.linko.rw03.frames", attributes);
+    }
     NSError *error = nil;
-    if (![stream addStreamOutput:output type:SCStreamOutputTypeScreen sampleHandlerQueue:queue error:&error]) {
+    if (![stream addStreamOutput:output type:SCStreamOutputTypeScreen sampleHandlerQueue:_captureQueue error:&error]) {
         _status.stringValue = @"无法初始化窗口预览。";
         return;
     }
@@ -681,24 +695,34 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
 }
 
+- (void)captureDidStop:(NSError *)error {
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+    _captureStopAcknowledged = error == nil;
+#else
+    (void)error;
+#endif
+    _stream = nil;
+    _output = nil;
+    _stopRequested = NO;
+    _stopping = NO;
+    _pick.enabled = YES;
+    if (_quitting) {
+        [NSApp replyToApplicationShouldTerminate:YES];
+    }
+}
+
 - (void)finishStop {
     _stopping = YES;
     SCStream *stream = _stream;
     CaptureOutput *output = _output;
+    dispatch_queue_t queue = _captureQueue;
     [stream removeStreamOutput:output type:SCStreamOutputTypeScreen error:NULL];
     [stream stopCaptureWithCompletionHandler:^(NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-#ifdef LINKO_RW04_NETWORK_PREVIEW
-            self->_captureStopAcknowledged = error == nil;
-#endif
-            self->_stream = nil;
-            self->_output = nil;
-            self->_stopRequested = NO;
-            self->_stopping = NO;
-            self->_pick.enabled = YES;
-            if (self->_quitting) {
-                [NSApp replyToApplicationShouldTerminate:YES];
-            }
+        // Retire queued samples before the next window can start.
+        dispatch_async(queue, ^{
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self captureDidStop:error];
+            });
         });
     }];
 }
@@ -764,6 +788,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 }
 - (BOOL)receivedFixtureFrame {
     return self.displayedFrame != nil;
+}
+- (dispatch_queue_t)captureQueueForFixture {
+    return _captureQueue;
 }
 #endif
 #endif
@@ -945,13 +972,15 @@ static BOOL stopFixtureCycle(PreviewApp *preview, BOOL usesLoopback) {
 
 static BOOL checkCaptureCycles(PreviewApp *preview, SCWindow *source, BOOL usesLoopback) {
     int warmDescriptors = -1;
-    if (!stopFixtureCycle(preview, usesLoopback) || !checkStoppedSample(0, &warmDescriptors)) {
+    dispatch_queue_t queue = preview.captureQueueForFixture;
+    if (!queue || !stopFixtureCycle(preview, usesLoopback) || !checkStoppedSample(0, &warmDescriptors)) {
         return NO;
     }
     for (unsigned cycle = 1; cycle <= 100; ++cycle) {
         @autoreleasepool {
             [preview beginCapture:source];
-            if (!preview.hasFrameTimer || !waitFor(^BOOL { return preview.receivedFixtureFrame; }) ||
+            if (preview.captureQueueForFixture != queue || !preview.hasFrameTimer ||
+                !waitFor(^BOOL { return preview.receivedFixtureFrame; }) ||
                 !stopFixtureCycle(preview, usesLoopback)) {
                 fprintf(stderr, "Loopback cycles: open, render or cleanup failed at cycle %u.\n", cycle);
                 return NO;
@@ -961,6 +990,7 @@ static BOOL checkCaptureCycles(PreviewApp *preview, SCWindow *source, BOOL usesL
             return NO;
         }
     }
+    puts("Loopback cycles: one capture queue reused across all cycles.");
     puts("Loopback cycles: 100 native start/stop cycles passed.");
     return YES;
 }
