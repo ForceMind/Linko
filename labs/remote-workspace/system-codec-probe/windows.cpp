@@ -35,8 +35,8 @@ struct Fixture {
     UINT32 nv12Bytes() const { return lumaBytes() * 3 / 2; }
 };
 
-constexpr Fixture small{128, 96, 24, 200'000, false};
-constexpr Fixture hd{1920, 1080, 90, 4'000'000, true};
+constexpr Fixture smallFixture{128, 96, 24, 200'000, false};
+constexpr Fixture hdFixture{1920, 1080, 90, 4'000'000, true};
 
 struct Timing {
     explicit Timing(UINT32 frames) {
@@ -58,7 +58,7 @@ struct Timing {
 };
 
 int fixtureLuma(UINT32 index) {
-    return 24 + 8 * static_cast<int>(index % small.frames);
+    return 24 + 8 * static_cast<int>(index % smallFixture.frames);
 }
 
 void check(HRESULT result, char const* operation) {
@@ -329,17 +329,19 @@ int main() {
         struct MediaScope {
             ~MediaScope() { MFShutdown(); }
         } media;
-        const int baseline = probe(small, LatencyMode::Default, "default");
+        const int baseline = probe(smallFixture, LatencyMode::Default, "default");
         if (baseline != 0) {
             return baseline;
         }
-        const int decoderOnly = probe(small, LatencyMode::DecoderOnly, "low-latency decoder");
+        const int decoderOnly = probe(smallFixture, LatencyMode::DecoderOnly, "low-latency decoder");
         if (decoderOnly != 0) {
             return decoderOnly;
         }
-        const int smallLowLatency = probe(small, LatencyMode::EncoderAndDecoder, "low-latency encoder and decoder");
-        return smallLowLatency == 0 ? probe(hd, LatencyMode::EncoderAndDecoder, "low-latency encoder and decoder")
-                                    : smallLowLatency;
+        const int smallLowLatency = probe(smallFixture, LatencyMode::EncoderAndDecoder,
+                                          "low-latency encoder and decoder");
+        return smallLowLatency == 0
+            ? probe(hdFixture, LatencyMode::EncoderAndDecoder, "low-latency encoder and decoder")
+            : smallLowLatency;
     } catch (HRESULT) {
         return 1;
     }
