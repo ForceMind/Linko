@@ -79,12 +79,19 @@ class Preview {
     std::mutex mutex_;
     std::shared_ptr<Frame const> frame_;
     wchar_t const* status_ = L"请选择一个窗口。";
+    HWND viewWindow_{};
     std::jthread worker_;
 
     void publish(wchar_t const* status, std::shared_ptr<Frame const> frame = {}) {
         std::lock_guard guard(mutex_);
+        if (status_ == status && frame_ == frame) {
+            return;
+        }
         status_ = status;
         frame_ = std::move(frame);
+        if (viewWindow_) {
+            InvalidateRect(viewWindow_, nullptr, FALSE);
+        }
     }
 
     void capture(std::stop_token stop, Source const& source) {
@@ -205,6 +212,11 @@ class Preview {
 public:
     ~Preview() { stop(); }
 
+    void attachView(HWND window) {
+        std::lock_guard guard(mutex_);
+        viewWindow_ = window;
+    }
+
     void start(Source source) {
         stop();
         publish(L"正在打开预览。");
@@ -292,13 +304,13 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     }
     switch (message) {
     case WM_CREATE:
+        app->preview.attachView(window);
         app->list = control(window, L"LISTBOX", nullptr, WS_BORDER | WS_VSCROLL | WS_TABSTOP | LBS_NOINTEGRALHEIGHT, listId);
         app->status = control(window, L"STATIC", L"请选择一个窗口。", 0, 0);
         control(window, L"BUTTON", L"刷新列表", WS_TABSTOP, refreshId);
         control(window, L"BUTTON", L"开始预览", WS_TABSTOP, startId);
         control(window, L"BUTTON", L"停止", WS_TABSTOP, stopId);
         app->refresh();
-        SetTimer(window, 1, 60, nullptr);
         return 0;
     case WM_GETMINMAXINFO: {
         auto limits = reinterpret_cast<MINMAXINFO*>(lparam);
@@ -333,8 +345,10 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
             break;
         }
         return 0;
-    case WM_TIMER: {
-        auto status = app->preview.view().first;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        auto dc = BeginPaint(window, &paint);
+        auto [status, frame] = app->preview.view();
         wchar_t previous[120]{};
         GetWindowTextW(app->status, previous, static_cast<int>(std::size(previous)));
         if (std::wstring_view(previous) != status) {
@@ -343,17 +357,7 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         RECT area{};
         GetClientRect(window, &area);
         area.top = 156;
-        InvalidateRect(window, &area, FALSE);
-        return 0;
-    }
-    case WM_PAINT: {
-        PAINTSTRUCT paint{};
-        auto dc = BeginPaint(window, &paint);
-        RECT area{};
-        GetClientRect(window, &area);
-        area.top = 156;
         FillRect(dc, &area, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-        auto frame = app->preview.view().second;
         if (frame && area.bottom > area.top && area.right > 0) {
             auto scale = std::min(static_cast<double>(area.right) / frame->width,
                                   static_cast<double>(area.bottom - area.top) / frame->height);
@@ -369,13 +373,29 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         return 0;
     }
     case WM_DESTROY:
-        KillTimer(window, 1);
+        app->preview.attachView(nullptr);
         app->preview.stop();
         PostQuitMessage(0);
         return 0;
     default:
         return DefWindowProcW(window, message, wparam, lparam);
     }
+}
+
+HWND createPreviewWindow(HINSTANCE instance, App& app) {
+    WNDCLASSW type{};
+    type.hInstance = instance;
+    type.lpfnWndProc = windowProc;
+    type.lpszClassName = L"LinkoLocalPreview";
+    type.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    type.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    if (!RegisterClassW(&type)) {
+        return nullptr;
+    }
+    return CreateWindowExW(WS_EX_CONTROLPARENT, type.lpszClassName, L"屏跃 · 本机窗口预览",
+                           WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+                           CW_USEDEFAULT, CW_USEDEFAULT, 780, 580,
+                           nullptr, nullptr, instance, &app);
 }
 
 #ifdef LINKO_RW03_CI
@@ -421,6 +441,46 @@ int smoke(HINSTANCE instance) {
     if (valid({0, 16}) || valid({4096, 4096}) || !valid({1920, 1080})) {
         return 10;
     }
+    App app;
+    FixtureWindow host{createPreviewWindow(instance, app)};
+    if (!host.handle) {
+        return 21;
+    }
+    ShowWindow(host.handle, SW_SHOWNOACTIVATE);
+    auto& preview = app.preview;
+    unsigned previewPaints = 0;
+    unsigned previewTimers = 0;
+    auto wait = [&](auto predicate) {
+        for (int count = 0; count < 120; ++count) {
+            MSG message{};
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                if (message.hwnd == host.handle) {
+                    previewPaints += message.message == WM_PAINT ? 1u : 0u;
+                    previewTimers += message.message == WM_TIMER ? 1u : 0u;
+                }
+                DispatchMessageW(&message);
+            }
+            if (predicate()) {
+                return true;
+            }
+            std::this_thread::sleep_for(40ms);
+        }
+        return false;
+    };
+    auto observeIdle = [&] {
+        auto const until = Clock::now() + 300ms;
+        return wait([&] { return Clock::now() >= until; }) && previewTimers == 0;
+    };
+    if (!observeIdle()) {
+        std::fputs("WGC preview dispatched a timer while idle before selection.\n", stderr);
+        return 21;
+    }
+    auto displaysStatus = [&](wchar_t const* expected) {
+        wchar_t text[120]{};
+        GetWindowTextW(app.status, text, static_cast<int>(std::size(text)));
+        return std::wstring_view(text) == expected;
+    };
+
     WNDCLASSW fixtureType{};
     fixtureType.hInstance = instance;
     fixtureType.lpfnWndProc = fixtureProc;
@@ -441,25 +501,11 @@ int smoke(HINSTANCE instance) {
     DWORD process{};
     auto thread = GetWindowThreadProcessId(fixture, &process);
     Source firstSource{fixture, process, thread, caption};
-    Preview preview;
     preview.start(firstSource);
-    auto wait = [](auto predicate) {
-        for (int count = 0; count < 120; ++count) {
-            MSG message{};
-            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-                DispatchMessageW(&message);
-            }
-            if (predicate()) {
-                return true;
-            }
-            std::this_thread::sleep_for(40ms);
-        }
-        return false;
-    };
     std::shared_ptr<Frame const> first;
     if (!wait([&] {
         first = preview.view().second;
-        return first && showsFixtureColor(*first, false);
+        return first && showsFixtureColor(*first, false) && displaysStatus(L"正在本机预览。");
     })) {
         ::fwprintf(stderr, L"WGC fixture did not deliver a frame: %ls\n", preview.view().first);
         return 12;
@@ -531,10 +577,15 @@ int smoke(HINSTANCE instance) {
         std::fputs("WGC did not switch to the explicitly selected same-title fixture.\n", stderr);
         return 19;
     }
-    preview.stop();
-    if (preview.view().second) {
+    auto const paintsBeforeStop = previewPaints;
+    SendMessageW(host.handle, WM_COMMAND, stopId, 0);
+    if (!wait([&] {
+        return !preview.view().second && previewPaints > paintsBeforeStop && displaysStatus(L"预览已停止。");
+    }) || !observeIdle()) {
+        std::fputs("WGC preview did not repaint on stop or stopped with an active timer.\n", stderr);
         return 20;
     }
+    std::puts("WGC preview UI: frame and stop repaints arrived without idle timer messages.");
     std::puts("WGC fixture: resize, minimize, explicit reselection, same-title isolation, and close passed.");
     return 0;
 }
@@ -546,7 +597,6 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    static_cast<void>(&windowProc);
     auto result = smoke(GetModuleHandleW(nullptr));
     std::printf("WGC smoke result: %d\n", result);
     return result;
@@ -555,19 +605,7 @@ int main() {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     App app;
-    WNDCLASSW type{};
-    type.hInstance = instance;
-    type.lpfnWndProc = windowProc;
-    type.lpszClassName = L"LinkoLocalPreview";
-    type.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    type.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    if (!RegisterClassW(&type)) {
-        return 1;
-    }
-    auto window = CreateWindowExW(WS_EX_CONTROLPARENT, type.lpszClassName, L"屏跃 · 本机窗口预览",
-                                  WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                                  CW_USEDEFAULT, CW_USEDEFAULT, 780, 580,
-                                  nullptr, nullptr, instance, &app);
+    auto window = createPreviewWindow(instance, app);
     if (!window) {
         return 1;
     }
