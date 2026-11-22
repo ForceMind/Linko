@@ -9,11 +9,13 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "windows_fixture.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -37,6 +39,14 @@ struct Fixture {
 
 constexpr Fixture smallFixture{128, 96, 24, 200'000, false};
 constexpr Fixture hdFixture{1920, 1080, 90, 4'000'000, true};
+using CapturedSamples = std::array<std::vector<BYTE>, 2>;
+
+std::span<BYTE const> capturedSample(CapturedSamples const* samples, UINT32 index) {
+    if (samples) {
+        return (*samples)[index % samples->size()];
+    }
+    return {};
+}
 
 struct Timing {
     explicit Timing(UINT32 frames) {
@@ -88,19 +98,24 @@ ComPtr<IMFSample> sampleWithBuffer(DWORD size, DWORD alignment, ComPtr<IMFMediaB
     return sample;
 }
 
-Clock::time_point submitFrame(IMFTransform* encoder, Fixture const& fixture, UINT32 index) {
+Clock::time_point submitFrame(IMFTransform* encoder, Fixture const& fixture, UINT32 index,
+                              std::span<BYTE const> captured) {
     ComPtr<IMFMediaBuffer> buffer;
     auto sample = sampleWithBuffer(fixture.nv12Bytes(), MF_1_BYTE_ALIGNMENT, buffer);
     BYTE* pixels{};
     check(buffer->Lock(&pixels, nullptr, nullptr), "lock NV12 buffer");
-    std::memset(pixels, fixtureLuma(index), fixture.lumaBytes());
-    if (fixture.striped) {
-        for (UINT32 row = 0; row < fixture.height; ++row) {
-            std::memset(pixels + row * fixture.width + fixture.width * 3 / 4,
-                        232 - fixtureLuma(index), fixture.width / 4);
+    if (!captured.empty()) {
+        std::memcpy(pixels, captured.data(), captured.size());
+    } else {
+        std::memset(pixels, fixtureLuma(index), fixture.lumaBytes());
+        if (fixture.striped) {
+            for (UINT32 row = 0; row < fixture.height; ++row) {
+                std::memset(pixels + row * fixture.width + fixture.width * 3 / 4,
+                            232 - fixtureLuma(index), fixture.width / 4);
+            }
         }
+        std::memset(pixels + fixture.lumaBytes(), 128, fixture.nv12Bytes() - fixture.lumaBytes());
     }
-    std::memset(pixels + fixture.lumaBytes(), 128, fixture.nv12Bytes() - fixture.lumaBytes());
     check(buffer->Unlock(), "unlock NV12 buffer");
     check(buffer->SetCurrentLength(fixture.nv12Bytes()), "commit NV12 buffer");
     check(sample->SetSampleTime(frameDuration * (index + 1)), "set sample timestamp");
@@ -188,7 +203,8 @@ MFVideoArea displayArea(IMFMediaType* layout, UINT32 width, UINT32 height) {
     return area;
 }
 
-void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const& fixture, UINT32 index) {
+void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const& fixture, UINT32 index,
+                        std::span<BYTE const> captured) {
     check(sample && index < fixture.frames ? S_OK : E_UNEXPECTED, "check decoded sample count");
     DWORD length{};
     check(sample->GetTotalLength(&length), "read decoded NV12 length");
@@ -226,9 +242,19 @@ void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const&
     const bool complete = currentLength >= fixture.nv12Bytes();
     const int brightness = complete ? pixels[fixture.width / 2] : -1;
     const int stripe = complete ? pixels[fixture.width * 7 / 8] : -1;
+    const int expectedBrightness = captured.empty() ? fixtureLuma(index) : captured[fixture.width / 2];
+    bool chromaMatches = true;
+    if (!captured.empty()) {
+        const auto stride = MFGetAttributeUINT32(layout.Get(), MF_MT_DEFAULT_STRIDE, decodedWidth);
+        const auto decodedOffset = static_cast<UINT64>(stride) * decodedHeight + fixture.width / 2;
+        const auto inputOffset = fixture.lumaBytes() + fixture.width / 2;
+        chromaMatches = stride >= fixture.width && decodedOffset + 1 < currentLength &&
+            std::abs(pixels[decodedOffset] - captured[inputOffset]) <= 8 &&
+            std::abs(pixels[decodedOffset + 1] - captured[inputOffset + 1]) <= 8;
+    }
     check(buffer->Unlock(), "unlock decoded buffer");
     if (timestamp != frameDuration * (index + 1) ||
-        std::abs(brightness - fixtureLuma(index)) > 6 ||
+        std::abs(brightness - expectedBrightness) > 6 || !chromaMatches ||
         (fixture.striped && std::abs(stripe - (232 - fixtureLuma(index))) > 6)) {
         std::fprintf(stderr, "Decoded frame %u: timestamp %lld, luma %d, stripe %d\n",
                      index, timestamp, brightness, stripe);
@@ -236,7 +262,8 @@ void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const&
     }
 }
 
-void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& timing) {
+void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& timing,
+                       CapturedSamples const* samples) {
     for (;;) {
         auto decoded = readOutput(decoder, fixture.nv12Bytes());
         if (decoded.status == MF_E_TRANSFORM_STREAM_CHANGE) {
@@ -250,13 +277,14 @@ void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& ti
         const auto received = Clock::now();
         const auto index = timing.decodedMs.size();
         check(index < timing.submitted.size() ? S_OK : E_UNEXPECTED, "check sample had been submitted");
-        verifyDecodedFrame(decoder, decoded.sample.Get(), fixture, static_cast<UINT32>(index));
+        const auto frame = static_cast<UINT32>(index);
+        verifyDecodedFrame(decoder, decoded.sample.Get(), fixture, frame, capturedSample(samples, frame));
         timing.decodedMs.push_back(std::chrono::duration<double, std::milli>(received - timing.submitted[index]).count());
     }
 }
 
 void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fixture const& fixture,
-                       UINT32& encodedCount, Timing& timing, bool lowLatency) {
+                       UINT32& encodedCount, Timing& timing, bool lowLatency, CapturedSamples const* samples) {
     for (;;) {
         auto encoded = readOutput(encoder, fixture.nv12Bytes());
         if (encoded.status == MF_E_TRANSFORM_NEED_MORE_INPUT) {
@@ -278,11 +306,11 @@ void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fix
         }
         check(decoder->ProcessInput(0, encoded.sample.Get(), 0), "submit H.264 sample");
         ++encodedCount;
-        readDecodedFrames(decoder.Get(), fixture, timing);
+        readDecodedFrames(decoder.Get(), fixture, timing, samples);
     }
 }
 
-int probe(Fixture const& fixture, LatencyMode mode, char const* modeName) {
+int probe(Fixture const& fixture, LatencyMode mode, char const* modeName, CapturedSamples const* samples = nullptr) {
     ComPtr<IMFTransform> encoder;
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&encoder)), "activate system H.264 encoder");
@@ -315,22 +343,22 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName) {
     Timing timing(fixture.frames);
     const auto started = Clock::now();
     for (UINT32 index = 0; index < fixture.frames; ++index) {
-        timing.submitted.push_back(submitFrame(encoder.Get(), fixture, index));
-        readEncodedFrames(encoder.Get(), decoder, fixture, encodedCount, timing, lowLatencyDecoder);
+        timing.submitted.push_back(submitFrame(encoder.Get(), fixture, index, capturedSample(samples, index)));
+        readEncodedFrames(encoder.Get(), decoder, fixture, encodedCount, timing, lowLatencyDecoder, samples);
         maxBacklog = std::max(maxBacklog, index + 1 - static_cast<UINT32>(timing.decodedMs.size()));
     }
     const UINT32 encodedBeforeDrain = encodedCount;
     const auto framesBeforeDrain = timing.decodedMs.size();
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark input complete");
     check(encoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain encoder");
-    readEncodedFrames(encoder.Get(), decoder, fixture, encodedCount, timing, lowLatencyDecoder);
+    readEncodedFrames(encoder.Get(), decoder, fixture, encodedCount, timing, lowLatencyDecoder, samples);
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish media streaming");
     if (!decoder) {
         return 2;
     }
     check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark decoder input complete");
     check(decoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain decoder");
-    readDecodedFrames(decoder.Get(), fixture, timing);
+    readDecodedFrames(decoder.Get(), fixture, timing, samples);
     const auto decodedCount = timing.decodedMs.size();
     const double elapsed = std::chrono::duration<double>(Clock::now() - started).count();
     check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish decoder streaming");
@@ -348,9 +376,8 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName) {
     timing.report();
     return 0;
 }
-}
 
-int main() {
+int withMediaFoundation(auto run) {
     try {
         check(CoInitializeEx(nullptr, COINIT_MULTITHREADED), "initialize COM");
         struct ComScope {
@@ -360,6 +387,71 @@ int main() {
         struct MediaScope {
             ~MediaScope() { MFShutdown(); }
         } media;
+        return run();
+    } catch (HRESULT) {
+        return 1;
+    }
+}
+
+#ifdef LINKO_RW04_WGC_CODEC_CI
+std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame, std::array<int, 3> expectedBgr) {
+    auto const& crop = smallFixture;
+    const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
+    check(frame.width >= crop.width && frame.height >= crop.height &&
+          frame.width <= 4096 && frame.height <= 2160 && rowBytes * frame.height == frame.bgra.size()
+          ? S_OK : E_INVALIDARG, "check WGC frame dimensions");
+    const unsigned left = (frame.width - crop.width) / 2;
+    const unsigned top = (frame.height - crop.height) / 2;
+    auto const* bgra = reinterpret_cast<BYTE const*>(frame.bgra.data());
+    auto const* center = bgra + rowBytes * (frame.height / 2) + (frame.width / 2) * 4;
+    for (std::size_t i = 0; i < expectedBgr.size(); ++i) {
+        check(std::abs(center[i] - expectedBgr[i]) <= 8 ? S_OK : E_UNEXPECTED, "check WGC fixture color");
+    }
+
+    std::vector<BYTE> nv12(crop.nv12Bytes());
+    for (unsigned y = 0; y < crop.height; y += 2) {
+        for (unsigned x = 0; x < crop.width; x += 2) {
+            int u = 0;
+            int v = 0;
+            for (unsigned dy = 0; dy < 2; ++dy) {
+                for (unsigned dx = 0; dx < 2; ++dx) {
+                    auto const* pixel = bgra + rowBytes * (top + y + dy) + 4 * (left + x + dx);
+                    const int blue = pixel[0];
+                    const int green = pixel[1];
+                    const int red = pixel[2];
+                    // Limited-range BT.601 luma and 2-by-2 averaged chroma for the fixture.
+                    nv12[(y + dy) * crop.width + x + dx] =
+                        static_cast<BYTE>((66 * red + 129 * green + 25 * blue + 128) / 256 + 16);
+                    u += 112 * blue - 74 * green - 38 * red;
+                    v += 112 * red - 94 * green - 18 * blue;
+                }
+            }
+            const auto chroma = crop.lumaBytes() + (y / 2) * crop.width + x;
+            constexpr int chromaBias = 128 * 1024 + 512;
+            nv12[chroma] = static_cast<BYTE>((u + chromaBias) / 1024);
+            nv12[chroma + 1] = static_cast<BYTE>((v + chromaBias) / 1024);
+        }
+    }
+    return nv12;
+}
+#endif
+}
+
+#ifdef LINKO_RW04_WGC_CODEC_CI
+int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
+    return withMediaFoundation([&] {
+        const CapturedSamples samples{cropWgcFixture(first, {70, 30, 190}),
+                                      cropWgcFixture(resized, {190, 70, 30})};
+        const auto result = probe(smallFixture, LatencyMode::EncoderAndDecoder, "WGC fixture", &samples);
+        if (result == 0) {
+            std::puts("WGC fixture H.264 roundtrip kept both source colors, luma and chroma.");
+        }
+        return result;
+    });
+}
+#else
+int main() {
+    return withMediaFoundation([] {
         const int baseline = probe(smallFixture, LatencyMode::Default, "default");
         if (baseline != 0) {
             return baseline;
@@ -373,7 +465,6 @@ int main() {
         return smallLowLatency == 0
             ? probe(hdFixture, LatencyMode::EncoderAndDecoder, "low-latency encoder and decoder")
             : smallLowLatency;
-    } catch (HRESULT) {
-        return 1;
-    }
+    });
 }
+#endif

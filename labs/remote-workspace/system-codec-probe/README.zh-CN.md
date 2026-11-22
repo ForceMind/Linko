@@ -6,6 +6,8 @@ macOS 使用 VideoToolbox 验证一帧并记录实际选中的软硬件路径。
 
 Windows 另用双端低延迟配置处理连续 90 帧 1920×1080 NV12。输入带 30 fps 时间戳并尽快送入编解码器，检查两处亮度、可见区域尺寸、时间戳和最大积压。日志报告缓冲区与可见区域各自的尺寸、提交到解码输出的 P50/P95/P99 和不按时间戳节流的吞吐量。测量涵盖编解码，真实窗口采集、网络和显示耗时待独立验证。[Media Foundation 可见区域](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mt-minimum-display-aperture-attribute)
 
+Windows 托管桌面测试还会通过 WGC 捕获一个测试窗口缩放前后的两帧。检查关闭后清空预览，再将这两帧的中央区域转换成 NV12，交替送入同一对低延迟编解码器，检查解码后亮度、色度和时间戳。测试画面只留在进程内存。
+
 这里验证系统编解码入口。Windows 硬件编码、WebRTC codec factory 接线、端到端延迟、完整许可及实际 GPU 性能仍待验证。
 
 - [Media Foundation H.264 编码器](https://learn.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder)
