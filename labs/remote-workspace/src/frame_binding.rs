@@ -135,7 +135,9 @@ impl FrameMatcher {
         if media.track != self.track {
             return Err(Error::StaleTarget);
         }
-        if stamp.is_some_and(|frame| frame.sequence == 0 || gate.frame_stamp(frame.sequence) != frame) {
+        if stamp
+            .is_some_and(|frame| frame.sequence == 0 || gate.frame_stamp(frame.sequence) != frame)
+        {
             return Err(Error::InvalidFrame);
         }
 
@@ -147,7 +149,9 @@ impl FrameMatcher {
             .high_timestamp
             .checked_add_signed(i64::from(delta))
             .ok_or(Error::InvalidSequence)?;
-        if self.retired_timestamp.is_some_and(|retired| timestamp <= retired)
+        if self
+            .retired_timestamp
+            .is_some_and(|retired| timestamp <= retired)
             || stamp.is_some_and(|frame| frame.sequence <= self.last_sequence)
         {
             return Err(Error::StaleFrame);
@@ -242,7 +246,10 @@ mod tests {
                 valid_until: 2010,
             }))
         );
-        assert_eq!(frames.describe(&gate, after, gate.frame_stamp(2), 24), Ok(None));
+        assert_eq!(
+            frames.describe(&gate, after, gate.frame_stamp(2), 24),
+            Ok(None)
+        );
         assert_eq!(
             frames.decoded(&gate, after, 25),
             Ok(Some(FrameMatch {
@@ -258,16 +265,29 @@ mod tests {
         let gate = gate();
         let mut frames = FrameMatcher::new(&gate, TRACK, 100, 0).unwrap();
         for track in [
-            MediaTrack { generation: 2, ..TRACK },
+            MediaTrack {
+                generation: 2,
+                ..TRACK
+            },
             MediaTrack { track: 2, ..TRACK },
             MediaTrack { ssrc: 34, ..TRACK },
         ] {
             assert_eq!(
-                frames.decoded(&gate, MediaFrame { track, timestamp: 120 }, 5),
+                frames.decoded(
+                    &gate,
+                    MediaFrame {
+                        track,
+                        timestamp: 120
+                    },
+                    5
+                ),
                 Err(Error::StaleTarget)
             );
         }
-        assert_eq!(frames.describe(&gate, packet(120), gate.frame_stamp(1), 6), Ok(None));
+        assert_eq!(
+            frames.describe(&gate, packet(120), gate.frame_stamp(1), 6),
+            Ok(None)
+        );
         assert!(frames.decoded(&gate, packet(120), 7).unwrap().is_some());
     }
 
@@ -275,9 +295,18 @@ mod tests {
     fn out_of_order_duplicate_metadata_does_not_extend_deadline() {
         let gate = gate();
         let mut frames = FrameMatcher::new(&gate, TRACK, 100, 0).unwrap();
-        assert_eq!(frames.describe(&gate, packet(140), gate.frame_stamp(2), 1), Ok(None));
-        assert_eq!(frames.describe(&gate, packet(110), gate.frame_stamp(1), 2), Ok(None));
-        assert_eq!(frames.describe(&gate, packet(110), gate.frame_stamp(1), 1000), Ok(None));
+        assert_eq!(
+            frames.describe(&gate, packet(140), gate.frame_stamp(2), 1),
+            Ok(None)
+        );
+        assert_eq!(
+            frames.describe(&gate, packet(110), gate.frame_stamp(1), 2),
+            Ok(None)
+        );
+        assert_eq!(
+            frames.describe(&gate, packet(110), gate.frame_stamp(1), 1000),
+            Ok(None)
+        );
         assert_eq!(
             frames.decoded(&gate, packet(110), 2001),
             Ok(Some(FrameMatch {
@@ -285,13 +314,19 @@ mod tests {
                 valid_until: 2002,
             }))
         );
-        assert_eq!(frames.decoded(&gate, packet(140), 2002), Err(Error::StaleFrame));
+        assert_eq!(
+            frames.decoded(&gate, packet(140), 2002),
+            Err(Error::StaleFrame)
+        );
         assert_eq!(
             frames.describe(&gate, packet(140), gate.frame_stamp(2), 2003),
             Err(Error::StaleFrame)
         );
         assert_eq!(frames.decoded(&gate, packet(170), 2004), Ok(None));
-        assert!(frames.describe(&gate, packet(170), gate.frame_stamp(3), 2005).unwrap().is_some());
+        assert!(frames
+            .describe(&gate, packet(170), gate.frame_stamp(3), 2005)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
@@ -300,13 +335,19 @@ mod tests {
         let mut frames = FrameMatcher::new(&gate, TRACK, 10, 0).unwrap();
         let mut stale = gate.frame_stamp(1);
         stale.revision += 1;
-        assert_eq!(frames.describe(&gate, packet(11), stale, 5), Err(Error::InvalidFrame));
+        assert_eq!(
+            frames.describe(&gate, packet(11), stale, 5),
+            Err(Error::InvalidFrame)
+        );
         assert_eq!(frames.decoded(&gate, packet(11), 6), Ok(None));
         gate.revoke_all(9).unwrap();
         assert_eq!(frames.expire(&gate, 9), Err(Error::StaleTarget));
         assert!(frames.pending.is_empty());
         gate.grant_view(10, 200).unwrap();
-        assert_eq!(frames.decoded(&gate, packet(11), 11), Err(Error::StaleTarget));
+        assert_eq!(
+            frames.decoded(&gate, packet(11), 11),
+            Err(Error::StaleTarget)
+        );
     }
 
     #[test]
@@ -316,8 +357,14 @@ mod tests {
         for tick in 0..MAX_PENDING as u32 {
             assert_eq!(frames.decoded(&gate, packet(tick), 1), Ok(None));
         }
-        assert_eq!(frames.decoded(&gate, packet(MAX_PENDING as u32), 2), Err(Error::Capacity));
-        assert_eq!(frames.decoded(&gate, packet(0x8000_003F), 2), Err(Error::InvalidSequence));
+        assert_eq!(
+            frames.decoded(&gate, packet(MAX_PENDING as u32), 2),
+            Err(Error::Capacity)
+        );
+        assert_eq!(
+            frames.decoded(&gate, packet(0x8000_003F), 2),
+            Err(Error::InvalidSequence)
+        );
         assert_eq!(frames.decoded(&gate, packet(0), 0), Err(Error::InvalidTime));
         frames.expire(&gate, 2002).unwrap();
         assert!(frames.pending.is_empty());
@@ -327,11 +374,17 @@ mod tests {
     fn conflicting_source_descriptions_close_the_stream() {
         let gate = gate();
         let mut frames = FrameMatcher::new(&gate, TRACK, 0, 0).unwrap();
-        assert_eq!(frames.describe(&gate, packet(10), gate.frame_stamp(1), 1), Ok(None));
+        assert_eq!(
+            frames.describe(&gate, packet(10), gate.frame_stamp(1), 1),
+            Ok(None)
+        );
         assert_eq!(
             frames.describe(&gate, packet(10), gate.frame_stamp(2), 2),
             Err(Error::InvalidFrame)
         );
-        assert_eq!(frames.decoded(&gate, packet(10), 3), Err(Error::StaleTarget));
+        assert_eq!(
+            frames.decoded(&gate, packet(10), 3),
+            Err(Error::StaleTarget)
+        );
     }
 }
