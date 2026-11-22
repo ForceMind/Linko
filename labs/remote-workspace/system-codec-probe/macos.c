@@ -10,7 +10,7 @@
 enum { Width = 128, Height = 96 };
 
 struct Encoded {
-    _Atomic size_t bytes;
+    _Atomic(CMSampleBufferRef) sample;
     _Atomic OSStatus error;
 };
 
@@ -27,7 +27,10 @@ static void output(void *state, void *source, OSStatus status, VTEncodeInfoFlags
     }
     CMFormatDescriptionRef type = CMSampleBufferGetFormatDescription(sample);
     if (type && CMFormatDescriptionGetMediaSubType(type) == kCMVideoCodecType_H264) {
-        atomic_fetch_add(&encoded->bytes, CMSampleBufferGetTotalSampleSize(sample));
+        CMSampleBufferRef previous = atomic_exchange(&encoded->sample, (CMSampleBufferRef)CFRetain(sample));
+        if (previous) {
+            CFRelease(previous);
+        }
     }
 }
 
@@ -53,6 +56,53 @@ static OSStatus submit(VTCompressionSessionRef session) {
     }
     CVPixelBufferRelease(pixels);
     return status;
+}
+
+struct Decoded {
+    _Atomic bool matchingSize;
+    _Atomic OSStatus error;
+};
+
+static void decodedOutput(void *state, void *source, OSStatus status, VTDecodeInfoFlags flags,
+                          CVImageBufferRef frame, CMTime pts, CMTime duration) {
+    (void)source;
+    (void)duration;
+    struct Decoded *result = state;
+    if (status != noErr) {
+        atomic_store(&result->error, status);
+    } else if (!(flags & kVTDecodeInfo_FrameDropped) && frame &&
+               CVPixelBufferGetWidth(frame) == Width && CVPixelBufferGetHeight(frame) == Height &&
+               CMTimeCompare(pts, kCMTimeZero) == 0) {
+        atomic_store(&result->matchingSize, true);
+    }
+}
+
+static bool decode(CMSampleBufferRef sample) {
+    struct Decoded result = {0};
+    VTDecompressionOutputCallbackRecord callback = { decodedOutput, &result };
+    VTDecompressionSessionRef session = NULL;
+    OSStatus status = VTDecompressionSessionCreate(NULL, CMSampleBufferGetFormatDescription(sample),
+                                                   NULL, NULL, &callback, &session);
+    if (status != noErr) {
+        fprintf(stderr, "create H.264 decoder: %d\n", (int)status);
+        return false;
+    }
+    status = VTDecompressionSessionDecodeFrame(session, sample, 0, NULL, NULL);
+    if (status == noErr) {
+        status = VTDecompressionSessionWaitForAsynchronousFrames(session);
+    }
+    VTDecompressionSessionInvalidate(session);
+    CFRelease(session);
+
+    OSStatus asynchronous = atomic_load(&result.error);
+    bool matched = atomic_load(&result.matchingSize);
+    if (status != noErr || asynchronous != noErr || !matched) {
+        fprintf(stderr, "decode H.264 result: status=%d callback=%d matching_frame=%d\n",
+                (int)status, (int)asynchronous, matched);
+        return false;
+    }
+    printf("VideoToolbox decoded the %dx%d frame at the original timestamp.\n", Width, Height);
+    return true;
 }
 
 int main(void) {
@@ -83,13 +133,19 @@ int main(void) {
     VTCompressionSessionInvalidate(session);
     CFRelease(session);
 
-    size_t bytes = atomic_load(&result.bytes);
+    CMSampleBufferRef encoded = atomic_exchange(&result.sample, NULL);
+    size_t bytes = encoded ? CMSampleBufferGetTotalSampleSize(encoded) : 0;
     OSStatus asynchronous = atomic_load(&result.error);
     if (status != noErr || asynchronous != noErr || bytes == 0 || !modeKnown) {
         fprintf(stderr, "H.264 result: status=%d callback=%d mode=%d bytes=%zu\n",
                 (int)status, (int)asynchronous, (int)property, bytes);
+        if (encoded) {
+            CFRelease(encoded);
+        }
         return 2;
     }
     printf("VideoToolbox %s H.264 encoder: %zu bytes\n", hardware ? "hardware" : "software", bytes);
-    return 0;
+    bool decoded = decode(encoded);
+    CFRelease(encoded);
+    return decoded ? 0 : 3;
 }

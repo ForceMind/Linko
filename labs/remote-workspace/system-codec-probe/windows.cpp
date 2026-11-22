@@ -61,9 +61,14 @@ void submitFrame(IMFTransform* encoder) {
     check(encoder->ProcessInput(0, sample.Get(), 0), "encode NV12 sample");
 }
 
-DWORD readEncodedSample(IMFTransform* encoder) {
+struct Output {
+    HRESULT status{};
+    ComPtr<IMFSample> sample;
+};
+
+Output readOutput(IMFTransform* transform) {
     MFT_OUTPUT_STREAM_INFO stream{};
-    check(encoder->GetOutputStreamInfo(0, &stream), "read output stream requirements");
+    check(transform->GetOutputStreamInfo(0, &stream), "read output stream requirements");
     ComPtr<IMFMediaBuffer> buffer;
     ComPtr<IMFSample> callerSample;
     if (!(stream.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)) {
@@ -72,20 +77,63 @@ DWORD readEncodedSample(IMFTransform* encoder) {
     MFT_OUTPUT_DATA_BUFFER output{};
     output.pSample = callerSample.Get();
     DWORD outputStatus{};
-    HRESULT result = encoder->ProcessOutput(0, 1, &output, &outputStatus);
+    HRESULT result = transform->ProcessOutput(0, 1, &output, &outputStatus);
     ComPtr<IMFCollection> events;
     events.Attach(output.pEvents);
-    ComPtr<IMFSample> ownedOutput;
     if (output.pSample != callerSample.Get()) {
-        ownedOutput.Attach(output.pSample);
+        callerSample.Reset();
+        callerSample.Attach(output.pSample);
     }
-    check(result, "read H.264 sample");
-    if (!output.pSample) {
-        return 0;
+    return {result, callerSample};
+}
+
+void selectDecodedType(IMFTransform* decoder) {
+    for (DWORD index = 0; index < 32; ++index) {
+        ComPtr<IMFMediaType> type;
+        HRESULT status = decoder->GetOutputAvailableType(0, index, &type);
+        if (status == MF_E_NO_MORE_TYPES) {
+            break;
+        }
+        check(status, "enumerate decoder output");
+        GUID subtype{};
+        check(type->GetGUID(MF_MT_SUBTYPE, &subtype), "read decoder output format");
+        if (subtype == MFVideoFormat_NV12) {
+            check(decoder->SetOutputType(0, type.Get(), 0), "select NV12 decoder output");
+            return;
+        }
     }
-    DWORD size{};
-    check(output.pSample->GetTotalLength(&size), "read H.264 length");
-    return size;
+    check(MF_E_INVALIDMEDIATYPE, "find NV12 decoder output");
+}
+
+bool decodeFrame(IMFMediaType* type, IMFSample* encoded) {
+    ComPtr<IMFTransform> decoder;
+    check(CoCreateInstance(CLSID_CMSH264DecoderMFT, nullptr, CLSCTX_INPROC_SERVER,
+                           IID_PPV_ARGS(&decoder)), "activate system H.264 decoder");
+    check(decoder->SetInputType(0, type, 0), "configure H.264 decoder input");
+    selectDecodedType(decoder.Get());
+    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0), "start decoder streaming");
+    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0), "start decoder stream");
+    check(decoder->ProcessInput(0, encoded, 0), "submit H.264 sample");
+    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark decoder input complete");
+    check(decoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain decoder");
+    auto decoded = readOutput(decoder.Get());
+    if (decoded.status == MF_E_TRANSFORM_STREAM_CHANGE) {
+        selectDecodedType(decoder.Get());
+        decoded = readOutput(decoder.Get());
+    }
+    check(decoded.status, "read decoded frame");
+    if (!decoded.sample) {
+        return false;
+    }
+    DWORD length{};
+    check(decoded.sample->GetTotalLength(&length), "read decoded NV12 length");
+    ComPtr<IMFMediaType> layout;
+    check(decoder->GetOutputCurrentType(0, &layout), "read decoded video layout");
+    UINT32 decodedWidth{}, decodedHeight{};
+    check(MFGetAttributeSize(layout.Get(), MF_MT_FRAME_SIZE, &decodedWidth, &decodedHeight),
+          "read decoded frame size");
+    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish decoder streaming");
+    return length >= nv12Bytes && decodedWidth == width && decodedHeight == height;
 }
 
 int probe() {
@@ -104,7 +152,12 @@ int probe() {
     submitFrame(encoder.Get());
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark input complete");
     check(encoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain encoder");
-    DWORD size = readEncodedSample(encoder.Get());
+    auto encoded = readOutput(encoder.Get());
+    check(encoded.status, "read H.264 sample");
+    DWORD size{};
+    if (encoded.sample) {
+        check(encoded.sample->GetTotalLength(&size), "read H.264 length");
+    }
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish media streaming");
 
     ComPtr<IMFMediaType> actual;
@@ -115,6 +168,10 @@ int probe() {
         return 2;
     }
     std::printf("Media Foundation system software H.264 encoder: %lu bytes\n", size);
+    if (!decodeFrame(actual.Get(), encoded.sample.Get())) {
+        return 3;
+    }
+    std::printf("Media Foundation decoded the %ux%u NV12 frame.\n", width, height);
     return 0;
 }
 }
