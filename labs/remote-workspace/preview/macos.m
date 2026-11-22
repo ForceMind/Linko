@@ -437,7 +437,8 @@ static int checkNativeCapture(void) {
     }
     [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
     PreviewApp *preview = [PreviewApp new];
-    [preview applicationDidFinishLaunching:nil];
+    [preview applicationDidFinishLaunching:
+        [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
     NSWindow *fixture = [[NSWindow alloc] initWithContentRect:NSMakeRect(50, 50, 220, 140)
                                                    styleMask:NSWindowStyleMaskTitled
                                                      backing:NSBackingStoreBuffered defer:NO];

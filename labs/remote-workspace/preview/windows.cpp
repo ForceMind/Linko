@@ -204,6 +204,13 @@ public:
             worker_ = std::jthread([this, source = std::move(source)](std::stop_token stopToken) {
                 try {
                     capture(stopToken, source);
+                } catch (hresult_error const& error) {
+#ifdef LINKO_RW03_CI
+                    std::fprintf(stderr, "WGC HRESULT 0x%08X\n", static_cast<unsigned>(error.code().value));
+#else
+                    static_cast<void>(error);
+#endif
+                    publish(L"系统拒绝或中断了窗口采集。");
                 } catch (std::exception const&) {
                     publish(L"无法采集此窗口。请检查系统权限或窗口状态。");
                 } catch (...) {
@@ -424,7 +431,7 @@ int smoke(HINSTANCE instance) {
 #ifdef LINKO_RW03_CI
 int main() {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    static_cast<void>(windowProc);
+    static_cast<void>(&windowProc);
     return smoke(GetModuleHandleW(nullptr));
 }
 #else
