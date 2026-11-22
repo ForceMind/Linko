@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -29,6 +30,7 @@
 #include "api/video/video_broadcaster.h"
 #include "api/video/video_frame.h"
 #include "api/video/video_sink_interface.h"
+#include "linko_probe/loopback_preview.h"
 #include "modules/audio_device/audio_device_impl.h"
 #include "p2p/base/basic_packet_socket_factory.h"
 #include "p2p/client/basic_port_allocator.h"
@@ -40,8 +42,10 @@
 #include "rtc_base/thread.h"
 #include "sdk/objc/components/video_codec/RTCVideoDecoderFactoryH264.h"
 #include "sdk/objc/components/video_codec/RTCVideoEncoderFactoryH264.h"
+#include "sdk/objc/components/video_frame_buffer/RTCCVPixelBuffer.h"
 #include "sdk/objc/native/api/video_decoder_factory.h"
 #include "sdk/objc/native/api/video_encoder_factory.h"
+#include "sdk/objc/native/api/video_frame_buffer.h"
 
 namespace {
 using namespace std::chrono_literals;
@@ -74,15 +78,19 @@ class LoopbackNetwork final : public webrtc::NetworkManagerBase {
     webrtc::Network network_;
 };
 
-class ColorTrack : public webrtc::VideoTrackSource {
+class FixtureTrack : public webrtc::VideoTrackSource {
  public:
-    ColorTrack() : VideoTrackSource(false) { SetState(kLive); }
+    FixtureTrack() : VideoTrackSource(false) { SetState(kLive); }
 
     void Send(uint8_t luma) {
         const std::vector<uint8_t> y(kWidth * kHeight, luma);
         const std::vector<uint8_t> uv(kWidth * kHeight / 4, 128);
         auto buffer = webrtc::I420Buffer::Copy(kWidth, kHeight, y.data(), kWidth,
                                                uv.data(), kWidth / 2, uv.data(), kWidth / 2);
+        SendBuffer(buffer);
+    }
+
+    void SendBuffer(webrtc::scoped_refptr<webrtc::VideoFrameBuffer> buffer) {
         const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now().time_since_epoch()).count();
         const auto frame = webrtc::VideoFrame::Builder()
@@ -101,9 +109,20 @@ class ColorTrack : public webrtc::VideoTrackSource {
 
 class FrameSink final : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
  public:
-    explicit FrameSink(uint8_t expected) : expected_(expected) {}
+    FrameSink(uint8_t expected, bool keep_pixels)
+        : expected_(expected), keep_pixels_(keep_pixels) {}
 
     void OnFrame(const webrtc::VideoFrame& frame) override {
+        if (keep_pixels_) {
+            if (frame.width() < 64 || frame.height() < 64 ||
+                frame.width() > 1920 || frame.height() > 1080) {
+                return;
+            }
+            std::lock_guard lock(mutex_);
+            latest_ = frame.video_frame_buffer();
+            arrived_ = Clock::now();
+            return;
+        }
         auto pixels = frame.video_frame_buffer()->ToI420ForInspection();
         if (!pixels || !pixels->DataY() || frame.width() != kWidth || frame.height() != kHeight) {
             return;
@@ -116,14 +135,26 @@ class FrameSink final : public webrtc::VideoSinkInterface<webrtc::VideoFrame> {
 
     unsigned matches() const { return matches_.load(); }
 
+    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> Take() {
+        std::lock_guard lock(mutex_);
+        if (latest_ && Clock::now() - arrived_ >= 2s) {
+            latest_ = nullptr;
+        }
+        return std::exchange(latest_, nullptr);
+    }
+
  private:
     uint8_t expected_;
+    bool keep_pixels_;
     std::atomic<unsigned> matches_{0};
+    std::mutex mutex_;
+    webrtc::scoped_refptr<webrtc::VideoFrameBuffer> latest_;
+    Clock::time_point arrived_;
 };
 
 class Observer final : public webrtc::PeerConnectionObserver {
  public:
-    explicit Observer(uint8_t expected) : sink(expected) {}
+    Observer(uint8_t expected, bool keep_pixels) : sink(expected, keep_pixels) {}
     void OnSignalingChange(Peer::SignalingState) override {}
     void OnDataChannel(webrtc::scoped_refptr<webrtc::DataChannelInterface>) override {
         invalid_.store(true);
@@ -204,8 +235,8 @@ bool Until(Predicate predicate, Clock::duration limit) {
 
 class Endpoint {
  public:
-    Endpoint(webrtc::Thread& signaling, uint8_t color)
-        : observer(color), signaling_(signaling) {}
+    Endpoint(webrtc::Thread& signaling, uint8_t color, bool keep_pixels = false)
+        : observer(color, keep_pixels), signaling_(signaling) {}
     ~Endpoint() { Close(); }
 
     bool Open(webrtc::PeerConnectionFactoryInterface& factory,
@@ -271,8 +302,10 @@ bool Describe(webrtc::Thread& signaling, Endpoint& from, Endpoint& to,
         const auto* current = from.peer->local_description();
         return current && current->ToString(&sdp);
     });
+    const char* direction = type == webrtc::SdpType::kOffer ? "a=sendonly" : "a=recvonly";
     if (!serialized || sdp.find(" H264/90000") == std::string::npos ||
-        sdp.find("a=fingerprint:sha-256 ") == std::string::npos) {
+        sdp.find("a=fingerprint:sha-256 ") == std::string::npos ||
+        sdp.find(direction) == std::string::npos) {
         return false;
     }
     auto remote_description = webrtc::CreateSessionDescription(type, sdp);
@@ -285,19 +318,21 @@ bool Describe(webrtc::Thread& signaling, Endpoint& from, Endpoint& to,
     return accepted.wait_for(8s) == std::future_status::ready && accepted.get();
 }
 
-bool Exercise(webrtc::Thread& signaling, webrtc::PeerConnectionFactoryInterface& factory,
+bool OpenPair(webrtc::Thread& signaling, webrtc::PeerConnectionFactoryInterface& factory,
               const webrtc::Environment& environment, LoopbackNetwork& network,
-              webrtc::BasicPacketSocketFactory& sockets, uint8_t color, std::string& offer) {
-    Endpoint sending(signaling, 0);
-    Endpoint receiving(signaling, color);
+              webrtc::BasicPacketSocketFactory& sockets, Endpoint& sending,
+              Endpoint& receiving, const webrtc::scoped_refptr<FixtureTrack>& source,
+              std::string& offer) {
     if (!sending.Open(factory, environment, network, sockets) ||
         !receiving.Open(factory, environment, network, sockets)) {
         std::fputs("loopback: create peers failed\n", stderr);
         return false;
     }
-    auto source = signaling.BlockingCall([] { return webrtc::make_ref_counted<ColorTrack>(); });
     auto track = factory.CreateVideoTrack(source, "linko-fixture");
-    if (!track || !sending.peer->AddTrack(track, {"linko-local"}).ok()) {
+    webrtc::RtpTransceiverInit init;
+    init.direction = webrtc::RtpTransceiverDirection::kSendOnly;
+    init.stream_ids = {"linko-local"};
+    if (!track || !sending.peer->AddTransceiver(track, init).ok()) {
         std::fputs("loopback: create sending track failed\n", stderr);
         return false;
     }
@@ -313,6 +348,82 @@ bool Exercise(webrtc::Thread& signaling, webrtc::PeerConnectionFactoryInterface&
                    receiving.peer->peer_connection_state() == Peer::PeerConnectionState::kConnected;
         }, 10s)) {
         std::fputs("loopback: ICE/DTLS did not connect\n", stderr);
+        return false;
+    }
+    return true;
+}
+
+class Runtime {
+ public:
+    bool Start() {
+        ssl_ = webrtc::InitializeSSL();
+        if (!ssl_ || !network_thread->Start() || !signaling->Start()) {
+            return false;
+        }
+        sockets = std::make_unique<webrtc::BasicPacketSocketFactory>(network_thread->socketserver());
+        webrtc::PeerConnectionFactoryDependencies dependencies;
+        dependencies.network_thread = network_thread.get();
+        dependencies.signaling_thread = signaling.get();
+        dependencies.socket_factory = network_thread->socketserver();
+        dependencies.env = env;
+        dependencies.adm =
+            webrtc::AudioDeviceModuleImpl::Create(env, webrtc::AudioDeviceModule::kDummyAudio);
+        if (!dependencies.adm) {
+            return false;
+        }
+        dependencies.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
+        dependencies.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
+        dependencies.video_encoder_factory = webrtc::ObjCToNativeVideoEncoderFactory(
+            [RTC_OBJC_TYPE(RTCVideoEncoderFactoryH264) new]);
+        dependencies.video_decoder_factory = webrtc::ObjCToNativeVideoDecoderFactory(
+            [RTC_OBJC_TYPE(RTCVideoDecoderFactoryH264) new]);
+        webrtc::EnableMedia(dependencies);
+        factory = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
+        if (!factory) {
+            return false;
+        }
+        webrtc::PeerConnectionFactoryInterface::Options options;
+        options.network_ignore_mask = 0;
+        factory->SetOptions(options);
+        return true;
+    }
+
+    ~Runtime() {
+        factory = nullptr;
+        if (sockets) {
+            network_thread->BlockingCall([] {});
+        }
+        signaling.reset();
+        network_thread.reset();
+        if (ssl_) {
+            webrtc::CleanupSSL();
+        }
+    }
+
+    bool Connect(Endpoint& sending, Endpoint& receiving,
+                 const webrtc::scoped_refptr<FixtureTrack>& source, std::string& offer) {
+        return OpenPair(*signaling, *factory, env, loopback, *sockets, sending, receiving,
+                        source, offer);
+    }
+
+    std::unique_ptr<webrtc::Thread> signaling = webrtc::Thread::Create();
+
+ private:
+    bool ssl_ = false;
+    const webrtc::Environment env = webrtc::CreateEnvironment();
+    std::unique_ptr<webrtc::Thread> network_thread = webrtc::Thread::CreateWithSocketServer();
+    LoopbackNetwork loopback;
+    std::unique_ptr<webrtc::BasicPacketSocketFactory> sockets;
+    webrtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> factory;
+};
+
+#ifndef LINKO_RW04_NETWORK_PREVIEW
+bool Exercise(Runtime& runtime, uint8_t color, std::string& offer) {
+    Endpoint sending(*runtime.signaling, 0);
+    Endpoint receiving(*runtime.signaling, color);
+    auto source =
+        runtime.signaling->BlockingCall([] { return webrtc::make_ref_counted<FixtureTrack>(); });
+    if (!runtime.Connect(sending, receiving, source, offer)) {
         return false;
     }
     for (unsigned i = 0; i < 120 && receiving.observer.sink.matches() < 3; ++i) {
@@ -346,59 +457,76 @@ std::string IceUser(const std::string& sdp) {
 }
 
 int Run() {
-    auto network_thread = webrtc::Thread::CreateWithSocketServer();
-    auto signaling = webrtc::Thread::Create();
-    if (!network_thread->Start() || !signaling->Start()) {
+    Runtime runtime;
+    if (!runtime.Start()) {
         return 1;
     }
-
-    const auto env = webrtc::CreateEnvironment();
-    LoopbackNetwork loopback;
-    webrtc::BasicPacketSocketFactory sockets(network_thread->socketserver());
-    webrtc::PeerConnectionFactoryDependencies dependencies;
-    dependencies.network_thread = network_thread.get();
-    dependencies.signaling_thread = signaling.get();
-    dependencies.socket_factory = network_thread->socketserver();
-    dependencies.env = env;
-    dependencies.adm = webrtc::AudioDeviceModuleImpl::Create(env, webrtc::AudioDeviceModule::kDummyAudio);
-    if (!dependencies.adm) {
-        return 2;
-    }
-    dependencies.audio_encoder_factory = webrtc::CreateBuiltinAudioEncoderFactory();
-    dependencies.audio_decoder_factory = webrtc::CreateBuiltinAudioDecoderFactory();
-    dependencies.video_encoder_factory = webrtc::ObjCToNativeVideoEncoderFactory(
-        [RTC_OBJC_TYPE(RTCVideoEncoderFactoryH264) new]);
-    dependencies.video_decoder_factory = webrtc::ObjCToNativeVideoDecoderFactory(
-        [RTC_OBJC_TYPE(RTCVideoDecoderFactoryH264) new]);
-    webrtc::EnableMedia(dependencies);
-    auto factory = webrtc::CreateModularPeerConnectionFactory(std::move(dependencies));
-    if (!factory) {
-        return 3;
-    }
-    webrtc::PeerConnectionFactoryInterface::Options options;
-    options.network_ignore_mask = 0;
-    factory->SetOptions(options);
     std::string first;
     std::string second;
-    const bool passed = Exercise(*signaling, *factory, env, loopback, sockets, 55, first) &&
-                        Exercise(*signaling, *factory, env, loopback, sockets, 185, second);
-    factory = nullptr;
-    network_thread->BlockingCall([] {});
+    const bool passed = Exercise(runtime, 55, first) && Exercise(runtime, 185, second);
     if (!passed || IceUser(first).empty() || IceUser(second).empty() || IceUser(first) == IceUser(second)) {
         return 4;
     }
     std::puts("Loopback UDP/DTLS H.264: decoded video, closed peers, and fresh ICE reconnection passed.");
     return 0;
 }
+#endif
 
 }  // namespace
 
-int main() {
-    @autoreleasepool {
-        if (!webrtc::InitializeSSL()) {
-            return 5;
-        }
-        const int result = Run();
-        return webrtc::CleanupSSL() ? result : 6;
+#ifdef LINKO_RW04_NETWORK_PREVIEW
+struct LinkoLoopbackPreview {
+    Runtime runtime;
+    std::unique_ptr<Endpoint> sending;
+    std::unique_ptr<Endpoint> receiving;
+    webrtc::scoped_refptr<FixtureTrack> source;
+};
+
+extern "C" LinkoLoopbackPreview* linko_rw04_loopback_open(void) {
+    auto preview = std::make_unique<LinkoLoopbackPreview>();
+    if (!preview->runtime.Start()) {
+        return nullptr;
+    }
+    auto& signaling = *preview->runtime.signaling;
+    preview->sending = std::make_unique<Endpoint>(signaling, 0);
+    preview->receiving = std::make_unique<Endpoint>(signaling, 0, true);
+    preview->source = signaling.BlockingCall([] { return webrtc::make_ref_counted<FixtureTrack>(); });
+    std::string offer;
+    if (!preview->runtime.Connect(*preview->sending, *preview->receiving, preview->source, offer)) {
+        return nullptr;
+    }
+    return preview.release();
+}
+
+extern "C" void linko_rw04_loopback_close(LinkoLoopbackPreview* preview) {
+    delete preview;
+}
+
+extern "C" void linko_rw04_loopback_submit(LinkoLoopbackPreview* preview, CVPixelBufferRef input) {
+    auto buffer = webrtc::ObjCToNativeVideoFrameBuffer(
+        [[RTC_OBJC_TYPE(RTCCVPixelBuffer) alloc] initWithPixelBuffer:input]);
+    if (buffer && !preview->receiving->observer.invalid()) {
+        preview->source->SendBuffer(buffer);
     }
 }
+
+extern "C" CVPixelBufferRef linko_rw04_loopback_take(LinkoLoopbackPreview* preview) {
+    auto& observer = preview->receiving->observer;
+    auto frame = observer.sink.Take();
+    if (!frame || observer.invalid() || preview->sending->observer.invalid()) {
+        return nullptr;
+    }
+    id image = webrtc::NativeToObjCVideoFrameBuffer(frame);
+    if (![image isKindOfClass:[RTC_OBJC_TYPE(RTCCVPixelBuffer) class]]) {
+        return nullptr;
+    }
+    CVPixelBufferRef pixels = ((RTC_OBJC_TYPE(RTCCVPixelBuffer)*)image).pixelBuffer;
+    return pixels ? CVPixelBufferRetain(pixels) : nullptr;
+}
+#else
+int main() {
+    @autoreleasepool {
+        return Run();
+    }
+}
+#endif
