@@ -107,5 +107,5 @@ if ($IsMacOS) {
     Invoke-Checked (Join-Path (Join-Path $source $out) 'linko_rw04_macos_loopback') @()
     Add-Content -LiteralPath $report -Value 'Loopback UDP/DTLS H.264 video, close, and a fresh ICE connection passed.' -Encoding utf8
     Invoke-Checked (Join-Path (Join-Path $source $out) 'linko_rw04_macos_window_loopback') @()
-    Add-Content -LiteralPath $report -Value 'Real ScreenCaptureKit window traveled over loopback UDP/DTLS H.264 to AppKit, then cleared on close.' -Encoding utf8
+    Add-Content -LiteralPath $report -Value 'Real ScreenCaptureKit window traveled over loopback UDP/DTLS H.264 to AppKit; stop closed old peers, rejected delayed pixels, and reopening rendered fresh frames.' -Encoding utf8
 }

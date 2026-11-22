@@ -476,23 +476,25 @@ int Run() {
 
 #ifdef LINKO_RW04_NETWORK_PREVIEW
 struct LinkoLoopbackPreview {
-    Runtime runtime;
+    std::mutex mutex;
+    std::unique_ptr<Runtime> runtime = std::make_unique<Runtime>();
     std::unique_ptr<Endpoint> sending;
     std::unique_ptr<Endpoint> receiving;
     webrtc::scoped_refptr<FixtureTrack> source;
+    bool closed = false;
 };
 
 extern "C" LinkoLoopbackPreview* linko_rw04_loopback_open(void) {
     auto preview = std::make_unique<LinkoLoopbackPreview>();
-    if (!preview->runtime.Start()) {
+    if (!preview->runtime->Start()) {
         return nullptr;
     }
-    auto& signaling = *preview->runtime.signaling;
+    auto& signaling = *preview->runtime->signaling;
     preview->sending = std::make_unique<Endpoint>(signaling, 0);
     preview->receiving = std::make_unique<Endpoint>(signaling, 0, true);
     preview->source = signaling.BlockingCall([] { return webrtc::make_ref_counted<FixtureTrack>(); });
     std::string offer;
-    if (!preview->runtime.Connect(*preview->sending, *preview->receiving, preview->source, offer)) {
+    if (!preview->runtime->Connect(*preview->sending, *preview->receiving, preview->source, offer)) {
         return nullptr;
     }
     return preview.release();
@@ -502,15 +504,44 @@ extern "C" void linko_rw04_loopback_close(LinkoLoopbackPreview* preview) {
     delete preview;
 }
 
-extern "C" void linko_rw04_loopback_submit(LinkoLoopbackPreview* preview, CVPixelBufferRef input) {
+extern "C" void linko_rw04_loopback_revoke(LinkoLoopbackPreview* preview) {
+    std::lock_guard lock(preview->mutex);
+    if (!preview->runtime) {
+        return;
+    }
+    const bool receiver_closed = preview->receiving->Close();
+    const bool sender_closed = preview->sending->Close();
+    preview->receiving.reset();
+    preview->sending.reset();
+    preview->source = nullptr;
+    preview->runtime.reset();
+    preview->closed = receiver_closed && sender_closed;
+}
+
+extern "C" bool linko_rw04_loopback_was_closed(LinkoLoopbackPreview* preview) {
+    std::lock_guard lock(preview->mutex);
+    return preview->closed;
+}
+
+extern "C" bool linko_rw04_loopback_submit(LinkoLoopbackPreview* preview, CVPixelBufferRef input) {
+    std::lock_guard lock(preview->mutex);
+    if (!preview->runtime || !input || preview->receiving->observer.invalid()) {
+        return false;
+    }
     auto buffer = webrtc::ObjCToNativeVideoFrameBuffer(
         [[RTC_OBJC_TYPE(RTCCVPixelBuffer) alloc] initWithPixelBuffer:input]);
-    if (buffer && !preview->receiving->observer.invalid()) {
-        preview->source->SendBuffer(buffer);
+    if (!buffer) {
+        return false;
     }
+    preview->source->SendBuffer(buffer);
+    return true;
 }
 
 extern "C" CVPixelBufferRef linko_rw04_loopback_take(LinkoLoopbackPreview* preview) {
+    std::lock_guard lock(preview->mutex);
+    if (!preview->runtime) {
+        return nullptr;
+    }
     auto& observer = preview->receiving->observer;
     auto frame = observer.sink.Take();
     if (!frame || observer.invalid() || preview->sending->observer.invalid()) {
