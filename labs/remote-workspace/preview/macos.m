@@ -158,6 +158,11 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @end
 
 @interface PreviewApp : NSObject <NSApplicationDelegate, NSWindowDelegate>
+#ifdef LINKO_RW03_CI
+- (void)beginCapture:(SCWindow *)source;
+- (NSImage *)displayedFrame;
+- (BOOL)hasStream;
+#endif
 @end
 
 @implementation PreviewApp {
@@ -383,6 +388,15 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
     }
 }
 
+#ifdef LINKO_RW03_CI
+- (NSImage *)displayedFrame {
+    return _image.image;
+}
+- (BOOL)hasStream {
+    return _stream != nil;
+}
+#endif
+
 - (void)windowWillClose:(NSNotification *)notification {
     [_timer invalidate];
     [NSApp terminate:nil];
@@ -404,6 +418,75 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 @end
 
 #ifdef LINKO_RW03_CI
+static BOOL waitFor(BOOL (^predicate)(void)) {
+    NSTimeInterval deadline = uptime() + 5;
+    do {
+        if (predicate()) {
+            return YES;
+        }
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                              beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+    } while (uptime() < deadline);
+    return NO;
+}
+
+static int checkNativeCapture(void) {
+    if (!CGPreflightScreenCaptureAccess()) {
+        puts("macOS hosted permission unavailable; native capture was not exercised.");
+        return 0;
+    }
+    [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
+    PreviewApp *preview = [PreviewApp new];
+    [preview applicationDidFinishLaunching:nil];
+    NSWindow *fixture = [[NSWindow alloc] initWithContentRect:NSMakeRect(50, 50, 220, 140)
+                                                   styleMask:NSWindowStyleMaskTitled
+                                                     backing:NSBackingStoreBuffered defer:NO];
+    fixture.releasedWhenClosed = NO;
+    fixture.title = @"Linko RW03 fixture";
+    fixture.backgroundColor = NSColor.systemRedColor;
+    [fixture makeKeyAndOrderFront:nil];
+    [fixture displayIfNeeded];
+    CGWindowID window = (CGWindowID)fixture.windowNumber;
+    __block SCWindow *source;
+    __block BOOL queried = NO;
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES
+                                               completionHandler:^(SCShareableContent *content, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (SCWindow *candidate in content.windows) {
+                if (candidate.windowID == window) {
+                    source = candidate;
+                    break;
+                }
+            }
+            queried = YES;
+        });
+    }];
+    if (!waitFor(^BOOL { return queried; }) || !source) {
+        fputs("macOS hosted fixture missing from ScreenCaptureKit.\n", stderr);
+        return 5;
+    }
+    [preview beginCapture:source];
+    if (!waitFor(^BOOL { return preview.displayedFrame != nil; })) {
+        fputs("macOS ScreenCaptureKit fixture did not deliver a viewable frame.\n", stderr);
+        return 6;
+    }
+    CGFloat width = preview.displayedFrame.size.width;
+    [fixture setContentSize:NSMakeSize(350, 230)];
+    [fixture displayIfNeeded];
+    if (!waitFor(^BOOL { return preview.displayedFrame.size.width > width; })) {
+        fputs("macOS ScreenCaptureKit fixture did not deliver the resized frame.\n", stderr);
+        return 7;
+    }
+    [fixture close];
+    fixture = nil;
+    if (!waitFor(^BOOL { return !preview.displayedFrame && !preview.hasStream; })) {
+        fputs("macOS preview did not clear and release the closed fixture.\n", stderr);
+        return 8;
+    }
+    puts("ScreenCaptureKit fixture start, resize and source close passed.");
+    return 0;
+}
+
 int main(void) {
     @autoreleasepool {
         CaptureOutput *output = [CaptureOutput new];
@@ -428,7 +511,7 @@ int main(void) {
         }
         printf("macOS frame expiry, stop and source identity checks passed; TCC preflight: %s\n",
                CGPreflightScreenCaptureAccess() ? "allowed" : "unavailable");
-        return 0;
+        return checkNativeCapture();
     }
 }
 #else
