@@ -1,0 +1,6 @@
+import("//webrtc.gni")
+
+rtc_executable("linko_rw04_probe") {
+  sources = [ "frame_probe.cc" ]
+  deps = [ "//api/video:video_frame" ]
+}

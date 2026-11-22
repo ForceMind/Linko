@@ -1,0 +1,35 @@
+name: RW04 WebRTC source probe
+on:
+  pull_request:
+    paths:
+      - 'labs/remote-workspace/webrtc-probe/**'
+      - '.github/workflows/workspace-webrtc-probe.yml'
+permissions:
+  contents: read
+concurrency:
+  group: workspace-webrtc-probe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  webrtc-frame:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Derive build version from commit time (UTC+08:00)
+        shell: bash
+        run: python tools/build_version.py >> "$GITHUB_ENV"
+      - name: Build and run a pinned WebRTC VideoFrame probe
+        shell: pwsh
+        run: ./labs/remote-workspace/webrtc-probe/build.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rw04-webrtc-report-${{ matrix.os }}
+          path: ${{ runner.temp }}/rw04-report
+          if-no-files-found: error
