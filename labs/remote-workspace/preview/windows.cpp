@@ -127,6 +127,8 @@ class Preview {
         auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(direct, format, 2, captureLimit);
         auto session = pool.CreateCaptureSession(item);
         com_ptr<ID3D11Texture2D> staging;
+        UINT stagingWidth{};
+        UINT stagingHeight{};
         session.StartCapture();
         auto lastFrame = Clock::now();
         while (!stop.stop_requested() && !closed->load() && available(source)) {
@@ -146,7 +148,6 @@ class Preview {
             }
             if (next.Width != size.Width || next.Height != size.Height) {
                 publish(L"正在调整预览尺寸。");
-                staging = nullptr;
                 size = next;
             }
             auto access = captured.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -158,9 +159,10 @@ class Preview {
                 publish(L"正在等待新尺寸的画面。");
                 continue;
             }
-            if (!staging) {
-                desc.Width = static_cast<UINT>(size.Width);
-                desc.Height = static_cast<UINT>(size.Height);
+            if (!staging || desc.Width != stagingWidth || desc.Height != stagingHeight) {
+                staging = nullptr;
+                stagingWidth = desc.Width;
+                stagingHeight = desc.Height;
                 desc.Usage = D3D11_USAGE_STAGING;
                 desc.BindFlags = 0;
                 desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
@@ -172,10 +174,14 @@ class Preview {
             frame->height = size.Height;
             auto const row = static_cast<std::size_t>(size.Width) * 4;
             frame->pixels.resize(row * static_cast<std::size_t>(size.Height));
-            D3D11_BOX const content{0, 0, 0, static_cast<UINT>(size.Width), static_cast<UINT>(size.Height), 1};
-            context->CopySubresourceRegion(staging.get(), 0, 0, 0, 0, texture.get(), 0, &content);
+            context->CopyResource(staging.get(), texture.get());
             D3D11_MAPPED_SUBRESOURCE mapped{};
             check_hresult(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
+            if (!mapped.pData || mapped.RowPitch < row) {
+                context->Unmap(staging.get(), 0);
+                publish(L"无法读取窗口画面。");
+                return;
+            }
             for (int y = 0; y < size.Height; ++y) {
                 auto offset = static_cast<std::size_t>(y);
                 std::memcpy(frame->pixels.data() + offset * row,
@@ -189,8 +195,9 @@ class Preview {
             }
             std::this_thread::sleep_for(40ms);
         }
-        session.Close();
+        onClosed.revoke();
         pool.Close();
+        session.Close();
         publish(stop.stop_requested() ? L"预览已停止。" : L"窗口已关闭、隐藏或最小化。请重新选择。");
     }
 
@@ -447,6 +454,7 @@ int smoke(HINSTANCE instance) {
         DestroyWindow(fixture);
         return 13;
     }
+    std::puts("WGC resized frame confirmed.");
     DestroyWindow(fixture);
     if (!wait([&] { return preview.view().second == nullptr; })) {
         std::fputs("WGC fixture remained visible after close.\n", stderr);
@@ -461,9 +469,13 @@ int smoke(HINSTANCE instance) {
 
 #ifdef LINKO_RW03_CI
 int main() {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     static_cast<void>(&windowProc);
-    return smoke(GetModuleHandleW(nullptr));
+    auto result = smoke(GetModuleHandleW(nullptr));
+    std::printf("WGC smoke result: %d\n", result);
+    return result;
 }
 #else
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {

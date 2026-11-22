@@ -74,7 +74,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         working-directory: ${{ runner.temp }}
-        run: .\rw03-smoke.exe
+        run: |
+          .\rw03-smoke.exe
+          Write-Host ('WGC smoke exit: 0x{0:X8}' -f $LASTEXITCODE)
+          exit $LASTEXITCODE
       - name: Build and test macOS preview without requesting host permissions
         if: runner.os == 'macOS'
         shell: bash
