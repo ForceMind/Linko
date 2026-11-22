@@ -15,7 +15,7 @@ rtc_executable("linko_rw04_probe") {
 if (is_mac) {
   rtc_executable("linko_rw04_macos_h264") {
     sources = [
-      "h264_probe.c",
+      "h264_probe_main.c",
       "h264_probe.h",
       "h264_probe.mm",
     ]
