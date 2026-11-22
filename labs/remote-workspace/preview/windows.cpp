@@ -382,6 +382,12 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 #ifdef LINKO_RW03_CI
+#ifdef LINKO_RW04_WGC_CODEC_CI
+WgcFixtureFrame capturedFixtureFrame(Frame const& frame) {
+    return {frame.pixels, static_cast<unsigned>(frame.width), static_cast<unsigned>(frame.height)};
+}
+#endif
+
 LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
@@ -436,6 +442,12 @@ int smoke(HINSTANCE instance) {
     std::shared_ptr<Frame const> first;
     if (!wait([&] {
         first = preview.view().second;
+#ifdef LINKO_RW04_WGC_CODEC_CI
+        if (!first || !hasWgcFixtureColor(capturedFixtureFrame(*first), false)) {
+            InvalidateRect(fixture, nullptr, FALSE);
+            return false;
+        }
+#endif
         return first != nullptr;
     })) {
         ::fwprintf(stderr, L"WGC fixture did not deliver a frame: %ls\n", preview.view().first);
@@ -455,13 +467,16 @@ int smoke(HINSTANCE instance) {
     RedrawWindow(fixture, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
     if (!wait([&] {
         auto frame = preview.view().second;
-        if (!frame || frame->width <= previous) {
+#ifdef LINKO_RW04_WGC_CODEC_CI
+        if (!frame || frame->width <= previous || !hasWgcFixtureColor(capturedFixtureFrame(*frame), true)) {
+            InvalidateRect(fixture, nullptr, FALSE);
             return false;
         }
-#ifdef LINKO_RW04_WGC_CODEC_CI
         resized = std::move(frame);
-#endif
         return true;
+#else
+        return frame && frame->width > previous;
+#endif
     })) {
         auto [state, frame] = preview.view();
         ::fwprintf(stderr, L"WGC fixture did not resize: %ls (%d)\n", state, frame ? frame->width : 0);
@@ -480,10 +495,7 @@ int smoke(HINSTANCE instance) {
         return 15;
     }
 #ifdef LINKO_RW04_WGC_CODEC_CI
-    auto captured = [](Frame const& frame) -> WgcFixtureFrame {
-        return {frame.pixels, static_cast<unsigned>(frame.width), static_cast<unsigned>(frame.height)};
-    };
-    return checkWgcCodec(captured(*first), captured(*resized));
+    return checkWgcCodec(capturedFixtureFrame(*first), capturedFixtureFrame(*resized));
 #else
     return 0;
 #endif

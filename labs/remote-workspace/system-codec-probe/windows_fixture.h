@@ -9,4 +9,5 @@ struct WgcFixtureFrame {
     unsigned height;
 };
 
+bool hasWgcFixtureColor(WgcFixtureFrame frame, bool resized);
 int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized);

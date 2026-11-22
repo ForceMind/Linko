@@ -394,19 +394,12 @@ int withMediaFoundation(auto run) {
 }
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
-std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame, std::array<int, 3> expectedBgr) {
+std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame) {
     auto const& crop = smallFixture;
     const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
-    check(frame.width >= crop.width && frame.height >= crop.height &&
-          frame.width <= 4096 && frame.height <= 2160 && rowBytes * frame.height == frame.bgra.size()
-          ? S_OK : E_INVALIDARG, "check WGC frame dimensions");
     const unsigned left = (frame.width - crop.width) / 2;
     const unsigned top = (frame.height - crop.height) / 2;
     auto const* bgra = reinterpret_cast<BYTE const*>(frame.bgra.data());
-    auto const* center = bgra + rowBytes * (frame.height / 2) + (frame.width / 2) * 4;
-    for (std::size_t i = 0; i < expectedBgr.size(); ++i) {
-        check(std::abs(center[i] - expectedBgr[i]) <= 8 ? S_OK : E_UNEXPECTED, "check WGC fixture color");
-    }
 
     std::vector<BYTE> nv12(crop.nv12Bytes());
     for (unsigned y = 0; y < crop.height; y += 2) {
@@ -438,10 +431,26 @@ std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame, std::array<int, 3> expec
 }
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
+bool hasWgcFixtureColor(WgcFixtureFrame frame, bool resized) {
+    const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
+    if (frame.width < smallFixture.width || frame.height < smallFixture.height ||
+        frame.width > 4096 || frame.height > 2160 || rowBytes * frame.height != frame.bgra.size()) {
+        return false;
+    }
+    const auto centerOffset = rowBytes * (frame.height / 2) + (frame.width / 2) * 4;
+    auto const* center = reinterpret_cast<BYTE const*>(frame.bgra.data()) + centerOffset;
+    const int blue = resized ? 190 : 70;
+    const int green = resized ? 70 : 30;
+    const int red = resized ? 30 : 190;
+    return std::abs(center[0] - blue) <= 8 && std::abs(center[1] - green) <= 8 &&
+           std::abs(center[2] - red) <= 8;
+}
+
 int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
     return withMediaFoundation([&] {
-        const CapturedSamples samples{cropWgcFixture(first, {70, 30, 190}),
-                                      cropWgcFixture(resized, {190, 70, 30})};
+        check(hasWgcFixtureColor(first, false) && hasWgcFixtureColor(resized, true)
+                  ? S_OK : E_UNEXPECTED, "check WGC fixture colors and dimensions");
+        const CapturedSamples samples{cropWgcFixture(first), cropWgcFixture(resized)};
         const auto result = probe(smallFixture, LatencyMode::EncoderAndDecoder, "WGC fixture", &samples);
         if (result == 0) {
             std::puts("WGC fixture H.264 roundtrip kept both source colors, luma and chroma.");
