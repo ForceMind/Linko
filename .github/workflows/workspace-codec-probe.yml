@@ -1,0 +1,41 @@
+name: RW04 system codecs
+on:
+  pull_request:
+    paths:
+      - 'labs/remote-workspace/system-codec-probe/**'
+      - '.github/workflows/workspace-codec-probe.yml'
+permissions:
+  contents: read
+jobs:
+  native-h264:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Derive build version from commit time (UTC+08:00)
+        shell: bash
+        run: python tools/build_version.py >> "$GITHUB_ENV"
+      - name: Roundtrip a synthetic frame through Media Foundation
+        if: runner.os == 'Windows'
+        shell: cmd
+        working-directory: ${{ runner.temp }}
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /W4 /WX /EHsc /O2 "%GITHUB_WORKSPACE%\labs\remote-workspace\system-codec-probe\windows.cpp" mfplat.lib mfuuid.lib wmcodecdspuuid.lib ole32.lib /link /out:rw04-h264.exe
+          if errorlevel 1 exit /b 1
+          rw04-h264.exe
+      - name: Roundtrip a synthetic frame through VideoToolbox
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          xcrun clang -std=c17 -Wall -Wextra -Werror -O2 labs/remote-workspace/system-codec-probe/macos.c \
+            -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox \
+            -o "$RUNNER_TEMP/rw04-h264"
+          "$RUNNER_TEMP/rw04-h264"
