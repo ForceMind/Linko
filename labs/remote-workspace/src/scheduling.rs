@@ -2,6 +2,7 @@
 //! Duplicate views of one surface share one decode allocation. The consumer must
 //! negotiate the requested profile; encoded bitrate needs runtime feedback.
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::geometry::{PixelSize, Rect};
 use crate::session::SessionGate;
@@ -86,6 +87,17 @@ impl Default for Budget {
     }
 }
 
+impl Budget {
+    fn validate(self) -> Result<(), Error> {
+        self.focused.validate()?;
+        self.preview.validate()?;
+        if self.decoders > 64 {
+            return Err(Error::Capacity);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Allocation {
     pub size: PixelSize,
@@ -118,6 +130,73 @@ impl Usage {
             && self.decoded_bytes <= budget.decoded_bytes
             && self.pixels_per_second <= budget.pixels_per_second
             && self.bitrate <= budget.bitrate
+    }
+}
+
+/// A process-local reservation. Each successful admission has a new identity.
+pub struct DecoderReservation {
+    key: SurfaceKey,
+    lifetime: Arc<()>,
+}
+
+/// Accounts for allocations while their decoders are starting, running or
+/// stopping. A change in the desired plan does not release native resources.
+pub struct DecoderReservations {
+    budget: Budget,
+    reserved: BTreeMap<SurfaceKey, (Arc<()>, Allocation)>,
+}
+
+impl DecoderReservations {
+    pub fn new(budget: Budget) -> Result<Self, Error> {
+        budget.validate()?;
+        Ok(Self {
+            budget,
+            reserved: BTreeMap::new(),
+        })
+    }
+
+    /// The caller rechecks the viewing grant before starting a decoder.
+    pub fn reserve(
+        &mut self,
+        key: SurfaceKey,
+        allocation: Allocation,
+    ) -> Result<DecoderReservation, Error> {
+        key.validate()?;
+        allocation.size.validate()?;
+        Profile {
+            max_edge: allocation.size.width.max(allocation.size.height),
+            fps: allocation.fps,
+            bitrate: allocation.bitrate,
+        }
+        .validate()?;
+        if self.reserved.contains_key(&key) {
+            return Err(Error::InvalidState);
+        }
+        let usage = self
+            .reserved
+            .values()
+            .fold(Usage::default(), |usage, (_, item)| usage.adding(*item));
+        if !usage.adding(allocation).fits(self.budget) {
+            return Err(Error::Capacity);
+        }
+        let lifetime = Arc::new(());
+        self.reserved
+            .insert(key, (Arc::clone(&lifetime), allocation));
+        Ok(DecoderReservation { key, lifetime })
+    }
+
+    /// Call only after the decoder has stopped and released resources, or after
+    /// confirming a failed launch left no running decoder.
+    pub fn release(&mut self, reservation: &DecoderReservation) -> Result<(), Error> {
+        if !self
+            .reserved
+            .get(&reservation.key)
+            .is_some_and(|(current, _)| Arc::ptr_eq(current, &reservation.lifetime))
+        {
+            return Err(Error::WrongAcknowledgement);
+        }
+        self.reserved.remove(&reservation.key);
+        Ok(())
     }
 }
 
@@ -164,9 +243,8 @@ pub fn plan(
     now: u64,
 ) -> Result<Plan, Error> {
     viewport.validate()?;
-    budget.focused.validate()?;
-    budget.preview.validate()?;
-    if views.len() > MAX_VIEWS || budget.decoders > 64 {
+    budget.validate()?;
+    if views.len() > MAX_VIEWS {
         return Err(Error::Capacity);
     }
     let mut candidates = BTreeMap::<SurfaceKey, Candidate>::new();
@@ -267,6 +345,44 @@ mod tests {
             canvas_rect: rect(),
             focused,
         }
+    }
+
+    #[test]
+    fn decoder_reservations_are_held_until_the_matching_release() {
+        let budget = Budget {
+            decoders: 1,
+            ..Budget::default()
+        };
+        let key = gate(1).key();
+        let next_key = gate(2).key();
+        let allocation = budget.focused.allocation(PixelSize {
+            width: 128,
+            height: 96,
+        });
+        let mut pool = DecoderReservations::new(budget).unwrap();
+        let before = pool.reserve(key, allocation).unwrap();
+        assert!(matches!(
+            pool.reserve(key, allocation),
+            Err(Error::InvalidState)
+        ));
+        assert!(matches!(
+            pool.reserve(next_key, allocation),
+            Err(Error::Capacity)
+        ));
+        pool.release(&before).unwrap();
+
+        let current = pool.reserve(key, allocation).unwrap();
+        let mut another_pool = DecoderReservations::new(budget).unwrap();
+        let foreign = another_pool.reserve(key, allocation).unwrap();
+        for stale in [&before, &foreign] {
+            assert_eq!(pool.release(stale), Err(Error::WrongAcknowledgement));
+        }
+        assert!(matches!(
+            pool.reserve(next_key, allocation),
+            Err(Error::Capacity)
+        ));
+        pool.release(&current).unwrap();
+        assert!(pool.reserve(next_key, allocation).is_ok());
     }
 
     #[test]
