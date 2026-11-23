@@ -54,7 +54,7 @@ jobs:
             -o "$RUNNER_TEMP/rw04-h264"
           "$RUNNER_TEMP/rw04-h264"
           fixtures=('224 144' '350 262' '352 262' '350 272' '352 272'
-                    '350 262 encode' '350 262 decode' '350 262 encode-nv12')
+                    '350 262 encode' '350 262 decode' '350 262 encode-nv12' '350 262 encode-soak')
           for fixture in "${fixtures[@]}"; do
             read -r width height stage <<< "$fixture"
             arguments=(--vm "$width" "$height")

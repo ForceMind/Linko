@@ -457,7 +457,8 @@ static bool decodeMemoryFixture(int width, int height, CVPixelBufferRef input, s
 }
 
 static bool checkMemory(int width, int height, enum MemoryStage stage, OSType format, const char *name) {
-    printf("VideoToolbox memory: size=%dx%d, stage=%s.\n", width, height, name);
+    const unsigned cycles = strcmp(name, "encode-soak") == 0 ? 500 : 100;
+    printf("VideoToolbox memory: size=%dx%d, stage=%s, cycles=%u.\n", width, height, name, cycles);
     CVPixelBufferRef input = makeMemoryFixture(width, height, format);
     if (!input) {
         fputs("VideoToolbox memory: could not create the fixed input.\n", stderr);
@@ -465,7 +466,7 @@ static bool checkMemory(int width, int height, enum MemoryStage stage, OSType fo
     }
     struct MemorySamples seed = {0};
     bool passed = stage != DecodeStage || encodeMemoryFixture(width, height, input, &seed);
-    for (unsigned cycle = 1; passed && cycle <= 100; ++cycle) {
+    for (unsigned cycle = 1; passed && cycle <= cycles; ++cycle) {
         if (stage == EncodeStage) {
             struct MemorySamples samples = {0};
             passed = encodeMemoryFixture(width, height, input, &samples);
@@ -475,7 +476,7 @@ static bool checkMemory(int width, int height, enum MemoryStage stage, OSType fo
         } else {
             passed = run(width, height, MemoryFrames, true, input, cycle == 1);
         }
-        if (passed && (cycle == 10 || cycle == 100)) {
+        if (passed && (cycle == 10 || cycle == 100 || cycle == 250 || cycle == cycles)) {
             passed = sampleMemory(cycle);
         }
         if (!passed) {
@@ -485,7 +486,7 @@ static bool checkMemory(int width, int height, enum MemoryStage stage, OSType fo
     releaseMemorySamples(&seed);
     CVPixelBufferRelease(input);
     if (passed) {
-        printf("VideoToolbox memory: 100 standalone hardware cycles passed, stage=%s.\n", name);
+        printf("VideoToolbox memory: %u standalone hardware cycles passed, stage=%s.\n", cycles, name);
     }
     return passed;
 }
@@ -510,7 +511,7 @@ int main(int argc, char **argv) {
         OSType format = kCVPixelFormatType_32BGRA;
         const char *name = argc == 5 ? argv[4] : "both";
         if (argc == 5) {
-            if (strcmp(name, "encode") == 0) {
+            if (strcmp(name, "encode") == 0 || strcmp(name, "encode-soak") == 0) {
                 stage = EncodeStage;
             } else if (strcmp(name, "encode-nv12") == 0) {
                 stage = EncodeStage;

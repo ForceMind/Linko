@@ -76,7 +76,7 @@ extern "C" bool linko_rw04_sample_vm_regions(bool save_baseline) {
     if (!baseline_ready) {
         return false;
     }
-    std::puts("Loopback VM: stopped mapping comparison at cycles 10 and 100.");
+    std::puts("Loopback VM: stopped mapping differences from the saved baseline.");
     for (size_t tag = 0; tag < current.size(); ++tag) {
         const auto& before = baseline.at(tag);
         const auto& after = current.at(tag);
