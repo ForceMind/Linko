@@ -213,7 +213,11 @@ impl LiveFixture {
         Ok(())
     }
 
-    fn verify_video_textures(&mut self, context: &egui::Context, expected: usize) -> io::Result<()> {
+    fn verify_video_textures(
+        &mut self,
+        context: &egui::Context,
+        expected: usize,
+    ) -> io::Result<()> {
         let manager = context.tex_manager();
         let manager = manager.read();
         let mut count = 0;
@@ -230,11 +234,15 @@ impl LiveFixture {
                 count += 1;
                 bytes += meta.bytes_used();
             } else if previous.is_some_and(|id| manager.meta(id).is_some()) {
-                return Err(io::Error::other("closed live panel still holds a video texture"));
+                return Err(io::Error::other(
+                    "closed live panel still holds a video texture",
+                ));
             }
         }
         if self.texture_ids[0].is_some() && self.texture_ids[0] == self.texture_ids[1] {
-            return Err(io::Error::other("independent sources reused the same texture ID"));
+            return Err(io::Error::other(
+                "independent sources reused the same texture ID",
+            ));
         }
         if count != expected || bytes != expected * VIDEO_BYTES {
             return Err(io::Error::other("unexpected live video texture footprint"));
