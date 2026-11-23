@@ -150,14 +150,18 @@ fn viewport_admission_tracks_registered_layout_viewing_focus_and_grants() {
         5,
     )
     .unwrap();
-    let visible = c.plan_viewport(bounds(), Some(offscreen), budget, 5).unwrap();
+    let visible = c
+        .plan_viewport(bounds(), Some(offscreen), budget, 5)
+        .unwrap();
     assert!(matches!(
         planned_decision(&visible, 3),
         Decision::Stream(allocation)
             if allocation.fps == budget.focused.fps && allocation.size == revised_pixels
     ));
     c.close(offscreen, Fault::SourceClosed, 6).unwrap();
-    let closed = c.plan_viewport(bounds(), Some(offscreen), budget, 6).unwrap();
+    let closed = c
+        .plan_viewport(bounds(), Some(offscreen), budget, 6)
+        .unwrap();
     assert_eq!(
         planned_decision(&closed, 3),
         Decision::Pause(PauseReason::Unauthorized)
