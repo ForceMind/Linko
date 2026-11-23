@@ -699,8 +699,8 @@ bool writeLiveRecord(HANDLE pipe, std::span<uint8_t const> record) {
     return true;
 }
 
-bool expectLiveReceipt(HANDLE pipe, uint64_t generation, unsigned char sequence) {
-    uint8_t actual[WorkerDisplayReceiptBytes];
+bool expectLiveCommand(HANDLE pipe, WorkerMessage kind, uint64_t generation, unsigned char sequence) {
+    uint8_t actual[WorkerSequencedMessageBytes];
     std::size_t offset{};
     DWORD error{};
     const bool completed = waitForFixture([&] {
@@ -727,11 +727,11 @@ bool expectLiveReceipt(HANDLE pipe, uint64_t generation, unsigned char sequence)
         }
         return true;
     });
-    uint8_t expected[WorkerDisplayReceiptBytes];
-    formatWorkerDisplayReceipt(expected, generation, sequence);
+    uint8_t expected[WorkerSequencedMessageBytes];
+    formatWorkerSequencedMessage(expected, kind, generation, sequence);
     if (!completed || offset != sizeof(actual) || std::memcmp(actual, expected, sizeof(actual)) != 0) {
-        std::fprintf(stderr, "WGC live display: receipt did not match source and sequence (error=%lu).\n",
-                     error);
+        std::fprintf(stderr, "WGC live display: command %u did not match source and sequence (error=%lu).\n",
+                     static_cast<unsigned>(kind), error);
         return false;
     }
     return true;
@@ -744,7 +744,7 @@ bool deliverLiveFrame(HANDLE pipe, WorkerFramePixels const& frame, uint64_t gene
     return writeLiveRecord(pipe, record);
 }
 
-int smokeDualCodec(WorkerControl const* worker) {
+int smokeDualCodec(WorkerControl const* worker, bool pauseForExpiry) {
     HANDLE input{};
     HANDLE events{};
     if (worker) {
@@ -785,10 +785,18 @@ int smokeDualCodec(WorkerControl const* worker) {
         if (worker) {
             const uint64_t generation = worker->generation;
             const auto sequence = static_cast<unsigned char>(secondFrames);
-            return (!left || deliverLiveFrame(events, leftOutput, generation, sequence)) &&
-                   deliverLiveFrame(events, rightOutput, generation + 1, sequence) &&
-                   (!left || expectLiveReceipt(input, generation, sequence)) &&
-                   expectLiveReceipt(input, generation + 1, sequence);
+            if ((left && !deliverLiveFrame(events, leftOutput, generation, sequence)) ||
+                !deliverLiveFrame(events, rightOutput, generation + 1, sequence) ||
+                (left && !expectLiveCommand(input, WorkerDisplayed, generation, sequence)) ||
+                !expectLiveCommand(input, WorkerDisplayed, generation + 1, sequence)) {
+                return false;
+            }
+            if (pauseForExpiry && sequence == WorkerLiveGapRound) {
+                if (!expectLiveCommand(input, WorkerResume, generation, sequence)) {
+                    return false;
+                }
+                std::puts("WGC live display: resume received after round 2.");
+            }
         }
         return true;
     }, [&](bool left) {
@@ -965,7 +973,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     const bool presentPixels = argc == 2 && std::strcmp(argv[1], "--present-pixels") == 0;
     const bool liveCodec = argc == 2 && std::strcmp(argv[1], "--dual-codec") == 0;
     const bool livePixels = argc == 2 && std::strcmp(argv[1], "--dual-live-pixels") == 0;
-    if (argc != 1 && !exportPixels && !presentPixels && !liveCodec && !livePixels) {
+    const bool stalePixels = argc == 2 && std::strcmp(argv[1], "--dual-live-stale-pixels") == 0;
+    if (argc != 1 && !exportPixels && !presentPixels && !liveCodec && !livePixels && !stalePixels) {
         return 2;
     }
     smokeThread = GetCurrentThreadId();
@@ -991,7 +1000,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 #ifdef LINKO_RW04_WGC_CODEC_CI
     // The worker validates its start record before creating or capturing the fixture window.
     auto run = [](WorkerControl const* worker) { return smoke(GetModuleHandleW(nullptr), worker); };
-    const int result = (liveCodec || livePixels) ? runWgcLiveCodecs(smokeDualCodec, livePixels)
+    const int result = (liveCodec || livePixels || stalePixels)
+                    ? runWgcLiveCodecs(smokeDualCodec, livePixels || stalePixels, stalePixels)
                     : presentPixels ? runWgcPresenter(presentFixture)
                     : exportPixels ? runWgcCodecWorker(run) : run(nullptr);
     markWgcCodecStage("closing-shared-mta");

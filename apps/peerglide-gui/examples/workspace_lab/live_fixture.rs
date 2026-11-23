@@ -21,8 +21,10 @@ const START: u8 = 1;
 const STOPPED: u8 = 4;
 const FRAME: u8 = 5;
 const DISPLAYED: u8 = 8;
+const RESUME: u8 = 9;
 const PAIRS: u32 = 4;
 const SURVIVOR: u32 = PAIRS + 1;
+const GAP_AFTER: u32 = 2;
 const VIDEO_SIZE: [usize; 2] = [FRAME_SIZE.width as usize, FRAME_SIZE.height as usize];
 const VIDEO_BYTES: usize = VIDEO_SIZE[0] * VIDEO_SIZE[1] * 4;
 const COLORS: [[[u8; 3]; SURVIVOR as usize]; PANELS] = [
@@ -54,14 +56,24 @@ enum Event {
 enum Phase {
     Receiving,
     Drawing,
+    Expiring,
+    GapClearing,
     Clearing,
     Exiting,
     Finished,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Readback {
+    Frames(u32),
+    Expired,
+    Closed,
+}
+
 pub(super) struct LiveFixture {
     process: Child,
     views: [ViewId; PANELS],
+    pause_for_expiry: bool,
     events: Receiver<io::Result<Event>>,
     round: u32,
     phase: Phase,
@@ -69,7 +81,7 @@ pub(super) struct LiveFixture {
     incoming: [Option<Received>; PANELS],
     draws: [Option<PendingDraw>; PANELS],
     texture_ids: [Option<egui::TextureId>; PANELS],
-    readback: Option<Receiver<(u32, bool)>>,
+    readback: Option<Receiver<(Readback, bool)>>,
     areas: Option<[Rect; PANELS]>,
     first_receipt: Option<u64>,
     deadline: Instant,
@@ -82,9 +94,14 @@ impl LiveFixture {
         views: [ViewId; PANELS],
         clock: Instant,
         context: &egui::Context,
+        pause_for_expiry: bool,
     ) -> io::Result<Self> {
         let mut process = Command::new(fixture)
-            .arg("--dual-live-pixels")
+            .arg(if pause_for_expiry {
+                "--dual-live-stale-pixels"
+            } else {
+                "--dual-live-pixels"
+            })
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()?;
@@ -105,6 +122,7 @@ impl LiveFixture {
         let mut fixture = Self {
             process,
             views,
+            pause_for_expiry,
             events,
             round: 1,
             phase: Phase::Receiving,
@@ -213,6 +231,31 @@ impl LiveFixture {
         Ok(())
     }
 
+    fn release_expired_draws(&mut self, context: &egui::Context, now: u64) -> io::Result<()> {
+        let textures = context.tex_manager();
+        for (source, draw) in self.draws.iter_mut().enumerate() {
+            let Some(active) = draw.as_ref() else {
+                continue;
+            };
+            let age = now.saturating_sub(active.first_seen);
+            if age < MAX_QUEUE_AGE_MS {
+                continue;
+            }
+            let id = active.texture.id();
+            *draw = None;
+            if textures.read().meta(id).is_some() {
+                return Err(io::Error::other("expired video texture was not released"));
+            }
+            self.texture_ids[source] = None;
+            println!(
+                "Live panels: source {} expired and released its texture at {}ms.",
+                source + 1,
+                age
+            );
+        }
+        Ok(())
+    }
+
     fn verify_video_textures(
         &mut self,
         context: &egui::Context,
@@ -264,11 +307,6 @@ impl LiveFixture {
         if self.round == PAIRS && now - first <= MAX_QUEUE_AGE_MS {
             return Err(io::Error::other("dual display did not cover the frame lifetime").into());
         }
-        for draw in self.draws.iter().flatten() {
-            if now.saturating_sub(draw.first_seen) >= MAX_QUEUE_AGE_MS {
-                return Err(Error::StaleFrame.into());
-            }
-        }
         self.verify_video_textures(context, if self.round <= PAIRS { PANELS } else { 1 })?;
         for draw in self.draws.iter().flatten() {
             coordinator.acknowledge_presentation(draw.ticket, now)?;
@@ -289,26 +327,39 @@ impl LiveFixture {
                 ""
             }
         );
+        self.phase = if self.pause_for_expiry && self.round == GAP_AFTER {
+            Phase::Expiring
+        } else {
+            Phase::Receiving
+        };
         self.round += 1;
-        self.phase = Phase::Receiving;
         Ok(())
     }
 
-    fn readback_confirmed(&mut self) -> io::Result<bool> {
+    fn readback_confirmed(&mut self, purpose: Readback) -> io::Result<bool> {
         let Some(readback) = &self.readback else {
             return Ok(false);
         };
         match readback.try_recv() {
-            Ok((round, true)) if round == self.round => {
+            Ok((observed, true)) if observed == purpose => {
                 self.readback = None;
                 Ok(true)
             }
             Ok(_) => Err(io::Error::other(
-                "live panel readback did not match the round",
+                "live panel readback did not match the expected pixels or stage",
             )),
             Err(TryRecvError::Empty) => Ok(false),
             Err(error) => Err(io::Error::other(error)),
         }
+    }
+
+    fn require_gap(&self) -> io::Result<()> {
+        if self.next_event()?.is_some() {
+            return Err(io::Error::other(
+                "unexpected native data during frame expiry",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -325,14 +376,41 @@ impl NativePanelProbe for LiveFixture {
             );
         }
         match self.phase {
-            Phase::Receiving => self.receive(coordinator, context, now)?,
+            Phase::Receiving => {
+                self.release_expired_draws(context, now)?;
+                self.receive(coordinator, context, now)?;
+            }
             Phase::Drawing => {
-                if self.readback_confirmed()? {
+                if self
+                    .draws
+                    .iter()
+                    .flatten()
+                    .any(|draw| now.saturating_sub(draw.first_seen) >= MAX_QUEUE_AGE_MS)
+                {
+                    return Err(Error::StaleFrame.into());
+                }
+                if self.readback_confirmed(Readback::Frames(self.round))? {
                     self.confirm_draws(coordinator, context, now)?;
                 }
             }
+            Phase::Expiring => {
+                self.require_gap()?;
+                self.release_expired_draws(context, now)?;
+                if self.draws.iter().all(Option::is_none) {
+                    self.phase = Phase::GapClearing;
+                }
+            }
+            Phase::GapClearing => {
+                self.require_gap()?;
+                if self.readback_confirmed(Readback::Expired)? {
+                    println!("Live panels: both expired regions cleared before resume.");
+                    self.write(&record(RESUME, GENERATION))?;
+                    self.write(&GAP_AFTER.to_be_bytes())?;
+                    self.phase = Phase::Receiving;
+                }
+            }
             Phase::Clearing => {
-                if self.readback_confirmed()? {
+                if self.readback_confirmed(Readback::Closed)? {
                     self.verify_video_textures(context, 0)?;
                     self.phase = Phase::Exiting;
                 }
@@ -376,9 +454,15 @@ impl NativePanelProbe for LiveFixture {
     }
 
     fn verify_paint(&mut self, context: &egui::Context, areas: [Rect; PANELS]) -> io::Result<()> {
-        if self.readback.is_some() || !matches!(self.phase, Phase::Drawing | Phase::Clearing) {
+        if self.readback.is_some() {
             return Ok(());
         }
+        let purpose = match self.phase {
+            Phase::Drawing => Readback::Frames(self.round),
+            Phase::GapClearing => Readback::Expired,
+            Phase::Clearing => Readback::Closed,
+            _ => return Ok(()),
+        };
         if *self.areas.get_or_insert(areas) != areas {
             return Err(io::Error::other("live panels moved before readback"));
         }
@@ -386,7 +470,6 @@ impl NativePanelProbe for LiveFixture {
             .draws
             .each_ref()
             .map(|draw| draw.as_ref().map_or(CANVAS, |draw| draw.color));
-        let round = self.round;
         let (send, receive) = mpsc::sync_channel(1);
         let scale = context.pixels_per_point();
         let repaint = context.clone();
@@ -395,7 +478,7 @@ impl NativePanelProbe for LiveFixture {
                 .into_iter()
                 .zip(expected)
                 .all(|(area, color)| matches_pixels(&image, area, scale, color));
-            let _ = send.send((round, valid));
+            let _ = send.send((purpose, valid));
             repaint.request_repaint();
         });
         self.readback = Some(receive);

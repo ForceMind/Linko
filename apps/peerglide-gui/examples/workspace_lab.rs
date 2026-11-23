@@ -68,8 +68,14 @@ trait NativePanelProbe {
 }
 
 enum ProbePaths {
-    Single { launcher: PathBuf, codec: PathBuf },
-    Live(PathBuf),
+    Single {
+        launcher: PathBuf,
+        codec: PathBuf,
+    },
+    Live {
+        codec: PathBuf,
+        pause_for_expiry: bool,
+    },
 }
 
 struct Workspace {
@@ -543,9 +549,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
             None,
         ),
-        [mode, codec] if mode == "--live-window-probe" => {
-            (Some(ProbePaths::Live(PathBuf::from(codec))), None)
-        }
+        [mode, codec] if mode == "--live-window-probe" || mode == "--live-window-stale-probe" => (
+            Some(ProbePaths::Live {
+                codec: PathBuf::from(codec),
+                pause_for_expiry: mode == "--live-window-stale-probe",
+            }),
+            None,
+        ),
         _ => return Err(io::Error::other("unexpected workspace example arguments").into()),
     };
     let require_native_result = paths.is_some();
@@ -623,9 +633,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         started,
                         &cc.egui_ctx,
                     )?),
-                    ProbePaths::Live(codec) => {
-                        Box::new(LiveFixture::start(&codec, views, started, &cc.egui_ctx)?)
-                    }
+                    ProbePaths::Live {
+                        codec,
+                        pause_for_expiry,
+                    } => Box::new(LiveFixture::start(
+                        &codec,
+                        views,
+                        started,
+                        &cc.egui_ctx,
+                        pause_for_expiry,
+                    )?),
                 })
             } else {
                 None

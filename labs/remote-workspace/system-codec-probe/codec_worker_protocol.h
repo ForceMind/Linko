@@ -9,7 +9,7 @@
 // Fixed records on the child process's inherited control pipes.
 enum WorkerMessage {
     WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame, WorkerPresented, WorkerPresent,
-    WorkerDisplayed
+    WorkerDisplayed, WorkerResume
 };
 enum { WorkerVersion = 1, WorkerMessageSize = 16, WorkerGenerationOffset = 8 };
 enum { WorkerFrameHeaderBytes = 12 };
@@ -17,7 +17,7 @@ enum { WorkerFrameWidth = 128, WorkerFrameHeight = 96, WorkerFrameCount = 2 };
 enum { WorkerFrameBytes = WorkerFrameWidth * WorkerFrameHeight * 3 / 2 };
 enum { WorkerRgbaBytes = WorkerFrameWidth * WorkerFrameHeight * 4 };
 enum { WorkerFrameRecordBytes = (size_t)WorkerMessageSize + WorkerFrameHeaderBytes + WorkerFrameBytes };
-enum { WorkerDisplayReceiptBytes = WorkerMessageSize + 4 };
+enum { WorkerSequencedMessageBytes = WorkerMessageSize + 4, WorkerLiveGapRound = 2 };
 
 struct WorkerFramePixels {
     uint8_t data[WorkerFrameBytes];
@@ -157,11 +157,11 @@ static inline void formatWorkerFrameRecord(uint8_t record[WorkerFrameRecordBytes
     memcpy(record + WorkerMessageSize + WorkerFrameHeaderBytes, frame->data, sizeof(frame->data));
 }
 
-static inline void formatWorkerDisplayReceipt(uint8_t receipt[WorkerDisplayReceiptBytes], uint64_t generation,
-                                              unsigned char sequence) {
-    formatWorkerMessage(receipt, WorkerDisplayed, generation);
-    memset(receipt + WorkerMessageSize, 0, 4);
-    receipt[WorkerDisplayReceiptBytes - 1] = sequence;
+static inline void formatWorkerSequencedMessage(uint8_t record[WorkerSequencedMessageBytes], enum WorkerMessage kind,
+                                                uint64_t generation, unsigned char sequence) {
+    formatWorkerMessage(record, kind, generation);
+    memset(record + WorkerMessageSize, 0, 4);
+    record[WorkerSequencedMessageBytes - 1] = sequence;
 }
 
 static inline bool sendWorkerFrame(struct WorkerControl const *control,

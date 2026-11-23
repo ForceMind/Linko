@@ -582,16 +582,17 @@ struct WgcLiveCodec {
     std::vector<BYTE> pending;
 };
 
-int runWgcLiveCodecs(int (*run)(WorkerControl const*), bool display) {
+int runWgcLiveCodecs(int (*run)(WorkerControl const*, bool), bool display, bool pauseForExpiry) {
     return withMediaFoundation([&] {
         if (!display) {
-            return run(nullptr);
+            return run(nullptr, false);
         }
         if (std::setvbuf(stdin, nullptr, _IONBF, 0) != 0) {
             std::fputs("WGC live display: cannot configure the receipt pipe.\n", stderr);
             return 1;
         }
-        return withWorkerControl("WGC live display", run, std::nullopt);
+        return withWorkerControl(
+            "WGC live display", [&](WorkerControl const* worker) { return run(worker, pauseForExpiry); }, std::nullopt);
     });
 }
 
