@@ -379,13 +379,29 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName, Captur
 
 int withMediaFoundation(auto run) {
     try {
+#ifdef LINKO_RW04_WGC_CODEC_CI
+        markWgcCodecStage("initializing-com");
+#endif
         check(CoInitializeEx(nullptr, COINIT_MULTITHREADED), "initialize COM");
         struct ComScope {
-            ~ComScope() { CoUninitialize(); }
+            ~ComScope() {
+#ifdef LINKO_RW04_WGC_CODEC_CI
+                markWgcCodecStage("uninitializing-com");
+#endif
+                CoUninitialize();
+            }
         } com;
+#ifdef LINKO_RW04_WGC_CODEC_CI
+        markWgcCodecStage("starting-media-foundation");
+#endif
         check(MFStartup(MF_VERSION), "start Media Foundation");
         struct MediaScope {
-            ~MediaScope() { MFShutdown(); }
+            ~MediaScope() {
+#ifdef LINKO_RW04_WGC_CODEC_CI
+                markWgcCodecStage("stopping-media-foundation");
+#endif
+                MFShutdown();
+            }
         } media;
         return run();
     } catch (HRESULT) {
@@ -448,9 +464,12 @@ bool hasWgcFixtureColor(WgcFixtureFrame frame, bool resized) {
 
 int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
     return withMediaFoundation([&] {
+        markWgcCodecStage("checking-fixture-colors");
         check(hasWgcFixtureColor(first, false) && hasWgcFixtureColor(resized, true)
                   ? S_OK : E_UNEXPECTED, "check WGC fixture colors and dimensions");
+        markWgcCodecStage("converting-bgra");
         const CapturedSamples samples{cropWgcFixture(first), cropWgcFixture(resized)};
+        markWgcCodecStage("running-h264-roundtrip");
         const auto result = probe(smallFixture, LatencyMode::EncoderAndDecoder, "WGC fixture", &samples);
         if (result == 0) {
             std::puts("WGC fixture H.264 roundtrip kept both source colors, luma and chroma.");

@@ -40,7 +40,10 @@ jobs:
           if errorlevel 1 exit /b 1
           link /nologo /out:rw04-wgc-h264.exe rw04-wgc.obj rw04-system-codec.obj d3d11.lib dwmapi.lib user32.lib gdi32.lib windowsapp.lib mfplat.lib mfuuid.lib wmcodecdspuuid.lib ole32.lib
           if errorlevel 1 exit /b 1
-          rw04-wgc-h264.exe
+          for /l %%n in (1,1,30) do (
+            echo WGC codec attempt %%n of 30
+            rw04-wgc-h264.exe || exit /b 1
+          )
       - name: Roundtrip a synthetic stream through VideoToolbox
         if: runner.os == 'macOS'
         shell: bash

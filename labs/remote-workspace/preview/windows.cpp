@@ -13,6 +13,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <cstdio>
 #include <iterator>
@@ -27,6 +28,36 @@
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
 #include "../system-codec-probe/windows_fixture.h"
+
+namespace {
+std::atomic<char const*> wgcCodecStage{"opening"};
+
+LONG WINAPI reportWgcCodecException(EXCEPTION_POINTERS* exception) {
+    auto const* record = exception->ExceptionRecord;
+    std::fprintf(stderr, "WGC codec exception=0x%08lX, last_stage=%s.\n",
+                 record->ExceptionCode, wgcCodecStage.load(std::memory_order_relaxed));
+    HMODULE module{};
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(record->ExceptionAddress), &module)) {
+        wchar_t path[MAX_PATH]{};
+        const auto length = GetModuleFileNameW(module, path, static_cast<DWORD>(std::size(path)));
+        if (length && length < std::size(path)) {
+            const std::wstring_view name(path, length);
+            const auto lastSeparator = name.find_last_of(L'\\');
+            const auto offset = reinterpret_cast<std::uintptr_t>(record->ExceptionAddress) -
+                                reinterpret_cast<std::uintptr_t>(module);
+            std::fprintf(stderr, "WGC codec exception module=%ls offset=0x%llX.\n",
+                         path + (lastSeparator == std::wstring_view::npos ? 0 : lastSeparator + 1),
+                         static_cast<unsigned long long>(offset));
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+}
+
+void markWgcCodecStage(char const* stage) noexcept {
+    wgcCodecStage.store(stage, std::memory_order_relaxed);
+}
 #endif
 
 using namespace winrt;
@@ -484,17 +515,24 @@ int smoke(HINSTANCE instance) {
         return 13;
     }
     std::puts("WGC resized frame confirmed.");
+#ifdef LINKO_RW04_WGC_CODEC_CI
+    markWgcCodecStage("destroying-source");
+#endif
     DestroyWindow(fixture);
     if (!wait([&] { return preview.view().second == nullptr; })) {
         std::fputs("WGC fixture remained visible after close.\n", stderr);
         return 14;
     }
+#ifdef LINKO_RW04_WGC_CODEC_CI
+    markWgcCodecStage("joining-capture");
+#endif
     preview.stop();
     std::puts("WGC fixture start, resize, source close and stop passed.");
     if (preview.view().second) {
         return 15;
     }
 #ifdef LINKO_RW04_WGC_CODEC_CI
+    markWgcCodecStage("retained-fixture-frames");
     return checkWgcCodec(capturedFixtureFrame(*first), capturedFixtureFrame(*resized));
 #else
     return 0;
@@ -507,6 +545,9 @@ int smoke(HINSTANCE instance) {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
+#ifdef LINKO_RW04_WGC_CODEC_CI
+    SetUnhandledExceptionFilter(reportWgcCodecException);
+#endif
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     static_cast<void>(&windowProc);
     auto result = smoke(GetModuleHandleW(nullptr));
