@@ -1,7 +1,9 @@
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>
 #include <VideoToolbox/VideoToolbox.h>
+#include <mach/mach.h>
 
+#include <inttypes.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,6 +12,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "../webrtc-probe/vm_probe.h"
+
 enum { MaxFrames = 90, FramesPerSecond = 30 };
 static const OSType NV12 = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
 
@@ -17,6 +21,7 @@ struct Probe {
     int width;
     int height;
     unsigned frames;
+    CVPixelBufferRef fixedInput;
     _Atomic(CMSampleBufferRef) encoded[MaxFrames];
     _Atomic bool encodedOnce[MaxFrames];
     _Atomic uint64_t decodedAt[MaxFrames];
@@ -63,6 +68,11 @@ static void encodedOutput(void *state, void *source, OSStatus status, VTEncodeIn
 }
 
 static OSStatus submit(struct Probe *probe, VTCompressionSessionRef encoder, unsigned index) {
+    if (probe->fixedInput) {
+        probe->submittedAt[index] = nowNs();
+        return VTCompressionSessionEncodeFrame(encoder, probe->fixedInput, CMTimeMake(index, FramesPerSecond),
+                                               CMTimeMake(1, FramesPerSecond), NULL, NULL, NULL);
+    }
     CVPixelBufferRef pixels = NULL;
     OSStatus status = CVPixelBufferCreate(NULL, (size_t)probe->width, (size_t)probe->height, NV12, NULL, &pixels);
     if (status != noErr) {
@@ -102,8 +112,9 @@ static bool matchesFixture(CVImageBufferRef frame, struct Probe const *probe, un
     bool valid = false;
     if (luma && stride >= width && CVPixelBufferGetHeightOfPlane(frame, 0) >= (size_t)probe->height) {
         const uint8_t *row = luma + stride * (size_t)(probe->height / 2);
-        valid = abs(row[width / 2] - brightness(index)) <= 6 &&
-                abs(row[width * 7 / 8] - (232 - brightness(index))) <= 6;
+        const int expected = probe->fixedInput ? 126 : brightness(index);
+        const int stripe = probe->fixedInput ? expected : 232 - expected;
+        valid = abs(row[width / 2] - expected) <= 6 && abs(row[width * 7 / 8] - stripe) <= 6;
     }
     return CVPixelBufferUnlockBaseAddress(frame, kCVPixelBufferLock_ReadOnly) == noErr && valid;
 }
@@ -195,8 +206,9 @@ static int compareLatency(const void *left, const void *right) {
     return (a > b) - (a < b);
 }
 
-static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain, unsigned delivered, uint64_t elapsed) {
-    if (delivered != probe->frames || elapsed == 0 || (probe->frames > 1 && beforeDrain == 0)) {
+static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain,
+                   unsigned delivered, uint64_t elapsed, bool verbose) {
+    if (delivered != probe->frames || elapsed == 0 || (!probe->fixedInput && probe->frames > 1 && beforeDrain == 0)) {
         return false;
     }
     double latency[MaxFrames];
@@ -206,6 +218,9 @@ static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain, 
             return false;
         }
         latency[index] = (double)(received - probe->submittedAt[index]) / 1000000.0;
+    }
+    if (!verbose) {
+        return true;
     }
     qsort(latency, probe->frames, sizeof(latency[0]), compareLatency);
     printf("VideoToolbox %dx%d (%s): %u decoded, %u decoded before drain, throughput %.1f frames/s.\n",
@@ -217,8 +232,8 @@ static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain, 
     return true;
 }
 
-static bool run(int width, int height, unsigned frames, bool paced) {
-    struct Probe probe = {.width = width, .height = height, .frames = frames};
+static bool run(int width, int height, unsigned frames, bool paced, CVPixelBufferRef fixedInput, bool verbose) {
+    struct Probe probe = {.width = width, .height = height, .frames = frames, .fixedInput = fixedInput};
     VTCompressionSessionRef encoder = NULL;
     VTDecompressionSessionRef decoder = NULL;
     OSStatus status = VTCompressionSessionCreate(NULL, width, height, kCMVideoCodecType_H264, NULL, NULL, NULL,
@@ -257,7 +272,9 @@ static bool run(int width, int height, unsigned frames, bool paced) {
     const char *encodeMode = hardwareMode(encoder, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder);
     const char *decodeMode = decoder
         ? hardwareMode(decoder, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder) : "unknown";
-    printf("VideoToolbox encoder=%s decoder=%s.\n", encodeMode, decodeMode);
+    if (verbose) {
+        printf("VideoToolbox encoder=%s decoder=%s.\n", encodeMode, decodeMode);
+    }
     if (decoder) {
         VTDecompressionSessionInvalidate(decoder);
         CFRelease(decoder);
@@ -271,16 +288,96 @@ static bool run(int width, int height, unsigned frames, bool paced) {
         }
     }
     OSStatus callbackError = atomic_load(&probe.callbackError);
-    if (status != noErr || callbackError != noErr || strcmp(encodeMode, "unknown") == 0 ||
-        !report(&probe, paced, beforeDrain, delivered, elapsed)) {
-        fprintf(stderr, "H.264 %dx%d result: status=%d callback=%d delivered=%u before_drain=%u\n",
-                width, height, (int)status, (int)callbackError, delivered, beforeDrain);
+    const bool modesKnown = fixedInput ? strcmp(encodeMode, "hardware") == 0 && strcmp(decodeMode, "hardware") == 0
+                                      : strcmp(encodeMode, "unknown") != 0;
+    if (status != noErr || callbackError != noErr || !modesKnown ||
+        !report(&probe, paced, beforeDrain, delivered, elapsed, verbose)) {
+        fprintf(stderr, "H.264 %dx%d result: status=%d callback=%d delivered=%u before_drain=%u paths=%s/%s\n",
+                width, height, (int)status, (int)callbackError, delivered, beforeDrain, encodeMode, decodeMode);
         return false;
     }
     return true;
 }
 
-int main(void) {
-    return run(128, 96, 1, false) && run(1920, 1080, MaxFrames, false) &&
-           run(1920, 1080, MaxFrames, true) ? 0 : 1;
+static CVPixelBufferRef makeBgraFixture(int width, int height) {
+    CFDictionaryRef empty = CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
+    if (!empty) {
+        return NULL;
+    }
+    const void *keys[] = {kCVPixelBufferIOSurfacePropertiesKey};
+    const void *values[] = {empty};
+    CFDictionaryRef attributes = CFDictionaryCreate(NULL, keys, values, 1,
+                                                     &kCFTypeDictionaryKeyCallBacks,
+                                                     &kCFTypeDictionaryValueCallBacks);
+    CFRelease(empty);
+    if (!attributes) {
+        return NULL;
+    }
+    CVPixelBufferRef pixels = NULL;
+    OSStatus status = CVPixelBufferCreate(NULL, (size_t)width, (size_t)height, kCVPixelFormatType_32BGRA,
+                                         attributes, &pixels);
+    CFRelease(attributes);
+    if (status != noErr) {
+        return NULL;
+    }
+    bool initialized = false;
+    if (CVPixelBufferLockBaseAddress(pixels, 0) == noErr) {
+        void *bytes = CVPixelBufferGetBaseAddress(pixels);
+        const size_t length = CVPixelBufferGetDataSize(pixels);
+        initialized = bytes && length >= (size_t)width * (size_t)height * 4;
+        if (initialized) {
+            memset(bytes, 0x80, length);
+        }
+        initialized = CVPixelBufferUnlockBaseAddress(pixels, 0) == noErr && initialized;
+    }
+    if (!initialized) {
+        CVPixelBufferRelease(pixels);
+        return NULL;
+    }
+    return pixels;
+}
+
+static bool sampleMemory(unsigned cycle) {
+    mach_task_basic_info_data_t memory = {0};
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&memory, &count) != KERN_SUCCESS) {
+        return false;
+    }
+    printf("VideoToolbox memory: stopped=%u rss_bytes=%" PRIu64 "\n", cycle, (uint64_t)memory.resident_size);
+    return linko_rw04_sample_vm_regions(cycle == 10);
+}
+
+static bool checkMemory(int width, int height) {
+    CVPixelBufferRef input = makeBgraFixture(width, height);
+    if (!input) {
+        fputs("VideoToolbox memory: could not create the BGRA fixture.\n", stderr);
+        return false;
+    }
+    printf("VideoToolbox memory: size=%dx%d, fixed BGRA input.\n", width, height);
+    bool passed = true;
+    for (unsigned cycle = 1; passed && cycle <= 100; ++cycle) {
+        passed = run(width, height, 3, true, input, cycle == 1);
+        if (passed && (cycle == 10 || cycle == 100)) {
+            passed = sampleMemory(cycle);
+        }
+        if (!passed) {
+            fprintf(stderr, "VideoToolbox memory: stopped at cycle %u.\n", cycle);
+        }
+    }
+    CVPixelBufferRelease(input);
+    if (passed) {
+        puts("VideoToolbox memory: 100 standalone hardware encode/decode cycles passed.");
+    }
+    return passed;
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--vm-small") == 0) {
+        return checkMemory(224, 144) ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "--vm-matched") == 0) {
+        return checkMemory(350, 262) ? 0 : 1;
+    }
+    return run(128, 96, 1, false, NULL, true) && run(1920, 1080, MaxFrames, false, NULL, true) &&
+           run(1920, 1080, MaxFrames, true, NULL, true) ? 0 : 1;
 }
