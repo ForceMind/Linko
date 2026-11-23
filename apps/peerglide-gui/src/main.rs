@@ -1,10 +1,12 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-mod config_store;
 mod discovery_panel;
 mod gesture_lab;
 mod gesture_rules;
+#[cfg(test)]
+mod test_fixture;
 use anyhow::{Context, Result};
 use eframe::egui::{self, Color32, RichText, Vec2};
+use peerglide_gui::config_store;
 use peerglide_protocol::worker::{WorkerEvent, WorkerState};
 use peerglide_transport::{self as transport, Identity};
 use serde::{Deserialize, Serialize};
@@ -917,49 +919,7 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    pub(super) struct Fixture {
-        pub(super) path: PathBuf,
-        live: bool,
-    }
-    impl Fixture {
-        pub(super) fn new() -> Result<Self> {
-            static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            for _ in 0..100 {
-                let path = std::env::temp_dir().join(format!(
-                    "peerglide-ui-{}-{}-{}",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)?
-                        .as_nanos(),
-                    NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                ));
-                match std::fs::create_dir(&path) {
-                    Ok(()) => return Ok(Self { path, live: true }),
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(e) => {
-                        return Err(e)
-                            .with_context(|| format!("create GUI fixture {}", path.display()))
-                    }
-                }
-            }
-            anyhow::bail!("unable to reserve a unique GUI test directory")
-        }
-        pub(super) fn close(mut self) -> Result<()> {
-            std::fs::remove_dir_all(&self.path)
-                .with_context(|| format!("cleanup GUI fixture {}", self.path.display()))?;
-            self.live = false;
-            Ok(())
-        }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            if self.live {
-                if let Err(e) = std::fs::remove_dir_all(&self.path) {
-                    eprintln!("GUI fixture cleanup failed at {}: {e}", self.path.display());
-                }
-            }
-        }
-    }
+    pub(super) use crate::test_fixture::Fixture;
     #[test]
     fn parallel_fixtures_have_exclusive_ownership_and_cleanup() -> Result<()> {
         let fixtures: Vec<_> = (0..32).map(|_| std::thread::spawn(Fixture::new)).collect();

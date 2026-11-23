@@ -1,6 +1,6 @@
 //! Interactive RW06 layout and scheduling with four offline fixture surfaces.
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,6 +18,12 @@ use linko_workspace_lab::{Binding, Error, SurfaceKey};
 mod live_fixture;
 #[path = "workspace_lab/native_fixture.rs"]
 mod native_fixture;
+#[path = "workspace_lab/layout.rs"]
+mod layout;
+#[cfg(test)]
+#[path = "../src/test_fixture.rs"]
+mod test_fixture;
+use layout::LayoutProfile;
 use live_fixture::LiveFixture;
 use native_fixture::{NativeFixture, PANELS as NATIVE_PANELS};
 
@@ -36,6 +42,7 @@ const MUTED: Color32 = Color32::from_rgb(95, 111, 133);
 
 #[derive(Clone, Copy)]
 struct Panel {
+    slot: u8,
     view: ViewId,
     key: SurfaceKey,
     label: &'static str,
@@ -70,6 +77,8 @@ struct Workspace {
     panels: Vec<Panel>,
     focused: ViewId,
     budget: Budget,
+    layout: Option<LayoutProfile>,
+    scroll_to_focus: bool,
 }
 
 impl Workspace {
@@ -120,6 +129,7 @@ impl Workspace {
             )?;
             coordinator.grant_view(view, 0, GRANT_MS)?;
             panels.push(Panel {
+                slot: seed,
                 view,
                 key,
                 label,
@@ -134,7 +144,96 @@ impl Workspace {
                 decoders: SLOTS,
                 ..Budget::default()
             },
+            layout: None,
+            scroll_to_focus: false,
         })
+    }
+
+    fn focused_index(&self) -> usize {
+        self.panels
+            .iter()
+            .position(|panel| panel.view == self.focused)
+            .expect("workspace has a focused panel")
+    }
+
+    fn select(&mut self, view: ViewId) {
+        if view != self.focused {
+            self.focused = view;
+            if let Some(profile) = &mut self.layout {
+                profile.notice = None;
+            }
+        }
+    }
+
+    fn open_layout(&mut self, directory: &Path) -> anyhow::Result<()> {
+        let (profile, layout) = LayoutProfile::open(directory)?;
+        self.panels.sort_by_key(|panel| {
+            layout
+                .panel_order
+                .iter()
+                .position(|slot| *slot == panel.slot)
+                .expect("validated layout lists every workspace panel")
+        });
+        self.focused = self
+            .panels
+            .iter()
+            .find(|panel| panel.slot == layout.focused_panel)
+            .expect("validated focused panel exists")
+            .view;
+        self.layout = Some(profile);
+        self.scroll_to_focus = true;
+        Ok(())
+    }
+
+    fn show_layout_controls(&mut self, ui: &mut egui::Ui) {
+        let selected = self.focused_index();
+        let last = self.panels.len() - 1;
+        let (key_earlier, key_later, key_save) = ui.input_mut(|input| {
+            (
+                input.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowLeft),
+                input.consume_key(egui::Modifiers::SHIFT, egui::Key::ArrowRight),
+                input.consume_key(egui::Modifiers::COMMAND, egui::Key::S),
+            )
+        });
+        let (earlier, later, save) = ui
+            .horizontal(|ui| {
+                (
+                    ui.add_enabled(selected > 0, egui::Button::new("Move earlier"))
+                        .on_hover_text("Shift+Left")
+                        .clicked(),
+                    ui.add_enabled(selected < last, egui::Button::new("Move later"))
+                        .on_hover_text("Shift+Right")
+                        .clicked(),
+                    ui.button("Save layout").clicked(),
+                )
+            })
+            .inner;
+        let destination = if earlier || key_earlier {
+            selected.checked_sub(1)
+        } else if (later || key_later) && selected < last {
+            Some(selected + 1)
+        } else {
+            None
+        };
+        if let Some(destination) = destination {
+            self.panels.swap(selected, destination);
+            self.scroll_to_focus = true;
+        }
+        if let Some(profile) = &mut self.layout {
+            if save || key_save {
+                let order = std::array::from_fn(|index| self.panels[index].slot);
+                let focused = self.panels[destination.unwrap_or(selected)].slot;
+                profile.notice = Some(match profile.save(order, focused) {
+                    Ok(()) => "Layout saved".into(),
+                    Err(error) => error.to_string(),
+                });
+            } else if destination.is_some() {
+                profile.notice = None;
+            }
+            if let Some(notice) = &profile.notice {
+                ui.label(notice);
+            }
+        }
     }
 
     fn plan(&mut self, viewport: Rect, now: u64) -> Result<Plan, Error> {
@@ -171,7 +270,7 @@ impl Workspace {
             .iter()
             .position(|panel| root.input(|input| input.key_pressed(panel.shortcut)));
         if let Some(index) = shortcut {
-            self.focused = self.panels[index].view;
+            self.select(self.panels[index].view);
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(CANVAS).inner_margin(24))
@@ -183,11 +282,16 @@ impl Workspace {
                     "Offline fixtures  ·  2 decoder slots"
                 };
                 ui.label(RichText::new(subtitle).color(MUTED));
+                if self.layout.is_some() {
+                    self.show_layout_controls(ui);
+                }
+                let scroll = std::mem::take(&mut self.scroll_to_focus);
+                let scroll_target = (shortcut.is_some() || scroll).then(|| self.focused_index());
                 ui.add_space(18.0);
                 let result = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show_viewport(ui, |ui, viewport| {
-                        self.show_tiles(ui, viewport, shortcut, now, preview)
+                        self.show_tiles(ui, viewport, scroll_target, now, preview)
                     });
                 match result.inner {
                     Ok(area) => area,
@@ -243,7 +347,7 @@ impl Workspace {
                 .find(|surface| surface.key == panel.key)
                 .ok_or(Error::InvalidState)?
                 .decision;
-            let builder = egui::UiBuilder::new().id_salt(index).max_rect(screen);
+            let builder = egui::UiBuilder::new().id_salt(panel.slot - 1).max_rect(screen);
             let mut card = ui.new_child(builder);
             card.set_clip_rect(ui.clip_rect().intersect(screen));
             let (focus, toggle) = egui::Frame::new()
@@ -281,7 +385,7 @@ impl Workspace {
                 })
                 .inner;
             if focus {
-                self.focused = panel.view;
+                self.select(panel.view);
             }
             if toggle {
                 self.toggle_viewing(panel, now)?;
@@ -427,14 +531,18 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let paths = match args.as_slice() {
-        [] => None,
-        [mode, launcher, codec] if mode == "--native-window-probe" => Some(ProbePaths::Single {
-            launcher: PathBuf::from(launcher),
-            codec: PathBuf::from(codec),
-        }),
+    let (paths, layout_dir) = match args.as_slice() {
+        [] => (None, None),
+        [mode, directory] if mode == "--layout-dir" => (None, Some(PathBuf::from(directory))),
+        [mode, launcher, codec] if mode == "--native-window-probe" => (
+            Some(ProbePaths::Single {
+                launcher: PathBuf::from(launcher),
+                codec: PathBuf::from(codec),
+            }),
+            None,
+        ),
         [mode, codec] if mode == "--live-window-probe" => {
-            Some(ProbePaths::Live(PathBuf::from(codec)))
+            (Some(ProbePaths::Live(PathBuf::from(codec))), None)
         }
         _ => return Err(io::Error::other("unexpected workspace example arguments").into()),
     };
@@ -482,6 +590,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             cc.egui_ctx.set_theme(egui::Theme::Light);
             let mut workspace = Workspace::new()?;
+            if let Some(directory) = layout_dir {
+                workspace.open_layout(&directory)?;
+            }
             let started = Instant::now();
             let native: Option<Box<dyn NativePanelProbe>> = if let Some(paths) = paths {
                 let views = [workspace.panels[0].view, workspace.panels[1].view];
@@ -534,30 +645,149 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixture::Fixture;
+
+    fn workspace_key(
+        workspace: &mut Workspace,
+        context: &egui::Context,
+        now: u64,
+        key: egui::Key,
+        modifiers: egui::Modifiers,
+    ) {
+        let size = egui::vec2(916.0, 584.0);
+        let output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                modifiers,
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |root| {
+                let _ = workspace.show(root, now, None);
+            },
+        );
+        assert!(!output.shapes.is_empty());
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn layout_controls_save_and_restore_only_preferences() -> anyhow::Result<()> {
+        let fixture = Fixture::new()?;
+        let path = fixture.path.join(layout::FILENAME);
+        let mut workspace = Workspace::new()?;
+        workspace.open_layout(&fixture.path)?;
+        assert!(!path.exists());
+        let source = workspace.panels[2].view;
+        workspace.coordinator.revoke_view(source, 1)?;
+        let context = egui::Context::default();
+        workspace_key(
+            &mut workspace,
+            &context,
+            2,
+            egui::Key::Num3,
+            egui::Modifiers::NONE,
+        );
+        workspace_key(
+            &mut workspace,
+            &context,
+            3,
+            egui::Key::ArrowLeft,
+            egui::Modifiers::SHIFT,
+        );
+        assert!(!path.exists());
+        workspace_key(
+            &mut workspace,
+            &context,
+            4,
+            egui::Key::S,
+            egui::Modifiers::COMMAND,
+        );
+        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        assert_eq!(
+            saved,
+            serde_json::json!({
+                "store_version": 1,
+                "data": {
+                    "layout_version": 1,
+                    "panel_order": [1, 3, 2, 4],
+                    "focused_panel": 3
+                }
+            })
+        );
+        assert_eq!(workspace.focused, source);
+        workspace.open_layout(&fixture.path)?;
+        let snapshot = workspace.coordinator.snapshot(source, 5)?;
+        assert!(!snapshot.viewing_allowed && !snapshot.input_active);
+
+        let mut reopened = Workspace::new()?;
+        reopened.open_layout(&fixture.path)?;
+        let order: Vec<_> = reopened.panels.iter().map(|panel| panel.slot).collect();
+        assert_eq!(order, [1, 3, 2, 4]);
+        assert_eq!(reopened.panels[reopened.focused_index()].slot, 3);
+        for panel in reopened.panels {
+            let snapshot = reopened.coordinator.snapshot(panel.view, 0)?;
+            assert!(snapshot.viewing_allowed && !snapshot.input_active);
+        }
+        fixture.close()
+    }
+
+    #[test]
+    fn layout_preserves_invalid_files_and_concurrent_changes() -> anyhow::Result<()> {
+        let fixture = Fixture::new()?;
+        let path = fixture.path.join(layout::FILENAME);
+        let mut first = Workspace::new()?;
+        first.open_layout(&fixture.path)?;
+        let mut second = Workspace::new()?;
+        second.open_layout(&fixture.path)?;
+        first.layout.as_mut().unwrap().save([4, 2, 3, 1], 4)?;
+        let saved = std::fs::read(&path)?;
+        workspace_key(
+            &mut second,
+            &egui::Context::default(),
+            1,
+            egui::Key::S,
+            egui::Modifiers::COMMAND,
+        );
+        let notice = second.layout.as_ref().unwrap().notice.as_deref().unwrap();
+        assert!(notice.contains("configuration changed"));
+        assert_eq!(std::fs::read(&path)?, saved);
+
+        for bytes in [
+            b"broken".to_vec(),
+            br#"{"store_version":2,"data":{}}"#.to_vec(),
+            br#"{"layout_version":2,"panel_order":[1,2,3,4],"focused_panel":3}"#.to_vec(),
+            br#"{"layout_version":1,"panel_order":[1,1,3,4],"focused_panel":3}"#.to_vec(),
+            br#"{"layout_version":1,"panel_order":[1,2,3,4],"focused_panel":5}"#.to_vec(),
+            br#"{"layout_version":1,"panel_order":[1,2,3,4],"focused_panel":3,"grant":"control"}"#.to_vec(),
+            vec![0; peerglide_gui::config_store::MAX_BYTES + 1],
+        ] {
+            std::fs::write(&path, &bytes)?;
+            assert!(LayoutProfile::open(&fixture.path).is_err());
+            assert_eq!(std::fs::read(&path)?, bytes);
+        }
+        let missing = fixture.path.join("missing");
+        assert!(LayoutProfile::open(&missing).is_err());
+        assert!(!missing.exists());
+        fixture.close()
+    }
 
     #[test]
     fn workspace_focus_and_visibility_use_the_live_plan() -> Result<(), Error> {
         let mut workspace = Workspace::new()?;
         let screen = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(916.0, 584.0));
-        let ctx = egui::Context::default();
-        let output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(screen),
-                events: vec![egui::Event::Key {
-                    key: egui::Key::Num3,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |root| {
-                let _ = workspace.show(root, 1, None);
-            },
+        workspace_key(
+            &mut workspace,
+            &egui::Context::default(),
+            1,
+            egui::Key::Num3,
+            egui::Modifiers::NONE,
         );
-        assert!(!output.shapes.is_empty());
-        output.drop_without_applying_deltas();
 
         let focus = workspace.panels[2];
         assert_eq!(workspace.focused, focus.view);

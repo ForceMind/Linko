@@ -174,18 +174,16 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixture::Fixture;
     #[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
     #[serde(default, deny_unknown_fields)]
     struct Settings {
         enabled: bool,
         n: u32,
     }
-    fn fixture() -> Result<super::super::tests::Fixture> {
-        super::super::tests::Fixture::new()
-    }
     #[test]
     fn legacy_migrates_with_exact_backup_and_new_defaults_off() -> Result<()> {
-        let f = fixture()?;
+        let f = Fixture::new()?;
         let path = f.path.join("settings.json");
         let old = br#"{"n":7}"#;
         std::fs::write(&path, old)?;
@@ -197,12 +195,12 @@ mod tests {
         assert_eq!(Store::open::<Settings>(path.clone())?.1, s);
         let backup = path.with_extension(format!("bak-{}", blake3::hash(old).to_hex()));
         assert_eq!(std::fs::read(backup)?, old);
-        Ok(())
+        f.close()
     }
     #[test]
     fn corrupt_future_and_oversized_configuration_is_preserved_until_explicit_reset() -> Result<()>
     {
-        let f = fixture()?;
+        let f = Fixture::new()?;
         let path = f.path.join("settings.json");
         for bytes in [
             b"broken".to_vec(),
@@ -221,7 +219,7 @@ mod tests {
     }
     #[test]
     fn concurrent_snapshot_cannot_overwrite_and_os_lock_releases_on_drop() -> Result<()> {
-        let f = fixture()?;
+        let f = Fixture::new()?;
         let path = f.path.join("settings.json");
         let (mut a, _) = Store::open::<Settings>(path.clone())?;
         let (mut b, _) = Store::open::<Settings>(path.clone())?;
