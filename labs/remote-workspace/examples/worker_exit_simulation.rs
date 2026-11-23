@@ -105,14 +105,23 @@ impl CoordinatedWorker {
         }
         let mut worker = Self::spawn(command, binding)?;
         worker.send_command(WORKER_START, generation)?;
-        let frames = worker.read_event(Duration::from_secs(90), move |stdout| {
+        let frames = worker.read_codec_frames(generation, fixture)?;
+        Ok((worker, frames))
+    }
+
+    fn read_codec_frames(
+        &mut self,
+        generation: u64,
+        fixture: FixturePixels,
+    ) -> io::Result<[Vec<u8>; 2]> {
+        let frames = self.read_event(Duration::from_secs(90), move |stdout| {
             let first = read_worker_frame(stdout, generation, 2, fixture)?;
             let second = read_worker_frame(stdout, generation, 3, fixture)?;
             expect_record(stdout, worker_record(WORKER_READY, generation))?;
             Ok([first, second])
         })?;
         eprintln!("Native worker: verified two decoded frames and codec READY.");
-        Ok((worker, frames))
+        Ok(frames)
     }
 
     fn send_command(&mut self, kind: u8, generation: u64) -> io::Result<()> {
@@ -125,12 +134,12 @@ impl CoordinatedWorker {
         if rgba.len() != NATIVE_WIDTH * NATIVE_HEIGHT * 4 {
             return Err(invalid_worker_data("invalid renderer frame size"));
         }
-        let input = self
-            .process
-            .stdin
-            .as_mut()
-            .expect("renderer stdin is piped");
-        input.write_all(rgba)?;
+        self.write_payload(rgba)
+    }
+
+    fn write_payload(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let input = self.process.stdin.as_mut().expect("worker stdin is piped");
+        input.write_all(bytes)?;
         input.flush()
     }
 
@@ -393,6 +402,33 @@ fn match_frame(
         .ok_or(Error::StaleFrame)
 }
 
+#[cfg(target_os = "macos")]
+fn start_mac_window_codec(
+    binary: &Path,
+    binding: Binding,
+) -> io::Result<(CoordinatedWorker, [Vec<u8>; 2])> {
+    let mut command = Command::new(binary);
+    command.arg("--worker-capture-input");
+    let mut capture = CoordinatedWorker::spawn(command, binding)?;
+    capture.send_command(WORKER_START, WORKER_GENERATION)?;
+    let frames = capture.read_event(Duration::from_secs(15), |output| {
+        let mut bgra = vec![0; 2 * NATIVE_WIDTH * NATIVE_HEIGHT * 4];
+        output.read_exact(&mut bgra)?;
+        Ok(bgra)
+    })?;
+    if !capture.process.wait()?.success() {
+        return Err(io::Error::other("AppKit capture process did not exit cleanly"));
+    }
+    eprintln!("Native window source: AppKit capture process reaped.");
+    let mut command = Command::new(binary);
+    command.arg("--worker-decode-input");
+    let mut decoder = CoordinatedWorker::spawn(command, binding)?;
+    decoder.send_command(WORKER_START, WORKER_GENERATION)?;
+    decoder.write_payload(&frames)?;
+    let decoded = decoder.read_codec_frames(WORKER_GENERATION, FixturePixels::Window)?;
+    Ok((decoder, decoded))
+}
+
 #[cfg(any(windows, target_os = "macos"))]
 fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()> {
     // Each relay captures its own window. Wait for the desktop fixture to
@@ -408,6 +444,9 @@ fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()
         viewer: [2; 32],
         nonce: [3; 16],
     };
+    #[cfg(target_os = "macos")]
+    let (mut worker, frames) = start_mac_window_codec(binary, binding)?;
+    #[cfg(windows)]
     let (mut worker, frames) = CoordinatedWorker::start_codec(
         binary,
         binding,

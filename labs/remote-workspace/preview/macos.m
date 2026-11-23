@@ -169,9 +169,6 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (NSImage *)displayedFrame;
 - (BOOL)hasStream;
 - (BOOL)captureActive;
-#ifdef LINKO_RW04_SCK_CODEC_CI
-- (void)closeFixturePreview;
-#endif
 #endif
 @end
 
@@ -408,16 +405,6 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (BOOL)captureActive {
     return _stream != nil && !_starting && !_stopRequested;
 }
-#ifdef LINKO_RW04_SCK_CODEC_CI
-- (void)closeFixturePreview {
-    [_timer invalidate];
-    _timer = nil;
-    _window.delegate = nil;
-    _window.releasedWhenClosed = NO;
-    [_window close];
-    _window = nil;
-}
-#endif
 #endif
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -522,33 +509,13 @@ static BOOL copySourceFixtureCrop(NSImage *image, struct SckWindowFrame *frame, 
     return copyFixtureCrop(image, frame) && matchesWorkerRgb(center, expected);
 }
 
-static bool runCaptureOnlyCodec(struct WorkerControl const *worker,
-                                struct SckWindowFrame const *frames) {
-    __block BOOL done = NO;
-    __block bool passed = false;
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const bool result = encodeSckWindowFrames(worker, frames);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            passed = result;
-            done = YES;
-        });
-    });
-    // The decoder can remain alive while another AppKit fixture acquires its
-    // own window. Keep servicing WindowServer while waiting for the stop pipe.
-    while (!done) {
-        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
-                              beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
-    }
-    return passed;
-}
-
 struct SckPresentationContext {
     __unsafe_unretained PreviewApp *preview;
     __unsafe_unretained NSWindow *window;
 };
 #endif
 
-static int checkNativeCapture(struct WorkerControl const *worker) {
+static int checkNativeCapture(struct WorkerControl const *worker, BOOL captureOnly) {
     if (!CGPreflightScreenCaptureAccess()) {
         puts("macOS hosted permission unavailable; native capture was not exercised.");
         return worker ? 5 : 0;
@@ -646,8 +613,11 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
     puts("ScreenCaptureKit fixture start, resize and source close passed.");
 #ifdef LINKO_RW04_SCK_CODEC_CI
     if (worker) {
-        [preview closeFixturePreview];
-        return runCaptureOnlyCodec(worker, frames) ? 0 : 9;
+        if (captureOnly) {
+            return fwrite(frames, sizeof(frames), 1, worker->events) == 1 &&
+                   fflush(worker->events) == 0 ? 0 : 9;
+        }
+        return encodeSckWindowFrames(worker, frames) ? 0 : 9;
     }
 #endif
     return 0;
@@ -734,12 +704,20 @@ static bool presentSckFrame(struct WorkerControl const *worker) {
     return sendWorkerMessage(worker, WorkerPresented);
 }
 
+enum SckFixtureMode { SckPixels, SckPresent, SckCaptureOnly, SckCapturedInput };
+
 static bool runSckWorker(struct WorkerControl const *worker, void *context) {
+    const enum SckFixtureMode mode = *(enum SckFixtureMode const *)context;
+    if (mode == SckCapturedInput) {
+        struct SckWindowFrame frames[WorkerFrameCount];
+        return fread(frames, sizeof(frames), 1, stdin) == 1 &&
+               encodeSckWindowFrames(worker, frames);
+    }
     struct WorkerControl session = *worker;
-    if (*(bool const *)context) {
+    if (mode == SckPresent) {
         session.present = presentSckFrame;
     }
-    return checkNativeCapture(&session) == 0;
+    return checkNativeCapture(&session, mode == SckCaptureOnly) == 0;
 }
 
 int main(int argc, char **argv) {
@@ -747,12 +725,20 @@ int main(int argc, char **argv) {
         if (argc != 2) {
             return 2;
         }
-        bool present = strcmp(argv[1], "--worker-present") == 0;
-        if (!present && strcmp(argv[1], "--worker-pixels") != 0) {
+        enum SckFixtureMode mode;
+        if (strcmp(argv[1], "--worker-pixels") == 0) {
+            mode = SckPixels;
+        } else if (strcmp(argv[1], "--worker-present") == 0) {
+            mode = SckPresent;
+        } else if (strcmp(argv[1], "--worker-capture-input") == 0) {
+            mode = SckCaptureOnly;
+        } else if (strcmp(argv[1], "--worker-decode-input") == 0) {
+            mode = SckCapturedInput;
+        } else {
             return 2;
         }
         setvbuf(stdout, NULL, _IONBF, 0);
-        return withMacWorkerControl(runSckWorker, &present) ? 0 : 1;
+        return withMacWorkerControl(runSckWorker, &mode) ? 0 : 1;
     }
 }
 #else
@@ -780,7 +766,7 @@ int main(void) {
         }
         printf("macOS frame expiry, stop and source identity checks passed; TCC preflight: %s\n",
                CGPreflightScreenCaptureAccess() ? "allowed" : "unavailable");
-        return checkNativeCapture(NULL);
+        return checkNativeCapture(NULL, NO);
     }
 }
 #endif
