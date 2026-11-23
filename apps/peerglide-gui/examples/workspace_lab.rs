@@ -381,8 +381,9 @@ impl Workspace {
                 .find(|surface| surface.key == panel.key)
                 .ok_or(Error::InvalidState)?
                 .decision;
+            // The number of preceding visible tiles changes as the viewport scrolls.
             let builder = egui::UiBuilder::new()
-                .id_salt(panel.slot - 1)
+                .scope_id(ui.make_persistent_id(("workspace-panel", panel.slot)))
                 .max_rect(screen);
             let mut card = ui.new_child(builder);
             card.set_clip_rect(ui.clip_rect().intersect(screen));
