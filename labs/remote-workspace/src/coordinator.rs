@@ -12,6 +12,7 @@ use crate::geometry::{Camera, MappedPoint, Point, Rect, SourceGeometry};
 use crate::handoff::{Command, Handoff, State};
 use crate::media::{LatestFrame, RawFrame, MAX_FRAME_BYTES, MAX_QUEUE_AGE_MS};
 use crate::routing::{InputRouter, InputTicket, Placement, PointerSample, ReleaseRequest};
+use crate::scheduling::{self, Budget, Plan, ViewDemand};
 use crate::session::{ContentCheck, ControlScope, FrameStamp, SessionGate, SurfaceKind};
 use crate::{advance, Binding, Error, SurfaceKey};
 
@@ -339,6 +340,35 @@ impl Coordinator {
         s.cancel_handoff();
         self.stop_view_input(view);
         Ok(())
+    }
+
+    /// Plan the current canvas viewport using registered geometry and viewing grants.
+    /// Viewing focus is a quality preference independent of the active input route.
+    /// Apply the plan with current authorization and actual decoder resource accounting.
+    pub fn plan_viewport(
+        &self,
+        viewport: Rect,
+        viewing_focus: Option<ViewId>,
+        budget: Budget,
+        now: u64,
+    ) -> Result<Plan, Error> {
+        if now < self.last_now {
+            return Err(Error::InvalidTime);
+        }
+        if let Some(view) = viewing_focus {
+            self.surface(view)?;
+        }
+        let demands: Vec<_> = self
+            .surfaces
+            .iter()
+            .map(|(view, surface)| ViewDemand {
+                gate: &surface.gate,
+                pixels: surface.geometry.pixels,
+                canvas_rect: surface.placement.panel,
+                focused: viewing_focus == Some(*view),
+            })
+            .collect();
+        scheduling::plan(&demands, viewport, budget, now)
     }
 
     /// Read-only policy for a trusted media adapter. Only the coordinator can

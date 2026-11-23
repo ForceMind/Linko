@@ -1,11 +1,12 @@
 //! Deterministic OFFLINE fixtures; no actual computers, video, or input injection.
 use std::io::Cursor;
 
-use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect};
+use linko_workspace_lab::coordinator::{Coordinator, SurfaceSpec};
+use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect, Rotation, SourceGeometry};
 use linko_workspace_lab::handoff::{Handoff, State};
 use linko_workspace_lab::media::{read_raw_frame, LatestFrame, RawFrame};
 use linko_workspace_lab::routing::{InputRouter, Placement};
-use linko_workspace_lab::scheduling::{plan, Budget, ViewDemand};
+use linko_workspace_lab::scheduling::{Budget, Decision, PauseReason};
 use linko_workspace_lab::session::{ControlScope, SessionGate, SurfaceKind};
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
@@ -72,26 +73,45 @@ fn main() -> Result<(), Error> {
         width: 1920,
         height: 1080,
     };
-    let plan = plan(
-        &[
-            ViewDemand {
-                gate: &mac_fixture,
-                pixels: size,
-                canvas_rect: rect,
-                focused: false,
-            },
-            ViewDemand {
-                gate: &windows_fixture,
-                pixels: size,
-                canvas_rect: rect,
-                focused: true,
-            },
-        ],
-        rect,
-        Budget::default(),
+    let mut workspace = Coordinator::new(mac_fixture.key().binding.viewer, 2)?;
+    let geometry = SourceGeometry {
+        pixels: size,
+        logical: rect,
+        rotation: Rotation::None,
+        revision: 1,
+    };
+    let first = SurfaceSpec {
+        key: mac_fixture.key(),
+        kind: SurfaceKind::Window,
+        geometry,
+        camera: placement.camera,
+        panel: rect,
+    };
+    let second = SurfaceSpec {
+        key: windows_fixture.key(),
+        ..first
+    };
+    let first_view = workspace.register(first, 5)?;
+    let second_view = workspace.register(second, 5)?;
+    workspace.grant_view(first_view, 5, 10_000)?;
+    workspace.grant_view(second_view, 5, 10_000)?;
+    let budget = Budget::default();
+    let plan = workspace.plan_viewport(rect, Some(second_view), budget, 5)?;
+    assert_eq!(plan.usage.decoders, 2);
+    workspace.relayout(
+        second_view,
+        second.camera,
+        Rect {
+            x: rect.width,
+            ..rect
+        },
         5,
     )?;
-    assert_eq!(plan.usage.decoders, 2);
+    let panned_plan = workspace.plan_viewport(rect, Some(second_view), budget, 5)?;
+    assert_eq!(panned_plan.usage.decoders, 1);
+    assert!(panned_plan.surfaces.iter().any(|surface| {
+        surface.key == second.key && surface.decision == Decision::Pause(PauseReason::Offscreen)
+    }));
     let mut handoff = Handoff::begin(mac_fixture.key(), 1, rect, 5, 1000)?;
     handoff.destination_ready(&mac_fixture, 1, 6)?;
     handoff.acknowledge_hidden(&mac_fixture, 1, 7)?;
@@ -100,7 +120,7 @@ fn main() -> Result<(), Error> {
     assert_eq!(handoff.state(), State::RestoreRequested);
     handoff.acknowledge_restored(1)?;
     assert_eq!(handoff.state(), State::Local);
-    println!("OFFLINE fixtures: two surfaces, bounded frame roundtrip, input isolation, cleanup barrier, admission budget, restore transaction passed.");
+    println!("OFFLINE fixtures: two surfaces, bounded frame roundtrip, input isolation, cleanup barrier, viewport admission, restore transaction passed.");
     println!(
         "No capture, network connection, native input, virtual monitor or mobile client was used."
     );
