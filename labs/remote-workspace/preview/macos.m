@@ -485,7 +485,7 @@ static BOOL copyFixtureCrop(NSImage *image, struct SckWindowFrame *frame) {
                                 color, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst)
         : NULL;
     const BOOL copied = context != NULL;
-    if (context) {
+    if (*(bool const *)context) {
         CGContextSetBlendMode(context, kCGBlendModeCopy);
         CGContextDrawImage(context, CGRectMake(0, 0, WorkerFrameWidth, WorkerFrameHeight), crop);
         CGContextRelease(context);
@@ -615,19 +615,21 @@ static CGImageRef createPresentationImage(struct WorkerRgbaPixels const *input) 
     return pixels;
 }
 
-static bool runSckPresenter(struct WorkerControl const *worker, void *context) {
-    (void)context;
+static bool presentSckFrame(struct WorkerControl const *worker) {
+    uint64_t generation;
     struct WorkerRgbaPixels input;
-    if (!readWorkerRgba(&input) || !CGPreflightScreenCaptureAccess()) {
-        fputs("ScreenCaptureKit presenter could not read its frame or capture its window.\n", stderr);
+    if (!readWorkerMessage(worker, WorkerPresent, &generation) || generation != worker->generation ||
+        !readWorkerRgba(&input) || !CGPreflightScreenCaptureAccess()) {
+        fputs("ScreenCaptureKit presenter rejected its frame or capture permission.\n", stderr);
         return false;
     }
-    [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
-    [NSApp finishLaunching];
     CGImageRef image = createPresentationImage(&input);
     if (!image) {
         return false;
     }
+    PreviewApp *preview = [PreviewApp new];
+    [preview applicationDidFinishLaunching:
+        [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
     NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(40, 40, 220, 150)
                                                   styleMask:NSWindowStyleMaskTitled
                                                     backing:NSBackingStoreBuffered defer:NO];
@@ -635,52 +637,40 @@ static bool runSckPresenter(struct WorkerControl const *worker, void *context) {
     window.title = @"Linko presentation fixture";
     NSView *imageView = [[NSView alloc] initWithFrame:window.contentView.bounds];
     imageView.wantsLayer = YES;
-    imageView.layer.contents = (__bridge id)image;
+    imageView.layer.backgroundColor = NSColor.blackColor.CGColor;
     imageView.layer.contentsGravity = kCAGravityResize;
-    CGImageRelease(image);
     window.contentView = imageView;
     [window makeKeyAndOrderFront:nil];
     [window orderFrontRegardless];
     [window displayIfNeeded];
-    [CATransaction flush];
 
     SCWindow *source = waitForFixtureWindow((CGWindowID)window.windowNumber);
+    BOOL armed = NO;
     BOOL shown = NO;
     if (source) {
-        SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:source];
-        SCStreamConfiguration *settings = [SCStreamConfiguration new];
-        settings.width = WorkerFrameWidth;
-        settings.height = WorkerFrameHeight;
-        settings.showsCursor = NO;
-        settings.ignoreShadowsSingleWindow = YES;
-        settings.preservesAspectRatio = NO;
-        __block NSImage *readback = nil;
-        __block NSInteger captureError = 0;
-        __block BOOL completed = NO;
-        [SCScreenshotManager captureImageWithFilter:filter configuration:settings
-                                 completionHandler:^(CGImageRef pixels, NSError *error) {
-            CGImageRef retained = pixels ? CGImageRetain(pixels) : NULL;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                if (retained) {
-                    readback = [[NSImage alloc] initWithCGImage:retained size:NSZeroSize];
-                    CGImageRelease(retained);
-                }
-                captureError = error.code;
-                completed = YES;
+        [preview beginCapture:source];
+        armed = waitFor(^BOOL { return preview.displayedFrame != nil; });
+        if (armed) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            imageView.layer.contents = (__bridge id)image;
+            [CATransaction commit];
+            [window setContentSize:NSMakeSize(230, 160)];
+            [window displayIfNeeded];
+            [CATransaction flush];
+            const uint8_t *expected = input.data;
+            shown = waitFor(^BOOL {
+                struct SckWindowFrame captured;
+                return copyFixtureCrop(preview.displayedFrame, &captured) &&
+                       matchesWorkerPresentation(captured.bgra, expected);
             });
-        }];
-        struct SckWindowFrame captured;
-        const BOOL received = waitFor(^BOOL { return completed; }) && readback != nil;
-        shown = received && copyFixtureCrop(readback, &captured) &&
-                matchesWorkerPresentation(captured.bgra, input.data);
-        if (!shown) {
-            fprintf(stderr, "ScreenCaptureKit presenter readback: completed=%d image=%d error=%ld.\n",
-                    completed, received, (long)captureError);
         }
     }
+    CGImageRelease(image);
     [window close];
-    if (!shown) {
-        fputs("ScreenCaptureKit presenter did not match the drawn window.\n", stderr);
+    const BOOL stopped = waitFor(^BOOL { return !preview.displayedFrame && !preview.hasStream; });
+    if (!shown || !stopped) {
+        fprintf(stderr, "ScreenCaptureKit presenter: armed=%d matched=%d stopped=%d.\n", armed, shown, stopped);
         return false;
     }
     puts("ScreenCaptureKit presenter: recaptured the drawn native window.");
@@ -688,8 +678,11 @@ static bool runSckPresenter(struct WorkerControl const *worker, void *context) {
 }
 
 static bool runSckWorker(struct WorkerControl const *worker, void *context) {
-    (void)context;
-    return checkNativeCapture(worker) == 0;
+    struct WorkerControl session = *worker;
+    if (context) {
+        session.present = presentSckFrame;
+    }
+    return checkNativeCapture(&session) == 0;
 }
 
 int main(int argc, char **argv) {
@@ -697,14 +690,12 @@ int main(int argc, char **argv) {
         if (argc != 2) {
             return 2;
         }
-        setvbuf(stdout, NULL, _IONBF, 0);
-        if (strcmp(argv[1], "--present-pixels") == 0) {
-            return withMacWorkerControl(runSckPresenter, NULL) ? 0 : 1;
-        }
-        if (strcmp(argv[1], "--worker-pixels") != 0) {
+        bool present = strcmp(argv[1], "--worker-present") == 0;
+        if (!present && strcmp(argv[1], "--worker-pixels") != 0) {
             return 2;
         }
-        return withMacWorkerControl(runSckWorker, NULL) ? 0 : 1;
+        setvbuf(stdout, NULL, _IONBF, 0);
+        return withMacWorkerControl(runSckWorker, &present) ? 0 : 1;
     }
 }
 #else

@@ -28,6 +28,7 @@ const WORKER_STOP: u8 = 3;
 const WORKER_STOPPED: u8 = 4;
 const WORKER_FRAME: u8 = 5;
 const WORKER_PRESENTED: u8 = 6;
+const WORKER_PRESENT: u8 = 7;
 // Include LF and Ctrl-Z so the Windows test also checks binary pipe mode.
 const WORKER_GENERATION: u64 = 0x0102_0a04_051a_0708;
 const MEDIA_TRACK: MediaTrack = MediaTrack {
@@ -93,7 +94,11 @@ impl CoordinatedWorker {
     ) -> io::Result<(Self, [Vec<u8>; 2])> {
         // The Actions launcher provides the path to its freshly built fixture.
         let mut command = Command::new(binary);
-        command.arg("--worker-pixels");
+        if cfg!(target_os = "macos") && matches!(fixture, FixturePixels::Window) {
+            command.arg("--worker-present");
+        } else {
+            command.arg("--worker-pixels");
+        }
         let mut worker = Self::spawn(command, binding)?;
         worker.send_command(WORKER_START, generation)?;
         let frames = worker.read_event(Duration::from_secs(90), move |stdout| {
@@ -109,6 +114,15 @@ impl CoordinatedWorker {
     fn send_command(&mut self, kind: u8, generation: u64) -> io::Result<()> {
         let input = self.process.stdin.as_mut().expect("worker stdin is piped");
         input.write_all(&worker_record(kind, generation))?;
+        input.flush()
+    }
+
+    fn write_presentation(&mut self, rgba: &[u8]) -> io::Result<()> {
+        if rgba.len() != NATIVE_WIDTH * NATIVE_HEIGHT * 4 {
+            return Err(invalid_worker_data("invalid renderer frame size"));
+        }
+        let input = self.process.stdin.as_mut().expect("renderer stdin is piped");
+        input.write_all(rgba)?;
         input.flush()
     }
 
@@ -186,20 +200,11 @@ fn prove_window_pixels(
     generation: u64,
     rgba: &[u8],
 ) -> io::Result<()> {
-    if rgba.len() != NATIVE_WIDTH * NATIVE_HEIGHT * 4 {
-        return Err(invalid_worker_data("invalid renderer frame size"));
-    }
     let mut command = Command::new(binary);
     command.arg("--present-pixels");
     let mut presenter = CoordinatedWorker::spawn(command, binding)?;
     presenter.send_command(WORKER_START, generation)?;
-    let mut input = presenter
-        .process
-        .stdin
-        .take()
-        .expect("renderer stdin is piped");
-    input.write_all(rgba)?;
-    drop(input);
+    presenter.write_presentation(rgba)?;
     presenter.expect_event(
         worker_record(WORKER_PRESENTED, generation),
         Duration::from_secs(15),
@@ -467,12 +472,21 @@ fn main() -> SimulationResult<()> {
     assert!(worker.poll_exit(&mut c, 1)?.is_none());
     assert!(c.snapshot(first, 1)?.presentation_pending);
     let late_ticket = if let (Some(binary), FixturePixels::Window) = (codec.as_deref(), fixture) {
-        prove_window_pixels(
-            Path::new(binary),
-            binding,
-            WORKER_GENERATION,
-            waiting.frame.pixels(),
-        )?;
+        if cfg!(target_os = "macos") {
+            worker.send_command(WORKER_PRESENT, WORKER_GENERATION)?;
+            worker.write_presentation(waiting.frame.pixels())?;
+            worker.expect_event(
+                worker_record(WORKER_PRESENTED, WORKER_GENERATION),
+                Duration::from_secs(15),
+            )?;
+        } else {
+            prove_window_pixels(
+                Path::new(binary),
+                binding,
+                WORKER_GENERATION,
+                waiting.frame.pixels(),
+            )?;
+        }
         c.acknowledge_presentation(waiting.ticket, 1)?;
         assert!(!c.snapshot(first, 1)?.presentation_pending);
         println!("Native worker: coordinator accepted the verified presentation receipt.");

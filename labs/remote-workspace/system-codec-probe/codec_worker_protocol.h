@@ -7,7 +7,9 @@
 #include <string.h>
 
 // Fixed records on the child process's inherited control pipes.
-enum WorkerMessage { WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame, WorkerPresented };
+enum WorkerMessage {
+    WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame, WorkerPresented, WorkerPresent
+};
 enum { WorkerVersion = 1, WorkerMessageSize = 16, WorkerGenerationOffset = 8 };
 enum { WorkerFrameWidth = 128, WorkerFrameHeight = 96, WorkerFrameCount = 2 };
 enum { WorkerFrameBytes = WorkerFrameWidth * WorkerFrameHeight * 3 / 2 };
@@ -74,6 +76,7 @@ struct WorkerControl {
     FILE *events;
     uint64_t generation;
     const char *backend;
+    bool (*present)(struct WorkerControl const *);
 };
 
 static inline bool readWorkerMessage(struct WorkerControl const *control, enum WorkerMessage expected, uint64_t *generation) {
@@ -140,7 +143,8 @@ static inline bool sendWorkerFrame(struct WorkerControl const *control,
 
 static inline bool waitForWorkerStop(struct WorkerControl const *control) {
     uint64_t generation;
-    if (!sendWorkerMessage(control, WorkerReady) || !readWorkerMessage(control, WorkerStop, &generation)) {
+    if (!sendWorkerMessage(control, WorkerReady) || (control->present && !control->present(control)) ||
+        !readWorkerMessage(control, WorkerStop, &generation)) {
         return false;
     }
     if (generation != control->generation) {
