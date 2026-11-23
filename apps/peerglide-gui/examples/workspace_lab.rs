@@ -424,12 +424,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(version) => format!("Linko Workspace Lab · {version}"),
         None => String::from("Linko Workspace Lab"),
     };
+    let native_options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
+    #[cfg(all(windows, feature = "workspace-lab-dx12"))]
+    let native_options = eframe::NativeOptions {
+        renderer: if require_native_result {
+            eframe::Renderer::Wgpu
+        } else {
+            eframe::Renderer::Glow
+        },
+        ..native_options
+    };
     eframe::run_native(
         &title,
-        eframe::NativeOptions {
-            viewport,
-            ..Default::default()
-        },
+        native_options,
         Box::new(move |cc| {
             cc.egui_ctx.set_theme(egui::Theme::Light);
             let mut workspace = Workspace::new()?;

@@ -1,0 +1,23 @@
+name: Resolve workspace panel lockfile
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/workspace-panel-lock.yml'
+permissions:
+  contents: read
+jobs:
+  resolve-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Resolve the Windows example feature against the existing lockfile
+        run: cargo metadata --format-version 1 --filter-platform x86_64-pc-windows-msvc --features peerglide-gui/workspace-lab-dx12 | Out-Null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workspace-panel-cargo-lock
+          path: Cargo.lock
+          retention-days: 1
+          if-no-files-found: error

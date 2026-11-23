@@ -10,6 +10,7 @@ on:
       - 'labs/remote-workspace/src/coordinator.rs'
       - 'apps/peerglide-gui/examples/workspace_lab.rs'
       - 'apps/peerglide-gui/examples/workspace_lab/**'
+      - 'apps/peerglide-gui/Cargo.toml'
       - '.github/workflows/workspace-codec-probe.yml'
 permissions:
   contents: read
@@ -153,6 +154,8 @@ jobs:
         env:
           CODEC_FIXTURE: ${{ runner.os == 'Windows' && 'rw04-wgc-h264.exe' || 'rw04-sck-h264' }}
           EXE_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
+          WGPU_BACKEND: dx12
+          WGPU_DX12_COMPILER: fxc
         run: |
           fixture="$RUNNER_TEMP/rw06-window-fixture/$CODEC_FIXTURE"
           if [[ "$RUNNER_OS" == "macOS" ]]; then
@@ -160,4 +163,8 @@ jobs:
           fi
           cargo build --locked --offline --manifest-path labs/remote-workspace/Cargo.toml --example worker_exit_simulation
           launcher="$GITHUB_WORKSPACE/labs/remote-workspace/target/debug/examples/worker_exit_simulation$EXE_SUFFIX"
-          cargo run --locked -p peerglide-gui --example workspace_lab -- --native-window-probe "$launcher" "$fixture"
+          options=()
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            options+=(--features workspace-lab-dx12)
+          fi
+          cargo run --locked -p peerglide-gui --example workspace_lab "${options[@]}" -- --native-window-probe "$launcher" "$fixture"
