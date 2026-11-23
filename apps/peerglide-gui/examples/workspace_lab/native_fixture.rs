@@ -76,7 +76,7 @@ impl Source {
         std::thread::spawn(move || {
             let mut ready = [0];
             let event = pipe.read_exact(&mut ready).and_then(|()| {
-                if ready == [b'R'] {
+                if ready == *b"R" {
                     Ok(SourceEvent::Ready)
                 } else {
                     Err(io::Error::other("invalid native source ready record"))
