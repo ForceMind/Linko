@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version = "1.95"
+
+[features]
+workspace-lab-dx12 = ["eframe/wgpu_no_default_features", "dep:wgpu"]
+
 [[bin]]
 name = "peerglide-gui"
 path = "src/main.rs"
@@ -18,6 +22,9 @@ peerglide-discovery.workspace = true
 peerglide-transport.workspace = true
 peerglide-gestures.workspace = true
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "clipboard", "glow", "x11", "wayland"] }
+
+[target.'cfg(windows)'.dependencies]
+wgpu = { version = "30.0.1", default-features = false, features = ["dx12"], optional = true }
 
 [dev-dependencies]
 linko-workspace-lab = { path = "../../labs/remote-workspace" }

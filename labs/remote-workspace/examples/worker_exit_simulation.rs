@@ -19,6 +19,8 @@ use linko_workspace_lab::{Binding, Error, SurfaceKey};
 const CHILD_ARG: &str = "--fixture-child";
 const CODEC_ARG: &str = "--native-codec";
 const WINDOW_ARG: &str = "--native-window";
+#[cfg(any(windows, target_os = "macos"))]
+const EXPORT_ARG: &str = "--export-native-window";
 const FIXTURE_READY: u8 = 1;
 const WORKER_VERSION: u8 = 1;
 const WORKER_START: u8 = 1;
@@ -109,7 +111,7 @@ impl CoordinatedWorker {
             expect_record(stdout, worker_record(WORKER_READY, generation))?;
             Ok([first, second])
         })?;
-        println!("Native worker: verified two decoded frames and codec READY.");
+        eprintln!("Native worker: verified two decoded frames and codec READY.");
         Ok((worker, frames))
     }
 
@@ -391,6 +393,44 @@ fn match_frame(
         .ok_or(Error::StaleFrame)
 }
 
+#[cfg(any(windows, target_os = "macos"))]
+fn export_window_frame(binary: &Path) -> SimulationResult<()> {
+    // The desktop fixture reads exactly one already validated RGBA frame.
+    // This test-only relay stays alive until the renderer has read back pixels.
+    let binding = Binding {
+        source: [1; 32],
+        viewer: [2; 32],
+        nonce: [3; 16],
+    };
+    let (mut worker, [frame, _]) = CoordinatedWorker::start_codec(
+        binary,
+        binding,
+        WORKER_GENERATION,
+        FixturePixels::Window,
+        false,
+    )?;
+    {
+        let mut output = io::stdout().lock();
+        output.write_all(&frame)?;
+        output.flush()?;
+    }
+    let mut stop = [0];
+    io::stdin().read_exact(&mut stop)?;
+    if stop != [1] {
+        return Err(invalid_worker_data("invalid renderer stop request").into());
+    }
+    worker.send_command(WORKER_STOP, WORKER_GENERATION)?;
+    worker.expect_event(
+        worker_record(WORKER_STOPPED, WORKER_GENERATION),
+        Duration::from_secs(10),
+    )?;
+    if !worker.process.wait()?.success() {
+        return Err(io::Error::other("native window worker failed to stop").into());
+    }
+    eprintln!("Native window source: decoder stopped and reaped.");
+    Ok(())
+}
+
 fn main() -> SimulationResult<()> {
     let mut args = std::env::args_os().skip(1);
     let (codec, fixture) = match args.next().as_deref() {
@@ -398,6 +438,16 @@ fn main() -> SimulationResult<()> {
         Some(arg) if arg == OsStr::new(CHILD_ARG) => {
             run_child()?;
             return Ok(());
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        Some(arg) if arg == OsStr::new(EXPORT_ARG) => {
+            let binary = args
+                .next()
+                .ok_or_else(|| invalid_worker_data("missing native codec fixture path"))?;
+            if args.next().is_some() {
+                return Err(invalid_worker_data("unexpected exporter argument").into());
+            }
+            return export_window_frame(Path::new(&binary));
         }
         Some(arg) if arg == OsStr::new(CODEC_ARG) || arg == OsStr::new(WINDOW_ARG) => {
             let fixture = if arg == OsStr::new(WINDOW_ARG) {
