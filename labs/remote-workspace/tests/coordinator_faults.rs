@@ -1,5 +1,6 @@
 //! Synthetic, in-process integration tests. No screen is captured or controlled.
 use linko_workspace_lab::coordinator::{Coordinator, Fault, SurfaceSpec, ViewId};
+use linko_workspace_lab::frame_binding::{FrameMatch, FrameMatcher, MediaFrame, MediaTrack};
 use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect, Rotation, SourceGeometry};
 use linko_workspace_lab::handoff::{Command, State};
 use linko_workspace_lab::media::RawFrame;
@@ -656,4 +657,77 @@ fn duplicate_and_oversized_registration_do_not_consume_slots() {
     };
     assert_eq!(c.register(huge, 0), Err(Error::Capacity));
     assert!(c.register(spec(2), 0).is_ok());
+}
+
+const TEST_MEDIA: MediaTrack = MediaTrack {
+    generation: 1,
+    track: 1,
+    ssrc: 1,
+};
+
+fn matched(
+    coordinator: &Coordinator,
+    view: ViewId,
+    matcher: &mut FrameMatcher,
+    sequence: u64,
+    first_seen: u64,
+    matched_at: u64,
+) -> FrameMatch {
+    let gate = coordinator.view_gate(view).unwrap();
+    let frame = MediaFrame {
+        track: TEST_MEDIA,
+        timestamp: sequence as u32,
+    };
+    assert_eq!(matcher.decoded(gate, frame, first_seen), Ok(None));
+    matcher
+        .describe(gate, frame, gate.frame_stamp(sequence), matched_at)
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn matched_frame_keeps_first_arrival_deadline_before_presentation() {
+    let mut c = coordinator();
+    let v = c.register(spec(1), 0).unwrap();
+    c.grant_view(v, 0, 10_000).unwrap();
+    let mut matcher = FrameMatcher::new(c.view_gate(v).unwrap(), TEST_MEDIA, 0, 0).unwrap();
+
+    let pair = matched(&c, v, &mut matcher, 1, 10, 1800);
+    let frame = raw(&c, v, 1);
+    assert_eq!(c.receive_matched(v, frame, pair, 1999), Ok(false));
+    assert!(c.take_for_present(v, 2010).unwrap().is_none());
+}
+
+#[test]
+fn expired_presentation_ticket_cannot_refresh_source_but_fresh_one_can() {
+    let mut c = coordinator();
+    let v = c.register(spec(1), 0).unwrap();
+    c.grant_view(v, 0, 10_000).unwrap();
+    c.grant_control(v, ControlScope::WholeDesktop, 0, 10_000)
+        .unwrap();
+    let mut matcher = FrameMatcher::new(c.view_gate(v).unwrap(), TEST_MEDIA, 0, 0).unwrap();
+
+    let pair = matched(&c, v, &mut matcher, 1, 10, 1800);
+    let frame = raw(&c, v, 1);
+    c.receive_matched(v, frame, pair, 1999).unwrap();
+    let old = c.take_for_present(v, 2000).unwrap().unwrap();
+    assert_eq!(
+        c.acknowledge_presentation(old.ticket, 2010),
+        Err(Error::WrongAcknowledgement)
+    );
+    assert_eq!(c.focus(v, 2010), Err(Error::StaleFrame));
+
+    let mismatched = matched(&c, v, &mut matcher, 2, 2020, 2021);
+    let frame = raw(&c, v, 3);
+    assert_eq!(
+        c.receive_matched(v, frame, mismatched, 2021),
+        Err(Error::InvalidFrame)
+    );
+    let current = matched(&c, v, &mut matcher, 3, 2022, 2023);
+    let frame = raw(&c, v, 3);
+    c.receive_matched(v, frame, current, 2024).unwrap();
+    let p = c.take_for_present(v, 2025).unwrap().unwrap();
+    assert_eq!(c.focus(v, 2025), Err(Error::StaleFrame));
+    c.acknowledge_presentation(p.ticket, 2026).unwrap();
+    assert!(c.focus(v, 2026).is_ok());
 }

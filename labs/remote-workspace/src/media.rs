@@ -193,7 +193,20 @@ impl LatestFrame {
 
     /// True means an older raw frame was replaced; useful for aggregate metrics.
     pub fn push(&mut self, frame: RawFrame, gate: &SessionGate, now: u64) -> Result<bool, Error> {
+        self.push_observed(frame, gate, now, now)
+    }
+
+    pub(crate) fn push_observed(
+        &mut self,
+        frame: RawFrame,
+        gate: &SessionGate,
+        received_at: u64,
+        now: u64,
+    ) -> Result<bool, Error> {
         self.check_gate(gate, now)?;
+        if now.checked_sub(received_at).ok_or(Error::InvalidTime)? >= MAX_QUEUE_AGE_MS {
+            return Err(Error::StaleFrame);
+        }
         if frame.stamp.key != self.key
             || frame.stamp.revision != self.revision
             || frame.stamp.view_epoch != self.view_epoch
@@ -206,10 +219,7 @@ impl LatestFrame {
         }
         self.watermark = frame.stamp.sequence;
         let replaced = self.queued.is_some();
-        self.queued = Some(Queued {
-            frame,
-            received_at: now,
-        });
+        self.queued = Some(Queued { frame, received_at });
         Ok(replaced)
     }
 
