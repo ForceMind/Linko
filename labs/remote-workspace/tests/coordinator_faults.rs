@@ -240,6 +240,99 @@ fn planned_decision(plan: &Plan, seed: u8) -> Decision {
 }
 
 #[test]
+fn mirror_visibility_shares_one_decoder_and_the_existing_view_grant() {
+    let mut c = coordinator();
+    let view = live(&mut c, 1);
+    let mirror_panel = Rect { x: 200.0, ..bounds() };
+    let mirror = c.attach_mirror(view, mirror_panel, 1).unwrap();
+    assert!(matches!(
+        c.attach_mirror(view, mirror_panel, 1),
+        Err(Error::Capacity)
+    ));
+    let budget = Budget {
+        decoders: 1,
+        ..Budget::default()
+    };
+    for viewport in [
+        bounds(),
+        mirror_panel,
+        Rect { width: 300.0, ..bounds() },
+    ] {
+        let plan = c.plan_viewport(viewport, Some(view), budget, 1).unwrap();
+        assert_eq!(plan.usage.decoders, 1);
+        assert_eq!(plan.surfaces.len(), 1);
+        assert!(matches!(planned_decision(&plan, 1), Decision::Stream(_)));
+    }
+    let offscreen = Rect { y: 200.0, ..bounds() };
+    let plan = c.plan_viewport(offscreen, None, budget, 1).unwrap();
+    assert_eq!(planned_decision(&plan, 1), Decision::Pause(PauseReason::Offscreen));
+    c.revoke_view(view, 2).unwrap();
+    let plan = c.plan_viewport(mirror_panel, None, budget, 2).unwrap();
+    assert_eq!(planned_decision(&plan, 1), Decision::Pause(PauseReason::Unauthorized));
+    assert_eq!(plan.usage.decoders, 0);
+    c.detach_mirror(&mirror, 2).unwrap();
+}
+
+#[test]
+fn mirror_only_receipts_never_refresh_input_and_expire_with_their_scope() {
+    let mut c = coordinator();
+    let view = live(&mut c, 1);
+    let active = c.focus(view, 1).unwrap();
+    let mirror = c.attach_mirror(view, bounds(), 1).unwrap();
+    let frame = raw(&c, view, 2);
+    c.receive(view, frame, 1_999).unwrap();
+    let only = c.take_for_mirror(&mirror, 1_999).unwrap().unwrap();
+    assert_eq!(
+        c.acknowledge_presentation(only.ticket, 1_999),
+        Err(Error::WrongAcknowledgement)
+    );
+    c.acknowledge_mirror(&mirror, only.ticket, 1_999).unwrap();
+    assert_eq!(c.authorize_input(view, active, 1, 2_000), Err(Error::StaleTarget));
+    let state = c.snapshot(view, 2_000).unwrap();
+    assert!(state.viewing_allowed && state.release_pending);
+    assert!(!state.control_policy_ready && !state.input_active);
+
+    let frame = raw(&c, view, 3);
+    c.receive(view, frame, 2_001).unwrap();
+    let withdrawn = c.take_for_mirror(&mirror, 2_001).unwrap().unwrap();
+    c.revoke_view(view, 2_002).unwrap();
+    c.grant_view(view, 2_002, 100).unwrap();
+    assert_eq!(
+        c.acknowledge_mirror(&mirror, withdrawn.ticket, 2_002),
+        Err(Error::WrongAcknowledgement)
+    );
+}
+
+#[test]
+fn moving_or_detaching_a_mirror_does_not_cancel_primary_presentation() {
+    let mut c = coordinator();
+    let view = live(&mut c, 1);
+    let mirror = c.attach_mirror(view, bounds(), 1).unwrap();
+    let mut independent = coordinator();
+    let other_view = live(&mut independent, 1);
+    let other_mirror = independent.attach_mirror(other_view, bounds(), 1).unwrap();
+    assert_eq!(c.detach_mirror(&other_mirror, 1), Err(Error::StaleTarget));
+    let frame = raw(&c, view, 2);
+    c.receive(view, frame, 1).unwrap();
+    let only = c.take_for_mirror(&mirror, 1).unwrap().unwrap();
+    c.relayout_mirror(&mirror, Rect { x: 200.0, ..bounds() }, 2).unwrap();
+    assert_eq!(
+        c.acknowledge_mirror(&mirror, only.ticket, 2),
+        Err(Error::WrongAcknowledgement)
+    );
+    let frame = raw(&c, view, 3);
+    c.receive(view, frame, 2).unwrap();
+    let primary = c.take_for_present(view, 2).unwrap().unwrap();
+    c.detach_mirror(&mirror, 2).unwrap();
+    let replacement = c.attach_mirror(view, bounds(), 2).unwrap();
+    assert_eq!(c.detach_mirror(&mirror, 2), Err(Error::StaleTarget));
+    c.acknowledge_presentation(primary.ticket, 2).unwrap();
+    assert!(c.snapshot(view, 2).unwrap().control_policy_ready);
+    c.close(view, Fault::SourceClosed, 3).unwrap();
+    assert_eq!(c.detach_mirror(&replacement, 3), Err(Error::StaleTarget));
+}
+
+#[test]
 fn viewport_admission_tracks_registered_layout_viewing_focus_and_grants() {
     let mut c = coordinator();
     let controlled = live(&mut c, 1);
