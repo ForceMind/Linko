@@ -22,6 +22,6 @@ struct WgcLiveCodec;
 int runWgcLiveCodecs(int (*run)(WorkerControl const*, bool), bool display, bool pauseForExpiry);
 WgcLiveCodec* startWgcLiveCodec();
 void submitWgcLiveFrame(WgcLiveCodec& codec, WgcFixtureFrame frame);
-void verifyWgcLiveFrame(WgcLiveCodec& codec, WorkerFramePixels* displayOutput);
+void verifyWgcLiveFrame(WgcLiveCodec& codec, char const* source, WorkerFramePixels* displayOutput);
 void finishWgcLiveCodec(WgcLiveCodec& codec);
 void deleteWgcLiveCodec(WgcLiveCodec* codec) noexcept;

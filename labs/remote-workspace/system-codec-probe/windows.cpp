@@ -609,11 +609,16 @@ void submitWgcLiveFrame(WgcLiveCodec& codec, WgcFixtureFrame frame) {
                                                  static_cast<UINT32>(index), codec.pending));
 }
 
-void verifyWgcLiveFrame(WgcLiveCodec& codec, WorkerFramePixels* displayOutput) {
+void verifyWgcLiveFrame(WgcLiveCodec& codec, char const* source, WorkerFramePixels* displayOutput) {
     check(codec.pending.empty() ? E_UNEXPECTED : S_OK, "require a submitted live WGC frame");
     readEncodedFrames(codec.encoder.Get(), codec.decoder, smallFixture, codec.encoded, codec.timing,
                       true, CaptureInputs(&codec.pending, 1), displayOutput);
     const auto expected = codec.timing.submitted.size();
+    if (codec.encoded != expected || codec.timing.decodedMs.size() != expected) {
+        std::fprintf(stderr,
+                     "WGC live codec stall: source=%s submitted=%zu encoded=%u decoded=%zu.\n",
+                     source, expected, codec.encoded, codec.timing.decodedMs.size());
+    }
     check(codec.encoded == expected && codec.timing.decodedMs.size() == expected
               ? S_OK : E_UNEXPECTED, "encode and decode each live WGC frame before drain");
     codec.pending.clear();
