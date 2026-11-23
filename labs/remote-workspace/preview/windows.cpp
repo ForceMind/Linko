@@ -493,16 +493,37 @@ WgcFixtureFrame capturedFixtureFrame(Frame const& frame) {
 LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
+        RECT area{};
         auto dc = BeginPaint(window, &paint);
+        GetClientRect(window, &area);
+        auto brush = CreateSolidBrush(area.right > 400 ? RGB(30, 70, 190) : RGB(190, 30, 70));
+        FillRect(dc, &area, brush);
+        DeleteObject(brush);
+        EndPaint(window, &paint);
+        return 0;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+bool registerFixture(HINSTANCE instance, wchar_t const* className = L"LinkoRW03Fixture",
+                     WNDPROC proc = fixtureProc) {
+    WNDCLASSW fixtureType{};
+    fixtureType.hInstance = instance;
+    fixtureType.lpfnWndProc = proc;
+    fixtureType.style = CS_HREDRAW | CS_VREDRAW;
+    fixtureType.lpszClassName = className;
+    return RegisterClassW(&fixtureType) != 0;
+}
+
+#ifdef LINKO_RW04_WGC_CODEC_CI
+LRESULT CALLBACK presenterProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        auto dc = BeginPaint(window, &paint);
+        FillRect(dc, &paint.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
         const auto* frame = reinterpret_cast<Frame const*>(GetWindowLongPtrW(window, GWLP_USERDATA));
         if (frame) {
             drawBgra(dc, *frame, 0, 0, frame->width, frame->height);
-        } else {
-            RECT area{};
-            GetClientRect(window, &area);
-            auto brush = CreateSolidBrush(area.right > 400 ? RGB(30, 70, 190) : RGB(190, 30, 70));
-            FillRect(dc, &area, brush);
-            DeleteObject(brush);
         }
         EndPaint(window, &paint);
         return 0;
@@ -510,20 +531,11 @@ LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     return DefWindowProcW(window, message, wparam, lparam);
 }
 
-bool registerFixture(HINSTANCE instance) {
-    WNDCLASSW fixtureType{};
-    fixtureType.hInstance = instance;
-    fixtureType.lpfnWndProc = fixtureProc;
-    fixtureType.style = CS_HREDRAW | CS_VREDRAW;
-    fixtureType.lpszClassName = L"LinkoRW03Fixture";
-    return RegisterClassW(&fixtureType) != 0;
-}
-
-#ifdef LINKO_RW04_WGC_CODEC_CI
 int presentFixture(WorkerControl const*) {
     WorkerRgbaPixels input{};
     const auto instance = GetModuleHandleW(nullptr);
-    if (!readWorkerRgba(&input) || !registerFixture(instance)) {
+    constexpr auto className = L"LinkoPresentationFixture";
+    if (!readWorkerRgba(&input) || !registerFixture(instance, className, presenterProc)) {
         return 17;
     }
     Frame frame{WorkerFrameWidth, WorkerFrameHeight, std::vector<std::byte>(WorkerRgbaBytes)};
@@ -533,7 +545,7 @@ int presentFixture(WorkerControl const*) {
         frame.pixels[offset + 2] = static_cast<std::byte>(input.data[offset]);
         frame.pixels[offset + 3] = static_cast<std::byte>(input.data[offset + 3]);
     }
-    const auto window = CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko presentation fixture",
+    const auto window = CreateWindowExW(WS_EX_TOPMOST, className, L"Linko presentation fixture",
                                        WS_POPUP, 40, 40, WorkerFrameWidth, WorkerFrameHeight,
                                        nullptr, nullptr, instance, nullptr);
     if (!window) {
@@ -552,9 +564,8 @@ int presentFixture(WorkerControl const*) {
             captured->pixels.size() != WorkerRgbaBytes) {
             return false;
         }
-        constexpr auto center = 4 * (WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2);
         auto const* bgra = reinterpret_cast<uint8_t const*>(captured->pixels.data());
-        return matchesWorkerRgb(bgra + center, input.data + center);
+        return matchesWorkerPresentation(bgra, input.data);
     });
     DestroyWindow(window);
     preview.stop();

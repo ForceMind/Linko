@@ -193,7 +193,11 @@ fn prove_window_pixels(
     command.arg("--present-pixels");
     let mut presenter = CoordinatedWorker::spawn(command, binding)?;
     presenter.send_command(WORKER_START, generation)?;
-    let mut input = presenter.process.stdin.take().expect("renderer stdin is piped");
+    let mut input = presenter
+        .process
+        .stdin
+        .take()
+        .expect("renderer stdin is piped");
     input.write_all(rgba)?;
     drop(input);
     presenter.expect_event(
@@ -201,7 +205,9 @@ fn prove_window_pixels(
         Duration::from_secs(15),
     )?;
     if !presenter.process.wait()?.success() {
-        return Err(io::Error::other("native presenter did not exit successfully"));
+        return Err(io::Error::other(
+            "native presenter did not exit successfully",
+        ));
     }
     Ok(())
 }

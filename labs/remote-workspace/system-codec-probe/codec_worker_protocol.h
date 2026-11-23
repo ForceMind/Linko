@@ -35,6 +35,18 @@ static inline bool matchesWorkerRgb(uint8_t const *capturedBgra, uint8_t const *
     return true;
 }
 
+static inline bool matchesWorkerPresentation(uint8_t const *capturedBgra, uint8_t const *expectedRgba) {
+    for (size_t y = WorkerFrameHeight / 4; y < WorkerFrameHeight; y += WorkerFrameHeight / 4) {
+        for (size_t x = WorkerFrameWidth / 4; x < WorkerFrameWidth; x += WorkerFrameWidth / 4) {
+            const size_t offset = 4 * (y * WorkerFrameWidth + x);
+            if (!matchesWorkerRgb(capturedBgra + offset, expectedRgba + offset)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // The fixture provides a complete 128x96 BGRA crop with a verified row stride.
 static inline void workerBgraToNv12(uint8_t const *bgra, size_t stride, uint8_t *nv12) {
     for (size_t y = 0; y < WorkerFrameHeight; y += 2) {

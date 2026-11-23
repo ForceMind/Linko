@@ -652,12 +652,11 @@ static bool runSckPresenter(struct WorkerControl const *worker, void *context) {
     BOOL shown = NO;
     if (source) {
         [preview beginCapture:source];
-        const size_t center = 4 * (WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2);
-        const uint8_t *expected = input.data + center;
+        const uint8_t *expected = input.data;
         shown = waitFor(^BOOL {
             struct SckWindowFrame captured;
             return copyFixtureCrop(preview.displayedFrame, &captured) &&
-                   matchesWorkerRgb(captured.bgra + center, expected);
+                   matchesWorkerPresentation(captured.bgra, expected);
         });
     }
     [window close];
