@@ -302,8 +302,12 @@ fn main() -> eframe::Result<()> {
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([916.0, 584.0])
         .with_min_inner_size([560.0, 300.0]);
+    let title = match option_env!("LINKO_VERSION") {
+        Some(version) => format!("Linko Workspace Lab · {version}"),
+        None => String::from("Linko Workspace Lab"),
+    };
     eframe::run_native(
-        "Linko Workspace Lab",
+        &title,
         eframe::NativeOptions {
             viewport,
             ..Default::default()
