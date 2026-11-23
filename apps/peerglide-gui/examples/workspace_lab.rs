@@ -20,12 +20,15 @@ mod layout;
 mod live_fixture;
 #[path = "workspace_lab/native_fixture.rs"]
 mod native_fixture;
+#[path = "workspace_lab/viewport_fixture.rs"]
+mod viewport_fixture;
 #[cfg(test)]
 #[path = "../src/test_fixture.rs"]
 mod test_fixture;
 use layout::LayoutProfile;
 use live_fixture::LiveFixture;
 use native_fixture::{NativeFixture, PANELS as NATIVE_PANELS};
+use viewport_fixture::ViewportFixture;
 
 const ORIGIN: Camera = Camera {
     origin: Point { x: 0.0, y: 0.0 },
@@ -52,6 +55,16 @@ struct Panel {
 type NativePreview<'a> = [Option<&'a egui::TextureHandle>; NATIVE_PANELS];
 type PreviewAreas = [Option<Rect>; NATIVE_PANELS];
 
+struct NativeTiles<'a> {
+    indices: [usize; NATIVE_PANELS],
+    textures: NativePreview<'a>,
+}
+
+struct WorkspaceDraw {
+    plan: Plan,
+    areas: PreviewAreas,
+}
+
 trait NativePanelProbe {
     fn advance(
         &mut self,
@@ -75,6 +88,10 @@ enum ProbePaths {
     Live {
         codec: PathBuf,
         pause_for_expiry: bool,
+    },
+    Viewport {
+        launcher: PathBuf,
+        codec: PathBuf,
     },
 }
 
@@ -269,8 +286,9 @@ impl Workspace {
         &mut self,
         root: &mut egui::Ui,
         now: u64,
-        preview: Option<NativePreview<'_>>,
-    ) -> PreviewAreas {
+        preview: Option<NativeTiles<'_>>,
+        move_to: Option<usize>,
+    ) -> Option<WorkspaceDraw> {
         let shortcut = self
             .panels
             .iter()
@@ -282,17 +300,19 @@ impl Workspace {
             .frame(egui::Frame::new().fill(CANVAS).inner_margin(24))
             .show(root, |ui| {
                 ui.heading(RichText::new("Workspace").size(34.0).strong());
-                let subtitle = if preview.is_some() {
-                    "Native window fixtures  ·  2 decoder slots"
-                } else {
-                    "Offline fixtures  ·  2 decoder slots"
+                let subtitle = match (preview.is_some(), self.budget.decoders) {
+                    (true, 1) => "Native window fixtures  ·  1 decoder slot",
+                    (true, _) => "Native window fixtures  ·  2 decoder slots",
+                    (false, _) => "Offline fixtures  ·  2 decoder slots",
                 };
                 ui.label(RichText::new(subtitle).color(MUTED));
                 if self.layout.is_some() {
                     self.show_layout_controls(ui);
                 }
                 let scroll = std::mem::take(&mut self.scroll_to_focus);
-                let scroll_target = (shortcut.is_some() || scroll).then(|| self.focused_index());
+                let scroll_target = move_to.or_else(|| {
+                    (shortcut.is_some() || scroll).then(|| self.focused_index())
+                });
                 ui.add_space(18.0);
                 let result = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -303,7 +323,7 @@ impl Workspace {
                     Ok(area) => area,
                     Err(error) => {
                         ui.colored_label(Color32::DARK_RED, error.to_string());
-                        [None; NATIVE_PANELS]
+                        None
                     }
                 }
             })
@@ -316,10 +336,10 @@ impl Workspace {
         viewport: Rect,
         shortcut: Option<usize>,
         now: u64,
-        preview: Option<NativePreview<'_>>,
-    ) -> Result<PreviewAreas, Error> {
+        preview: Option<NativeTiles<'_>>,
+    ) -> Result<Option<WorkspaceDraw>, Error> {
         if viewport.width() <= GAP || viewport.height() <= 0.0 {
-            return Ok([None; NATIVE_PANELS]);
+            return Ok(None);
         }
         let plan = self.plan(viewport, now)?;
         let height = row_height(viewport);
@@ -370,14 +390,17 @@ impl Workspace {
                         .selectable_label(selected, RichText::new(panel.label).size(16.0))
                         .clicked();
                     ui.add_space(spacing);
-                    if let Some(texture) = preview.and_then(|preview| preview.get(index).copied()) {
+                    let promoted = preview.as_ref().and_then(|preview| {
+                        preview.indices.iter().position(|&position| position == index)
+                    });
+                    if let (Some(preview), Some(slot)) = (&preview, promoted) {
                         let texture = if matches!(decision, Decision::Stream(_)) {
-                            texture
+                            preview.textures[slot]
                         } else {
                             None
                         };
-                        preview_areas[index] =
-                            Some(render_native_preview(ui, texture, status_height + 24.0));
+                        let area = render_native_preview(ui, texture, status_height + 24.0);
+                        preview_areas[slot] = ui.clip_rect().contains_rect(area).then_some(area);
                     } else {
                         render_status(ui, decision, self.budget, status_height);
                     }
@@ -402,7 +425,10 @@ impl Workspace {
                 ui.ctx().request_repaint();
             }
         }
-        Ok(preview_areas)
+        Ok(Some(WorkspaceDraw {
+            plan,
+            areas: preview_areas,
+        }))
     }
 }
 
@@ -494,6 +520,7 @@ struct WorkspaceApp {
     workspace: Workspace,
     started: Instant,
     native: Option<Box<dyn NativePanelProbe>>,
+    viewport_probe: Option<ViewportFixture>,
     native_passed: Arc<AtomicBool>,
 }
 
@@ -501,24 +528,30 @@ impl eframe::App for WorkspaceApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = elapsed_ms(self.started);
         let context = root.ctx().clone();
-        let Some(native) = &mut self.native else {
-            let _ = self.workspace.show(root, now, None);
+        let result = if let Some(viewport) = &mut self.viewport_probe {
+            viewport.step(&mut self.workspace, root, now)
+        } else if let Some(native) = &mut self.native {
+            native
+                .advance(&mut self.workspace.coordinator, &context, now)
+                .and_then(|finished| {
+                    if !finished {
+                        let preview = NativeTiles {
+                            indices: [0, 1],
+                            textures: native.textures(now),
+                        };
+                        if let Some(WorkspaceDraw { areas: [Some(first), Some(second)], .. }) =
+                            self.workspace.show(root, now, Some(preview), None)
+                        {
+                            native.verify_paint(&context, [first, second])?;
+                        }
+                    }
+                    Ok(finished)
+                })
+        } else {
+            let _ = self.workspace.show(root, now, None, None);
             context.request_repaint_after(Duration::from_secs(1));
             return;
         };
-        let result = native
-            .advance(&mut self.workspace.coordinator, &context, now)
-            .and_then(|finished| {
-                if !finished {
-                    let preview = native.textures(now);
-                    if let [Some(first), Some(second)] =
-                        self.workspace.show(root, now, Some(preview))
-                    {
-                        native.verify_paint(&context, [first, second])?;
-                    }
-                }
-                Ok(finished)
-            });
         match result {
             Ok(true) => {
                 self.native_passed.store(true, Ordering::Relaxed);
@@ -549,6 +582,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
             None,
         ),
+        [mode, launcher, codec] if mode == "--viewport-window-probe" => (
+            Some(ProbePaths::Viewport {
+                launcher: PathBuf::from(launcher),
+                codec: PathBuf::from(codec),
+            }),
+            None,
+        ),
         [mode, codec] if mode == "--live-window-probe" || mode == "--live-window-stale-probe" => (
             Some(ProbePaths::Live {
                 codec: PathBuf::from(codec),
@@ -559,10 +599,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => return Err(io::Error::other("unexpected workspace example arguments").into()),
     };
     let require_native_result = paths.is_some();
+    let compact = matches!(paths, Some(ProbePaths::Viewport { .. }));
     let native_passed = Arc::new(AtomicBool::new(false));
     let result = Arc::clone(&native_passed);
     let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([916.0, 584.0])
+        .with_inner_size(if compact { [640.0, 300.0] } else { [916.0, 584.0] })
         .with_min_inner_size([560.0, 300.0]);
     let title = match option_env!("LINKO_VERSION") {
         Some(version) => format!("Linko Workspace Lab · {version}"),
@@ -606,8 +647,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 workspace.open_layout(&directory)?;
             }
             let started = Instant::now();
+            let mut viewport_probe = None;
             let native: Option<Box<dyn NativePanelProbe>> = if let Some(paths) = paths {
-                let views = [workspace.panels[0].view, workspace.panels[1].view];
+                let indices = if compact { [0, 2] } else { [0, 1] };
+                let views = indices.map(|index| workspace.panels[index].view);
                 for view in views {
                     workspace.coordinator.revise_geometry(
                         view,
@@ -625,25 +668,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         0,
                     )?;
                 }
-                Some(match paths {
-                    ProbePaths::Single { launcher, codec } => Box::new(NativeFixture::start(
+                match paths {
+                    ProbePaths::Single { launcher, codec } => Some(Box::new(NativeFixture::start(
                         &launcher,
                         &codec,
                         views,
                         started,
                         &cc.egui_ctx,
-                    )?),
+                    )?)),
                     ProbePaths::Live {
                         codec,
                         pause_for_expiry,
-                    } => Box::new(LiveFixture::start(
+                    } => Some(Box::new(LiveFixture::start(
                         &codec,
                         views,
                         started,
                         &cc.egui_ctx,
                         pause_for_expiry,
-                    )?),
-                })
+                    )?)),
+                    ProbePaths::Viewport { launcher, codec } => {
+                        workspace.budget.decoders = 1;
+                        viewport_probe = Some(ViewportFixture::new(
+                            launcher,
+                            codec,
+                            indices,
+                            views,
+                            started,
+                            workspace.budget,
+                        )?);
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -651,6 +706,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 workspace,
                 started,
                 native,
+                viewport_probe,
                 native_passed: result,
             }))
         }),
@@ -687,7 +743,7 @@ mod tests {
                 ..Default::default()
             },
             |root| {
-                let _ = workspace.show(root, now, None);
+                let _ = workspace.show(root, now, None, None);
             },
         );
         assert!(!output.shapes.is_empty());

@@ -476,12 +476,11 @@ fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()
     output.write_all(b"R")?;
     output.flush()?;
     io::stdin().read_exact(&mut command)?;
-    if command != [1] {
-        return Err(invalid_worker_data("invalid renderer delivery request").into());
+    if command == [1] {
+        output.write_all(&frames[frame_index])?;
+        output.flush()?;
+        io::stdin().read_exact(&mut command)?;
     }
-    output.write_all(&frames[frame_index])?;
-    output.flush()?;
-    io::stdin().read_exact(&mut command)?;
     if command != [2] {
         return Err(invalid_worker_data("invalid renderer stop request").into());
     }
@@ -603,6 +602,22 @@ fn native_viewport(binary: &Path) -> SimulationResult<()> {
         assert!(coordinator.snapshot(view, 9_999)?.viewing_allowed);
         assert!(!coordinator.snapshot(view, 10_000)?.viewing_allowed);
     }
+    // Simulate scrolling away while the relay is still starting. STOP is
+    // already queued when it reports READY, without a frame request.
+    let mut command = Command::new(std::env::current_exe()?);
+    command.arg(EXPORT_ARG).arg(binary).arg("0");
+    let mut relay = CoordinatedWorker::spawn(
+        command,
+        Binding {
+            nonce: [5; 16],
+            ..binding
+        },
+    )?;
+    relay.write_payload(&[b'S', 2])?;
+    relay.expect_event(*b"R", Duration::from_secs(30))?;
+    let (status, closed) = relay.await_exit(&mut coordinator, 3)?;
+    assert!(status.success() && closed == 0);
+    println!("Viewport startup cancel: decoder reaped without delivering a frame.");
     println!(
         "Viewport A -> B -> A: single decoder slot, stale frame rejected, same consent deadline."
     );
