@@ -80,7 +80,7 @@ impl Workspace {
                         revision: 1,
                     },
                     camera: ORIGIN,
-                    panel: canvas_rect(tile(index, 880.0)),
+                    panel: canvas_rect(tile(index, 880.0, ROW_HEIGHT)),
                 },
                 0,
             )?;
@@ -105,11 +105,12 @@ impl Workspace {
 
     fn plan(&mut self, viewport: Rect, now: u64) -> Result<Plan, Error> {
         self.coordinator.poll(now)?;
+        let height = row_height(viewport);
         for (index, panel) in self.panels.iter().enumerate() {
             self.coordinator.relayout(
                 panel.view,
                 ORIGIN,
-                canvas_rect(tile(index, viewport.width())),
+                canvas_rect(tile(index, viewport.width(), height)),
                 now,
             )?;
         }
@@ -161,19 +162,25 @@ impl Workspace {
             return Ok(());
         }
         let plan = self.plan(viewport, now)?;
+        let height = row_height(viewport);
+        let (margin, spacing, status_height): (i8, f32, f32) = if height < ROW_HEIGHT {
+            (12, 8.0, 50.0)
+        } else {
+            (16, 12.0, 64.0)
+        };
         let (canvas, _) = ui.allocate_exact_size(
-            egui::vec2(viewport.width(), ROW_HEIGHT * 2.0 + GAP),
+            egui::vec2(viewport.width(), height * 2.0 + GAP),
             egui::Sense::hover(),
         );
         if let Some(index) = shortcut {
             ui.scroll_to_rect(
-                tile(index, viewport.width()).translate(canvas.min.to_vec2()),
+                tile(index, viewport.width(), height).translate(canvas.min.to_vec2()),
                 Some(egui::Align::Center),
             );
         }
         for index in 0..self.panels.len() {
             let panel = self.panels[index];
-            let bounds = tile(index, viewport.width());
+            let bounds = tile(index, viewport.width(), height);
             if !bounds.intersects(viewport) {
                 continue;
             }
@@ -185,22 +192,23 @@ impl Workspace {
                 .find(|surface| surface.key == panel.key)
                 .ok_or(Error::InvalidState)?
                 .decision;
-            let mut card = ui.new_child(egui::UiBuilder::new().max_rect(screen));
+            let builder = egui::UiBuilder::new().id_salt(index).max_rect(screen);
+            let mut card = ui.new_child(builder);
             card.set_clip_rect(ui.clip_rect().intersect(screen));
             let (focus, toggle) = egui::Frame::new()
                 .fill(Color32::WHITE)
-                .inner_margin(16)
+                .inner_margin(margin)
                 .corner_radius(12)
                 .stroke(Stroke::new(1.0, if selected { ACCENT } else { OUTLINE }))
                 .show(&mut card, |ui| {
-                    ui.set_min_width(screen.width() - 34.0);
-                    ui.set_min_height(ROW_HEIGHT - 34.0);
+                    let frame_padding = 2.0 * f32::from(margin) + 2.0;
+                    ui.set_min_size(screen.size() - egui::vec2(frame_padding, frame_padding));
                     let focus = ui
                         .selectable_label(selected, RichText::new(panel.label).size(16.0))
                         .clicked();
-                    ui.add_space(12.0);
-                    render_status(ui, decision, self.budget);
-                    ui.add_space(12.0);
+                    ui.add_space(spacing);
+                    render_status(ui, decision, self.budget, status_height);
+                    ui.add_space(spacing);
                     let toggle = ui
                         .button(if decision == Decision::Pause(PauseReason::Unauthorized) {
                             "Resume"
@@ -225,7 +233,11 @@ impl Workspace {
     }
 }
 
-fn tile(index: usize, width: f32) -> Rect {
+fn row_height(viewport: Rect) -> f32 {
+    viewport.height().clamp(160.0, ROW_HEIGHT)
+}
+
+fn tile(index: usize, width: f32, height: f32) -> Rect {
     let width = (width - GAP) / 2.0;
     Rect::from_min_size(
         egui::pos2(
@@ -234,9 +246,9 @@ fn tile(index: usize, width: f32) -> Rect {
             } else {
                 width + GAP
             },
-            if index < 2 { 0.0 } else { ROW_HEIGHT + GAP },
+            if index < 2 { 0.0 } else { height + GAP },
         ),
-        egui::vec2(width, ROW_HEIGHT),
+        egui::vec2(width, height),
     )
 }
 
@@ -249,7 +261,7 @@ fn canvas_rect(rect: Rect) -> CanvasRect {
     }
 }
 
-fn render_status(ui: &mut egui::Ui, decision: Decision, budget: Budget) {
+fn render_status(ui: &mut egui::Ui, decision: Decision, budget: Budget, height: f32) {
     let label = match decision {
         Decision::Stream(allocation) if allocation.fps == budget.focused.fps => "Full quality",
         Decision::Stream(_) => "Preview quality",
@@ -267,7 +279,7 @@ fn render_status(ui: &mut egui::Ui, decision: Decision, budget: Budget) {
         .corner_radius(8)
         .inner_margin(12)
         .show(ui, |ui| {
-            ui.set_min_size(egui::vec2(ui.available_width(), 64.0));
+            ui.set_min_size(egui::vec2(ui.available_width(), height));
             ui.label(RichText::new(label).strong().color(color));
             if let Decision::Stream(allocation) = decision {
                 ui.label(
@@ -355,13 +367,13 @@ mod tests {
         ));
         assert!(!workspace.coordinator.snapshot(focus.view, 2)?.input_active);
 
-        let compact = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(512.0, ROW_HEIGHT));
+        let compact = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(512.0, 174.0));
         let top = workspace.plan(compact, 3)?;
         assert!(top.surfaces.iter().any(|surface| {
             surface.key == focus.key && surface.decision == Decision::Pause(PauseReason::Offscreen)
         }));
 
-        let bottom = compact.translate(egui::vec2(0.0, ROW_HEIGHT + GAP));
+        let bottom = compact.translate(egui::vec2(0.0, row_height(compact) + GAP));
         workspace.toggle_viewing(focus, 4)?;
         let paused = workspace.plan(bottom, 4)?;
         assert_eq!(paused.usage.decoders, 1);
