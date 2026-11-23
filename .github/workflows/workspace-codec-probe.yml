@@ -130,6 +130,13 @@ jobs:
             -framework VideoToolbox -o "$RUNNER_TEMP/rw04-sck-h264"
           cargo run --locked --offline --manifest-path labs/remote-workspace/Cargo.toml \
             --example worker_exit_simulation -- --native-window "$RUNNER_TEMP/rw04-sck-h264"
+      - name: Switch one native decoder between workspace viewports
+        shell: bash
+        timeout-minutes: 2
+        working-directory: labs/remote-workspace
+        env:
+          WINDOW_CODEC: ${{ runner.os == 'Windows' && 'rw04-wgc-h264.exe' || 'rw04-sck-h264' }}
+        run: cargo run --locked --offline --example worker_exit_simulation -- --native-viewport "$RUNNER_TEMP/$WINDOW_CODEC"
       - name: Roundtrip two live ScreenCaptureKit windows through persistent VideoToolbox sessions
         if: runner.os == 'macOS'
         shell: bash

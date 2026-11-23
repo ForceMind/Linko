@@ -13,6 +13,8 @@ use linko_workspace_lab::frame_binding::{FrameMatch, FrameMatcher, MediaFrame, M
 use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect, Rotation, SourceGeometry};
 use linko_workspace_lab::handoff::Command as WindowCommand;
 use linko_workspace_lab::media::RawFrame;
+#[cfg(any(windows, target_os = "macos"))]
+use linko_workspace_lab::scheduling::PauseReason;
 use linko_workspace_lab::scheduling::{Budget, Decision, DecoderReservations};
 use linko_workspace_lab::session::{ControlScope, SurfaceKind};
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
@@ -196,6 +198,33 @@ impl CoordinatedWorker {
             }
             if Instant::now() >= deadline {
                 return Err(io::Error::new(io::ErrorKind::TimedOut, "worker did not exit").into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn stop_codec(&mut self, generation: u64) -> io::Result<()> {
+        self.send_command(WORKER_STOP, generation)?;
+        let timeout = Duration::from_secs(10);
+        self.expect_event(worker_record(WORKER_STOPPED, generation), timeout)?;
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.process.try_wait()? {
+                self.binding = None;
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(io::Error::other(format!(
+                        "native worker stop failed: {status}"
+                    )))
+                };
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "worker did not exit",
+                ));
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -384,11 +413,12 @@ fn match_frame(
 fn start_mac_window_codec(
     binary: &Path,
     binding: Binding,
+    generation: u64,
 ) -> io::Result<(CoordinatedWorker, [Vec<u8>; 2])> {
     let mut command = Command::new(binary);
     command.arg("--worker-capture-input");
     let mut capture = CoordinatedWorker::spawn(command, binding)?;
-    capture.send_command(WORKER_START, WORKER_GENERATION)?;
+    capture.send_command(WORKER_START, generation)?;
     let frames = capture.read_event(Duration::from_secs(15), |output| {
         let mut bgra = vec![0; 2 * NATIVE_WIDTH * NATIVE_HEIGHT * 4];
         output.read_exact(&mut bgra)?;
@@ -403,10 +433,26 @@ fn start_mac_window_codec(
     let mut command = Command::new(binary);
     command.arg("--worker-decode-input");
     let mut decoder = CoordinatedWorker::spawn(command, binding)?;
-    decoder.send_command(WORKER_START, WORKER_GENERATION)?;
+    decoder.send_command(WORKER_START, generation)?;
     decoder.write_payload(&frames)?;
-    let decoded = decoder.read_codec_frames(WORKER_GENERATION, FixturePixels::Window)?;
+    let decoded = decoder.read_codec_frames(generation, FixturePixels::Window)?;
     Ok((decoder, decoded))
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn start_window_codec(
+    binary: &Path,
+    binding: Binding,
+    generation: u64,
+) -> io::Result<(CoordinatedWorker, [Vec<u8>; 2])> {
+    #[cfg(target_os = "macos")]
+    {
+        start_mac_window_codec(binary, binding, generation)
+    }
+    #[cfg(windows)]
+    {
+        CoordinatedWorker::start_codec(binary, binding, generation, FixturePixels::Window, false)
+    }
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -424,16 +470,7 @@ fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()
         viewer: [2; 32],
         nonce: [3; 16],
     };
-    #[cfg(target_os = "macos")]
-    let (mut worker, frames) = start_mac_window_codec(binary, binding)?;
-    #[cfg(windows)]
-    let (mut worker, frames) = CoordinatedWorker::start_codec(
-        binary,
-        binding,
-        WORKER_GENERATION,
-        FixturePixels::Window,
-        false,
-    )?;
+    let (mut worker, frames) = start_window_codec(binary, binding, WORKER_GENERATION)?;
     eprintln!("Native window source {frame_index}: capture finished, decoder ready.");
     let mut output = io::stdout().lock();
     output.write_all(b"R")?;
@@ -448,15 +485,127 @@ fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()
     if command != [2] {
         return Err(invalid_worker_data("invalid renderer stop request").into());
     }
-    worker.send_command(WORKER_STOP, WORKER_GENERATION)?;
-    worker.expect_event(
-        worker_record(WORKER_STOPPED, WORKER_GENERATION),
-        Duration::from_secs(10),
-    )?;
-    if !worker.process.wait()?.success() {
-        return Err(io::Error::other("native window worker failed to stop").into());
-    }
+    worker.stop_codec(WORKER_GENERATION)?;
     eprintln!("Native window source: decoder stopped and reaped.");
+    Ok(())
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn native_viewport(binary: &Path) -> SimulationResult<()> {
+    let binding = Binding {
+        source: [1; 32],
+        viewer: [2; 32],
+        nonce: [3; 16],
+    };
+    let mut coordinator = Coordinator::new(binding.viewer, 2)?;
+    let first = register(&mut coordinator, binding, 1, NATIVE_PIXELS)?;
+    let second = register(
+        &mut coordinator,
+        Binding {
+            nonce: [4; 16],
+            ..binding
+        },
+        1,
+        NATIVE_PIXELS,
+    )?;
+    let right = Rect { x: 200.0, ..BOUNDS };
+    coordinator.relayout(
+        second,
+        Camera {
+            origin: Point { x: 0.0, y: 0.0 },
+            zoom: 1.0,
+        },
+        right,
+        0,
+    )?;
+    let budget = Budget {
+        decoders: 1,
+        ..Budget::default()
+    };
+    let mut reservations = DecoderReservations::new(budget)?;
+    let mut late_from_first = None;
+    for (step, (view, viewport)) in [(first, BOUNDS), (second, right), (first, BOUNDS)]
+        .into_iter()
+        .enumerate()
+    {
+        let now = u64::try_from(step)?;
+        let key = coordinator.view_gate(view)?.key();
+        let plan = coordinator.plan_viewport(viewport, Some(view), budget, now)?;
+        let planned = plan.surfaces.first().ok_or(Error::InvalidState)?;
+        assert_eq!(planned.key, key);
+        let Decision::Stream(allocation) = planned.decision else {
+            return Err(Error::InvalidState.into());
+        };
+        coordinator.view_gate(view)?.can_view(now)?;
+        let reservation = reservations.reserve(key, allocation)?;
+        let generation = WORKER_GENERATION + now;
+        // Bind the frames before the worker can produce data.
+        let frame_stamp = coordinator.frame_stamp(view, 2)?;
+        let late_stamp = coordinator.frame_stamp(view, 3)?;
+        let (mut worker, [red, blue]) = start_window_codec(binary, key.binding, generation)?;
+        if let Some(old) = late_from_first.take_if(|_| step == 2) {
+            assert_eq!(coordinator.receive(view, old, now), Err(Error::StaleTarget));
+        }
+        let (pixels, late) = if view == first {
+            (red, blue)
+        } else {
+            (blue, red)
+        };
+        coordinator.receive(
+            view,
+            RawFrame::new(frame_stamp, NATIVE_PIXELS, pixels)?,
+            now,
+        )?;
+        let presentation = coordinator
+            .take_for_present(view, now)?
+            .ok_or(Error::StaleFrame)?;
+        assert!(matches_window_color(
+            presentation.frame.pixels(),
+            view == second
+        ));
+        if step == 0 {
+            late_from_first = Some(RawFrame::new(late_stamp, NATIVE_PIXELS, late.clone())?);
+        }
+        coordinator.receive(view, RawFrame::new(late_stamp, NATIVE_PIXELS, late)?, now)?;
+
+        let (next_view, next_viewport) = if view == first {
+            (second, right)
+        } else {
+            (first, BOUNDS)
+        };
+        let next_plan = coordinator.plan_viewport(next_viewport, Some(next_view), budget, now)?;
+        assert!(next_plan.surfaces.iter().any(|surface| {
+            surface.key == key && surface.decision == Decision::Pause(PauseReason::Offscreen)
+        }));
+        coordinator.invalidate_media(view, now)?;
+        let state = coordinator.snapshot(view, now)?;
+        assert!(state.connected && state.viewing_allowed && state.fault.is_none());
+        assert!(!state.frame_queued && !state.presentation_pending);
+        assert_eq!(
+            coordinator.acknowledge_presentation(presentation.ticket, now),
+            Err(Error::WrongAcknowledgement)
+        );
+        let next = next_plan.surfaces.first().ok_or(Error::InvalidState)?;
+        let Decision::Stream(next_allocation) = next.decision else {
+            return Err(Error::InvalidState.into());
+        };
+        assert!(matches!(
+            reservations.reserve(next.key, next_allocation),
+            Err(Error::Capacity)
+        ));
+        worker.stop_codec(generation)?;
+        reservations.release(&reservation)?;
+        println!(
+            "Viewport switch {step}: native pixels verified, old media cleared and worker reaped."
+        );
+    }
+    for view in [first, second] {
+        assert!(coordinator.snapshot(view, 9_999)?.viewing_allowed);
+        assert!(!coordinator.snapshot(view, 10_000)?.viewing_allowed);
+    }
+    println!(
+        "Viewport A -> B -> A: single decoder slot, stale frame rejected, same consent deadline."
+    );
     Ok(())
 }
 
@@ -467,6 +616,16 @@ fn main() -> SimulationResult<()> {
         Some(arg) if arg == OsStr::new(CHILD_ARG) => {
             run_child()?;
             return Ok(());
+        }
+        #[cfg(any(windows, target_os = "macos"))]
+        Some(arg) if arg == OsStr::new("--native-viewport") => {
+            let binary = args
+                .next()
+                .ok_or_else(|| invalid_worker_data("missing native codec fixture path"))?;
+            if args.next().is_some() {
+                return Err(invalid_worker_data("unexpected viewport argument").into());
+            }
+            return native_viewport(Path::new(&binary));
         }
         #[cfg(any(windows, target_os = "macos"))]
         Some(arg) if arg == OsStr::new(EXPORT_ARG) => {

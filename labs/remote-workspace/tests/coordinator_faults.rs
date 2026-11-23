@@ -366,6 +366,34 @@ fn static_content_confirmation_is_one_shot_and_source_bound() {
 }
 
 #[test]
+fn ending_a_decoder_lifetime_discards_old_content_and_stops_input() {
+    let mut c = coordinator();
+    let paused = live(&mut c, 1);
+    let other = live(&mut c, 2);
+    c.focus(paused, 1).unwrap();
+    let check = c.request_content_check(paused, 1).unwrap();
+    let old = raw(&c, paused, 2);
+
+    c.invalidate_media(paused, 2).unwrap();
+    let state = c.snapshot(paused, 2).unwrap();
+    assert!(state.connected && state.viewing_allowed && state.release_pending);
+    assert!(!state.input_active && !state.control_policy_ready);
+    assert!(c.snapshot(other, 2).unwrap().control_policy_ready);
+    assert_eq!(
+        c.confirm_unchanged(paused, check, 2),
+        Err(Error::StaleTarget)
+    );
+    assert_eq!(c.receive(paused, old, 2), Err(Error::StaleTarget));
+
+    present(&mut c, paused, 1, 3);
+    let state = c.snapshot(paused, 3).unwrap();
+    assert!(state.control_policy_ready && state.release_pending);
+    assert!(!state.input_active);
+    assert!(c.snapshot(paused, 9_999).unwrap().viewing_allowed);
+    assert!(!c.snapshot(paused, 10_000).unwrap().viewing_allowed);
+}
+
+#[test]
 fn geometry_change_invalidates_media_control_and_input_tickets() {
     let mut c = coordinator();
     let v = live(&mut c, 1);
