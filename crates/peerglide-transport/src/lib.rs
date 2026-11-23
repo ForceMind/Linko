@@ -299,6 +299,9 @@ pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
 }
 
 #[cfg(test)]
+mod media_signaling_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[tokio::test]
