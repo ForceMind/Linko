@@ -504,4 +504,6 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 
 ## RW09 来源窗口恢复账本（2026-11-23）
 
-- [PR #392](https://github.com/ForceMind/Linko/pull/392)，`12854b0a86eb68a05b482bf63b39f72c42acdd37`。三端 Actions 强制终止持有持久账本的工作进程。分别核对提交前、提交后尚未停放、模拟停放后、模拟恢复后未清账。独立模拟窗口拥有者保留事务结果，证实重启后只清账，不重复恢复或覆盖随后的位置变更。并发持有、恢复失败、错窗口、旧回执以及损坏和未来版本均保留当前记录。证据覆盖工作进程崩溃，原生窗口效果和断电耐久性分别验证。[三端 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45191977346)
+- [PR #392](https://github.com/ForceMind/Linko/pull/392)，`12854b0a86eb68a05b482bf63b39f72c42acdd37`。三端 Actions 强制终止持有持久账本的工作进程。分别核对提交前、提交后尚未停放、模拟停放后、模拟恢复后未清账。独立模拟窗口拥有者保留事务结果，证实重启后只清账，不重复恢复或覆盖随后的位置变更。并发持有、恢复失败、错窗口、旧回执以及损坏和未来版本均保留当前记录。证据覆盖工作进程崩溃，断电耐久性待验证。[三端 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45191977346)
+
+- [PR #393](https://github.com/ForceMind/Linko/pull/393)，`724fd051e73d966ebe14438594443fd1a628a44d`。独立 Windows 进程拥有自己的 Win32 测试窗口。账本工作进程强杀后，原窗口和所属进程均保留。恢复的可见性、位置和尺寸由 Win32 回读确认；恢复后未清账时再次强杀，重开只清账，原生恢复计数为 1。另强杀窗口所属进程，重建的新窗口保持原样，旧账本正本保留。[Windows 原生恢复作业](https://github.com/ForceMind/Linko/actions/runs/45194064632/job/137759699948) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45194063110)
