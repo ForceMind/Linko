@@ -29,7 +29,10 @@ impl Default for Layout {
 
 impl Layout {
     fn validate(self) -> Result<()> {
-        ensure!(self.layout_version == VERSION, "unknown workspace layout version");
+        ensure!(
+            self.layout_version == VERSION,
+            "unknown workspace layout version"
+        );
         let mut slots = self.panel_order;
         slots.sort_unstable();
         ensure!(slots == SLOTS, "workspace layout must list each panel once");
@@ -48,10 +51,19 @@ pub(super) struct LayoutProfile {
 
 impl LayoutProfile {
     pub(super) fn open(directory: &Path) -> Result<(Self, Layout)> {
-        ensure!(directory.is_dir(), "workspace layout directory does not exist");
+        ensure!(
+            directory.is_dir(),
+            "workspace layout directory does not exist"
+        );
         let (store, layout) = Store::open::<Layout>(directory.join(FILENAME))?;
         layout.validate()?;
-        Ok((Self { store, notice: None }, layout))
+        Ok((
+            Self {
+                store,
+                notice: None,
+            },
+            layout,
+        ))
     }
 
     pub(super) fn save(&mut self, panel_order: [u8; 4], focused_panel: u8) -> Result<()> {

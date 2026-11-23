@@ -14,12 +14,12 @@ use linko_workspace_lab::scheduling::{Budget, Decision, PauseReason, Plan};
 use linko_workspace_lab::session::SurfaceKind;
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
+#[path = "workspace_lab/layout.rs"]
+mod layout;
 #[path = "workspace_lab/live_fixture.rs"]
 mod live_fixture;
 #[path = "workspace_lab/native_fixture.rs"]
 mod native_fixture;
-#[path = "workspace_lab/layout.rs"]
-mod layout;
 #[cfg(test)]
 #[path = "../src/test_fixture.rs"]
 mod test_fixture;
@@ -347,7 +347,9 @@ impl Workspace {
                 .find(|surface| surface.key == panel.key)
                 .ok_or(Error::InvalidState)?
                 .decision;
-            let builder = egui::UiBuilder::new().id_salt(panel.slot - 1).max_rect(screen);
+            let builder = egui::UiBuilder::new()
+                .id_salt(panel.slot - 1)
+                .max_rect(screen);
             let mut card = ui.new_child(builder);
             card.set_clip_rect(ui.clip_rect().intersect(screen));
             let (focus, toggle) = egui::Frame::new()
@@ -764,7 +766,8 @@ mod tests {
             br#"{"layout_version":2,"panel_order":[1,2,3,4],"focused_panel":3}"#.to_vec(),
             br#"{"layout_version":1,"panel_order":[1,1,3,4],"focused_panel":3}"#.to_vec(),
             br#"{"layout_version":1,"panel_order":[1,2,3,4],"focused_panel":5}"#.to_vec(),
-            br#"{"layout_version":1,"panel_order":[1,2,3,4],"focused_panel":3,"grant":"control"}"#.to_vec(),
+            br#"{"layout_version":1,"panel_order":[1,2,3,4],"focused_panel":3,"grant":"control"}"#
+                .to_vec(),
             vec![0; peerglide_gui::config_store::MAX_BYTES + 1],
         ] {
             std::fs::write(&path, &bytes)?;
