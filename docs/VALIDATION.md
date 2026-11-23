@@ -430,3 +430,21 @@ Automatic Codex code review could not run: repository review usage limit reached
 No credits/purchases/review-gate bypass were requested. CI does not replace that
 review. Independent security review, native OS backends/network integration,
 persistent/global disk accounting and real Win/Mac acceptance remain open.
+
+## RW03 本机预览与 RW04 媒体实验（2026-11-23）
+
+以下证据对应各行的草稿候选提交。不同分支的实验结果不能合并当作一个发布版本的验证。
+
+| 范围 | 精确提交与证据 | 已验证 |
+| --- | --- | --- |
+| RW03 本机单窗口只读预览 | `b846ed0874d288e34aaf6c17d6fb3549e934f066` · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45103803193) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45103803166) | 两端原生构建通过。Windows 100 次启停无进程句柄或 GDI 对象增长，另通过 40 次采集、缩放、源关闭及清屏。macOS 在已有录屏许可的 runner 上通过实际窗口的采集、缩放、停止、重新选源和关闭。 |
+| RW04 Windows 系统 H.264 | `d364905ae1a258eb004954b63ce43a758aafdc3c` · [首轮](https://github.com/ForceMind/Linko/actions/runs/45102064419/job/137454936884) · [复跑](https://github.com/ForceMind/Linko/actions/runs/45102064419/job/137457855673) | 独立测试进程从 WGC 采集开始到 Media Foundation 停止保持 COM 生命周期。两台 runner 共通过 60 次实采窗口关闭和编解码，每次 24 帧且验证两种颜色。最大积压一帧。历史异常的执行地址未能识别具体模块。 |
+| RW04 macOS 原生回环 | `8701cdaf8e548c8abc1d64e549aa66e8403bb0d5` · [原生作业和测量产物](https://github.com/ForceMind/Linko/actions/runs/45087485463/artifacts/14781172077) | ScreenCaptureKit 捕获测试窗口，经本机 WebRTC UDP/DTLS H.264 回环在 AppKit 显示。覆盖颜色、缩放、撤权后拒绝旧帧、重开和关闭。100 次启停中，部分完整回环配置的 IOAccelerator 驻留页仍有增长。 |
+| RW04 进程替换与协调器 | `0cee2ee57d6462ccbf84e982adfbcdc30a409ee5` · [macOS 实际编码进程](https://github.com/ForceMind/Linko/actions/runs/45098986436/job/137445189037)<br>`b846ed0874d288e34aaf6c17d6fb3549e934f066` · [三端工作空间回归](https://github.com/ForceMind/Linko/actions/runs/45103803193) | macOS 子进程被终止后，新进程从零驻留映射开始并解码新素材。Windows、macOS、Linux 另用本机测试子进程验证协调器清空同一连接的两个视图、拒绝迟到的展示回执，并保留其他连接及原有释放和窗口恢复义务。协调器场景使用测试授权和像素。 |
+| RW04 macOS 本机媒体进程控制 | `090965ac1b805f0d4ba78f8e30c26727db393114` · [VideoToolbox 作业](https://github.com/ForceMind/Linko/actions/runs/45104951436/job/137463976144) | 实际硬件编解码子进程通过继承管道校验控制版本、消息类型和会话代次。正常停止在释放会话后回执。错误版本、截断、命令乱序、零代次及跨会话停止均被拒绝，强制退出后的新进程能重新解码。 |
+
+RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://github.com/ForceMind/Linko/actions/runs/45103803193/artifacts/14786178954) 和 [macOS 预览](https://github.com/ForceMind/Linko/actions/runs/45103803193/artifacts/14785619836)。它们是本机只读预览。应用的连接、键鼠和共享功能随各自候选另行验证。
+
+正式 RW04 仍需要 Windows 固定 WebRTC 工具链的 SDK `10.0.28000.0` 与通过评审的独立媒体协议。托管 Windows SDK 预检仍有缺项，局域网观看、正式媒体与用户授权接线、八小时连续资源验证仍待完成。[Windows 预检](https://github.com/ForceMind/Linko/actions/runs/45087485463/job/137409299532) · [媒体 ADR #333](https://github.com/ForceMind/Linko/pull/333)
+
+本节编译、测试及原生试验均在 GitHub Actions 运行。Windows/macOS 用户机器的系统权限、真实双机行为及 [#3/C06](https://github.com/ForceMind/Linko/issues/3) 仍待验收。
