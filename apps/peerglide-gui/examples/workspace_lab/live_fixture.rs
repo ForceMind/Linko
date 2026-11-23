@@ -23,6 +23,8 @@ const FRAME: u8 = 5;
 const DISPLAYED: u8 = 8;
 const PAIRS: u32 = 4;
 const SURVIVOR: u32 = PAIRS + 1;
+const VIDEO_SIZE: [usize; 2] = [FRAME_SIZE.width as usize, FRAME_SIZE.height as usize];
+const VIDEO_BYTES: usize = VIDEO_SIZE[0] * VIDEO_SIZE[1] * 4;
 const COLORS: [[[u8; 3]; SURVIVOR as usize]; PANELS] = [
     [
         [190, 30, 70],
@@ -66,6 +68,7 @@ pub(super) struct LiveFixture {
     stopped: [bool; PANELS],
     incoming: [Option<Received>; PANELS],
     draws: [Option<PendingDraw>; PANELS],
+    texture_ids: [Option<egui::TextureId>; PANELS],
     readback: Option<Receiver<(u32, bool)>>,
     areas: Option<[Rect; PANELS]>,
     first_receipt: Option<u64>,
@@ -108,12 +111,20 @@ impl LiveFixture {
             stopped: [false; PANELS],
             incoming: [None, None],
             draws: [None, None],
+            texture_ids: [None; PANELS],
             readback: None,
             areas: None,
             first_receipt: None,
             deadline: Instant::now() + Duration::from_secs(45),
             ended: false,
         };
+        writeln!(
+            io::stdout(),
+            "Live panel resources: viewer_pid={} codec_pid={}",
+            std::process::id(),
+            fixture.process.id()
+        )?;
+        io::stdout().flush()?;
         fixture.write(&record(START, GENERATION))?;
         Ok(fixture)
     }
@@ -202,7 +213,45 @@ impl LiveFixture {
         Ok(())
     }
 
-    fn confirm_draws(&mut self, coordinator: &mut Coordinator, now: u64) -> ProbeResult<()> {
+    fn verify_video_textures(&mut self, context: &egui::Context, expected: usize) -> io::Result<()> {
+        let manager = context.tex_manager();
+        let manager = manager.read();
+        let mut count = 0;
+        let mut bytes = 0;
+        for (draw, previous) in self.draws.iter().zip(&mut self.texture_ids) {
+            if let Some(draw) = draw {
+                let id = draw.texture.id();
+                let meta = manager
+                    .meta(id)
+                    .ok_or_else(|| io::Error::other("live panel missing its video texture"))?;
+                if *previous.get_or_insert(id) != id || meta.size != VIDEO_SIZE {
+                    return Err(io::Error::other("live panel changed its texture or size"));
+                }
+                count += 1;
+                bytes += meta.bytes_used();
+            } else if previous.is_some_and(|id| manager.meta(id).is_some()) {
+                return Err(io::Error::other("closed live panel still holds a video texture"));
+            }
+        }
+        if self.texture_ids[0].is_some() && self.texture_ids[0] == self.texture_ids[1] {
+            return Err(io::Error::other("independent sources reused the same texture ID"));
+        }
+        if count != expected || bytes != expected * VIDEO_BYTES {
+            return Err(io::Error::other("unexpected live video texture footprint"));
+        }
+        println!(
+            "Live panel resources: round={} video_textures={count} rgba_bytes={bytes}",
+            self.round
+        );
+        Ok(())
+    }
+
+    fn confirm_draws(
+        &mut self,
+        coordinator: &mut Coordinator,
+        context: &egui::Context,
+        now: u64,
+    ) -> ProbeResult<()> {
         let first = *self.first_receipt.get_or_insert(now);
         if self.round == PAIRS && now - first <= MAX_QUEUE_AGE_MS {
             return Err(io::Error::other("dual display did not cover the frame lifetime").into());
@@ -212,6 +261,7 @@ impl LiveFixture {
                 return Err(Error::StaleFrame.into());
             }
         }
+        self.verify_video_textures(context, if self.round <= PAIRS { PANELS } else { 1 })?;
         for draw in self.draws.iter().flatten() {
             coordinator.acknowledge_presentation(draw.ticket, now)?;
         }
@@ -270,11 +320,12 @@ impl NativePanelProbe for LiveFixture {
             Phase::Receiving => self.receive(coordinator, context, now)?,
             Phase::Drawing => {
                 if self.readback_confirmed()? {
-                    self.confirm_draws(coordinator, now)?;
+                    self.confirm_draws(coordinator, context, now)?;
                 }
             }
             Phase::Clearing => {
                 if self.readback_confirmed()? {
+                    self.verify_video_textures(context, 0)?;
                     self.phase = Phase::Exiting;
                 }
             }
