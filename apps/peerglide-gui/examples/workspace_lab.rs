@@ -394,7 +394,8 @@ impl Workspace {
                 .show(&mut card, |ui| {
                     let frame_padding = 2.0 * f32::from(margin) + 2.0;
                     ui.set_min_size(screen.size() - egui::vec2(frame_padding, frame_padding));
-                    let header = ui.selectable_label(selected, RichText::new(panel.label).size(16.0));
+                    let header =
+                        ui.selectable_label(selected, RichText::new(panel.label).size(16.0));
                     if self.keyboard_focus_target == Some(panel.view)
                         && ui.clip_rect().contains_rect(header.rect)
                     {
