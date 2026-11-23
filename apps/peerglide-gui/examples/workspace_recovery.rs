@@ -152,6 +152,7 @@ fn worker_recover(
     let evidence = read(input)?;
     let confirmed_transaction = evidence
         .strip_prefix("restored ")
+        .or_else(|| evidence.strip_prefix("untouched "))
         .context("native restore was not confirmed")?
         .parse::<u64>()?;
     send(output, "before-clear")?;

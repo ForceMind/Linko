@@ -33,12 +33,15 @@ bool moveWindow(HWND window, RECT bounds) {
 }
 
 struct Owner {
+    enum class Completion { None, Untouched, Restored };
     HWND window;
     std::string incarnation;
     RECT original;
     static constexpr std::uint64_t object = 1;
     std::uint64_t parked{};
-    std::uint64_t restored{};
+    std::uint64_t resolved{};
+    bool bound{};
+    Completion completion{};
     unsigned restores{};
 
     bool snapshot() const {
@@ -63,13 +66,26 @@ struct Owner {
         std::uint64_t transaction{}, generation{};
         LONG x{}, y{}, width{}, height{};
         if (!(input >> command >> transaction >> owner >> generation >> x >> y >> width >> height) ||
-            input >> trailing || !transaction || owner != incarnation || generation != object ||
+            input >> trailing || owner != incarnation || generation != object ||
             x != original.left || y != original.top ||
             width != original.right - original.left || height != original.bottom - original.top) {
             std::cout << "rejected" << std::endl;
             return true;
         }
-        if (command == "hide" && !parked && transaction > restored && IsWindowVisible(window)) {
+        if (command == "bind" && !bound) {
+            resolved = transaction;
+            bound = true;
+            std::cout << "bound" << std::endl;
+            return true;
+        }
+        if (!bound || !transaction) {
+            std::cout << "rejected" << std::endl;
+            return true;
+        }
+        const bool next = transaction > resolved && transaction - resolved == 1;
+        if (command == "hide" && !parked && next && IsWindowVisible(window)) {
+            // Record ownership of the intent before the first native effect.
+            parked = transaction;
             ShowWindow(window, SW_HIDE);
             RECT shifted{original.left + 48, original.top + 32,
                          original.right + 48, original.bottom + 32};
@@ -78,7 +94,6 @@ struct Owner {
                 !GetWindowRect(window, &measured) || !EqualRect(&shifted, &measured)) {
                 return false;
             }
-            parked = transaction;
             std::cout << "hidden " << transaction << std::endl;
             return true;
         }
@@ -93,11 +108,18 @@ struct Owner {
                 return false;
             }
             parked = 0;
-            restored = transaction;
+            resolved = transaction;
+            completion = Completion::Restored;
             ++restores;
+        } else if (command == "restore" && !parked && next) {
+            // Fence the unused transaction before sending its receipt.
+            resolved = transaction;
+            completion = Completion::Untouched;
         }
-        if (command == "restore" && !parked && restored == transaction) {
-            std::cout << "restored " << transaction << std::endl;
+        if (command == "restore" && !parked && resolved == transaction &&
+            completion != Completion::None) {
+            std::cout << (completion == Completion::Restored ? "restored " : "untouched ")
+                      << transaction << std::endl;
         } else {
             std::cout << "rejected" << std::endl;
         }

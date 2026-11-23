@@ -7,12 +7,16 @@
 #include <string.h>
 #include <unistd.h>
 
+enum Completion { NoCompletion, Untouched, Restored };
+
 struct Owner {
     __unsafe_unretained NSWindow *window;
     char incarnation[33];
     NSRect original;
     unsigned long long parked;
-    unsigned long long restored;
+    unsigned long long resolved;
+    bool bound;
+    enum Completion completion;
     unsigned restores;
 };
 
@@ -33,21 +37,33 @@ static bool command(struct Owner *owner, const char *line) {
     double x, y, width, height;
     if (sscanf(line, "%15s %llu %32s %llu %lf %lf %lf %lf %c", action, &transaction,
                incarnation, &generation, &x, &y, &width, &height, &trailing) != 8 ||
-        transaction == 0 || strcmp(incarnation, owner->incarnation) != 0 ||
+        strcmp(incarnation, owner->incarnation) != 0 ||
         generation != 1 || !NSEqualRects(NSMakeRect(x, y, width, height), owner->original)) {
         puts("rejected");
         return true;
     }
     NSWindow *window = owner->window;
+    if (strcmp(action, "bind") == 0 && !owner->bound) {
+        owner->resolved = transaction;
+        owner->bound = true;
+        puts("bound");
+        return true;
+    }
+    if (!owner->bound || transaction == 0) {
+        puts("rejected");
+        return true;
+    }
+    const bool next = transaction > owner->resolved && transaction - owner->resolved == 1;
     if (strcmp(action, "hide") == 0 && owner->parked == 0 &&
-        transaction > owner->restored && window.isVisible) {
+        next && window.isVisible) {
+        // Record ownership of the intent before the first native effect.
+        owner->parked = transaction;
         [window orderOut:nil];
         const NSRect shifted = NSOffsetRect(owner->original, 48, 32);
         [window setFrame:shifted display:NO animate:NO];
         if (window.isVisible || !NSEqualRects(shifted, window.frame)) {
             return false;
         }
-        owner->parked = transaction;
         printf("hidden %llu\n", transaction);
         return true;
     }
@@ -58,11 +74,17 @@ static bool command(struct Owner *owner, const char *line) {
             return false;
         }
         owner->parked = 0;
-        owner->restored = transaction;
+        owner->resolved = transaction;
+        owner->completion = Restored;
         ++owner->restores;
+    } else if (strcmp(action, "restore") == 0 && owner->parked == 0 && next) {
+        // Fence the unused transaction before sending its receipt.
+        owner->resolved = transaction;
+        owner->completion = Untouched;
     }
-    if (strcmp(action, "restore") == 0 && owner->parked == 0 && owner->restored == transaction) {
-        printf("restored %llu\n", transaction);
+    if (strcmp(action, "restore") == 0 && owner->parked == 0 &&
+        owner->resolved == transaction && owner->completion != NoCompletion) {
+        printf("%s %llu\n", owner->completion == Restored ? "restored" : "untouched", transaction);
     } else {
         puts("rejected");
     }

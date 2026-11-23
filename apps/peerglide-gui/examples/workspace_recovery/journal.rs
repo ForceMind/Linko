@@ -113,18 +113,21 @@ impl Journal {
         Ok(self.ledger.pending)
     }
 
+    pub(super) fn clean_sequence(&self) -> Result<u64> {
+        ensure!(
+            self.pending()?.is_none(),
+            "previous recovery is still pending"
+        );
+        Ok(self.ledger.last_transaction)
+    }
+
     /// Called after the current handoff policy has requested a hide. Persist
     /// the obligation before dispatching the action to the platform.
     pub(super) fn arm(&mut self, window: WindowInstance, bounds: Rect) -> Result<RecoveryRecord> {
         window.validate()?;
         bounds.validate()?;
-        ensure!(
-            self.pending()?.is_none(),
-            "previous recovery is still pending"
-        );
         let transaction = self
-            .ledger
-            .last_transaction
+            .clean_sequence()?
             .checked_add(1)
             .context("recovery transaction number exhausted")?;
         let record = RecoveryRecord {
