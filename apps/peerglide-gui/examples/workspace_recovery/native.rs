@@ -171,18 +171,34 @@ fn fence_unapplied(directory: &Path, owner: &mut Worker, original: Snapshot) -> 
     let saved = std::fs::read(directory.join(FILENAME))?;
     owner.write(&format!("restore 2 {}", original.window))?;
     owner.expect("rejected")?;
-    let mut worker = restore(directory, owner, original.window, original.window, 1, "untouched")?;
+    let mut worker = restore(
+        directory,
+        owner,
+        original.window,
+        original.window,
+        1,
+        "untouched",
+    )?;
     worker.expect("before-clear")?;
     owner.write(&delayed_hide)?;
     owner.expect("rejected")?;
     ensure!(snapshot(owner)? == original);
     worker.crash()?;
     ensure!(std::fs::read(directory.join(FILENAME))? == saved);
-    let mut worker = restore(directory, owner, original.window, original.window, 1, "untouched")?;
+    let mut worker = restore(
+        directory,
+        owner,
+        original.window,
+        original.window,
+        1,
+        "untouched",
+    )?;
     check_clear(&mut worker)?;
     ensure!(snapshot(owner)? == original);
     ensure!(Journal::open(directory)?.pending()?.is_none());
-    println!("Native recovery: unexecuted hide fenced, late command rejected and window unchanged.");
+    println!(
+        "Native recovery: unexecuted hide fenced, late command rejected and window unchanged."
+    );
     Ok(())
 }
 
@@ -204,13 +220,27 @@ pub(super) fn smoke(binary: &Path) -> Result<()> {
     ensure!(snapshot(&mut owner)? == hidden);
     ensure!(std::fs::read(directory.join(FILENAME))? == saved);
 
-    let mut worker = restore(directory, &mut owner, original.window, hidden.window, 2, "restored")?;
+    let mut worker = restore(
+        directory,
+        &mut owner,
+        original.window,
+        hidden.window,
+        2,
+        "restored",
+    )?;
     worker.expect("before-clear")?;
     let recovered = snapshot(&mut owner)?;
     ensure!(recovered.visible && recovered.window == original.window && recovered.restores == 1);
     worker.crash()?;
     ensure!(std::fs::read(directory.join(FILENAME))? == saved);
-    let mut worker = restore(directory, &mut owner, original.window, recovered.window, 2, "restored")?;
+    let mut worker = restore(
+        directory,
+        &mut owner,
+        original.window,
+        recovered.window,
+        2,
+        "restored",
+    )?;
     check_clear(&mut worker)?;
     ensure!(snapshot(&mut owner)? == recovered);
     ensure!(Journal::open(directory)?.pending()?.is_none());
