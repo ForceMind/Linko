@@ -213,11 +213,12 @@ static OSStatus deliverSamples(struct Probe *probe, VTDecompressionSessionRef *d
 }
 
 static OSStatus deliverUntil(struct Probe *probe, VTDecompressionSessionRef *decoder, unsigned *next,
-                             uint64_t deadline) {
+                             uint64_t deadline, bool waitForFirstDecode) {
     for (;;) {
         OSStatus status = deliverSamples(probe, decoder, next);
         uint64_t now = nowNs();
-        if (status != noErr || now >= deadline || deadline == 0) {
+        if (status != noErr || now >= deadline ||
+            (waitForFirstDecode && atomic_load(&probe->decodedAt[0]))) {
             return status;
         }
         const uint64_t left = deadline - now;
@@ -336,8 +337,14 @@ static bool runProbe(struct Probe *probe, bool paced, bool verbose) {
         status = submit(probe, encoder, index);
         if (status == noErr) {
             const uint64_t deadline = paced ? started + (index + 1) * 1000000000ull / FramesPerSecond : 0;
-            status = deliverUntil(probe, &decoder, &delivered, deadline);
+            status = deliverUntil(probe, &decoder, &delivered, deadline, false);
         }
+    }
+    // The two captured window samples have no following frames to cover codec
+    // startup. Require output before flush, with a separate bounded wait.
+    if (status == noErr && probe->captured[0] && !atomic_load(&probe->decodedAt[0])) {
+        const uint64_t startupDeadline = started + 500000000ull;
+        status = deliverUntil(probe, &decoder, &delivered, startupDeadline, true);
     }
     unsigned beforeDrain = 0;
     for (unsigned index = 0; index < delivered; ++index) {
