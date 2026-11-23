@@ -6,6 +6,7 @@
 //! The production adapter must serialize calls, supply a monotonic local clock,
 //! run poll while idle, and acknowledge actual effects rather than queued work.
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::frame_binding::FrameMatch;
 use crate::geometry::{Camera, MappedPoint, Point, Rect, SourceGeometry};
@@ -21,6 +22,13 @@ pub const MAX_SURFACES: usize = 16;
 /// Local lifetime handle, never reused within a coordinator. Not a wire credential.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ViewId(u64);
+
+/// An additional local display of one authorized view. It carries no input route.
+#[derive(Clone)]
+pub struct MirrorHandle {
+    view: ViewId,
+    instance: Arc<()>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceSpec {
@@ -49,6 +57,7 @@ pub struct PresentationTicket {
     view: ViewId,
     stamp: FrameStamp,
     received_at: u64,
+    mirror: bool,
 }
 
 impl PresentationTicket {
@@ -95,13 +104,32 @@ struct Surface {
     frames: LatestFrame,
     queued_at: Option<u64>,
     presenting: Option<PresentationTicket>,
+    mirror: Option<Mirror>,
     connected: bool,
     fault: Option<Fault>,
     parking_allowed: bool,
     handoff: Option<(HandoffToken, Handoff)>,
 }
 
+struct Mirror {
+    instance: Arc<()>,
+    panel: Rect,
+}
+
 impl Surface {
+    fn mirror_mut(&mut self, handle: &MirrorHandle) -> Result<&mut Mirror, Error> {
+        self.mirror
+            .as_mut()
+            .filter(|mirror| Arc::ptr_eq(&mirror.instance, &handle.instance))
+            .ok_or(Error::StaleTarget)
+    }
+
+    fn cancel_mirror_presentation(&mut self) {
+        if self.presenting.is_some_and(|ticket| ticket.mirror) {
+            self.presenting = None;
+        }
+    }
+
     fn clear_media(&mut self) {
         self.frames.clear();
         self.queued_at = None;
@@ -236,6 +264,7 @@ impl Coordinator {
                 frames,
                 queued_at: None,
                 presenting: None,
+                mirror: None,
                 connected: true,
                 fault: None,
                 parking_allowed: false,
@@ -356,6 +385,55 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Add one read-only presentation region to this already authorized source.
+    /// Both regions use the same source gate, mailbox and decoder allocation.
+    pub fn attach_mirror(
+        &mut self,
+        view: ViewId,
+        panel: Rect,
+        now: u64,
+    ) -> Result<MirrorHandle, Error> {
+        self.clock(now)?;
+        panel.validate()?;
+        let s = self.surface_mut(view)?;
+        s.gate.can_view(now)?;
+        if s.mirror.is_some() {
+            return Err(Error::Capacity);
+        }
+        let instance = Arc::new(());
+        s.mirror = Some(Mirror {
+            instance: Arc::clone(&instance),
+            panel,
+        });
+        Ok(MirrorHandle { view, instance })
+    }
+
+    pub fn relayout_mirror(
+        &mut self,
+        handle: &MirrorHandle,
+        panel: Rect,
+        now: u64,
+    ) -> Result<(), Error> {
+        self.clock(now)?;
+        panel.validate()?;
+        let s = self.surface_mut(handle.view)?;
+        let mirror = s.mirror_mut(handle)?;
+        if mirror.panel != panel {
+            mirror.panel = panel;
+            s.cancel_mirror_presentation();
+        }
+        Ok(())
+    }
+
+    pub fn detach_mirror(&mut self, handle: &MirrorHandle, now: u64) -> Result<(), Error> {
+        self.clock(now)?;
+        let s = self.surface_mut(handle.view)?;
+        s.mirror_mut(handle)?;
+        s.mirror = None;
+        s.cancel_mirror_presentation();
+        Ok(())
+    }
+
     /// Plan the current canvas viewport using registered geometry and viewing grants.
     /// Viewing focus is a quality preference independent of the active input route.
     /// Apply the plan with current authorization and actual decoder resource accounting.
@@ -375,11 +453,15 @@ impl Coordinator {
         let demands: Vec<_> = self
             .surfaces
             .iter()
-            .map(|(view, surface)| ViewDemand {
-                gate: &surface.gate,
-                pixels: surface.geometry.pixels,
-                canvas_rect: surface.placement.panel,
-                focused: viewing_focus == Some(*view),
+            .flat_map(|(view, surface)| {
+                std::iter::once(surface.placement.panel)
+                    .chain(surface.mirror.iter().map(|mirror| mirror.panel))
+                    .map(move |panel| ViewDemand {
+                        gate: &surface.gate,
+                        pixels: surface.geometry.pixels,
+                        canvas_rect: panel,
+                        focused: viewing_focus == Some(*view),
+                    })
             })
             .collect();
         scheduling::plan(&demands, viewport, budget, now)
@@ -436,8 +518,30 @@ impl Coordinator {
         view: ViewId,
         now: u64,
     ) -> Result<Option<Presentation>, Error> {
+        self.take_for_region(view, None, now)
+    }
+
+    /// Use only when presenting to the mirror alone. A frame visible at both
+    /// regions uses one primary presentation and one renderer-owned texture.
+    pub fn take_for_mirror(
+        &mut self,
+        handle: &MirrorHandle,
+        now: u64,
+    ) -> Result<Option<Presentation>, Error> {
+        self.take_for_region(handle.view, Some(handle), now)
+    }
+
+    fn take_for_region(
+        &mut self,
+        view: ViewId,
+        mirror: Option<&MirrorHandle>,
+        now: u64,
+    ) -> Result<Option<Presentation>, Error> {
         self.poll(now)?;
         let s = self.surface_mut(view)?;
+        if let Some(handle) = mirror {
+            s.mirror_mut(handle)?;
+        }
         if s.presenting.is_some() {
             return Err(Error::InvalidState);
         }
@@ -449,6 +553,7 @@ impl Coordinator {
             view,
             stamp: frame.stamp(),
             received_at: received_at.ok_or(Error::InvalidState)?,
+            mirror: mirror.is_some(),
         };
         s.presenting = Some(ticket);
         Ok(Some(Presentation { ticket, frame }))
@@ -463,11 +568,27 @@ impl Coordinator {
     ) -> Result<(), Error> {
         self.poll(now)?;
         let s = self.surface_mut(ticket.view)?;
-        if s.presenting != Some(ticket) {
+        if ticket.mirror || s.presenting != Some(ticket) {
             return Err(Error::WrongAcknowledgement);
         }
         s.presenting = None;
         s.gate.presented(ticket.stamp, now)
+    }
+
+    /// Confirms a mirror-only display without renewing primary input freshness.
+    pub fn acknowledge_mirror(
+        &mut self,
+        handle: &MirrorHandle,
+        ticket: PresentationTicket,
+        now: u64,
+    ) -> Result<(), Error> {
+        self.poll(now)?;
+        let s = self.surface_mut(handle.view)?;
+        if !ticket.mirror || s.presenting != Some(ticket) || s.mirror_mut(handle).is_err() {
+            return Err(Error::WrongAcknowledgement);
+        }
+        s.presenting = None;
+        s.gate.can_view(now)
     }
 
     pub fn request_content_check(&mut self, view: ViewId, now: u64) -> Result<ContentCheck, Error> {
@@ -649,6 +770,7 @@ impl Coordinator {
             s.connected = false;
             s.fault = Some(fault);
         }
+        s.mirror = None;
         s.clear_media();
         s.parking_allowed = false;
         s.cancel_handoff();
