@@ -16,7 +16,7 @@ enum { WorkerFrameHeaderBytes = 12 };
 enum { WorkerFrameWidth = 128, WorkerFrameHeight = 96, WorkerFrameCount = 2 };
 enum { WorkerFrameBytes = WorkerFrameWidth * WorkerFrameHeight * 3 / 2 };
 enum { WorkerRgbaBytes = WorkerFrameWidth * WorkerFrameHeight * 4 };
-enum { WorkerFrameRecordBytes = WorkerMessageSize + WorkerFrameHeaderBytes + WorkerFrameBytes };
+enum { WorkerFrameRecordBytes = (size_t)WorkerMessageSize + WorkerFrameHeaderBytes + WorkerFrameBytes };
 enum { WorkerDisplayReceiptBytes = WorkerMessageSize + 4 };
 
 struct WorkerFramePixels {
