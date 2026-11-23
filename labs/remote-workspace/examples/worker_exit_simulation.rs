@@ -80,11 +80,7 @@ impl CoordinatedWorker {
         expected: [u8; N],
         timeout: Duration,
     ) -> io::Result<()> {
-        let mut stdout = self
-            .process
-            .stdout
-            .take()
-            .expect("worker stdout is piped");
+        let mut stdout = self.process.stdout.take().expect("worker stdout is piped");
         let (send, receive) = mpsc::sync_channel(1);
         let reader = thread::spawn(move || {
             let mut event = [0; N];
@@ -205,7 +201,10 @@ fn main() -> SimulationResult<()> {
             return Ok(());
         }
         Some(arg) if arg == OsStr::new(CODEC_ARG) => Some(args.next().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "missing native codec fixture path")
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "missing native codec fixture path",
+            )
         })?),
         Some(_) => {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "unknown fixture mode").into());
