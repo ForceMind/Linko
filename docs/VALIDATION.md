@@ -495,3 +495,7 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 ## RW02 来源控制租约（2026-11-23）
 
 - [PR #389](https://github.com/ForceMind/Linko/pull/389)，`a541159e8890c3ef6444843ccac66bec21f4cbe4`。Linux、Windows 和 macOS 的离线场景用两个独立 Coordinator 观看同一来源。来源只授予一个整机控制租约。争用和旧输入不能影响有效持有者。撤销、断开、精确到期、原生权限丢失和时钟倒退触发释放屏障。完成本地模拟清理后，下一位仍需独立授权。旧连接和其他实例的释放回执均被拒绝。实际注入与按键释放留待原生 owner 接线及双机验收。[三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45183081896) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45183081794)
+
+## A17 同一来源的本机只读镜像（2026-11-23）
+
+- [PR #390](https://github.com/ForceMind/Linko/pull/390)，`ff55c2ac6f0076e68168447a008e4797340273d6`。主面板和镜像共用授权、帧邮箱和一份解码分配。三端模型回归覆盖主面板或镜像单独可见、两处可见、两处离屏、撤权和重授、跨实例句柄、镜像移动和拆除。镜像单独的展示回执不续期主面板输入。[三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45185814449)
