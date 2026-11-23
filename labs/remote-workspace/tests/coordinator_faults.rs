@@ -243,7 +243,10 @@ fn planned_decision(plan: &Plan, seed: u8) -> Decision {
 fn mirror_visibility_shares_one_decoder_and_the_existing_view_grant() {
     let mut c = coordinator();
     let view = live(&mut c, 1);
-    let mirror_panel = Rect { x: 200.0, ..bounds() };
+    let mirror_panel = Rect {
+        x: 200.0,
+        ..bounds()
+    };
     let mirror = c.attach_mirror(view, mirror_panel, 1).unwrap();
     assert!(matches!(
         c.attach_mirror(view, mirror_panel, 1),
@@ -256,19 +259,31 @@ fn mirror_visibility_shares_one_decoder_and_the_existing_view_grant() {
     for viewport in [
         bounds(),
         mirror_panel,
-        Rect { width: 300.0, ..bounds() },
+        Rect {
+            width: 300.0,
+            ..bounds()
+        },
     ] {
         let plan = c.plan_viewport(viewport, Some(view), budget, 1).unwrap();
         assert_eq!(plan.usage.decoders, 1);
         assert_eq!(plan.surfaces.len(), 1);
         assert!(matches!(planned_decision(&plan, 1), Decision::Stream(_)));
     }
-    let offscreen = Rect { y: 200.0, ..bounds() };
+    let offscreen = Rect {
+        y: 200.0,
+        ..bounds()
+    };
     let plan = c.plan_viewport(offscreen, None, budget, 1).unwrap();
-    assert_eq!(planned_decision(&plan, 1), Decision::Pause(PauseReason::Offscreen));
+    assert_eq!(
+        planned_decision(&plan, 1),
+        Decision::Pause(PauseReason::Offscreen)
+    );
     c.revoke_view(view, 2).unwrap();
     let plan = c.plan_viewport(mirror_panel, None, budget, 2).unwrap();
-    assert_eq!(planned_decision(&plan, 1), Decision::Pause(PauseReason::Unauthorized));
+    assert_eq!(
+        planned_decision(&plan, 1),
+        Decision::Pause(PauseReason::Unauthorized)
+    );
     assert_eq!(plan.usage.decoders, 0);
     c.detach_mirror(&mirror, 2).unwrap();
 }
@@ -287,7 +302,10 @@ fn mirror_only_receipts_never_refresh_input_and_expire_with_their_scope() {
         Err(Error::WrongAcknowledgement)
     );
     c.acknowledge_mirror(&mirror, only.ticket, 1_999).unwrap();
-    assert_eq!(c.authorize_input(view, active, 1, 2_000), Err(Error::StaleTarget));
+    assert_eq!(
+        c.authorize_input(view, active, 1, 2_000),
+        Err(Error::StaleTarget)
+    );
     let state = c.snapshot(view, 2_000).unwrap();
     assert!(state.viewing_allowed && state.release_pending);
     assert!(!state.control_policy_ready && !state.input_active);
@@ -315,7 +333,15 @@ fn moving_or_detaching_a_mirror_does_not_cancel_primary_presentation() {
     let frame = raw(&c, view, 2);
     c.receive(view, frame, 1).unwrap();
     let only = c.take_for_mirror(&mirror, 1).unwrap().unwrap();
-    c.relayout_mirror(&mirror, Rect { x: 200.0, ..bounds() }, 2).unwrap();
+    c.relayout_mirror(
+        &mirror,
+        Rect {
+            x: 200.0,
+            ..bounds()
+        },
+        2,
+    )
+    .unwrap();
     assert_eq!(
         c.acknowledge_mirror(&mirror, only.ticket, 2),
         Err(Error::WrongAcknowledgement)
