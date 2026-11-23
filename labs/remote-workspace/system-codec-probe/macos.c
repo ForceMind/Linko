@@ -300,7 +300,8 @@ static bool run(int width, int height, unsigned frames, bool paced, CVPixelBuffe
 }
 
 static CVPixelBufferRef makeBgraFixture(int width, int height) {
-    CFDictionaryRef empty = CFDictionaryCreate(NULL, NULL, NULL, 0, NULL, NULL);
+    CFDictionaryRef empty = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
+                                                        &kCFTypeDictionaryValueCallBacks);
     if (!empty) {
         return NULL;
     }
@@ -348,12 +349,12 @@ static bool sampleMemory(unsigned cycle) {
 }
 
 static bool checkMemory(int width, int height) {
+    printf("VideoToolbox memory: size=%dx%d, fixed BGRA input.\n", width, height);
     CVPixelBufferRef input = makeBgraFixture(width, height);
     if (!input) {
         fputs("VideoToolbox memory: could not create the BGRA fixture.\n", stderr);
         return false;
     }
-    printf("VideoToolbox memory: size=%dx%d, fixed BGRA input.\n", width, height);
     bool passed = true;
     for (unsigned cycle = 1; passed && cycle <= 100; ++cycle) {
         passed = run(width, height, 3, true, input, cycle == 1);
@@ -372,6 +373,7 @@ static bool checkMemory(int width, int height) {
 }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 2 && strcmp(argv[1], "--vm-small") == 0) {
         return checkMemory(224, 144) ? 0 : 1;
     }
