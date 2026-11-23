@@ -313,7 +313,18 @@ static bool run(int width, int height, unsigned frames, bool paced, CVPixelBuffe
     return true;
 }
 
-static CVPixelBufferRef makeBgraFixture(int width, int height) {
+static bool fillMemoryPlane(CVPixelBufferRef pixels, size_t plane, int value) {
+    void *bytes = CVPixelBufferGetBaseAddressOfPlane(pixels, plane);
+    const size_t stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, plane);
+    const size_t rows = CVPixelBufferGetHeightOfPlane(pixels, plane);
+    if (!bytes || !stride || !rows || stride > SIZE_MAX / rows) {
+        return false;
+    }
+    memset(bytes, value, stride * rows);
+    return true;
+}
+
+static CVPixelBufferRef makeMemoryFixture(int width, int height, OSType format) {
     CFDictionaryRef empty = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
                                                         &kCFTypeDictionaryValueCallBacks);
     if (!empty) {
@@ -329,19 +340,23 @@ static CVPixelBufferRef makeBgraFixture(int width, int height) {
         return NULL;
     }
     CVPixelBufferRef pixels = NULL;
-    OSStatus status = CVPixelBufferCreate(NULL, (size_t)width, (size_t)height, kCVPixelFormatType_32BGRA,
-                                         attributes, &pixels);
+    OSStatus status = CVPixelBufferCreate(NULL, (size_t)width, (size_t)height, format, attributes, &pixels);
     CFRelease(attributes);
     if (status != noErr) {
         return NULL;
     }
     bool initialized = false;
     if (CVPixelBufferLockBaseAddress(pixels, 0) == noErr) {
-        void *bytes = CVPixelBufferGetBaseAddress(pixels);
-        const size_t length = CVPixelBufferGetDataSize(pixels);
-        initialized = bytes && length >= (size_t)width * (size_t)height * 4;
-        if (initialized) {
-            memset(bytes, 0x80, length);
+        if (format == NV12) {
+            initialized = CVPixelBufferGetPlaneCount(pixels) == 2 &&
+                          fillMemoryPlane(pixels, 0, 126) && fillMemoryPlane(pixels, 1, 128);
+        } else {
+            void *bytes = CVPixelBufferGetBaseAddress(pixels);
+            const size_t length = CVPixelBufferGetDataSize(pixels);
+            initialized = bytes && length >= (size_t)width * (size_t)height * 4;
+            if (initialized) {
+                memset(bytes, 0x80, length);
+            }
         }
         initialized = CVPixelBufferUnlockBaseAddress(pixels, 0) == noErr && initialized;
     }
@@ -441,12 +456,11 @@ static bool decodeMemoryFixture(int width, int height, CVPixelBufferRef input, s
     return true;
 }
 
-static bool checkMemory(int width, int height, enum MemoryStage stage) {
-    const char *name = stage == EncodeStage ? "encode" : stage == DecodeStage ? "decode" : "both";
+static bool checkMemory(int width, int height, enum MemoryStage stage, OSType format, const char *name) {
     printf("VideoToolbox memory: size=%dx%d, stage=%s.\n", width, height, name);
-    CVPixelBufferRef input = makeBgraFixture(width, height);
+    CVPixelBufferRef input = makeMemoryFixture(width, height, format);
     if (!input) {
-        fputs("VideoToolbox memory: could not create the BGRA fixture.\n", stderr);
+        fputs("VideoToolbox memory: could not create the fixed input.\n", stderr);
         return false;
     }
     struct MemorySamples seed = {0};
@@ -493,16 +507,21 @@ int main(int argc, char **argv) {
             return 2;
         }
         enum MemoryStage stage = BothStages;
+        OSType format = kCVPixelFormatType_32BGRA;
+        const char *name = argc == 5 ? argv[4] : "both";
         if (argc == 5) {
-            if (strcmp(argv[4], "encode") == 0) {
+            if (strcmp(name, "encode") == 0) {
                 stage = EncodeStage;
-            } else if (strcmp(argv[4], "decode") == 0) {
+            } else if (strcmp(name, "encode-nv12") == 0) {
+                stage = EncodeStage;
+                format = NV12;
+            } else if (strcmp(name, "decode") == 0) {
                 stage = DecodeStage;
             } else {
                 return 2;
             }
         }
-        return checkMemory(width, height, stage) ? 0 : 1;
+        return checkMemory(width, height, stage, format, name) ? 0 : 1;
     }
     if (argc != 1) {
         return 2;
