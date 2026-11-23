@@ -465,4 +465,6 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 
 - [PR #378](https://github.com/ForceMind/Linko/pull/378)，`bc06123d8ecf4849df425efac7e996ed7aa954cc`。Windows 的两条 WGC 流和 macOS 的两条 ScreenCaptureKit 流各核对四组不同画面，跨度分别为 2.520 秒和 2.521 秒。两端均在关闭第一路后核对第二路新画面，随后关闭第二路并确认释放。Windows 首轮既有单窗口冒烟在缩放后以 `0xC0000005` 退出，同一提交重跑通过，原因待确认。[Windows](https://github.com/ForceMind/Linko/actions/runs/45148272846/job/137603706867) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45148272846/job/137603792605) · [Windows 首轮](https://github.com/ForceMind/Linko/actions/runs/45148272846/job/137602879465)
 
-本批验证覆盖协调器、单槽进程交接、离线面板操作、本机双面板各一帧和两端双路持续采集。下一步验证持续采集到编解码再到实际绘制的链路，记录进程内存与纹理占用。实际 GPU 预算和跨设备观看待验证。
+- [PR #379](https://github.com/ForceMind/Linko/pull/379)，`8437c6b1c7cb966f2007576a9e68414221c42ea5`。两个 macOS 自建窗口的实采画面分别进入持续运行的 VideoToolbox 硬件编解码会话。每路最多一帧在途，按实解码时间戳、亮度、色度核对四组 128×96 画面，跨度 2.857 秒。第一路采集与编解码释放后，第二路通过第五帧核对，随后释放。[macOS 原生链路](https://github.com/ForceMind/Linko/actions/runs/45149653670/job/137607545071)
+
+本批验证覆盖协调器、单槽进程交接、离线面板操作、本机双面板各一帧、两端双路持续采集和 macOS 双路持续编解码。下一步验证 Windows 持续编解码和双端连续绘制，并记录进程内存与纹理占用。实际 GPU 预算和跨设备观看待验证。
