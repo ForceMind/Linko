@@ -379,7 +379,10 @@ fn ending_a_decoder_lifetime_discards_old_content_and_stops_input() {
     assert!(state.connected && state.viewing_allowed && state.release_pending);
     assert!(!state.input_active && !state.control_policy_ready);
     assert!(c.snapshot(other, 2).unwrap().control_policy_ready);
-    assert_eq!(c.confirm_unchanged(paused, check, 2), Err(Error::StaleTarget));
+    assert_eq!(
+        c.confirm_unchanged(paused, check, 2),
+        Err(Error::StaleTarget)
+    );
     assert_eq!(c.receive(paused, old, 2), Err(Error::StaleTarget));
 
     present(&mut c, paused, 1, 3);

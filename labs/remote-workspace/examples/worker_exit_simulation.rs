@@ -221,7 +221,10 @@ impl CoordinatedWorker {
                 };
             }
             if Instant::now() >= deadline {
-                return Err(io::Error::new(io::ErrorKind::TimedOut, "worker did not exit"));
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "worker did not exit",
+                ));
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -541,12 +544,13 @@ fn native_viewport(binary: &Path) -> SimulationResult<()> {
         let late_stamp = coordinator.frame_stamp(view, 3)?;
         let (mut worker, [red, blue]) = start_window_codec(binary, key.binding, generation)?;
         if let Some(old) = late_from_first.take_if(|_| step == 2) {
-            assert_eq!(
-                coordinator.receive(view, old, now),
-                Err(Error::StaleTarget)
-            );
+            assert_eq!(coordinator.receive(view, old, now), Err(Error::StaleTarget));
         }
-        let (pixels, late) = if view == first { (red, blue) } else { (blue, red) };
+        let (pixels, late) = if view == first {
+            (red, blue)
+        } else {
+            (blue, red)
+        };
         coordinator.receive(
             view,
             RawFrame::new(frame_stamp, NATIVE_PIXELS, pixels)?,
@@ -555,7 +559,10 @@ fn native_viewport(binary: &Path) -> SimulationResult<()> {
         let presentation = coordinator
             .take_for_present(view, now)?
             .ok_or(Error::StaleFrame)?;
-        assert!(matches_window_color(presentation.frame.pixels(), view == second));
+        assert!(matches_window_color(
+            presentation.frame.pixels(),
+            view == second
+        ));
         if step == 0 {
             late_from_first = Some(RawFrame::new(late_stamp, NATIVE_PIXELS, late.clone())?);
         }
