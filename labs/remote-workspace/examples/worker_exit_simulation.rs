@@ -39,7 +39,11 @@ impl FixtureChild {
                 .stdout(Stdio::piped())
                 .spawn()?,
         };
-        let mut stdout = child.process.stdout.take().expect("fixture stdout is piped");
+        let mut stdout = child
+            .process
+            .stdout
+            .take()
+            .expect("fixture stdout is piped");
         let (send, receive) = mpsc::sync_channel(1);
         let reader = thread::spawn(move || {
             let mut ready = [0];
@@ -141,7 +145,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     queue(&mut c, second, 1, 1)?;
     queue(&mut c, survivor, 1, 1)?;
     let mut child = FixtureChild::start()?;
-    assert!(child.process.try_wait()?.is_none(), "fixture exited before stop");
+    assert!(
+        child.process.try_wait()?.is_none(),
+        "fixture exited before stop"
+    );
     assert!(c.snapshot(first, 1)?.presentation_pending);
     assert!(c.snapshot(second, 1)?.frame_queued);
     child.process.kill()?;
