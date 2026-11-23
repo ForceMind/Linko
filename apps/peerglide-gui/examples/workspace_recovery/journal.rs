@@ -39,7 +39,12 @@ pub(super) struct RecoveryRecord {
 impl RecoveryRecord {
     pub(super) fn original_bounds(self) -> Rect {
         let [x, y, width, height] = self.bounds;
-        Rect { x, y, width, height }
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }
 
@@ -63,7 +68,10 @@ impl Default for Ledger {
 
 impl Ledger {
     fn validate(self) -> Result<()> {
-        ensure!(self.version == VERSION, "unsupported recovery journal version");
+        ensure!(
+            self.version == VERSION,
+            "unsupported recovery journal version"
+        );
         if let Some(record) = self.pending {
             ensure!(
                 record.transaction != 0 && record.transaction == self.last_transaction,
@@ -107,15 +115,17 @@ impl Journal {
 
     /// Called after the current handoff policy has requested a hide. Persist
     /// the obligation before dispatching the action to the platform.
-    pub(super) fn arm(
-        &mut self,
-        window: WindowInstance,
-        bounds: Rect,
-    ) -> Result<RecoveryRecord> {
+    pub(super) fn arm(&mut self, window: WindowInstance, bounds: Rect) -> Result<RecoveryRecord> {
         window.validate()?;
         bounds.validate()?;
-        ensure!(self.pending()?.is_none(), "previous recovery is still pending");
-        let transaction = self.ledger.last_transaction.checked_add(1)
+        ensure!(
+            self.pending()?.is_none(),
+            "previous recovery is still pending"
+        );
+        let transaction = self
+            .ledger
+            .last_transaction
+            .checked_add(1)
             .context("recovery transaction number exhausted")?;
         let record = RecoveryRecord {
             transaction,
@@ -134,7 +144,10 @@ impl Journal {
     /// original bounds against the current native display topology.
     pub(super) fn recovery_for(&self, observed: WindowInstance) -> Result<RecoveryRecord> {
         let record = self.pending()?.context("no recovery is pending")?;
-        ensure!(record.window == observed, "native window incarnation changed");
+        ensure!(
+            record.window == observed,
+            "native window incarnation changed"
+        );
         Ok(record)
     }
 
@@ -142,8 +155,14 @@ impl Journal {
     /// resolved. Successful submission of a restore request is insufficient.
     pub(super) fn confirm(&mut self, observed: WindowInstance, transaction: u64) -> Result<()> {
         let record = self.recovery_for(observed)?;
-        ensure!(record.transaction == transaction, "stale recovery acknowledgement");
-        self.commit(Ledger { pending: None, ..self.ledger })
+        ensure!(
+            record.transaction == transaction,
+            "stale recovery acknowledgement"
+        );
+        self.commit(Ledger {
+            pending: None,
+            ..self.ledger
+        })
     }
 
     fn commit(&mut self, candidate: Ledger) -> Result<()> {

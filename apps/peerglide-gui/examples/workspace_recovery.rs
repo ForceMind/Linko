@@ -34,7 +34,10 @@ const BOUNDS: Rect = Rect {
 
 fn handoff() -> Result<(Coordinator, ViewId, HandoffToken)> {
     let mut coordinator = Coordinator::new([2; 32], 1)?;
-    let size = PixelSize { width: 2, height: 2 };
+    let size = PixelSize {
+        width: 2,
+        height: 2,
+    };
     let view = coordinator.register(
         SurfaceSpec {
             key: SurfaceKey {
@@ -65,7 +68,9 @@ fn handoff() -> Result<(Coordinator, ViewId, HandoffToken)> {
     coordinator.grant_control(view, ControlScope::WholeDesktop, 0, 1_000)?;
     let frame = RawFrame::new(coordinator.frame_stamp(view, 1)?, size, vec![0; 16])?;
     coordinator.receive(view, frame, 0)?;
-    let frame = coordinator.take_for_present(view, 0)?.context("fixture frame")?;
+    let frame = coordinator
+        .take_for_present(view, 0)?
+        .context("fixture frame")?;
     coordinator.acknowledge_presentation(frame.ticket, 0)?;
     coordinator.allow_parking(view, true, 0)?;
     let token = coordinator.begin_handoff(view, BOUNDS, 0, 500)?;
@@ -94,7 +99,11 @@ fn worker_hide(directory: &Path, input: &mut impl BufRead, output: &mut impl Wri
     Ok(())
 }
 
-fn worker_recover(directory: &Path, input: &mut impl BufRead, output: &mut impl Write) -> Result<()> {
+fn worker_recover(
+    directory: &Path,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+) -> Result<()> {
     let mut journal = Journal::open(directory)?;
     let Some(pending) = journal.pending()? else {
         send(output, "clean")?;
@@ -127,7 +136,10 @@ fn send(output: &mut impl Write, line: &str) -> Result<()> {
 
 fn read(input: &mut impl BufRead) -> Result<String> {
     let mut line = String::new();
-    ensure!(input.read_line(&mut line)? != 0, "fixture control pipe closed");
+    ensure!(
+        input.read_line(&mut line)? != 0,
+        "fixture control pipe closed"
+    );
     Ok(line.trim_end().to_owned())
 }
 
@@ -173,7 +185,10 @@ impl Worker {
         let deadline = Instant::now() + WAIT;
         loop {
             if let Some(status) = self.process.try_wait()? {
-                ensure!(status.success() == success, "unexpected fixture exit {status}");
+                ensure!(
+                    status.success() == success,
+                    "unexpected fixture exit {status}"
+                );
                 return Ok(());
             }
             ensure!(Instant::now() < deadline, "fixture did not exit");
@@ -253,7 +268,10 @@ fn smoke() -> Result<()> {
 
     let mut worker = Worker::start(directory, "hide")?;
     worker.expect("prepared")?;
-    ensure!(Journal::open(directory).is_err(), "source owner lock missing");
+    ensure!(
+        Journal::open(directory).is_err(),
+        "source owner lock missing"
+    );
     worker.crash()?;
     ensure!(!path.exists() && Journal::open(directory)?.pending()?.is_none());
     println!("Recovery journal: crash before commit left no obligation.");
@@ -338,10 +356,18 @@ fn smoke() -> Result<()> {
     for file in std::fs::read_dir(directory)? {
         ensure!(!file?.file_name().to_string_lossy().contains(".bak-"));
     }
-    let future = br#"{"store_version":2,"data":{}}"#;
-    std::fs::write(&path, future)?;
-    ensure!(Journal::open(directory).is_err() && std::fs::read(&path)? == future);
-    println!("Recovery journal: hard kill after restore, idempotent restart and clean re-open verified.");
+    let invalid_ledgers: [&[u8]; 3] = [
+        b"truncated journal",
+        br#"{"store_version":2,"data":{}}"#,
+        br#"{"store_version":1,"data":{"version":2,"last_transaction":3,"pending":null}}"#,
+    ];
+    for bytes in invalid_ledgers {
+        std::fs::write(&path, bytes)?;
+        ensure!(Journal::open(directory).is_err() && std::fs::read(&path)? == bytes);
+    }
+    println!(
+        "Recovery journal: hard kill after restore, idempotent restart and clean re-open verified."
+    );
     fixture.close()
 }
 
