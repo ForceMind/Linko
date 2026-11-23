@@ -72,3 +72,8 @@ jobs:
               exit "$status"
             fi
           done
+      - name: Retire and replace VideoToolbox fixture processes
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 5
+        run: python labs/remote-workspace/system-codec-probe/worker_smoke.py "$RUNNER_TEMP/rw04-h264"

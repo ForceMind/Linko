@@ -24,6 +24,7 @@ struct Probe {
     int height;
     unsigned frames;
     CVPixelBufferRef fixedInput;
+    int workerLuma;
     CFStringRef softwareEncoder;
     _Atomic(CMSampleBufferRef) encoded[MaxFrames];
     _Atomic bool encodedOnce[MaxFrames];
@@ -115,7 +116,7 @@ static bool matchesFixture(CVImageBufferRef frame, struct Probe const *probe, un
     bool valid = false;
     if (luma && stride >= width && CVPixelBufferGetHeightOfPlane(frame, 0) >= (size_t)probe->height) {
         const uint8_t *row = luma + stride * (size_t)(probe->height / 2);
-        const int expected = probe->fixedInput ? 126 : brightness(index);
+        const int expected = probe->workerLuma ? probe->workerLuma : probe->fixedInput ? 126 : brightness(index);
         const int stripe = probe->fixedInput ? expected : 232 - expected;
         valid = abs(row[width / 2] - expected) <= 6 && abs(row[width * 7 / 8] - stripe) <= 6;
     }
@@ -286,45 +287,55 @@ static OSStatus startEncoder(struct Probe *probe, VTCompressionSessionRef *encod
     return status;
 }
 
-static bool run(int width, int height, unsigned frames, bool paced, CVPixelBufferRef fixedInput,
-                bool verbose, CFStringRef softwareEncoder) {
-    struct Probe probe = {.width = width, .height = height, .frames = frames,
-                          .fixedInput = fixedInput, .softwareEncoder = softwareEncoder};
+static bool runProbe(struct Probe *probe, bool paced, bool verbose) {
     VTCompressionSessionRef encoder = NULL;
     VTDecompressionSessionRef decoder = NULL;
-    OSStatus status = startEncoder(&probe, &encoder);
+    OSStatus status = startEncoder(probe, &encoder);
     if (status != noErr) {
         fprintf(stderr, "create H.264 encoder: %d\n", (int)status);
         return false;
     }
     unsigned delivered = 0;
     uint64_t started = nowNs();
-    for (unsigned index = 0; index < frames && status == noErr; ++index) {
-        status = submit(&probe, encoder, index);
+    for (unsigned index = 0; index < probe->frames && status == noErr; ++index) {
+        status = submit(probe, encoder, index);
         if (status == noErr) {
             const uint64_t deadline = paced ? started + (index + 1) * 1000000000ull / FramesPerSecond : 0;
-            status = deliverUntil(&probe, &decoder, &delivered, deadline);
+            status = deliverUntil(probe, &decoder, &delivered, deadline);
         }
     }
     unsigned beforeDrain = 0;
     for (unsigned index = 0; index < delivered; ++index) {
-        beforeDrain += atomic_load(&probe.decodedAt[index]) != 0;
+        beforeDrain += atomic_load(&probe->decodedAt[index]) != 0;
     }
     if (status == noErr) {
         status = VTCompressionSessionCompleteFrames(encoder, kCMTimeInvalid);
     }
     if (status == noErr) {
-        status = deliverSamples(&probe, &decoder, &delivered);
+        status = deliverSamples(probe, &decoder, &delivered);
     }
     if (status == noErr && decoder) {
         status = VTDecompressionSessionWaitForAsynchronousFrames(decoder);
     }
     const uint64_t elapsed = nowNs() - started;
-    const char *encodeMode = encoderMode(encoder, softwareEncoder);
+    const char *encodeMode = encoderMode(encoder, probe->softwareEncoder);
     const char *decodeMode = decoder
         ? hardwareMode(decoder, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder) : "unknown";
     if (verbose) {
         printf("VideoToolbox encoder=%s decoder=%s.\n", encodeMode, decodeMode);
+    }
+    bool modesKnown = strcmp(encodeMode, "unknown") != 0;
+    if (probe->softwareEncoder) {
+        modesKnown = strcmp(encodeMode, "software") == 0;
+    } else if (probe->fixedInput) {
+        modesKnown = strcmp(encodeMode, "hardware") == 0 && strcmp(decodeMode, "hardware") == 0;
+    }
+    bool passed = status == noErr && atomic_load(&probe->callbackError) == noErr && modesKnown &&
+                  report(probe, paced, beforeDrain, delivered, elapsed, verbose);
+    if (passed && probe->workerLuma) {
+        printf("VideoToolbox worker ready: luma=%d.\n", probe->workerLuma);
+        char command[16];
+        passed = fgets(command, sizeof(command), stdin) && strcmp(command, "stop\n") == 0;
     }
     if (decoder) {
         VTDecompressionSessionInvalidate(decoder);
@@ -332,26 +343,27 @@ static bool run(int width, int height, unsigned frames, bool paced, CVPixelBuffe
     }
     VTCompressionSessionInvalidate(encoder);
     CFRelease(encoder);
-    for (unsigned index = delivered; index < frames; ++index) {
-        CMSampleBufferRef unused = atomic_exchange(&probe.encoded[index], NULL);
+    for (unsigned index = delivered; index < probe->frames; ++index) {
+        CMSampleBufferRef unused = atomic_exchange(&probe->encoded[index], NULL);
         if (unused) {
             CFRelease(unused);
         }
     }
-    OSStatus callbackError = atomic_load(&probe.callbackError);
-    bool modesKnown = strcmp(encodeMode, "unknown") != 0;
-    if (softwareEncoder) {
-        modesKnown = strcmp(encodeMode, "software") == 0;
-    } else if (fixedInput) {
-        modesKnown = strcmp(encodeMode, "hardware") == 0 && strcmp(decodeMode, "hardware") == 0;
-    }
-    if (status != noErr || callbackError != noErr || !modesKnown ||
-        !report(&probe, paced, beforeDrain, delivered, elapsed, verbose)) {
+    OSStatus callbackError = atomic_load(&probe->callbackError);
+    if (!passed || callbackError != noErr) {
         fprintf(stderr, "H.264 %dx%d result: status=%d callback=%d delivered=%u before_drain=%u paths=%s/%s\n",
-                width, height, (int)status, (int)callbackError, delivered, beforeDrain, encodeMode, decodeMode);
+                probe->width, probe->height, (int)status, (int)callbackError, delivered, beforeDrain,
+                encodeMode, decodeMode);
         return false;
     }
     return true;
+}
+
+static bool run(int width, int height, unsigned frames, bool paced, CVPixelBufferRef fixedInput,
+                bool verbose, CFStringRef softwareEncoder) {
+    struct Probe probe = {.width = width, .height = height, .frames = frames,
+                          .fixedInput = fixedInput, .softwareEncoder = softwareEncoder};
+    return runProbe(&probe, paced, verbose);
 }
 
 static bool fillMemoryPlane(CVPixelBufferRef pixels, size_t plane, int value) {
@@ -365,7 +377,7 @@ static bool fillMemoryPlane(CVPixelBufferRef pixels, size_t plane, int value) {
     return true;
 }
 
-static CVPixelBufferRef makeMemoryFixture(int width, int height, OSType format) {
+static CVPixelBufferRef makeMemoryFixture(int width, int height, OSType format, int luma) {
     CFDictionaryRef empty = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
                                                         &kCFTypeDictionaryValueCallBacks);
     if (!empty) {
@@ -390,7 +402,7 @@ static CVPixelBufferRef makeMemoryFixture(int width, int height, OSType format) 
     if (CVPixelBufferLockBaseAddress(pixels, 0) == noErr) {
         if (format == NV12) {
             initialized = CVPixelBufferGetPlaneCount(pixels) == 2 &&
-                          fillMemoryPlane(pixels, 0, 126) && fillMemoryPlane(pixels, 1, 128);
+                          fillMemoryPlane(pixels, 0, luma) && fillMemoryPlane(pixels, 1, 128);
         } else {
             void *bytes = CVPixelBufferGetBaseAddress(pixels);
             const size_t length = CVPixelBufferGetDataSize(pixels);
@@ -415,7 +427,7 @@ static bool sampleMemory(unsigned cycle) {
         return false;
     }
     printf("VideoToolbox memory: stopped=%u rss_bytes=%" PRIu64 "\n", cycle, (uint64_t)memory.resident_size);
-    return linko_rw04_sample_vm_regions(cycle == 10);
+    return linko_rw04_sample_vm_regions(cycle <= 10);
 }
 
 struct MemorySamples {
@@ -505,7 +517,7 @@ static bool checkMemory(int width, int height, enum MemoryStage stage, OSType fo
     const bool software = softwareEncoder != NULL;
     const unsigned cycles = software || strcmp(name, "encode-soak") == 0 ? 500 : 100;
     printf("VideoToolbox memory: size=%dx%d, stage=%s, cycles=%u.\n", width, height, name, cycles);
-    CVPixelBufferRef input = makeMemoryFixture(width, height, format);
+    CVPixelBufferRef input = makeMemoryFixture(width, height, format, 126);
     if (!input) {
         fputs("VideoToolbox memory: could not create the fixed input.\n", stderr);
         return false;
@@ -601,8 +613,30 @@ static bool checkSoftware(void) {
     return passed;
 }
 
+static bool checkWorker(int luma) {
+    if (!sampleMemory(0) || !checkMemory(350, 262, EncodeStage, kCVPixelFormatType_32BGRA, "worker", NULL)) {
+        return false;
+    }
+    CVPixelBufferRef input = makeMemoryFixture(350, 262, NV12, luma);
+    if (!input) {
+        return false;
+    }
+    struct Probe probe = {.width = 350, .height = 262, .frames = MemoryFrames,
+                          .fixedInput = input, .workerLuma = luma};
+    const bool passed = runProbe(&probe, true, false);
+    CVPixelBufferRelease(input);
+    if (passed) {
+        printf("VideoToolbox worker closed: luma=%d.\n", luma);
+    }
+    return passed;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (argc == 3 && strcmp(argv[1], "--worker-fixture") == 0) {
+        const int luma = evenDimension(argv[2], 220);
+        return luma && checkWorker(luma) ? 0 : 1;
+    }
     if (argc == 2 && strcmp(argv[1], "--software") == 0) {
         return checkSoftware() ? 0 : 1;
     }
