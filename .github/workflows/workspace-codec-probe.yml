@@ -77,7 +77,7 @@ jobs:
               exit "$status"
             fi
           done
-      - name: Retire and replace VideoToolbox fixture processes
+      - name: Verify VideoToolbox worker control and replacement
         if: runner.os == 'macOS'
         shell: bash
         timeout-minutes: 5

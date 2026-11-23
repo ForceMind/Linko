@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "../webrtc-probe/vm_probe.h"
 
@@ -19,12 +20,67 @@ enum { MemoryFrames = 3 };
 enum MemoryStage { BothStages, EncodeStage, DecodeStage };
 static const OSType NV12 = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
 
+enum WorkerMessage { WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped };
+enum { WorkerVersion = 1, WorkerMessageSize = 16, WorkerGenerationOffset = 8 };
+
+struct WorkerControl {
+    FILE *events;
+    uint64_t generation;
+};
+
+static bool readWorkerMessage(enum WorkerMessage expected, uint64_t *generation) {
+    unsigned char message[WorkerMessageSize];
+    if (fread(message, 1, sizeof(message), stdin) != sizeof(message)) {
+        fputs("VideoToolbox worker control: incomplete message.\n", stderr);
+        return false;
+    }
+    if (memcmp(message, "LRW4", 4) != 0 || message[4] != WorkerVersion ||
+        message[5] != (unsigned char)expected || message[6] != 0 || message[7] != 0) {
+        fputs("VideoToolbox worker control: invalid header.\n", stderr);
+        return false;
+    }
+    uint64_t value = 0;
+    for (size_t index = WorkerGenerationOffset; index < sizeof(message); ++index) {
+        value = (value << 8) | message[index];
+    }
+    if (!value) {
+        fputs("VideoToolbox worker control: missing generation.\n", stderr);
+        return false;
+    }
+    *generation = value;
+    return true;
+}
+
+static bool sendWorkerMessage(struct WorkerControl const *control, enum WorkerMessage kind) {
+    unsigned char message[WorkerMessageSize] = {'L', 'R', 'W', '4', WorkerVersion, (unsigned char)kind};
+    uint64_t generation = control->generation;
+    for (size_t index = sizeof(message); index > WorkerGenerationOffset;) {
+        message[--index] = (unsigned char)(generation & 0xff);
+        generation >>= 8;
+    }
+    return fwrite(message, 1, sizeof(message), control->events) == sizeof(message) &&
+           fflush(control->events) == 0;
+}
+
+static bool waitForWorkerStop(struct WorkerControl const *control) {
+    uint64_t generation;
+    if (!sendWorkerMessage(control, WorkerReady) || !readWorkerMessage(WorkerStop, &generation)) {
+        return false;
+    }
+    if (generation != control->generation) {
+        fputs("VideoToolbox worker control: mismatched generation.\n", stderr);
+        return false;
+    }
+    return true;
+}
+
 struct Probe {
     int width;
     int height;
     unsigned frames;
     CVPixelBufferRef fixedInput;
     int workerLuma;
+    struct WorkerControl const *worker;
     CFStringRef softwareEncoder;
     _Atomic(CMSampleBufferRef) encoded[MaxFrames];
     _Atomic bool encodedOnce[MaxFrames];
@@ -332,10 +388,8 @@ static bool runProbe(struct Probe *probe, bool paced, bool verbose) {
     }
     bool passed = status == noErr && atomic_load(&probe->callbackError) == noErr && modesKnown &&
                   report(probe, paced, beforeDrain, delivered, elapsed, verbose);
-    if (passed && probe->workerLuma) {
-        printf("VideoToolbox worker ready: luma=%d.\n", probe->workerLuma);
-        char command[16];
-        passed = fgets(command, sizeof(command), stdin) && strcmp(command, "stop\n") == 0;
+    if (passed && probe->worker) {
+        passed = waitForWorkerStop(probe->worker);
     }
     if (decoder) {
         VTDecompressionSessionInvalidate(decoder);
@@ -613,7 +667,7 @@ static bool checkSoftware(void) {
     return passed;
 }
 
-static bool checkWorker(int luma) {
+static bool checkWorker(int luma, struct WorkerControl const *control) {
     if (!sampleMemory(0) || !checkMemory(350, 262, EncodeStage, kCVPixelFormatType_32BGRA, "worker", NULL)) {
         return false;
     }
@@ -622,12 +676,34 @@ static bool checkWorker(int luma) {
         return false;
     }
     struct Probe probe = {.width = 350, .height = 262, .frames = MemoryFrames,
-                          .fixedInput = input, .workerLuma = luma};
+                          .fixedInput = input, .workerLuma = luma, .worker = control};
     const bool passed = runProbe(&probe, true, false);
     CVPixelBufferRelease(input);
-    if (passed) {
-        printf("VideoToolbox worker closed: luma=%d.\n", luma);
+    printf("VideoToolbox worker released: luma=%d.\n", luma);
+    return passed && sendWorkerMessage(control, WorkerStopped);
+}
+
+static bool runWorker(int luma) {
+    // Preserve the inherited stdout pipe for protocol records. Keep diagnostics on stderr.
+    const int eventsFd = dup(STDOUT_FILENO);
+    if (eventsFd < 0) {
+        perror("duplicate worker event pipe");
+        return false;
     }
+    FILE *events = fdopen(eventsFd, "wb");
+    if (!events) {
+        perror("open worker event pipe");
+        close(eventsFd);
+        return false;
+    }
+    if (dup2(STDERR_FILENO, STDOUT_FILENO) < 0) {
+        perror("redirect worker diagnostics");
+        fclose(events);
+        return false;
+    }
+    struct WorkerControl control = {.events = events};
+    const bool passed = readWorkerMessage(WorkerStart, &control.generation) && checkWorker(luma, &control);
+    fclose(events);
     return passed;
 }
 
@@ -635,7 +711,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 3 && strcmp(argv[1], "--worker-fixture") == 0) {
         const int luma = evenDimension(argv[2], 220);
-        return luma && checkWorker(luma) ? 0 : 1;
+        return luma && runWorker(luma) ? 0 : 1;
     }
     if (argc == 2 && strcmp(argv[1], "--software") == 0) {
         return checkSoftware() ? 0 : 1;
