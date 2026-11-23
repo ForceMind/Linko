@@ -75,7 +75,10 @@ impl CoordinatedWorker {
         command.args(["--worker-fixture", "80"]);
         let mut worker = Self::spawn(command, binding)?;
         worker.send_command(WORKER_START, generation)?;
-        worker.expect_event(worker_record(WORKER_READY, generation), Duration::from_secs(90))?;
+        worker.expect_event(
+            worker_record(WORKER_READY, generation),
+            Duration::from_secs(90),
+        )?;
         println!("Native worker: verified codec READY for this generation.");
         Ok(worker)
     }
@@ -318,7 +321,10 @@ fn main() -> SimulationResult<()> {
         let generation = WORKER_GENERATION + 1;
         let mut next = CoordinatedWorker::start_codec(Path::new(binary), replacement, generation)?;
         next.send_command(WORKER_STOP, generation)?;
-        next.expect_event(worker_record(WORKER_STOPPED, generation), Duration::from_secs(10))?;
+        next.expect_event(
+            worker_record(WORKER_STOPPED, generation),
+            Duration::from_secs(10),
+        )?;
         let (status, closed) = next.await_exit(&mut c, 3)?;
         assert!(status.success());
         assert_eq!(closed, 0);
