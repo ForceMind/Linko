@@ -31,6 +31,7 @@ struct WorkerControl;
 #ifdef LINKO_RW04_WGC_CODEC_CI
 #include <dbghelp.h>
 
+#include "../system-codec-probe/codec_worker_protocol.h"
 #include "../system-codec-probe/windows_fixture.h"
 
 namespace {
@@ -367,6 +368,13 @@ HWND control(HWND owner, wchar_t const* type, wchar_t const* text, DWORD style, 
     return child;
 }
 
+void drawBgra(HDC dc, Frame const& frame, int x, int y, int width, int height) {
+    BITMAPINFO info{};
+    info.bmiHeader = {sizeof(BITMAPINFOHEADER), frame.width, -frame.height, 1, 32, BI_RGB};
+    StretchDIBits(dc, x, y, width, height, 0, 0, frame.width, frame.height, frame.pixels.data(),
+                  &info, DIB_RGB_COLORS, SRCCOPY);
+}
+
 LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_NCCREATE) {
         auto create = reinterpret_cast<CREATESTRUCTW const*>(lparam);
@@ -445,11 +453,8 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                                   static_cast<double>(area.bottom - area.top) / frame->height);
             auto width = static_cast<int>(frame->width * scale);
             auto height = static_cast<int>(frame->height * scale);
-            BITMAPINFO info{};
-            info.bmiHeader = {sizeof(BITMAPINFOHEADER), frame->width, -frame->height, 1, 32, BI_RGB};
-            StretchDIBits(dc, (area.right - width) / 2, area.top + (area.bottom - area.top - height) / 2,
-                          width, height, 0, 0, frame->width, frame->height, frame->pixels.data(),
-                          &info, DIB_RGB_COLORS, SRCCOPY);
+            drawBgra(dc, *frame, (area.right - width) / 2, area.top + (area.bottom - area.top - height) / 2,
+                     width, height);
         }
         EndPaint(window, &paint);
         return 0;
@@ -465,6 +470,20 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 }
 
 #ifdef LINKO_RW03_CI
+bool waitForFixture(auto predicate) {
+    for (int count = 0; count < 120; ++count) {
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            DispatchMessageW(&message);
+        }
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(40ms);
+    }
+    return false;
+}
+
 #ifdef LINKO_RW04_WGC_CODEC_CI
 WgcFixtureFrame capturedFixtureFrame(Frame const& frame) {
     return {frame.pixels, static_cast<unsigned>(frame.width), static_cast<unsigned>(frame.height)};
@@ -486,19 +505,87 @@ LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     return DefWindowProcW(window, message, wparam, lparam);
 }
 
+bool registerFixture(HINSTANCE instance, wchar_t const* className = L"LinkoRW03Fixture",
+                     WNDPROC proc = fixtureProc) {
+    WNDCLASSW fixtureType{};
+    fixtureType.hInstance = instance;
+    fixtureType.lpfnWndProc = proc;
+    fixtureType.style = CS_HREDRAW | CS_VREDRAW;
+    fixtureType.lpszClassName = className;
+    return RegisterClassW(&fixtureType) != 0;
+}
+
+#ifdef LINKO_RW04_WGC_CODEC_CI
+LRESULT CALLBACK presenterProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        auto dc = BeginPaint(window, &paint);
+        FillRect(dc, &paint.rcPaint, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+        const auto* frame = reinterpret_cast<Frame const*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (frame) {
+            drawBgra(dc, *frame, 0, 0, frame->width, frame->height);
+        }
+        EndPaint(window, &paint);
+        return 0;
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
+int presentFixture(WorkerControl const*) {
+    WorkerRgbaPixels input{};
+    const auto instance = GetModuleHandleW(nullptr);
+    constexpr auto className = L"LinkoPresentationFixture";
+    if (!readWorkerRgba(&input) || !registerFixture(instance, className, presenterProc)) {
+        return 17;
+    }
+    Frame frame{WorkerFrameWidth, WorkerFrameHeight, std::vector<std::byte>(WorkerRgbaBytes)};
+    for (std::size_t offset = 0; offset < frame.pixels.size(); offset += 4) {
+        frame.pixels[offset] = static_cast<std::byte>(input.data[offset + 2]);
+        frame.pixels[offset + 1] = static_cast<std::byte>(input.data[offset + 1]);
+        frame.pixels[offset + 2] = static_cast<std::byte>(input.data[offset]);
+        frame.pixels[offset + 3] = static_cast<std::byte>(input.data[offset + 3]);
+    }
+    const auto window = CreateWindowExW(WS_EX_TOPMOST, className, L"Linko presentation fixture",
+                                       WS_POPUP, 40, 40, WorkerFrameWidth, WorkerFrameHeight,
+                                       nullptr, nullptr, instance, nullptr);
+    if (!window) {
+        return 18;
+    }
+    SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(&frame));
+    ShowWindow(window, SW_SHOWNOACTIVATE);
+    RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+    DWORD process{};
+    const auto thread = GetWindowThreadProcessId(window, &process);
+    Preview preview;
+    preview.start({window, process, thread, title(window)});
+    const bool shown = waitForFixture([&] {
+        auto captured = preview.view().second;
+        if (!captured || captured->width != WorkerFrameWidth || captured->height != WorkerFrameHeight ||
+            captured->pixels.size() != WorkerRgbaBytes) {
+            return false;
+        }
+        auto const* bgra = reinterpret_cast<uint8_t const*>(captured->pixels.data());
+        return matchesWorkerPresentation(bgra, input.data);
+    });
+    DestroyWindow(window);
+    preview.stop();
+    if (!shown) {
+        std::fputs("WGC presenter did not recapture the drawn pixels.\n", stderr);
+        return 19;
+    }
+    std::puts("WGC presenter: recaptured the drawn native window.");
+    return 0;
+}
+#endif
+
 int smoke(HINSTANCE instance, [[maybe_unused]] WorkerControl const* worker = nullptr) {
     if (valid({0, 16}) || valid({4096, 4096}) || !valid({1920, 1080})) {
         return 10;
     }
-    WNDCLASSW fixtureType{};
-    fixtureType.hInstance = instance;
-    fixtureType.lpfnWndProc = fixtureProc;
-    fixtureType.style = CS_HREDRAW | CS_VREDRAW;
-    fixtureType.lpszClassName = L"LinkoRW03Fixture";
-    if (!RegisterClassW(&fixtureType)) {
+    if (!registerFixture(instance)) {
         return 11;
     }
-    auto fixture = CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, L"Linko RW03 fixture",
+    auto fixture = CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko RW03 fixture",
                                     WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 320, 200,
                                     nullptr, nullptr, instance, nullptr);
     if (!fixture) {
@@ -509,21 +596,8 @@ int smoke(HINSTANCE instance, [[maybe_unused]] WorkerControl const* worker = nul
     auto thread = GetWindowThreadProcessId(fixture, &process);
     Preview preview;
     preview.start({fixture, process, thread, title(fixture)});
-    auto wait = [](auto predicate) {
-        for (int count = 0; count < 120; ++count) {
-            MSG message{};
-            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
-                DispatchMessageW(&message);
-            }
-            if (predicate()) {
-                return true;
-            }
-            std::this_thread::sleep_for(40ms);
-        }
-        return false;
-    };
     std::shared_ptr<Frame const> first;
-    if (!wait([&] {
+    if (!waitForFixture([&] {
         first = preview.view().second;
 #ifdef LINKO_RW04_WGC_CODEC_CI
         if (!first || !hasWgcFixtureColor(capturedFixtureFrame(*first), false)) {
@@ -548,7 +622,7 @@ int smoke(HINSTANCE instance, [[maybe_unused]] WorkerControl const* worker = nul
         return 13;
     }
     RedrawWindow(fixture, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-    if (!wait([&] {
+    if (!waitForFixture([&] {
         auto frame = preview.view().second;
 #ifdef LINKO_RW04_WGC_CODEC_CI
         if (!frame || frame->width <= previous || !hasWgcFixtureColor(capturedFixtureFrame(*frame), true)) {
@@ -571,7 +645,7 @@ int smoke(HINSTANCE instance, [[maybe_unused]] WorkerControl const* worker = nul
     markWgcCodecStage("destroying-source");
 #endif
     DestroyWindow(fixture);
-    if (!wait([&] { return preview.view().second == nullptr; })) {
+    if (!waitForFixture([&] { return preview.view().second == nullptr; })) {
         std::fputs("WGC fixture remained visible after close.\n", stderr);
         return 14;
     }
@@ -599,7 +673,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     std::setvbuf(stderr, nullptr, _IONBF, 0);
 #ifdef LINKO_RW04_WGC_CODEC_CI
     const bool exportPixels = argc == 2 && std::strcmp(argv[1], "--worker-pixels") == 0;
-    if (argc != 1 && !exportPixels) {
+    const bool presentPixels = argc == 2 && std::strcmp(argv[1], "--present-pixels") == 0;
+    if (argc != 1 && !exportPixels && !presentPixels) {
         return 2;
     }
     smokeThread = GetCurrentThreadId();
@@ -625,7 +700,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 #ifdef LINKO_RW04_WGC_CODEC_CI
     // The worker validates its start record before creating or capturing the fixture window.
     auto run = [](WorkerControl const* worker) { return smoke(GetModuleHandleW(nullptr), worker); };
-    const int result = exportPixels ? runWgcCodecWorker(run) : run(nullptr);
+    const int result = presentPixels ? runWgcPresenter(presentFixture)
+                    : exportPixels ? runWgcCodecWorker(run) : run(nullptr);
     markWgcCodecStage("closing-shared-mta");
     CoUninitialize();
 #else
