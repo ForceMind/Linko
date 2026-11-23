@@ -455,4 +455,6 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 - [PR #372](https://github.com/ForceMind/Linko/pull/372)，`45e6ffe2baac71f465b7253fa7d3a3c2f8173485`。四面板回归覆盖观看焦点、离屏、授权到期、尺寸更新、关闭和解码槽竞争。原输入票据仍只对原目标有效。[三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45123200722) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45123200689) · [双端原生回归](https://github.com/ForceMind/Linko/actions/runs/45123200688)
 - [PR #373](https://github.com/ForceMind/Linko/pull/373)，`8330e5431475f051f34627234e11eaa3a47f4a89`。单槽预算拒绝在旧工作进程确认退出前启动替换。Windows 与 macOS 的实际编解码进程回收后，新进程取得槽位并正常停止。离线回归验证同一来源旧票据及另一预算池的票据无法释放现有槽位。[Windows](https://github.com/ForceMind/Linko/actions/runs/45125279984/job/137528082503) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45125279984/job/137528082825) · [三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45125279941) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45125280004)
 
-本批验证覆盖协调器和单槽进程交接。完整多面板桌面界面、实际 GPU 预算和跨设备观看待验证。
+- [PR #374](https://github.com/ForceMind/Linko/pull/374)，`f176c05645c409d5a0b15ac46480dd65ba53eaeb`。现有 eframe 工程的离线示例通过三端焦点、离屏、暂停和恢复回归。逐张核对 916×584 和 640×300 的 Linux 原生窗口截图。紧凑窗口按 4 后完整显示底部两张卡片，第四面板获得全画质分配。[截图](https://github.com/ForceMind/Linko/actions/runs/45128907777/artifacts/14797650518) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45128907777) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45128907770)
+
+本批验证覆盖协调器、单槽进程交接和离线面板操作。实际多路媒体呈现、GPU 预算和跨设备观看待验证。
