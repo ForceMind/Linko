@@ -6,7 +6,13 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
+
+struct WorkerControl;
+#ifdef LINKO_RW04_SCK_CODEC_CI
+#include "../system-codec-probe/macos_fixture.h"
+#endif
 
 static const size_t MaxWidth = 1920;
 static const size_t MaxHeight = 1080;
@@ -430,10 +436,43 @@ static BOOL waitFor(BOOL (^predicate)(void)) {
     return NO;
 }
 
-static int checkNativeCapture(void) {
+#ifdef LINKO_RW04_SCK_CODEC_CI
+static BOOL copyFixtureCrop(NSImage *image, struct SckWindowFrame *frame, BOOL resized) {
+    CGImageRef full = [image CGImageForProposedRect:NULL context:nil hints:nil];
+    if (!full || CGImageGetWidth(full) < WorkerFrameWidth || CGImageGetHeight(full) < WorkerFrameHeight) {
+        return NO;
+    }
+    const size_t x = (CGImageGetWidth(full) - WorkerFrameWidth) / 2;
+    const size_t y = (CGImageGetHeight(full) - WorkerFrameHeight) / 2;
+    CGImageRef crop = CGImageCreateWithImageInRect(
+        full, CGRectMake((CGFloat)x, (CGFloat)y, WorkerFrameWidth, WorkerFrameHeight));
+    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGContextRef context = color && crop
+        ? CGBitmapContextCreate(frame->bgra, WorkerFrameWidth, WorkerFrameHeight, 8, WorkerFrameWidth * 4,
+                                color, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst)
+        : NULL;
+    const BOOL copied = context != NULL;
+    if (context) {
+        CGContextSetBlendMode(context, kCGBlendModeCopy);
+        CGContextDrawImage(context, CGRectMake(0, 0, WorkerFrameWidth, WorkerFrameHeight), crop);
+        CGContextRelease(context);
+    }
+    if (color) {
+        CGColorSpaceRelease(color);
+    }
+    if (crop) {
+        CGImageRelease(crop);
+    }
+    const uint8_t *center = frame->bgra + 4 * (WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2);
+    return copied && abs(center[0] - (resized ? 190 : 70)) <= 16 &&
+           abs(center[1] - (resized ? 70 : 30)) <= 16 && abs(center[2] - (resized ? 30 : 190)) <= 16;
+}
+#endif
+
+static int checkNativeCapture(struct WorkerControl const *worker) {
     if (!CGPreflightScreenCaptureAccess()) {
         puts("macOS hosted permission unavailable; native capture was not exercised.");
-        return 0;
+        return worker ? 5 : 0;
     }
     [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
     [NSApp finishLaunching];
@@ -447,6 +486,18 @@ static int checkNativeCapture(void) {
     fixture.title = @"Linko RW03 fixture";
     fixture.backgroundColor = NSColor.systemRedColor;
     fixture.contentView = [NSTextField labelWithString:@"RW03"];
+#ifdef LINKO_RW04_SCK_CODEC_CI
+    struct SckWindowFrame frames[WorkerFrameCount] = {0};
+    struct SckWindowFrame *first = &frames[0];
+    struct SckWindowFrame *resized = &frames[1];
+    if (worker) {
+        NSView *colorView = [[NSView alloc] initWithFrame:fixture.contentView.bounds];
+        colorView.wantsLayer = YES;
+        colorView.layer.backgroundColor =
+            [NSColor colorWithSRGBRed:190.0 / 255 green:30.0 / 255 blue:70.0 / 255 alpha:1].CGColor;
+        fixture.contentView = colorView;
+    }
+#endif
     [fixture makeKeyAndOrderFront:nil];
     [fixture orderFrontRegardless];
     [fixture displayIfNeeded];
@@ -480,14 +531,37 @@ static int checkNativeCapture(void) {
         return 5;
     }
     [preview beginCapture:source];
-    if (!waitFor(^BOOL { return preview.displayedFrame != nil; })) {
+    if (!waitFor(^BOOL {
+#ifdef LINKO_RW04_SCK_CODEC_CI
+        if (worker) {
+            return copyFixtureCrop(preview.displayedFrame, first, NO);
+        }
+#endif
+        return preview.displayedFrame != nil;
+    })) {
         fputs("macOS ScreenCaptureKit fixture did not deliver a viewable frame.\n", stderr);
         return 6;
     }
     CGFloat width = preview.displayedFrame.size.width;
     [fixture setContentSize:NSMakeSize(350, 230)];
+#ifdef LINKO_RW04_SCK_CODEC_CI
+    if (worker) {
+        fixture.contentView.layer.backgroundColor =
+            [NSColor colorWithSRGBRed:30.0 / 255 green:70.0 / 255 blue:190.0 / 255 alpha:1].CGColor;
+    }
+#endif
     [fixture displayIfNeeded];
-    if (!waitFor(^BOOL { return preview.displayedFrame.size.width > width; })) {
+    if (!waitFor(^BOOL {
+        if (preview.displayedFrame.size.width <= width) {
+            return NO;
+        }
+#ifdef LINKO_RW04_SCK_CODEC_CI
+        if (worker) {
+            return copyFixtureCrop(preview.displayedFrame, resized, YES);
+        }
+#endif
+        return YES;
+    })) {
         fputs("macOS ScreenCaptureKit fixture did not deliver the resized frame.\n", stderr);
         return 7;
     }
@@ -498,9 +572,30 @@ static int checkNativeCapture(void) {
         return 8;
     }
     puts("ScreenCaptureKit fixture start, resize and source close passed.");
+#ifdef LINKO_RW04_SCK_CODEC_CI
+    if (worker) {
+        return encodeSckWindowFrames(worker, frames) ? 0 : 9;
+    }
+#endif
     return 0;
 }
 
+#ifdef LINKO_RW04_SCK_CODEC_CI
+static bool runSckWorker(struct WorkerControl const *worker, void *context) {
+    (void)context;
+    return checkNativeCapture(worker) == 0;
+}
+
+int main(int argc, char **argv) {
+    @autoreleasepool {
+        if (argc != 2 || strcmp(argv[1], "--worker-pixels") != 0) {
+            return 2;
+        }
+        setvbuf(stdout, NULL, _IONBF, 0);
+        return withMacWorkerControl(runSckWorker, NULL) ? 0 : 1;
+    }
+}
+#else
 int main(void) {
     @autoreleasepool {
         CaptureOutput *output = [CaptureOutput new];
@@ -525,9 +620,10 @@ int main(void) {
         }
         printf("macOS frame expiry, stop and source identity checks passed; TCC preflight: %s\n",
                CGPreflightScreenCaptureAccess() ? "allowed" : "unavailable");
-        return checkNativeCapture();
+        return checkNativeCapture(NULL);
     }
 }
+#endif
 #else
 int main(void) {
     @autoreleasepool {

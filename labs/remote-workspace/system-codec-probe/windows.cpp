@@ -509,29 +509,7 @@ std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame) {
     auto const* bgra = reinterpret_cast<BYTE const*>(frame.bgra.data());
 
     std::vector<BYTE> nv12(crop.nv12Bytes());
-    for (unsigned y = 0; y < crop.height; y += 2) {
-        for (unsigned x = 0; x < crop.width; x += 2) {
-            int u = 0;
-            int v = 0;
-            for (unsigned dy = 0; dy < 2; ++dy) {
-                for (unsigned dx = 0; dx < 2; ++dx) {
-                    auto const* pixel = bgra + rowBytes * (top + y + dy) + 4 * (left + x + dx);
-                    const int blue = pixel[0];
-                    const int green = pixel[1];
-                    const int red = pixel[2];
-                    // Limited-range BT.601 luma and 2-by-2 averaged chroma for the fixture.
-                    nv12[(y + dy) * crop.width + x + dx] =
-                        static_cast<BYTE>((66 * red + 129 * green + 25 * blue + 128) / 256 + 16);
-                    u += 112 * blue - 74 * green - 38 * red;
-                    v += 112 * red - 94 * green - 18 * blue;
-                }
-            }
-            const auto chroma = crop.lumaBytes() + (y / 2) * crop.width + x;
-            constexpr int chromaBias = 128 * 1024 + 512;
-            nv12[chroma] = static_cast<BYTE>((u + chromaBias) / 1024);
-            nv12[chroma + 1] = static_cast<BYTE>((v + chromaBias) / 1024);
-        }
-    }
+    workerBgraToNv12(bgra + rowBytes * top + 4 * left, rowBytes, nv12.data());
     return nv12;
 }
 #endif
