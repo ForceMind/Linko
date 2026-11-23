@@ -53,13 +53,15 @@ std::span<BYTE const> capturedSample(CapturedSamples const* samples, UINT32 inde
 }
 
 struct Timing {
-    explicit Timing(UINT32 frames) {
+    explicit Timing(UINT32 frames, bool exportPixels)
+        : exported(exportPixels ? std::make_unique<WorkerFramePixels[]>(WorkerFrameCount) : nullptr) {
         submitted.reserve(frames);
         decodedMs.reserve(frames);
     }
 
     std::vector<Clock::time_point> submitted;
     std::vector<double> decodedMs;
+    std::unique_ptr<WorkerFramePixels[]> exported;
 
     void report() {
         std::sort(decodedMs.begin(), decodedMs.end());
@@ -221,7 +223,7 @@ MFVideoArea displayArea(IMFMediaType* layout, UINT32 width, UINT32 height) {
 }
 
 void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const& fixture, UINT32 index,
-                        std::span<BYTE const> captured) {
+                        std::span<BYTE const> captured, WorkerFramePixels* exported) {
     check(sample && index < fixture.frames ? S_OK : E_UNEXPECTED, "check decoded sample count");
     DWORD length{};
     check(sample->GetTotalLength(&length), "read decoded NV12 length");
@@ -269,7 +271,17 @@ void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const&
             std::abs(pixels[decodedOffset] - captured[inputOffset]) <= 8 &&
             std::abs(pixels[decodedOffset + 1] - captured[inputOffset + 1]) <= 8;
     }
+    bool copied = true;
+    if (exported) {
+        const auto stride = MFGetAttributeUINT32(layout.Get(), MF_MT_DEFAULT_STRIDE, decodedWidth);
+        const auto uvStart = static_cast<UINT64>(stride) * decodedHeight;
+        const auto uvBytes = static_cast<UINT64>(stride) * (WorkerFrameHeight / 2 - 1) + WorkerFrameWidth;
+        copied = fixture.width == WorkerFrameWidth && fixture.height == WorkerFrameHeight &&
+                 uvStart <= currentLength && uvBytes <= currentLength - uvStart &&
+                 copyWorkerNv12(exported, pixels, stride, pixels + uvStart, stride);
+    }
     check(buffer->Unlock(), "unlock decoded buffer");
+    check(copied ? S_OK : E_UNEXPECTED, "copy the bounded decoded NV12 frame");
     if (timestamp != frameDuration * (index + 1) ||
         std::abs(brightness - expectedBrightness) > 6 || !chromaMatches ||
         (fixture.striped && std::abs(stripe - (232 - fixtureLuma(index))) > 6)) {
@@ -296,7 +308,8 @@ void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& ti
         const auto index = timing.decodedMs.size();
         check(index < timing.submitted.size() ? S_OK : E_UNEXPECTED, "check sample had been submitted");
         const auto frame = static_cast<UINT32>(index);
-        verifyDecodedFrame(decoder, decoded.sample.Get(), fixture, frame, capturedSample(samples, frame));
+        auto* exported = timing.exported && frame < WorkerFrameCount ? &timing.exported[frame] : nullptr;
+        verifyDecodedFrame(decoder, decoded.sample.Get(), fixture, frame, capturedSample(samples, frame), exported);
         timing.decodedMs.push_back(std::chrono::duration<double, std::milli>(received - timing.submitted[index]).count());
     }
 }
@@ -331,7 +344,7 @@ void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fix
 }
 
 int probe(Fixture const& fixture, LatencyMode mode, char const* modeName,
-          CapturedSamples const* samples = nullptr, WorkerControl const* worker = nullptr) {
+          CapturedSamples const* samples = nullptr, WorkerControl const* worker = nullptr, bool exportPixels = false) {
     stage("creating-encoder");
     ComPtr<IMFTransform> encoder;
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
@@ -369,7 +382,7 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName,
     ComPtr<IMFTransform> decoder;
     UINT32 encodedCount{};
     UINT32 maxBacklog{};
-    Timing timing(fixture.frames);
+    Timing timing(fixture.frames, exportPixels);
     const auto started = Clock::now();
     for (UINT32 index = 0; index < fixture.frames; ++index) {
         stage("allocating-encoder-input");
@@ -411,7 +424,11 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName,
                 static_cast<double>(decodedCount) / elapsed);
     timing.report();
     if (worker) {
-        const bool stopped = waitForWorkerStop(worker);
+        bool sent = true;
+        for (unsigned char index = 0; timing.exported && index < WorkerFrameCount && sent; ++index) {
+            sent = sendWorkerFrame(worker, &timing.exported[index], static_cast<unsigned char>(index + 2));
+        }
+        const bool stopped = sent && waitForWorkerStop(worker);
         check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish worker encoder");
         check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish worker decoder");
         if (!stopped) {
@@ -523,7 +540,7 @@ int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
 }
 #else
 namespace {
-int runWorker(BYTE luma) {
+int runWorker(BYTE luma, bool exportPixels) {
     const int eventsFd = _dup(_fileno(stdout));
     if (eventsFd < 0) {
         std::perror("duplicate worker event pipe");
@@ -545,10 +562,14 @@ int runWorker(BYTE luma) {
     if (!readWorkerMessage(&control, WorkerStart, &control.generation)) {
         return 1;
     }
-    std::vector<BYTE> pixels(smallFixture.nv12Bytes(), BYTE{128});
-    std::fill_n(pixels.begin(), smallFixture.lumaBytes(), luma);
-    const CapturedSamples samples{pixels, pixels};
     const int result = withMediaFoundation([&] {
+        if (exportPixels) {
+            constexpr Fixture striped{WorkerFrameWidth, WorkerFrameHeight, 24, 200'000, true};
+            return probe(striped, LatencyMode::EncoderAndDecoder, "worker pixels", nullptr, &control, true);
+        }
+        std::vector<BYTE> pixels(smallFixture.nv12Bytes(), BYTE{128});
+        std::fill_n(pixels.begin(), smallFixture.lumaBytes(), luma);
+        const CapturedSamples samples{pixels, pixels};
         return probe(smallFixture, LatencyMode::EncoderAndDecoder, "worker fixture", &samples, &control);
     });
     if (result != 0) {
@@ -565,7 +586,10 @@ int main(int argc, char** argv) {
         if (end == argv[2] || *end || luma < 16 || luma > 220 || luma % 2) {
             return 2;
         }
-        return runWorker(static_cast<BYTE>(luma));
+        return runWorker(static_cast<BYTE>(luma), false);
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--worker-pixels") == 0) {
+        return runWorker(0, true);
     }
     if (argc != 1) {
         return 2;

@@ -2,7 +2,7 @@
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -25,6 +25,7 @@ const WORKER_READY: u8 = 2;
 const WORKER_STOP: u8 = 3;
 #[cfg(windows)]
 const WORKER_STOPPED: u8 = 4;
+const WORKER_FRAME: u8 = 5;
 // Include LF and Ctrl-Z so the Windows test also checks binary pipe mode.
 const WORKER_GENERATION: u64 = 0x0102_0a04_051a_0708;
 const MEDIA_TRACK: MediaTrack = MediaTrack {
@@ -35,10 +36,17 @@ const MEDIA_TRACK: MediaTrack = MediaTrack {
 
 type SimulationResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-const PIXELS: PixelSize = PixelSize {
+const FIXTURE_PIXELS: PixelSize = PixelSize {
     width: 2,
     height: 2,
 };
+const NATIVE_PIXELS: PixelSize = PixelSize {
+    width: 128,
+    height: 96,
+};
+const NATIVE_WIDTH: usize = NATIVE_PIXELS.width as usize;
+const NATIVE_HEIGHT: usize = NATIVE_PIXELS.height as usize;
+const NV12_BYTES: usize = NATIVE_WIDTH * NATIVE_HEIGHT * 3 / 2;
 const BOUNDS: Rect = Rect {
     x: 0.0,
     y: 0.0,
@@ -69,18 +77,24 @@ impl CoordinatedWorker {
         Ok(worker)
     }
 
-    fn start_codec(binary: &Path, binding: Binding, generation: u64) -> io::Result<Self> {
+    fn start_codec(
+        binary: &Path,
+        binding: Binding,
+        generation: u64,
+    ) -> io::Result<(Self, [Vec<u8>; 2])> {
         // The Actions launcher provides the path to its freshly built fixture.
         let mut command = Command::new(binary);
-        command.args(["--worker-fixture", "80"]);
+        command.arg("--worker-pixels");
         let mut worker = Self::spawn(command, binding)?;
         worker.send_command(WORKER_START, generation)?;
-        worker.expect_event(
-            worker_record(WORKER_READY, generation),
-            Duration::from_secs(90),
-        )?;
-        println!("Native worker: verified codec READY for this generation.");
-        Ok(worker)
+        let frames = worker.read_event(Duration::from_secs(90), move |stdout| {
+            let first = read_worker_frame(stdout, generation, 2)?;
+            let second = read_worker_frame(stdout, generation, 3)?;
+            expect_record(stdout, worker_record(WORKER_READY, generation))?;
+            Ok([first, second])
+        })?;
+        println!("Native worker: verified two decoded frames and codec READY.");
+        Ok((worker, frames))
     }
 
     fn send_command(&mut self, kind: u8, generation: u64) -> io::Result<()> {
@@ -94,20 +108,24 @@ impl CoordinatedWorker {
         expected: [u8; N],
         timeout: Duration,
     ) -> io::Result<()> {
+        self.read_event(timeout, move |stdout| expect_record(stdout, expected))
+    }
+
+    fn read_event<T: Send + 'static>(
+        &mut self,
+        timeout: Duration,
+        read: impl FnOnce(&mut ChildStdout) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
         let mut stdout = self.process.stdout.take().expect("worker stdout is piped");
         let (send, receive) = mpsc::sync_channel(1);
         let reader = thread::spawn(move || {
-            let mut event = [0; N];
-            let result = stdout.read_exact(&mut event).map(|()| event);
+            let result = read(&mut stdout);
             let _ = send.send((stdout, result));
         });
         let (stdout, result) = receive.recv_timeout(timeout).map_err(io::Error::other)?;
         reader.join().expect("worker stdout reader panicked");
         self.process.stdout = Some(stdout);
-        if result? != expected {
-            return Err(io::Error::other("mismatched worker readiness event"));
-        }
-        Ok(())
+        result
     }
 
     fn poll_exit(
@@ -163,6 +181,69 @@ fn worker_record(kind: u8, generation: u64) -> [u8; 16] {
     record
 }
 
+fn invalid_worker_data(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+fn expect_record<const N: usize>(stdout: &mut impl Read, expected: [u8; N]) -> io::Result<()> {
+    let mut event = [0; N];
+    stdout.read_exact(&mut event)?;
+    if event != expected {
+        return Err(invalid_worker_data("unexpected worker event"));
+    }
+    Ok(())
+}
+
+fn read_worker_frame(
+    stdout: &mut impl Read,
+    generation: u64,
+    sequence: u32,
+) -> io::Result<Vec<u8>> {
+    expect_record(stdout, worker_record(WORKER_FRAME, generation))?;
+    let mut header = [0; 12];
+    stdout.read_exact(&mut header)?;
+    if header[..4] != sequence.to_be_bytes()
+        || header[4..6] != (NATIVE_WIDTH as u16).to_be_bytes()
+        || header[6..8] != (NATIVE_HEIGHT as u16).to_be_bytes()
+        || header[8..] != (NV12_BYTES as u32).to_be_bytes()
+    {
+        return Err(invalid_worker_data("invalid decoded frame header"));
+    }
+    let mut nv12 = vec![0; NV12_BYTES];
+    stdout.read_exact(&mut nv12)?;
+
+    let expected = if sequence == 2 { 24 } else { 32 };
+    let middle_row = NATIVE_HEIGHT / 2 * NATIVE_WIDTH;
+    let left = i32::from(nv12[middle_row + NATIVE_WIDTH / 2]);
+    let right = i32::from(nv12[middle_row + NATIVE_WIDTH * 7 / 8]);
+    if (left - expected).abs() > 6 || (right - (232 - expected)).abs() > 6 {
+        return Err(invalid_worker_data("unexpected decoded fixture pixels"));
+    }
+    Ok(nv12_rgba(&nv12))
+}
+
+// The bounded SDR fixture uses the limited-range BT.601 matrix.
+fn nv12_rgba(nv12: &[u8]) -> Vec<u8> {
+    let (luma, chroma) = nv12.split_at(NATIVE_WIDTH * NATIVE_HEIGHT);
+    let mut rgba = Vec::with_capacity(luma.len() * 4);
+    let channel = |value: i32| ((value + 128) >> 8).clamp(0, 255) as u8;
+    for (index, &y) in luma.iter().enumerate() {
+        let row = index / NATIVE_WIDTH;
+        let column = index % NATIVE_WIDTH;
+        let uv = row / 2 * NATIVE_WIDTH + (column & !1);
+        let c = 298 * (i32::from(y) - 16);
+        let d = i32::from(chroma[uv]) - 128;
+        let e = i32::from(chroma[uv + 1]) - 128;
+        rgba.extend_from_slice(&[
+            channel(c + 409 * e),
+            channel(c - 100 * d - 208 * e),
+            channel(c + 516 * d),
+            255,
+        ]);
+    }
+    rgba
+}
+
 fn run_child() -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     stdout.write_all(&[FIXTURE_READY])?;
@@ -173,7 +254,12 @@ fn run_child() -> io::Result<()> {
     Ok(())
 }
 
-fn register(c: &mut Coordinator, binding: Binding, object: u64) -> Result<ViewId, Error> {
+fn register(
+    c: &mut Coordinator,
+    binding: Binding,
+    object: u64,
+    pixels: PixelSize,
+) -> Result<ViewId, Error> {
     let view = c.register(
         SurfaceSpec {
             key: SurfaceKey {
@@ -183,7 +269,7 @@ fn register(c: &mut Coordinator, binding: Binding, object: u64) -> Result<ViewId
             },
             kind: SurfaceKind::Window,
             geometry: SourceGeometry {
-                pixels: PIXELS,
+                pixels,
                 logical: BOUNDS,
                 rotation: Rotation::None,
                 revision: 1,
@@ -200,8 +286,15 @@ fn register(c: &mut Coordinator, binding: Binding, object: u64) -> Result<ViewId
     Ok(view)
 }
 
-fn queue(c: &mut Coordinator, view: ViewId, sequence: u64, now: u64) -> Result<(), Error> {
-    let frame = RawFrame::new(c.frame_stamp(view, sequence)?, PIXELS, vec![0; 16])?;
+fn queue(
+    c: &mut Coordinator,
+    view: ViewId,
+    sequence: u64,
+    now: u64,
+    pixels: PixelSize,
+) -> Result<(), Error> {
+    let bytes = usize::try_from(pixels.rgba_bytes()?).map_err(|_| Error::Capacity)?;
+    let frame = RawFrame::new(c.frame_stamp(view, sequence)?, pixels, vec![0; bytes])?;
     c.receive(view, frame, now)?;
     Ok(())
 }
@@ -210,21 +303,18 @@ fn match_frame(
     c: &Coordinator,
     view: ViewId,
     matcher: &mut FrameMatcher,
-    sequence: u32,
+    frame: &RawFrame,
     now: u64,
-) -> Result<(RawFrame, FrameMatch), Error> {
+) -> Result<FrameMatch, Error> {
     let gate = c.view_gate(view)?;
     let media = MediaFrame {
         track: MEDIA_TRACK,
-        timestamp: sequence,
+        timestamp: u32::try_from(frame.sequence()).map_err(|_| Error::InvalidSequence)?,
     };
-    let stamp = gate.frame_stamp(u64::from(sequence));
     assert!(matcher.decoded(gate, media, now)?.is_none());
-    let matched = matcher
-        .describe(gate, media, stamp, now)?
-        .ok_or(Error::StaleFrame)?;
-    let frame = RawFrame::new(stamp, PIXELS, vec![0; 16])?;
-    Ok((frame, matched))
+    matcher
+        .describe(gate, media, frame.stamp(), now)?
+        .ok_or(Error::StaleFrame)
 }
 
 fn main() -> SimulationResult<()> {
@@ -246,6 +336,11 @@ fn main() -> SimulationResult<()> {
         }
     };
 
+    let size = if codec.is_some() {
+        NATIVE_PIXELS
+    } else {
+        FIXTURE_PIXELS
+    };
     let binding = Binding {
         source: [1; 32],
         viewer: [2; 32],
@@ -256,11 +351,11 @@ fn main() -> SimulationResult<()> {
         ..binding
     };
     let mut c = Coordinator::new(binding.viewer, 3)?;
-    let first = register(&mut c, binding, 1)?;
-    let second = register(&mut c, binding, 2)?;
-    let survivor = register(&mut c, independent, 1)?;
+    let first = register(&mut c, binding, 1, size)?;
+    let second = register(&mut c, binding, 2, FIXTURE_PIXELS)?;
+    let survivor = register(&mut c, independent, 1, FIXTURE_PIXELS)?;
     c.grant_control(first, ControlScope::WholeDesktop, 0, 10_000)?;
-    queue(&mut c, first, 1, 0)?;
+    queue(&mut c, first, 1, 0, size)?;
     let initial = c.take_for_present(first, 0)?.ok_or(Error::StaleFrame)?;
     c.acknowledge_presentation(initial.ticket, 0)?;
     c.focus(first, 0)?;
@@ -269,19 +364,33 @@ fn main() -> SimulationResult<()> {
     c.destination_ready(handoff, 0)?;
     c.acknowledge_hidden(handoff, 0)?;
 
-    let mut matcher = FrameMatcher::new(c.view_gate(first)?, MEDIA_TRACK, 0, 0)?;
-    let (frame, matched) = match_frame(&c, first, &mut matcher, 2, 1)?;
-    c.receive_matched(first, frame, matched, 1)?;
-    let waiting = c.take_for_present(first, 1)?.ok_or(Error::StaleFrame)?;
-    let (late_frame, late_match) = match_frame(&c, first, &mut matcher, 3, 1)?;
-    queue(&mut c, second, 1, 1)?;
-    queue(&mut c, survivor, 1, 1)?;
-    let mut worker = match codec.as_deref() {
+    let (mut worker, [pixels, late_pixels]) = match codec.as_deref() {
         Some(binary) => {
             CoordinatedWorker::start_codec(Path::new(binary), binding, WORKER_GENERATION)?
         }
-        None => CoordinatedWorker::start_fixture(binding)?,
+        None => (
+            CoordinatedWorker::start_fixture(binding)?,
+            [vec![0; 16], vec![0; 16]],
+        ),
     };
+    let mut matcher = FrameMatcher::new(c.view_gate(first)?, MEDIA_TRACK, 0, 0)?;
+    let frame = RawFrame::new(c.frame_stamp(first, 2)?, size, pixels)?;
+    let matched = match_frame(&c, first, &mut matcher, &frame, 1)?;
+    c.receive_matched(first, frame, matched, 1)?;
+    let waiting = c.take_for_present(first, 1)?.ok_or(Error::StaleFrame)?;
+    if codec.is_some() {
+        let middle = NATIVE_HEIGHT / 2 * NATIVE_WIDTH;
+        let dark = (middle + NATIVE_WIDTH / 2) * 4;
+        let bright = (middle + NATIVE_WIDTH * 7 / 8) * 4;
+        let rgba = waiting.frame.pixels();
+        assert!(rgba[dark] < 32 && rgba[bright] > 175);
+        assert_eq!(rgba[bright + 3], 255);
+        println!("Native worker: coordinator returned a decoded 128x96 frame.");
+    }
+    let late_frame = RawFrame::new(c.frame_stamp(first, 3)?, size, late_pixels)?;
+    let late_match = match_frame(&c, first, &mut matcher, &late_frame, 1)?;
+    queue(&mut c, second, 1, 1, FIXTURE_PIXELS)?;
+    queue(&mut c, survivor, 1, 1, FIXTURE_PIXELS)?;
     assert!(worker.poll_exit(&mut c, 1)?.is_none());
     assert!(c.snapshot(first, 1)?.presentation_pending);
     assert!(c.snapshot(second, 1)?.frame_queued);
@@ -319,7 +428,8 @@ fn main() -> SimulationResult<()> {
             ..binding
         };
         let generation = WORKER_GENERATION + 1;
-        let mut next = CoordinatedWorker::start_codec(Path::new(binary), replacement, generation)?;
+        let (mut next, _) =
+            CoordinatedWorker::start_codec(Path::new(binary), replacement, generation)?;
         next.send_command(WORKER_STOP, generation)?;
         next.expect_event(
             worker_record(WORKER_STOPPED, generation),
@@ -332,4 +442,29 @@ fn main() -> SimulationResult<()> {
         println!("Native worker: verified Windows replacement and clean STOPPED.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_wrong_generation_oversize_and_truncation() {
+        let mut packet = worker_record(WORKER_FRAME, WORKER_GENERATION).to_vec();
+        packet.extend_from_slice(&2_u32.to_be_bytes());
+        packet.extend_from_slice(&(NATIVE_WIDTH as u16).to_be_bytes());
+        packet.extend_from_slice(&(NATIVE_HEIGHT as u16).to_be_bytes());
+        packet.extend_from_slice(&(NV12_BYTES as u32).to_be_bytes());
+
+        let wrong_generation = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION + 1, 2);
+        assert_eq!(
+            wrong_generation.unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let truncated = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION, 2);
+        assert_eq!(truncated.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
+        packet[24] = 0xff;
+        let oversized = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION, 2);
+        assert_eq!(oversized.unwrap_err().kind(), io::ErrorKind::InvalidData);
+    }
 }

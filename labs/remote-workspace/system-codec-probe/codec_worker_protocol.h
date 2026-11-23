@@ -7,8 +7,14 @@
 #include <string.h>
 
 // Fixed records on the child process's inherited control pipes.
-enum WorkerMessage { WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped };
+enum WorkerMessage { WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame };
 enum { WorkerVersion = 1, WorkerMessageSize = 16, WorkerGenerationOffset = 8 };
+enum { WorkerFrameWidth = 128, WorkerFrameHeight = 96, WorkerFrameCount = 2 };
+enum { WorkerFrameBytes = WorkerFrameWidth * WorkerFrameHeight * 3 / 2 };
+
+struct WorkerFramePixels {
+    uint8_t data[WorkerFrameBytes];
+};
 
 struct WorkerControl {
     FILE *events;
@@ -47,6 +53,34 @@ static inline bool sendWorkerMessage(struct WorkerControl const *control, enum W
         generation >>= 8;
     }
     return fwrite(message, 1, sizeof(message), control->events) == sizeof(message) &&
+           fflush(control->events) == 0;
+}
+
+// Callers check the native plane heights and readable buffer extents first.
+static inline bool copyWorkerNv12(struct WorkerFramePixels *frame, uint8_t const *y, size_t yStride,
+                                 uint8_t const *uv, size_t uvStride) {
+    if (!y || !uv || yStride < WorkerFrameWidth || uvStride < WorkerFrameWidth) {
+        return false;
+    }
+    for (size_t row = 0; row < WorkerFrameHeight; ++row) {
+        memcpy(frame->data + row * WorkerFrameWidth, y + row * yStride, WorkerFrameWidth);
+    }
+    uint8_t *chroma = frame->data + WorkerFrameWidth * WorkerFrameHeight;
+    for (size_t row = 0; row < WorkerFrameHeight / 2; ++row) {
+        memcpy(chroma + row * WorkerFrameWidth, uv + row * uvStride, WorkerFrameWidth);
+    }
+    return true;
+}
+
+static inline bool sendWorkerFrame(struct WorkerControl const *control,
+                                   struct WorkerFramePixels const *frame, unsigned char sequence) {
+    const uint8_t geometry[12] = {
+        0, 0, 0, sequence, 0, WorkerFrameWidth, 0, WorkerFrameHeight,
+        0, 0, WorkerFrameBytes >> 8, WorkerFrameBytes & 0xff,
+    };
+    return sendWorkerMessage(control, WorkerFrame) &&
+           fwrite(geometry, 1, sizeof(geometry), control->events) == sizeof(geometry) &&
+           fwrite(frame->data, 1, sizeof(frame->data), control->events) == sizeof(frame->data) &&
            fflush(control->events) == 0;
 }
 

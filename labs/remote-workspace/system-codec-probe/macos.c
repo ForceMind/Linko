@@ -28,6 +28,8 @@ struct Probe {
     CVPixelBufferRef fixedInput;
     int workerLuma;
     struct WorkerControl const *worker;
+    bool exportPixels;
+    _Atomic(CVPixelBufferRef) exported[WorkerFrameCount];
     CFStringRef softwareEncoder;
     _Atomic(CMSampleBufferRef) encoded[MaxFrames];
     _Atomic bool encodedOnce[MaxFrames];
@@ -136,7 +138,32 @@ static void decodedOutput(void *state, void *source, OSStatus status, VTDecodeIn
     if (status != noErr || (flags & kVTDecodeInfo_FrameDropped) || index < 0 ||
         !matchesFixture(frame, probe, (unsigned)index) || atomic_exchange(&probe->decodedAt[index], received)) {
         atomic_store(&probe->callbackError, status == noErr ? -3 : status);
+    } else if (probe->exportPixels && index < WorkerFrameCount) {
+        atomic_store(&probe->exported[index], CVPixelBufferRetain(frame));
     }
+}
+
+static bool sendDecodedPixels(struct Probe *probe) {
+    for (unsigned index = 0; index < WorkerFrameCount; ++index) {
+        CVPixelBufferRef pixels = atomic_load(&probe->exported[index]);
+        if (!pixels || CVPixelBufferGetPlaneCount(pixels) != 2 ||
+            CVPixelBufferGetHeightOfPlane(pixels, 0) < WorkerFrameHeight ||
+            CVPixelBufferGetHeightOfPlane(pixels, 1) < WorkerFrameHeight / 2 ||
+            CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != noErr) {
+            return false;
+        }
+        struct WorkerFramePixels packed;
+        const bool copied =
+            copyWorkerNv12(&packed, CVPixelBufferGetBaseAddressOfPlane(pixels, 0),
+                           CVPixelBufferGetBytesPerRowOfPlane(pixels, 0),
+                           CVPixelBufferGetBaseAddressOfPlane(pixels, 1),
+                           CVPixelBufferGetBytesPerRowOfPlane(pixels, 1));
+        const OSStatus unlock = CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
+        if (!copied || unlock != noErr || !sendWorkerFrame(probe->worker, &packed, (unsigned char)(index + 2))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static OSStatus startDecoder(struct Probe *probe, CMFormatDescriptionRef type,
@@ -330,13 +357,13 @@ static bool runProbe(struct Probe *probe, bool paced, bool verbose) {
     bool modesKnown = strcmp(encodeMode, "unknown") != 0;
     if (probe->softwareEncoder) {
         modesKnown = strcmp(encodeMode, "software") == 0;
-    } else if (probe->fixedInput) {
+    } else if (probe->fixedInput || probe->exportPixels) {
         modesKnown = strcmp(encodeMode, "hardware") == 0 && strcmp(decodeMode, "hardware") == 0;
     }
     bool passed = status == noErr && atomic_load(&probe->callbackError) == noErr && modesKnown &&
                   report(probe, paced, beforeDrain, delivered, elapsed, verbose);
     if (passed && probe->worker) {
-        passed = waitForWorkerStop(probe->worker);
+        passed = (!probe->exportPixels || sendDecodedPixels(probe)) && waitForWorkerStop(probe->worker);
     }
     if (decoder) {
         VTDecompressionSessionInvalidate(decoder);
@@ -344,6 +371,12 @@ static bool runProbe(struct Probe *probe, bool paced, bool verbose) {
     }
     VTCompressionSessionInvalidate(encoder);
     CFRelease(encoder);
+    for (unsigned index = 0; index < WorkerFrameCount; ++index) {
+        CVPixelBufferRef pixels = atomic_load(&probe->exported[index]);
+        if (pixels) {
+            CVPixelBufferRelease(pixels);
+        }
+    }
     for (unsigned index = delivered; index < probe->frames; ++index) {
         CMSampleBufferRef unused = atomic_exchange(&probe->encoded[index], NULL);
         if (unused) {
@@ -614,7 +647,12 @@ static bool checkSoftware(void) {
     return passed;
 }
 
-static bool checkWorker(int luma, struct WorkerControl const *control) {
+static bool checkWorker(int luma, struct WorkerControl const *control, bool exportPixels) {
+    if (exportPixels) {
+        struct Probe probe = {.width = WorkerFrameWidth, .height = WorkerFrameHeight, .frames = MemoryFrames,
+                              .worker = control, .exportPixels = true};
+        return runProbe(&probe, true, true) && sendWorkerMessage(control, WorkerStopped);
+    }
     if (!sampleMemory(0) || !checkMemory(350, 262, EncodeStage, kCVPixelFormatType_32BGRA, "worker", NULL)) {
         return false;
     }
@@ -630,7 +668,7 @@ static bool checkWorker(int luma, struct WorkerControl const *control) {
     return passed && sendWorkerMessage(control, WorkerStopped);
 }
 
-static bool runWorker(int luma) {
+static bool runWorker(int luma, bool exportPixels) {
     // Preserve the inherited stdout pipe for protocol records. Keep diagnostics on stderr.
     const int eventsFd = dup(STDOUT_FILENO);
     if (eventsFd < 0) {
@@ -649,7 +687,8 @@ static bool runWorker(int luma) {
         return false;
     }
     struct WorkerControl control = {.events = events, .backend = "VideoToolbox"};
-    const bool passed = readWorkerMessage(&control, WorkerStart, &control.generation) && checkWorker(luma, &control);
+    const bool passed = readWorkerMessage(&control, WorkerStart, &control.generation) &&
+                        checkWorker(luma, &control, exportPixels);
     fclose(events);
     return passed;
 }
@@ -658,7 +697,10 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 3 && strcmp(argv[1], "--worker-fixture") == 0) {
         const int luma = evenDimension(argv[2], 220);
-        return luma && runWorker(luma) ? 0 : 1;
+        return luma && runWorker(luma, false) ? 0 : 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "--worker-pixels") == 0) {
+        return runWorker(0, true) ? 0 : 1;
     }
     if (argc == 2 && strcmp(argv[1], "--software") == 0) {
         return checkSoftware() ? 0 : 1;
