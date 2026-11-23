@@ -128,6 +128,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (void)handleEncoderInput:(CVPixelBufferRef)source pixels:(CGRect)pixels;
 - (CVPixelBufferRef)copyEncoderFrame:(CVPixelBufferRef)source pixels:(CGRect)pixels CF_RETURNS_RETAINED;
 - (BOOL)consumeDecodedFrameWithoutRendering;
+- (CGSize)fixtureInputSize;
 - (CVPixelBufferRef)copyInputWithWidth:(size_t)width height:(size_t)height CF_RETURNS_RETAINED;
 - (CVPixelBufferRef)copyCroppedFrame:(CIImage *)frame pixels:(CGRect)pixels;
 #endif
@@ -193,6 +194,13 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
                  CVPixelBufferGetHeight(pixels) >= 64 && CVPixelBufferGetHeight(pixels) <= MaxHeight;
     CVPixelBufferRelease(pixels);
     return valid;
+}
+
+- (CGSize)fixtureInputSize {
+    [_lock lock];
+    CGSize size = CGSizeMake(_inputWidth, _inputHeight);
+    [_lock unlock];
+    return size;
 }
 #endif
 
@@ -1230,23 +1238,49 @@ static BOOL exerciseMedia(CVPixelBufferRef input) {
     return received && network.wasClosed;
 }
 
-static int checkMediaCycles(void) {
-    puts("Loopback cycles: path=media-only");
+static CVPixelBufferRef createMediaInput(size_t width, size_t height) {
     CVPixelBufferRef input = NULL;
     NSDictionary *attributes = @{(__bridge NSString *)kCVPixelBufferIOSurfacePropertiesKey: @{}};
-    if (CVPixelBufferCreate(kCFAllocatorDefault, 224, 144, kCVPixelFormatType_32BGRA,
+    if (CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA,
                             (__bridge CFDictionaryRef)attributes, &input) != kCVReturnSuccess) {
+        return NULL;
+    }
+    BOOL initialized = NO;
+    if (CVPixelBufferLockBaseAddress(input, 0) == kCVReturnSuccess) {
+        void *bytes = CVPixelBufferGetBaseAddress(input);
+        const size_t length = CVPixelBufferGetDataSize(input);
+        initialized = bytes && length >= width * height * 4;
+        if (initialized) {
+            memset(bytes, 0x80, length);
+        }
+        initialized = CVPixelBufferUnlockBaseAddress(input, 0) == kCVReturnSuccess && initialized;
+    }
+    if (!initialized) {
+        CVPixelBufferRelease(input);
+        return NULL;
+    }
+    return input;
+}
+
+static int checkMediaCycles(const char *path, size_t width, size_t height, BOOL renew) {
+    printf("Loopback cycles: path=%s\n", path);
+    printf("Loopback media input: %zux%zu, renewed=%d.\n", width, height, renew);
+    CVPixelBufferRef fixed = renew ? NULL : createMediaInput(width, height);
+    if (!renew && !fixed) {
+        fputs("Loopback cycles: could not initialize fixed media input.\n", stderr);
         return 16;
     }
-    CIImage *pixels = [[CIImage imageWithColor:[CIColor colorWithRed:0.8 green:0.1 blue:0.1]]
-        imageByCroppingToRect:CGRectMake(0, 0, 224, 144)];
-    [makeRenderingContext() render:pixels toCVPixelBuffer:input];
     int warmDescriptors = -1;
     int result = checkStoppedSample(0, &warmDescriptors) ? 0 : 17;
     for (unsigned cycle = 1; cycle <= 100 && result == 0; ++cycle) {
         @autoreleasepool {
-            if (!exerciseMedia(input)) {
-                fprintf(stderr, "Loopback cycles: media-only frame or cleanup failed at cycle %u.\n", cycle);
+            CVPixelBufferRef input = renew ? createMediaInput(width, height) : fixed;
+            BOOL passed = input && exerciseMedia(input);
+            if (renew && input) {
+                CVPixelBufferRelease(input);
+            }
+            if (!passed) {
+                fprintf(stderr, "Loopback cycles: %s frame or cleanup failed at cycle %u.\n", path, cycle);
                 result = 17;
             }
         }
@@ -1254,9 +1288,11 @@ static int checkMediaCycles(void) {
             result = 17;
         }
     }
-    CVPixelBufferRelease(input);
+    if (fixed) {
+        CVPixelBufferRelease(fixed);
+    }
     if (result == 0) {
-        puts("Loopback cycles: 100 media-only start/stop cycles passed.");
+        printf("Loopback cycles: 100 %s start/stop cycles passed.\n", path);
     }
     return result;
 }
@@ -1266,7 +1302,22 @@ static int checkNativeCapture(void) {
 #ifdef LINKO_RW04_NETWORK_PREVIEW
     NSArray<NSString *> *arguments = NSProcessInfo.processInfo.arguments;
     if ([arguments containsObject:@"--media-only"]) {
-        return checkMediaCycles();
+        return checkMediaCycles("media-only", 224, 144, NO);
+    }
+    BOOL renew = [arguments containsObject:@"--media-renewed"];
+    NSUInteger matched = [arguments indexOfObject:renew ? @"--media-renewed" : @"--media-matched"];
+    if (matched != NSNotFound) {
+        if (arguments.count - matched != 3) {
+            fputs("Loopback media control requires width and height.\n", stderr);
+            return 16;
+        }
+        NSUInteger width = (NSUInteger)[arguments objectAtIndex:matched + 1].integerValue;
+        NSUInteger height = (NSUInteger)[arguments objectAtIndex:matched + 2].integerValue;
+        if (width < 64 || height < 64 || width > MaxWidth || height > MaxHeight || width % 2 || height % 2) {
+            fputs("Loopback media control requires bounded even dimensions.\n", stderr);
+            return 16;
+        }
+        return checkMediaCycles(renew ? "media-renewed" : "media-matched", width, height, renew);
     }
 #endif
     if (!CGPreflightScreenCaptureAccess()) {
@@ -1388,8 +1439,12 @@ static int checkNativeCapture(void) {
         [fixture setContentSize:NSMakeSize(350, 230)];
         [fixture displayIfNeeded];
         [preview beginCapture:source];
-        BOOL passed = waitFor(^BOOL { return preview.receivedFixtureFrame; }) &&
-                      checkCaptureCycles(preview, source, !cropOnly);
+        BOOL received = waitFor(^BOOL { return preview.receivedFixtureFrame; });
+        if (received && drainOnly) {
+            CGSize size = [[preview activeCaptureOutput] fixtureInputSize];
+            printf("Loopback sampled input size: %zux%zu.\n", (size_t)size.width, (size_t)size.height);
+        }
+        BOOL passed = received && checkCaptureCycles(preview, source, !cropOnly);
         [pulse invalidate];
         [fixture close];
         if (!passed) {

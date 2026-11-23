@@ -114,13 +114,23 @@ if ($IsMacOS) {
         Tee-Object -FilePath (Join-Path $reports 'macos-window-loopback-gpu-crop.txt')
     Invoke-Checked $windowPreview @('--cpu-copy') |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-loopback-cpu-copy.txt')
-    Invoke-Checked $windowPreview @('--drain-only') |
-        Tee-Object -FilePath (Join-Path $reports 'macos-window-drain-only.txt')
+    $drainReport = Join-Path $reports 'macos-window-drain-only.txt'
+    Invoke-Checked $windowPreview @('--drain-only') | Tee-Object -FilePath $drainReport
+    $sampledSize = Select-String -LiteralPath $drainReport -Pattern '^Loopback sampled input size: ([0-9]+)x([0-9]+)\.$'
+    if (@($sampledSize).Count -ne 1) {
+        throw 'Expected one set of dimensions from the real window encoder input.'
+    }
+    $fixtureWidth = $sampledSize.Matches[0].Groups[1].Value
+    $fixtureHeight = $sampledSize.Matches[0].Groups[2].Value
     Invoke-Checked $windowPreview @('--crop-only') |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-crop-only.txt')
     Invoke-Checked $windowPreview @('--capture-only') |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-capture-only.txt')
     Invoke-Checked $windowPreview @('--media-only') |
         Tee-Object -FilePath (Join-Path $reports 'macos-window-media-only.txt')
+    Invoke-Checked $windowPreview @('--media-matched', $fixtureWidth, $fixtureHeight) |
+        Tee-Object -FilePath (Join-Path $reports 'macos-media-matched.txt')
+    Invoke-Checked $windowPreview @('--media-renewed', $fixtureWidth, $fixtureHeight) |
+        Tee-Object -FilePath (Join-Path $reports 'macos-media-renewed.txt')
     Add-Content -LiteralPath $report -Value 'Real ScreenCaptureKit window traveled over loopback UDP/DTLS H.264 to AppKit; original receipt expiry, revocation, reopening and 100 native start/stop cycles passed.' -Encoding utf8
 }
