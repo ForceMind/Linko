@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "codec_worker_protocol.h"
 #include "windows_fixture.h"
@@ -293,7 +294,7 @@ void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const&
 }
 
 void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& timing,
-                       CaptureInputs samples) {
+                       CaptureInputs samples, WorkerFramePixels* displayOutput = nullptr) {
     for (;;) {
         stage("decoder-read-output");
         auto decoded = readOutput(decoder, fixture.nv12Bytes());
@@ -309,14 +310,18 @@ void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& ti
         const auto index = timing.decodedMs.size();
         check(index < timing.submitted.size() ? S_OK : E_UNEXPECTED, "check sample had been submitted");
         const auto frame = static_cast<UINT32>(index);
-        auto* exported = timing.exported && frame < WorkerFrameCount ? &timing.exported[frame] : nullptr;
+        auto* exported = displayOutput;
+        if (!exported && timing.exported && frame < WorkerFrameCount) {
+            exported = &timing.exported[frame];
+        }
         verifyDecodedFrame(decoder, decoded.sample.Get(), fixture, frame, capturedSample(samples, frame), exported);
         timing.decodedMs.push_back(std::chrono::duration<double, std::milli>(received - timing.submitted[index]).count());
     }
 }
 
 void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fixture const& fixture,
-                       UINT32& encodedCount, Timing& timing, bool lowLatency, CaptureInputs samples) {
+                       UINT32& encodedCount, Timing& timing, bool lowLatency, CaptureInputs samples,
+                       WorkerFramePixels* displayOutput = nullptr) {
     for (;;) {
         stage("encoder-read-output");
         auto encoded = readOutput(encoder, fixture.nv12Bytes());
@@ -340,7 +345,7 @@ void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fix
         stage("decoder-process-input");
         check(decoder->ProcessInput(0, encoded.sample.Get(), 0), "submit H.264 sample");
         ++encodedCount;
-        readDecodedFrames(decoder.Get(), fixture, timing, samples);
+        readDecodedFrames(decoder.Get(), fixture, timing, samples, displayOutput);
     }
 }
 
@@ -477,7 +482,8 @@ int withMediaFoundation(auto run) {
 }
 
 
-int withWorkerControl(char const* backend, auto run, WorkerMessage completion = WorkerStopped) {
+int withWorkerControl(char const* backend, auto run,
+                      std::optional<WorkerMessage> completion = WorkerStopped) {
     const int eventsFd = _dup(_fileno(stdout));
     if (eventsFd < 0) {
         std::perror("duplicate worker event pipe");
@@ -503,7 +509,7 @@ int withWorkerControl(char const* backend, auto run, WorkerMessage completion = 
     if (result != 0) {
         return result;
     }
-    return sendWorkerMessage(&control, completion) ? 0 : 1;
+    return !completion || sendWorkerMessage(&control, *completion) ? 0 : 1;
 }
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
@@ -576,8 +582,17 @@ struct WgcLiveCodec {
     std::vector<BYTE> pending;
 };
 
-int runWgcLiveCodecs(int (*run)()) {
-    return withMediaFoundation(run);
+int runWgcLiveCodecs(int (*run)(WorkerControl const*), bool display) {
+    return withMediaFoundation([&] {
+        if (!display) {
+            return run(nullptr);
+        }
+        if (std::setvbuf(stdin, nullptr, _IONBF, 0) != 0) {
+            std::fputs("WGC live display: cannot configure the receipt pipe.\n", stderr);
+            return 1;
+        }
+        return withWorkerControl("WGC live display", run, std::nullopt);
+    });
 }
 
 WgcLiveCodec* startWgcLiveCodec() {
@@ -593,10 +608,10 @@ void submitWgcLiveFrame(WgcLiveCodec& codec, WgcFixtureFrame frame) {
                                                  static_cast<UINT32>(index), codec.pending));
 }
 
-void verifyWgcLiveFrame(WgcLiveCodec& codec) {
+void verifyWgcLiveFrame(WgcLiveCodec& codec, WorkerFramePixels* displayOutput) {
     check(codec.pending.empty() ? E_UNEXPECTED : S_OK, "require a submitted live WGC frame");
     readEncodedFrames(codec.encoder.Get(), codec.decoder, smallFixture, codec.encoded, codec.timing,
-                      true, CaptureInputs(&codec.pending, 1));
+                      true, CaptureInputs(&codec.pending, 1), displayOutput);
     const auto expected = codec.timing.submitted.size();
     check(codec.encoded == expected && codec.timing.decodedMs.size() == expected
               ? S_OK : E_UNEXPECTED, "encode and decode each live WGC frame before drain");

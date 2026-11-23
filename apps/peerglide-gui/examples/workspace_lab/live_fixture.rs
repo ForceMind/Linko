@@ -54,6 +54,7 @@ enum Phase {
     Drawing,
     Clearing,
     Exiting,
+    Finished,
 }
 
 pub(super) struct LiveFixture {
@@ -298,9 +299,11 @@ impl NativePanelProbe for LiveFixture {
                         .into());
                     }
                     println!("Live panels: both regions cleared and native fixture reaped.");
+                    self.phase = Phase::Finished;
                     return Ok(true);
                 }
             }
+            Phase::Finished => return Ok(true),
         }
         Ok(false)
     }

@@ -180,10 +180,17 @@ jobs:
             options+=(--features workspace-lab-dx12)
           fi
           cargo run --locked -p peerglide-gui --example workspace_lab "${options[@]}" -- --native-window-probe "$launcher" "$fixture"
-      - name: Verify live macOS frame updates, receipts and independent panel clearing
-        if: runner.os == 'macOS'
+      - name: Verify live frame updates, receipts and independent panel clearing
         shell: bash
         timeout-minutes: 3
+        env:
+          CODEC_FIXTURE: ${{ runner.os == 'Windows' && 'rw04-wgc-h264.exe' || 'rw04-sck-h264' }}
+          WGPU_BACKEND: dx12
+          WGPU_DX12_COMPILER: fxc
         run: |
-          fixture="$RUNNER_TEMP/rw06-window-fixture/rw04-sck-h264"
-          cargo run --locked -p peerglide-gui --example workspace_lab -- --live-window-probe "$fixture"
+          fixture="$RUNNER_TEMP/rw06-window-fixture/$CODEC_FIXTURE"
+          options=()
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            options+=(--features workspace-lab-dx12)
+          fi
+          cargo run --locked -p peerglide-gui --example workspace_lab "${options[@]}" -- --live-window-probe "$fixture"

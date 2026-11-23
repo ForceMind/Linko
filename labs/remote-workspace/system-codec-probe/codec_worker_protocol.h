@@ -16,6 +16,8 @@ enum { WorkerFrameHeaderBytes = 12 };
 enum { WorkerFrameWidth = 128, WorkerFrameHeight = 96, WorkerFrameCount = 2 };
 enum { WorkerFrameBytes = WorkerFrameWidth * WorkerFrameHeight * 3 / 2 };
 enum { WorkerRgbaBytes = WorkerFrameWidth * WorkerFrameHeight * 4 };
+enum { WorkerFrameRecordBytes = WorkerMessageSize + WorkerFrameHeaderBytes + WorkerFrameBytes };
+enum { WorkerDisplayReceiptBytes = WorkerMessageSize + 4 };
 
 struct WorkerFramePixels {
     uint8_t data[WorkerFrameBytes];
@@ -146,6 +148,20 @@ static inline void formatWorkerFrameHeader(uint8_t header[WorkerFrameHeaderBytes
         0, 0, WorkerFrameBytes >> 8, WorkerFrameBytes & 0xff,
     };
     memcpy(header, geometry, sizeof(geometry));
+}
+
+static inline void formatWorkerFrameRecord(uint8_t record[WorkerFrameRecordBytes], uint64_t generation,
+                                            struct WorkerFramePixels const *frame, unsigned char sequence) {
+    formatWorkerMessage(record, WorkerFrame, generation);
+    formatWorkerFrameHeader(record + WorkerMessageSize, sequence);
+    memcpy(record + WorkerMessageSize + WorkerFrameHeaderBytes, frame->data, sizeof(frame->data));
+}
+
+static inline void formatWorkerDisplayReceipt(uint8_t receipt[WorkerDisplayReceiptBytes], uint64_t generation,
+                                              unsigned char sequence) {
+    formatWorkerMessage(receipt, WorkerDisplayed, generation);
+    memset(receipt + WorkerMessageSize, 0, 4);
+    receipt[WorkerDisplayReceiptBytes - 1] = sequence;
 }
 
 static inline bool sendWorkerFrame(struct WorkerControl const *control,
