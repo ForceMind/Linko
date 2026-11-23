@@ -24,7 +24,7 @@ struct Probe {
     int height;
     unsigned frames;
     CVPixelBufferRef fixedInput;
-    bool software;
+    CFStringRef softwareEncoder;
     _Atomic(CMSampleBufferRef) encoded[MaxFrames];
     _Atomic bool encodedOnce[MaxFrames];
     _Atomic uint64_t decodedAt[MaxFrames];
@@ -203,6 +203,22 @@ static const char *hardwareMode(VTSessionRef session, CFStringRef key) {
     return mode;
 }
 
+static const char *encoderMode(VTCompressionSessionRef session, CFStringRef expectedId) {
+    const char *mode = hardwareMode(session, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder);
+    if (!expectedId || strcmp(mode, "hardware") == 0) {
+        return mode;
+    }
+    CFPropertyListRef reportedId = NULL;
+    OSStatus status = VTSessionCopyProperty(session, kVTCompressionPropertyKey_EncoderID, NULL, &reportedId);
+    const bool mismatch = status == noErr && (!reportedId || !CFEqual(reportedId, expectedId));
+    if (reportedId) {
+        CFRelease(reportedId);
+    }
+    // A successful session with a specific, catalog-checked ID and hardware explicitly disabled
+    // is the evidence when the optional session hardware property is absent.
+    return mismatch ? "unexpected-encoder" : "software";
+}
+
 static int compareLatency(const void *left, const void *right) {
     const double a = *(const double *)left;
     const double b = *(const double *)right;
@@ -235,13 +251,18 @@ static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain,
     return true;
 }
 
+static CFDictionaryRef softwareSpecification(CFStringRef encoderId) {
+    const void *keys[] = {kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
+                          kVTVideoEncoderSpecification_EncoderID};
+    const void *values[] = {kCFBooleanFalse, encoderId};
+    return CFDictionaryCreate(NULL, keys, values, encoderId ? 2 : 1, &kCFTypeDictionaryKeyCallBacks,
+                              &kCFTypeDictionaryValueCallBacks);
+}
+
 static OSStatus startEncoder(struct Probe *probe, VTCompressionSessionRef *encoder) {
     CFDictionaryRef specification = NULL;
-    if (probe->software) {
-        const void *keys[] = {kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder};
-        const void *values[] = {kCFBooleanFalse};
-        specification = CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
-                                            &kCFTypeDictionaryValueCallBacks);
+    if (probe->softwareEncoder) {
+        specification = softwareSpecification(probe->softwareEncoder);
         if (!specification) {
             return -4;
         }
@@ -266,9 +287,9 @@ static OSStatus startEncoder(struct Probe *probe, VTCompressionSessionRef *encod
 }
 
 static bool run(int width, int height, unsigned frames, bool paced, CVPixelBufferRef fixedInput,
-                bool verbose, bool software) {
+                bool verbose, CFStringRef softwareEncoder) {
     struct Probe probe = {.width = width, .height = height, .frames = frames,
-                          .fixedInput = fixedInput, .software = software};
+                          .fixedInput = fixedInput, .softwareEncoder = softwareEncoder};
     VTCompressionSessionRef encoder = NULL;
     VTDecompressionSessionRef decoder = NULL;
     OSStatus status = startEncoder(&probe, &encoder);
@@ -299,7 +320,7 @@ static bool run(int width, int height, unsigned frames, bool paced, CVPixelBuffe
         status = VTDecompressionSessionWaitForAsynchronousFrames(decoder);
     }
     const uint64_t elapsed = nowNs() - started;
-    const char *encodeMode = hardwareMode(encoder, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder);
+    const char *encodeMode = encoderMode(encoder, softwareEncoder);
     const char *decodeMode = decoder
         ? hardwareMode(decoder, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder) : "unknown";
     if (verbose) {
@@ -319,7 +340,7 @@ static bool run(int width, int height, unsigned frames, bool paced, CVPixelBuffe
     }
     OSStatus callbackError = atomic_load(&probe.callbackError);
     bool modesKnown = strcmp(encodeMode, "unknown") != 0;
-    if (software) {
+    if (softwareEncoder) {
         modesKnown = strcmp(encodeMode, "software") == 0;
     } else if (fixedInput) {
         modesKnown = strcmp(encodeMode, "hardware") == 0 && strcmp(decodeMode, "hardware") == 0;
@@ -411,9 +432,9 @@ static void releaseMemorySamples(struct MemorySamples *samples) {
 }
 
 static bool encodeMemoryFixture(int width, int height, CVPixelBufferRef input,
-                                struct MemorySamples *samples, bool software) {
+                                struct MemorySamples *samples, CFStringRef softwareEncoder) {
     struct Probe probe = {.width = width, .height = height, .frames = MemoryFrames,
-                          .fixedInput = input, .software = software};
+                          .fixedInput = input, .softwareEncoder = softwareEncoder};
     VTCompressionSessionRef encoder = NULL;
     OSStatus status = startEncoder(&probe, &encoder);
     if (status != noErr) {
@@ -430,7 +451,7 @@ static bool encodeMemoryFixture(int width, int height, CVPixelBufferRef input,
     if (status == noErr) {
         status = VTCompressionSessionCompleteFrames(encoder, kCMTimeInvalid);
     }
-    const char *mode = hardwareMode(encoder, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder);
+    const char *mode = encoderMode(encoder, softwareEncoder);
     VTCompressionSessionInvalidate(encoder);
     CFRelease(encoder);
     bool present = true;
@@ -439,7 +460,7 @@ static bool encodeMemoryFixture(int width, int height, CVPixelBufferRef input,
         present = present && samples->frames[index] != NULL;
     }
     OSStatus callbackError = atomic_load(&probe.callbackError);
-    const char *expectedMode = software ? "software" : "hardware";
+    const char *expectedMode = softwareEncoder ? "software" : "hardware";
     if (status != noErr || callbackError != noErr || !present || strcmp(mode, expectedMode) != 0) {
         fprintf(stderr, "VideoToolbox memory: isolated encoder status=%d callback=%d mode=%s.\n",
                 (int)status, (int)callbackError, mode);
@@ -479,8 +500,9 @@ static bool decodeMemoryFixture(int width, int height, CVPixelBufferRef input, s
     return true;
 }
 
-static bool checkMemory(int width, int height, enum MemoryStage stage, OSType format, const char *name) {
-    const bool software = strcmp(name, "encode-software") == 0;
+static bool checkMemory(int width, int height, enum MemoryStage stage, OSType format,
+                        const char *name, CFStringRef softwareEncoder) {
+    const bool software = softwareEncoder != NULL;
     const unsigned cycles = software || strcmp(name, "encode-soak") == 0 ? 500 : 100;
     printf("VideoToolbox memory: size=%dx%d, stage=%s, cycles=%u.\n", width, height, name, cycles);
     CVPixelBufferRef input = makeMemoryFixture(width, height, format);
@@ -489,16 +511,16 @@ static bool checkMemory(int width, int height, enum MemoryStage stage, OSType fo
         return false;
     }
     struct MemorySamples seed = {0};
-    bool passed = stage != DecodeStage || encodeMemoryFixture(width, height, input, &seed, false);
+    bool passed = stage != DecodeStage || encodeMemoryFixture(width, height, input, &seed, NULL);
     for (unsigned cycle = 1; passed && cycle <= cycles; ++cycle) {
         if (stage == EncodeStage) {
             struct MemorySamples samples = {0};
-            passed = encodeMemoryFixture(width, height, input, &samples, software);
+            passed = encodeMemoryFixture(width, height, input, &samples, softwareEncoder);
             releaseMemorySamples(&samples);
         } else if (stage == DecodeStage) {
             passed = decodeMemoryFixture(width, height, input, &seed);
         } else {
-            passed = run(width, height, MemoryFrames, true, input, cycle == 1, false);
+            passed = run(width, height, MemoryFrames, true, input, cycle == 1, NULL);
         }
         if (passed && (cycle == 10 || cycle == 100 || cycle == 250 || cycle == cycles)) {
             passed = sampleMemory(cycle);
@@ -523,22 +545,60 @@ static int evenDimension(const char *text, int limit) {
         ? (int)value : 0;
 }
 
+static bool catalogAllowsSoftware(CFStringRef encoderId) {
+    CFArrayRef catalog = NULL;
+    if (VTCopyVideoEncoderList(NULL, &catalog) != noErr || !catalog) {
+        return false;
+    }
+    bool matched = false;
+    for (CFIndex index = 0; index < CFArrayGetCount(catalog); ++index) {
+        CFDictionaryRef entry = CFArrayGetValueAtIndex(catalog, index);
+        CFStringRef listedId = CFDictionaryGetValue(entry, kVTVideoEncoderList_EncoderID);
+        if (listedId && CFEqual(listedId, encoderId)) {
+            CFBooleanRef hardware = CFDictionaryGetValue(entry, kVTVideoEncoderList_IsHardwareAccelerated);
+            matched = !hardware || CFEqual(hardware, kCFBooleanFalse);
+            break;
+        }
+    }
+    CFRelease(catalog);
+    return matched;
+}
+
 static bool checkSoftware(void) {
-    struct Probe probe = {.width = 350, .height = 262, .software = true};
-    VTCompressionSessionRef encoder = NULL;
-    const OSStatus status = startEncoder(&probe, &encoder);
+    CFDictionaryRef specification = softwareSpecification(NULL);
+    if (!specification) {
+        return false;
+    }
+    CFStringRef encoderId = NULL;
+    const OSStatus status = VTCopySupportedPropertyDictionaryForEncoder(350, 262, kCMVideoCodecType_H264,
+                                                                        specification, &encoderId, NULL);
+    CFRelease(specification);
     if (status == kVTCouldNotFindVideoEncoderErr) {
+        if (encoderId) {
+            CFRelease(encoderId);
+        }
         printf("VideoToolbox software H.264: unavailable (%d).\n", (int)status);
         return true;
     }
-    if (status != noErr) {
+    if (status != noErr || !encoderId) {
+        if (encoderId) {
+            CFRelease(encoderId);
+        }
         fprintf(stderr, "VideoToolbox software H.264: preflight failed (%d).\n", (int)status);
         return false;
     }
-    VTCompressionSessionInvalidate(encoder);
-    CFRelease(encoder);
-    return checkMemory(350, 262, EncodeStage, NV12, "encode-software") &&
-           run(1920, 1080, MaxFrames, true, NULL, true, true);
+    char identifier[256] = {0};
+    bool passed = catalogAllowsSoftware(encoderId) &&
+                  CFStringGetCString(encoderId, identifier, sizeof(identifier), kCFStringEncodingUTF8);
+    if (passed) {
+        printf("VideoToolbox software H.264: selected encoder %s with hardware disabled.\n", identifier);
+        passed = checkMemory(350, 262, EncodeStage, NV12, "encode-software", encoderId) &&
+                 run(1920, 1080, MaxFrames, true, NULL, true, encoderId);
+    } else {
+        fputs("VideoToolbox software H.264: selected ID could not be verified against the catalog.\n", stderr);
+    }
+    CFRelease(encoderId);
+    return passed;
 }
 
 int main(int argc, char **argv) {
@@ -568,11 +628,11 @@ int main(int argc, char **argv) {
                 return 2;
             }
         }
-        return checkMemory(width, height, stage, format, name) ? 0 : 1;
+        return checkMemory(width, height, stage, format, name, NULL) ? 0 : 1;
     }
     if (argc != 1) {
         return 2;
     }
-    return run(128, 96, 1, false, NULL, true, false) && run(1920, 1080, MaxFrames, false, NULL, true, false) &&
-           run(1920, 1080, MaxFrames, true, NULL, true, false) ? 0 : 1;
+    return run(128, 96, 1, false, NULL, true, NULL) && run(1920, 1080, MaxFrames, false, NULL, true, NULL) &&
+           run(1920, 1080, MaxFrames, true, NULL, true, NULL) ? 0 : 1;
 }
