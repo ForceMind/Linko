@@ -394,29 +394,33 @@ fn match_frame(
 }
 
 #[cfg(any(windows, target_os = "macos"))]
-fn export_window_frame(binary: &Path) -> SimulationResult<()> {
-    // The desktop fixture reads exactly one already validated RGBA frame.
-    // This test-only relay stays alive until the renderer has read back pixels.
+fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()> {
+    // Each relay captures its own window. Wait for the desktop fixture to
+    // synchronize delivery before sending one already validated RGBA frame.
     let binding = Binding {
         source: [1; 32],
         viewer: [2; 32],
         nonce: [3; 16],
     };
-    let (mut worker, [frame, _]) = CoordinatedWorker::start_codec(
+    let (mut worker, frames) = CoordinatedWorker::start_codec(
         binary,
         binding,
         WORKER_GENERATION,
         FixturePixels::Window,
         false,
     )?;
-    {
-        let mut output = io::stdout().lock();
-        output.write_all(&frame)?;
-        output.flush()?;
+    let mut output = io::stdout().lock();
+    output.write_all(b"R")?;
+    output.flush()?;
+    let mut command = [0];
+    io::stdin().read_exact(&mut command)?;
+    if command != [1] {
+        return Err(invalid_worker_data("invalid renderer delivery request").into());
     }
-    let mut stop = [0];
-    io::stdin().read_exact(&mut stop)?;
-    if stop != [1] {
+    output.write_all(&frames[frame_index])?;
+    output.flush()?;
+    io::stdin().read_exact(&mut command)?;
+    if command != [2] {
         return Err(invalid_worker_data("invalid renderer stop request").into());
     }
     worker.send_command(WORKER_STOP, WORKER_GENERATION)?;
@@ -444,10 +448,15 @@ fn main() -> SimulationResult<()> {
             let binary = args
                 .next()
                 .ok_or_else(|| invalid_worker_data("missing native codec fixture path"))?;
+            let index = match args.next().as_deref() {
+                Some(arg) if arg == OsStr::new("0") => 0,
+                Some(arg) if arg == OsStr::new("1") => 1,
+                _ => return Err(invalid_worker_data("invalid exported frame index").into()),
+            };
             if args.next().is_some() {
                 return Err(invalid_worker_data("unexpected exporter argument").into());
             }
-            return export_window_frame(Path::new(&binary));
+            return export_window_frame(Path::new(&binary), index);
         }
         Some(arg) if arg == OsStr::new(CODEC_ARG) || arg == OsStr::new(WINDOW_ARG) => {
             let fixture = if arg == OsStr::new(WINDOW_ARG) {

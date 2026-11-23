@@ -16,7 +16,7 @@ use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
 #[path = "workspace_lab/native_fixture.rs"]
 mod native_fixture;
-use native_fixture::NativeFixture;
+use native_fixture::{NativeFixture, PANELS as NATIVE_PANELS};
 
 const ORIGIN: Camera = Camera {
     origin: Point { x: 0.0, y: 0.0 },
@@ -39,10 +39,8 @@ struct Panel {
     shortcut: egui::Key,
 }
 
-#[derive(Clone, Copy)]
-struct NativePreview<'a> {
-    texture: Option<&'a egui::TextureHandle>,
-}
+type NativePreview<'a> = [Option<&'a egui::TextureHandle>; NATIVE_PANELS];
+type PreviewAreas = [Option<Rect>; NATIVE_PANELS];
 
 struct Workspace {
     coordinator: Coordinator,
@@ -144,7 +142,7 @@ impl Workspace {
         root: &mut egui::Ui,
         now: u64,
         preview: Option<NativePreview<'_>>,
-    ) -> Option<Rect> {
+    ) -> PreviewAreas {
         let shortcut = self
             .panels
             .iter()
@@ -157,7 +155,7 @@ impl Workspace {
             .show(root, |ui| {
                 ui.heading(RichText::new("Workspace").size(34.0).strong());
                 let subtitle = if preview.is_some() {
-                    "Native window fixture  ·  2 decoder slots"
+                    "Native window fixtures  ·  2 decoder slots"
                 } else {
                     "Offline fixtures  ·  2 decoder slots"
                 };
@@ -172,7 +170,7 @@ impl Workspace {
                     Ok(area) => area,
                     Err(error) => {
                         ui.colored_label(Color32::DARK_RED, error.to_string());
-                        None
+                        [None; NATIVE_PANELS]
                     }
                 }
             })
@@ -186,9 +184,9 @@ impl Workspace {
         shortcut: Option<usize>,
         now: u64,
         preview: Option<NativePreview<'_>>,
-    ) -> Result<Option<Rect>, Error> {
+    ) -> Result<PreviewAreas, Error> {
         if viewport.width() <= GAP || viewport.height() <= 0.0 {
-            return Ok(None);
+            return Ok([None; NATIVE_PANELS]);
         }
         let plan = self.plan(viewport, now)?;
         let height = row_height(viewport);
@@ -207,7 +205,7 @@ impl Workspace {
                 Some(egui::Align::Center),
             );
         }
-        let mut preview_area = None;
+        let mut preview_areas = [None; NATIVE_PANELS];
         for index in 0..self.panels.len() {
             let panel = self.panels[index];
             let bounds = tile(index, viewport.width(), height);
@@ -237,13 +235,13 @@ impl Workspace {
                         .selectable_label(selected, RichText::new(panel.label).size(16.0))
                         .clicked();
                     ui.add_space(spacing);
-                    if let (0, Some(preview)) = (index, preview) {
+                    if let Some(texture) = preview.and_then(|preview| preview.get(index).copied()) {
                         let texture = if matches!(decision, Decision::Stream(_)) {
-                            preview.texture
+                            texture
                         } else {
                             None
                         };
-                        preview_area =
+                        preview_areas[index] =
                             Some(render_native_preview(ui, texture, status_height + 24.0));
                     } else {
                         render_status(ui, decision, self.budget, status_height);
@@ -269,7 +267,7 @@ impl Workspace {
                 ui.ctx().request_repaint();
             }
         }
-        Ok(preview_area)
+        Ok(preview_areas)
     }
 }
 
@@ -373,16 +371,13 @@ impl eframe::App for WorkspaceApp {
             context.request_repaint_after(Duration::from_secs(1));
             return;
         };
-        let view = self.workspace.panels[0].view;
         let result = native
-            .advance(&mut self.workspace.coordinator, view, &context, now)
+            .advance(&mut self.workspace.coordinator, &context, now)
             .and_then(|finished| {
                 if !finished {
-                    let preview = NativePreview {
-                        texture: native.texture(now),
-                    };
-                    if let Some(area) = self.workspace.show(root, now, Some(preview)) {
-                        native.verify_paint(&context, area)?;
+                    let preview = native.textures(now);
+                    if let [Some(first), Some(second)] = self.workspace.show(root, now, Some(preview)) {
+                        native.verify_paint(&context, [first, second])?;
                     }
                 }
                 Ok(finished)
@@ -460,25 +455,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut workspace = Workspace::new()?;
             let started = Instant::now();
             let native = if let Some((launcher, codec)) = paths {
-                let view = workspace.panels[0].view;
-                workspace.coordinator.revise_geometry(
-                    view,
-                    SourceGeometry {
-                        pixels: native_fixture::FRAME_SIZE,
-                        logical: CanvasRect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: 128.0,
-                            height: 96.0,
+                let views = [workspace.panels[0].view, workspace.panels[1].view];
+                for view in views {
+                    workspace.coordinator.revise_geometry(
+                        view,
+                        SourceGeometry {
+                            pixels: native_fixture::FRAME_SIZE,
+                            logical: CanvasRect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 128.0,
+                                height: 96.0,
+                            },
+                            rotation: Rotation::None,
+                            revision: 2,
                         },
-                        rotation: Rotation::None,
-                        revision: 2,
-                    },
-                    0,
-                )?;
+                        0,
+                    )?;
+                }
                 Some(NativeFixture::start(
                     &launcher,
                     &codec,
+                    views,
                     started,
                     &cc.egui_ctx,
                 )?)
