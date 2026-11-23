@@ -197,3 +197,14 @@ jobs:
           fi
           cargo build --locked -p peerglide-gui --example workspace_lab "${options[@]}"
           python tools/workspace_panel_memory.py "target/debug/examples/workspace_lab$EXE_SUFFIX" "$fixture"
+      - name: Verify expired frames release textures and clear before resuming
+        shell: bash
+        timeout-minutes: 2
+        env:
+          CODEC_FIXTURE: ${{ runner.os == 'Windows' && 'rw04-wgc-h264.exe' || 'rw04-sck-h264' }}
+          EXE_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
+          WGPU_BACKEND: dx12
+          WGPU_DX12_COMPILER: fxc
+        run: |
+          fixture="$RUNNER_TEMP/rw06-window-fixture/$CODEC_FIXTURE"
+          "target/debug/examples/workspace_lab$EXE_SUFFIX" --live-window-stale-probe "$fixture"

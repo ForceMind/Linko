@@ -19,7 +19,7 @@ int runWgcPresenter(int (*run)(WorkerControl const*));
 int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized, WorkerControl const* worker);
 
 struct WgcLiveCodec;
-int runWgcLiveCodecs(int (*run)(WorkerControl const*), bool display);
+int runWgcLiveCodecs(int (*run)(WorkerControl const*, bool), bool display, bool pauseForExpiry);
 WgcLiveCodec* startWgcLiveCodec();
 void submitWgcLiveFrame(WgcLiveCodec& codec, WgcFixtureFrame frame);
 void verifyWgcLiveFrame(WgcLiveCodec& codec, WorkerFramePixels* displayOutput);

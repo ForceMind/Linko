@@ -773,13 +773,14 @@ static BOOL deliverLiveFrame(struct WorkerControl const *worker, struct SckLiveC
     return exchangeLiveBytes(fileno(worker->events), record, sizeof(record), YES);
 }
 
-static BOOL expectLiveReceipt(uint64_t generation, unsigned char sequence) {
-    uint8_t expected[WorkerDisplayReceiptBytes];
-    formatWorkerDisplayReceipt(expected, generation, sequence);
+static BOOL expectLiveCommand(enum WorkerMessage kind, uint64_t generation, unsigned char sequence) {
+    uint8_t expected[WorkerSequencedMessageBytes];
+    formatWorkerSequencedMessage(expected, kind, generation, sequence);
     uint8_t actual[sizeof(expected)];
     if (!exchangeLiveBytes(fileno(stdin), actual, sizeof(actual), NO) ||
         memcmp(expected, actual, sizeof(expected)) != 0) {
-        fputs("VideoToolbox live display: receipt did not match source and sequence.\n", stderr);
+        fprintf(stderr, "VideoToolbox live display: command %u did not match source and sequence.\n",
+                (unsigned)kind);
         return NO;
     }
     return YES;
@@ -793,7 +794,7 @@ static bool submitCapturedImage(struct SckLiveCodec **codec, NSImage *image, boo
     return *codec && copyFixtureCrop(image, &crop) && submitSckLiveFrame(*codec, &crop);
 }
 
-static int checkDualCodec(struct WorkerControl const *worker) {
+static int checkDualCodec(struct WorkerControl const *worker, bool pauseForExpiry) {
     if (worker && (worker->generation == UINT64_MAX ||
                    !setLivePipeNonblocking(fileno(stdin)) || !setLivePipeNonblocking(fileno(worker->events)))) {
         fputs("VideoToolbox live display: cannot prepare bounded local pipes.\n", stderr);
@@ -831,10 +832,18 @@ static int checkDualCodec(struct WorkerControl const *worker) {
             const uint64_t firstGeneration = worker->generation;
             const uint64_t secondGeneration = firstGeneration + 1;
             const unsigned char sequence = (unsigned char)secondFrames;
-            return (!left || deliverLiveFrame(worker, first, firstGeneration, sequence)) &&
-                   deliverLiveFrame(worker, second, secondGeneration, sequence) &&
-                   (!left || expectLiveReceipt(firstGeneration, sequence)) &&
-                   expectLiveReceipt(secondGeneration, sequence);
+            if ((left && !deliverLiveFrame(worker, first, firstGeneration, sequence)) ||
+                !deliverLiveFrame(worker, second, secondGeneration, sequence) ||
+                (left && !expectLiveCommand(WorkerDisplayed, firstGeneration, sequence)) ||
+                !expectLiveCommand(WorkerDisplayed, secondGeneration, sequence)) {
+                return NO;
+            }
+            if (pauseForExpiry && sequence == WorkerLiveGapRound) {
+                if (!expectLiveCommand(WorkerResume, firstGeneration, sequence)) {
+                    return NO;
+                }
+                puts("VideoToolbox live display: resume received after round 2.");
+            }
         }
         return YES;
     }, ^BOOL(BOOL left) {
@@ -859,8 +868,7 @@ static int checkDualCodec(struct WorkerControl const *worker) {
 }
 
 static bool runDualDisplayWorker(struct WorkerControl const *worker, void *context) {
-    (void)context;
-    return checkDualCodec(worker) == 0;
+    return checkDualCodec(worker, *(bool const *)context) == 0;
 }
 
 int main(int argc, char **argv) {
@@ -870,11 +878,12 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[1], "--dual-codec") == 0) {
             setvbuf(stdout, NULL, _IONBF, 0);
-            return checkDualCodec(NULL);
+            return checkDualCodec(NULL, false);
         }
-        if (strcmp(argv[1], "--dual-live-pixels") == 0) {
+        bool stalePixels = strcmp(argv[1], "--dual-live-stale-pixels") == 0;
+        if (stalePixels || strcmp(argv[1], "--dual-live-pixels") == 0) {
             setvbuf(stdout, NULL, _IONBF, 0);
-            return withMacWorkerControl(runDualDisplayWorker, NULL) ? 0 : 1;
+            return withMacWorkerControl(runDualDisplayWorker, &stalePixels) ? 0 : 1;
         }
         enum SckFixtureMode mode;
         if (strcmp(argv[1], "--worker-pixels") == 0) {
