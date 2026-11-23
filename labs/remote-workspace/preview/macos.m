@@ -167,6 +167,7 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 #ifdef LINKO_RW03_CI
 - (void)beginCapture:(SCWindow *)source;
 - (NSImage *)displayedFrame;
+- (NSImage *)pollFixtureFrame;
 - (BOOL)hasStream;
 - (BOOL)captureActive;
 #endif
@@ -398,6 +399,13 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 #ifdef LINKO_RW03_CI
 - (NSImage *)displayedFrame {
     return _image.image;
+}
+- (NSImage *)pollFixtureFrame {
+    if (!_image) {
+        _image = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    }
+    [self updateFrame:nil];
+    return self.displayedFrame;
 }
 - (BOOL)hasStream {
     return _stream != nil;
@@ -742,8 +750,148 @@ int main(int argc, char **argv) {
     }
 }
 #else
-int main(void) {
+enum { DualRounds = 4 };
+static const uint8_t DualColors[2][DualRounds + 1][3] = {
+    {{190, 30, 70}, {190, 100, 70}, {190, 170, 70}, {190, 30, 150}},
+    {{30, 70, 190}, {30, 145, 190}, {30, 220, 190}, {95, 70, 190}, {30, 140, 115}},
+};
+
+static void paintCaptureFixture(NSWindow *window, const uint8_t color[3]) {
+    window.contentView.layer.backgroundColor =
+        [NSColor colorWithSRGBRed:color[0] / 255.0 green:color[1] / 255.0 blue:color[2] / 255.0 alpha:1].CGColor;
+    [window displayIfNeeded];
+    [CATransaction flush];
+}
+
+static NSWindow *makeCaptureFixture(CGFloat x, NSString *title, const uint8_t color[3]) {
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(x, 50, 220, 140)
+                                                    styleMask:NSWindowStyleMaskTitled
+                                                      backing:NSBackingStoreBuffered defer:NO];
+    window.releasedWhenClosed = NO;
+    window.title = title;
+    window.contentView.wantsLayer = YES;
+    [window makeKeyAndOrderFront:nil];
+    [window orderFrontRegardless];
+    paintCaptureFixture(window, color);
+    return window;
+}
+
+static BOOL captureMatches(PreviewApp *preview, const uint8_t expected[3]) {
     @autoreleasepool {
+        NSImage *image = [preview pollFixtureFrame];
+        if (!image || !preview.captureActive) {
+            return NO;
+        }
+        CGImageRef full = [image CGImageForProposedRect:NULL context:nil hints:nil];
+        if (!full) {
+            return NO;
+        }
+        CGImageRef center = CGImageCreateWithImageInRect(full, CGRectMake(
+            CGImageGetWidth(full) / 2, CGImageGetHeight(full) / 2, 1, 1));
+        if (!center) {
+            return NO;
+        }
+        NSBitmapImageRep *sample = [[NSBitmapImageRep alloc] initWithCGImage:center];
+        CGImageRelease(center);
+        NSColor *color = [[sample colorAtX:0 y:0] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        if (!color) {
+            return NO;
+        }
+        return fabs(color.redComponent * 255 - expected[0]) <= 16 &&
+               fabs(color.greenComponent * 255 - expected[1]) <= 16 &&
+               fabs(color.blueComponent * 255 - expected[2]) <= 16;
+    }
+}
+
+static int checkDualNativeCapture(void) {
+    if (!CGPreflightScreenCaptureAccess()) {
+        fputs("ScreenCaptureKit dual capture requires the hosted capture permission.\n", stderr);
+        return 5;
+    }
+    [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
+    [NSApp finishLaunching];
+    NSWindow *left = makeCaptureFixture(50, @"Linko capture fixture A", DualColors[0][0]);
+    NSWindow *right = makeCaptureFixture(320, @"Linko capture fixture B", DualColors[1][0]);
+    [NSApp activate];
+    SCWindow *leftSource = waitForFixtureWindow((CGWindowID)left.windowNumber);
+    SCWindow *rightSource = waitForFixtureWindow((CGWindowID)right.windowNumber);
+    if (!leftSource || !rightSource || leftSource.windowID == rightSource.windowID) {
+        return 6;
+    }
+    PreviewApp *first = [PreviewApp new];
+    PreviewApp *second = [PreviewApp new];
+    [first beginCapture:leftSource];
+    if (!waitFor(^BOOL { return captureMatches(first, DualColors[0][0]); })) {
+        fputs("ScreenCaptureKit dual capture: first stream produced no initial match.\n", stderr);
+        return 7;
+    }
+    [second beginCapture:rightSource];
+    if (!waitFor(^BOOL {
+        const BOOL leftMatches = captureMatches(first, DualColors[0][0]);
+        return captureMatches(second, DualColors[1][0]) && leftMatches;
+    })) {
+        fprintf(stderr, "ScreenCaptureKit dual capture: initial pair unavailable (active=%d/%d).\n",
+                first.captureActive, second.captureActive);
+        return 8;
+    }
+    const NSTimeInterval started = uptime();
+    for (size_t round = 1; round < DualRounds; ++round) {
+        const NSTimeInterval nextUpdate = started + 0.8 * round;
+        if (!waitFor(^BOOL {
+            [first pollFixtureFrame];
+            [second pollFixtureFrame];
+            return uptime() >= nextUpdate;
+        }) || !first.captureActive || !second.captureActive) {
+            fputs("ScreenCaptureKit dual capture: both streams must survive until the next update.\n", stderr);
+            return 9;
+        }
+        paintCaptureFixture(left, DualColors[0][round]);
+        paintCaptureFixture(right, DualColors[1][round]);
+        if (!waitFor(^BOOL {
+            const BOOL leftMatches = captureMatches(first, DualColors[0][round]);
+            return captureMatches(second, DualColors[1][round]) && leftMatches;
+        })) {
+            fprintf(stderr, "ScreenCaptureKit dual capture: pair %zu not updated (active=%d/%d).\n",
+                    round, first.captureActive, second.captureActive);
+            return 10;
+        }
+    }
+    const NSTimeInterval elapsed = uptime() - started;
+    if (elapsed <= FrameLifetime) {
+        return 11;
+    }
+    printf("ScreenCaptureKit dual capture: %d distinct pairs over %.3f seconds.\n", DualRounds, elapsed);
+
+    [left close];
+    left = nil;
+    if (!waitFor(^BOOL { return ![first pollFixtureFrame] && !first.hasStream; })) {
+        fputs("ScreenCaptureKit dual capture: first closed source did not release.\n", stderr);
+        return 12;
+    }
+    paintCaptureFixture(right, DualColors[1][DualRounds]);
+    if (first.hasStream || !waitFor(^BOOL { return captureMatches(second, DualColors[1][DualRounds]); })) {
+        fputs("ScreenCaptureKit dual capture: remaining source did not deliver a fresh frame.\n", stderr);
+        return 13;
+    }
+    puts("ScreenCaptureKit dual capture: first source cleared, remaining source updated.");
+    [right close];
+    right = nil;
+    if (!waitFor(^BOOL { return ![second pollFixtureFrame] && !second.hasStream; })) {
+        fputs("ScreenCaptureKit dual capture: second closed source did not release.\n", stderr);
+        return 14;
+    }
+    puts("ScreenCaptureKit dual capture: both closed sources cleared and released.");
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    @autoreleasepool {
+        if (argc == 2 && strcmp(argv[1], "--dual-capture") == 0) {
+            return checkDualNativeCapture();
+        }
+        if (argc != 1) {
+            return 2;
+        }
         CaptureOutput *output = [CaptureOutput new];
         NSImage *fixture = [[NSImage alloc] initWithSize:NSMakeSize(20, 10)];
         [output publish:fixture];
