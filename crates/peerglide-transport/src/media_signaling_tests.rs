@@ -32,7 +32,12 @@ const ANSWER: MediaParameters = MediaParameters {
 };
 
 fn test_endpoint(identity: &Identity, peer: &Identity) -> Result<Endpoint> {
-    endpoint_alpn("127.0.0.1:0".parse()?, identity, &peer.certificate, TEST_ALPN)
+    endpoint_alpn(
+        "127.0.0.1:0".parse()?,
+        identity,
+        &peer.certificate,
+        TEST_ALPN,
+    )
 }
 
 fn authenticated_peer(connection: &Connection, enrolled: &Identity) -> Result<[u8; 32]> {
@@ -86,7 +91,11 @@ impl Pair {
         Ok(Self {
             source: at_source,
             viewer: at_viewer,
-            binding: Binding { source: source_id, viewer: viewer_id, nonce },
+            binding: Binding {
+                source: source_id,
+                viewer: viewer_id,
+                nonce,
+            },
         })
     }
 
@@ -132,7 +141,12 @@ fn encode(
     });
     let surface = gate.key();
     bytes.extend_from_slice(&surface.binding.nonce);
-    for value in [surface.object, surface.generation, gate.view_epoch(), generation] {
+    for value in [
+        surface.object,
+        surface.generation,
+        gate.view_epoch(),
+        generation,
+    ] {
         bytes.extend_from_slice(&value.to_be_bytes());
     }
     append_parameters(&mut bytes, declared);
@@ -161,14 +175,20 @@ fn read_parameters(fields: &mut &[u8]) -> Result<MediaParameters> {
 
 fn decode(mut wire: &[u8], binding: Binding) -> Result<(ControlDescription, MediaParameters)> {
     ensure!(wire.len() == RECORD_BYTES, "wrong test description length");
-    ensure!(&field::<5>(&mut wire)? == MAGIC, "unknown test protocol version");
+    ensure!(
+        &field::<5>(&mut wire)? == MAGIC,
+        "unknown test protocol version"
+    );
     let role = match field(&mut wire)? {
         [1] => Role::Offer,
         [2] => Role::Answer,
         _ => bail!("invalid test description role"),
     };
     let surface = SurfaceKey {
-        binding: Binding { nonce: field(&mut wire)?, ..binding },
+        binding: Binding {
+            nonce: field(&mut wire)?,
+            ..binding
+        },
         object: u64::from_be_bytes(field(&mut wire)?),
         generation: u64::from_be_bytes(field(&mut wire)?),
     };
@@ -212,7 +232,10 @@ async fn authenticates_both_descriptions_and_rejects_old_connection_or_revoked_g
     let source_peer_at_viewer = authenticated_peer(&pair.viewer, &source)?;
     let viewer_peer_at_source = authenticated_peer(&pair.source, &viewer)?;
 
-    let wrong_media = MediaParameters { dtls_sha256: [14; 32], ..OFFER };
+    let wrong_media = MediaParameters {
+        dtls_sha256: [14; 32],
+        ..OFFER
+    };
     let substituted = encode(&gate, generation, Role::Offer, OFFER, wrong_media);
     let substituted = transfer(&pair.source, &pair.viewer, &substituted).await?;
     let (description, media) = decode(&substituted, pair.binding)?;
@@ -244,7 +267,10 @@ async fn authenticates_both_descriptions_and_rejects_old_connection_or_revoked_g
         Err(Error::PermissionDenied)
     );
     pair.viewer.close(0u8.into(), b"test revocation");
-    assert!(matches!(timeout(WAIT, pair.source.closed()).await?, quinn::ConnectionError::ApplicationClosed(_)));
+    assert!(matches!(
+        timeout(WAIT, pair.source.closed()).await?,
+        quinn::ConnectionError::ApplicationClosed(_)
+    ));
 
     let next = Pair::connect(&source, &viewer, &source_endpoint, &viewer_endpoint).await?;
     assert_ne!(pair.binding.nonce, next.binding.nonce);
