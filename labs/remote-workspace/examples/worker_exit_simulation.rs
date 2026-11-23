@@ -457,7 +457,10 @@ mod tests {
         packet.extend_from_slice(&(NV12_BYTES as u32).to_be_bytes());
 
         let wrong_generation = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION + 1, 2);
-        assert_eq!(wrong_generation.unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            wrong_generation.unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
         let truncated = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION, 2);
         assert_eq!(truncated.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
         packet[24] = 0xff;
