@@ -43,6 +43,8 @@ jobs:
         run: |
           cargo test --locked -p peerglide-gui --example workspace_lab
           cargo build --locked --release -p peerglide-gui --example workspace_lab
+      - name: Verify recovery journal across forced process termination
+        run: cargo run --locked -p peerglide-gui --example workspace_recovery -- --smoke
       - run: python tools/smoke.py
       - run: python tools/reconnect_smoke.py
       - run: python -m unittest discover -s tools -p test_third_party.py

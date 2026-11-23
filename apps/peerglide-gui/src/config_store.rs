@@ -87,6 +87,16 @@ impl Store {
         Ok((Self { path, expected }, data))
     }
     pub fn save<T: Serialize>(&mut self, data: &T) -> Result<()> {
+        self.save_inner(data, true)
+    }
+
+    /// Replace a restart journal by comparing the current bytes and committing
+    /// atomically. The live record is authoritative; old obligations are not backups.
+    pub fn save_without_backup<T: Serialize>(&mut self, data: &T) -> Result<()> {
+        self.save_inner(data, false)
+    }
+
+    fn save_inner<T: Serialize>(&mut self, data: &T, keep_backup: bool) -> Result<()> {
         let path = self.path.clone();
         let _lock = lock(&path.with_extension("lock"))?;
         let previous = read(&path)?;
@@ -94,7 +104,7 @@ impl Store {
             previous.as_deref().map(blake3::hash) == self.expected,
             "configuration changed in another process; reload before saving"
         );
-        self.commit(data, previous)
+        self.commit(data, previous.filter(|_| keep_backup))
     }
     /// Only invoked by an explicit GUI reset, never automatic on parse/version error.
     pub fn reset<T: Serialize + Default>(path: PathBuf) -> Result<(Self, T)> {
