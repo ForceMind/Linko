@@ -355,7 +355,9 @@ impl LiveFixture {
 
     fn require_gap(&self) -> io::Result<()> {
         if self.next_event()?.is_some() {
-            return Err(io::Error::other("unexpected native data during frame expiry"));
+            return Err(io::Error::other(
+                "unexpected native data during frame expiry",
+            ));
         }
         Ok(())
     }

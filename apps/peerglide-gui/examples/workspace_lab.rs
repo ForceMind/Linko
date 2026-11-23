@@ -68,7 +68,10 @@ trait NativePanelProbe {
 }
 
 enum ProbePaths {
-    Single { launcher: PathBuf, codec: PathBuf },
+    Single {
+        launcher: PathBuf,
+        codec: PathBuf,
+    },
     Live {
         codec: PathBuf,
         pause_for_expiry: bool,
