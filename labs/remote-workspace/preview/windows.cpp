@@ -31,6 +31,7 @@ struct WorkerControl;
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
 #include <dbghelp.h>
+#include <io.h>
 
 #include "../system-codec-probe/codec_worker_protocol.h"
 #include "../system-codec-probe/windows_fixture.h"
@@ -569,7 +570,7 @@ int verifyDualFixtures(HWND& left, HWND& right, auto decode, auto releaseCodec) 
                    first.view().first, second.view().first);
         return 12;
     }
-    const auto started = Clock::now();
+    auto started = Clock::now();
     for (int round = 0; round < dualRounds; ++round) {
         if (round) {
             const auto next = started + 800ms * round;
@@ -584,7 +585,12 @@ int verifyDualFixtures(HWND& left, HWND& right, auto decode, auto releaseCodec) 
                 return 13;
             }
         }
-        decode(leftFrame.get(), *rightFrame);
+        if (!decode(leftFrame.get(), *rightFrame)) {
+            return 17;
+        }
+        if (!round) {
+            started = Clock::now();
+        }
         leftFrame.reset();
         rightFrame.reset();
     }
@@ -603,7 +609,9 @@ int verifyDualFixtures(HWND& left, HWND& right, auto decode, auto releaseCodec) 
         return 14;
     }
     first.stop();
-    releaseCodec(true);
+    if (!releaseCodec(true)) {
+        return 14;
+    }
     paintCaptureFixture(right, dualColors[1][dualRounds]);
     if (first.view().second || !waitForFixture([&] {
         rightFrame = matchedCapture(second, dualColors[1][dualRounds]);
@@ -612,7 +620,9 @@ int verifyDualFixtures(HWND& left, HWND& right, auto decode, auto releaseCodec) 
         std::fputs("WGC dual capture: remaining source did not deliver a fresh frame.\n", stderr);
         return 15;
     }
-    decode(nullptr, *rightFrame);
+    if (!decode(nullptr, *rightFrame)) {
+        return 17;
+    }
     rightFrame.reset();
     std::puts("WGC dual capture: first source cleared, remaining source updated.");
     if (!DestroyWindow(right)) {
@@ -624,7 +634,9 @@ int verifyDualFixtures(HWND& left, HWND& right, auto decode, auto releaseCodec) 
         return 16;
     }
     second.stop();
-    releaseCodec(false);
+    if (!releaseCodec(false)) {
+        return 16;
+    }
     std::puts("WGC dual capture: both closed sources cleared and released.");
     return 0;
 }
@@ -662,7 +674,89 @@ int smokeDualCapture(HINSTANCE instance, auto decode, auto releaseCodec) {
 }
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
-int smokeDualCodec() {
+bool writeLiveRecord(HANDLE pipe, std::span<uint8_t const> record) {
+    std::size_t offset{};
+    DWORD error{};
+    const bool completed = waitForFixture([&] {
+        while (offset < record.size()) {
+            DWORD written{};
+            if (!WriteFile(pipe, record.data() + offset, static_cast<DWORD>(record.size() - offset),
+                           &written, nullptr)) {
+                error = GetLastError();
+                return true;
+            }
+            if (!written) {
+                return false;
+            }
+            offset += written;
+        }
+        return true;
+    });
+    if (!completed || offset != record.size()) {
+        std::fprintf(stderr, "WGC live display: incomplete output record (error=%lu).\n", error);
+        return false;
+    }
+    return true;
+}
+
+bool expectLiveReceipt(HANDLE pipe, uint64_t generation, unsigned char sequence) {
+    uint8_t actual[WorkerDisplayReceiptBytes];
+    std::size_t offset{};
+    DWORD error{};
+    const bool completed = waitForFixture([&] {
+        while (offset < sizeof(actual)) {
+            DWORD available{};
+            if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
+                error = GetLastError();
+                return true;
+            }
+            if (!available) {
+                return false;
+            }
+            const auto count = std::min(available, static_cast<DWORD>(sizeof(actual) - offset));
+            DWORD received{};
+            if (!ReadFile(pipe, actual + offset, count, &received, nullptr)) {
+                error = GetLastError();
+                return true;
+            }
+            if (!received) {
+                error = ERROR_BROKEN_PIPE;
+                return true;
+            }
+            offset += received;
+        }
+        return true;
+    });
+    uint8_t expected[WorkerDisplayReceiptBytes];
+    formatWorkerDisplayReceipt(expected, generation, sequence);
+    if (!completed || offset != sizeof(actual) || std::memcmp(actual, expected, sizeof(actual)) != 0) {
+        std::fprintf(stderr, "WGC live display: receipt did not match source and sequence (error=%lu).\n",
+                     error);
+        return false;
+    }
+    return true;
+}
+
+bool deliverLiveFrame(HANDLE pipe, WorkerFramePixels const& frame, uint64_t generation,
+                      unsigned char sequence) {
+    uint8_t record[WorkerFrameRecordBytes];
+    formatWorkerFrameRecord(record, generation, &frame, sequence);
+    return writeLiveRecord(pipe, record);
+}
+
+int smokeDualCodec(WorkerControl const* worker) {
+    HANDLE input{};
+    HANDLE events{};
+    if (worker) {
+        input = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stdin)));
+        events = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(worker->events)));
+        DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+        if (worker->generation == UINT64_MAX || input == INVALID_HANDLE_VALUE ||
+            events == INVALID_HANDLE_VALUE || !SetNamedPipeHandleState(events, &mode, nullptr, nullptr)) {
+            std::fprintf(stderr, "WGC live display: cannot prepare bounded pipes (error=%lu).\n", GetLastError());
+            return 17;
+        }
+    }
     using LiveCodec = std::unique_ptr<WgcLiveCodec, decltype(&deleteWgcLiveCodec)>;
     LiveCodec first(nullptr, deleteWgcLiveCodec);
     LiveCodec second(nullptr, deleteWgcLiveCodec);
@@ -678,19 +772,36 @@ int smokeDualCodec() {
             submitWgcLiveFrame(*first, capturedFixtureFrame(*left));
         }
         submitWgcLiveFrame(*second, capturedFixtureFrame(right));
+        WorkerFramePixels leftOutput{};
+        WorkerFramePixels rightOutput{};
         if (left) {
-            verifyWgcLiveFrame(*first);
+            verifyWgcLiveFrame(*first, worker ? &leftOutput : nullptr);
             ++firstFrames;
         }
-        verifyWgcLiveFrame(*second);
+        verifyWgcLiveFrame(*second, worker ? &rightOutput : nullptr);
         ++secondFrames;
         std::printf("Media Foundation dual capture: verified decoded timestamps and colors before drain, "
                     "first=%u second=%u.\n", firstFrames, secondFrames);
+        if (worker) {
+            const uint64_t generation = worker->generation;
+            const auto sequence = static_cast<unsigned char>(secondFrames);
+            return (!left || deliverLiveFrame(events, leftOutput, generation, sequence)) &&
+                   deliverLiveFrame(events, rightOutput, generation + 1, sequence) &&
+                   (!left || expectLiveReceipt(input, generation, sequence)) &&
+                   expectLiveReceipt(input, generation + 1, sequence);
+        }
+        return true;
     }, [&](bool left) {
         auto& codec = left ? first : second;
         finishWgcLiveCodec(*codec);
         codec.reset();
         std::printf("Media Foundation dual capture: released %s codec.\n", left ? "first" : "second");
+        if (worker) {
+            uint8_t record[WorkerMessageSize];
+            formatWorkerMessage(record, WorkerStopped, worker->generation + (left ? 0 : 1));
+            return writeLiveRecord(events, record);
+        }
+        return true;
     });
 }
 
@@ -853,7 +964,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     const bool exportPixels = argc == 2 && std::strcmp(argv[1], "--worker-pixels") == 0;
     const bool presentPixels = argc == 2 && std::strcmp(argv[1], "--present-pixels") == 0;
     const bool liveCodec = argc == 2 && std::strcmp(argv[1], "--dual-codec") == 0;
-    if (argc != 1 && !exportPixels && !presentPixels && !liveCodec) {
+    const bool livePixels = argc == 2 && std::strcmp(argv[1], "--dual-live-pixels") == 0;
+    if (argc != 1 && !exportPixels && !presentPixels && !liveCodec && !livePixels) {
         return 2;
     }
     smokeThread = GetCurrentThreadId();
@@ -879,7 +991,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 #ifdef LINKO_RW04_WGC_CODEC_CI
     // The worker validates its start record before creating or capturing the fixture window.
     auto run = [](WorkerControl const* worker) { return smoke(GetModuleHandleW(nullptr), worker); };
-    const int result = liveCodec ? runWgcLiveCodecs(smokeDualCodec)
+    const int result = (liveCodec || livePixels) ? runWgcLiveCodecs(smokeDualCodec, livePixels)
                     : presentPixels ? runWgcPresenter(presentFixture)
                     : exportPixels ? runWgcCodecWorker(run) : run(nullptr);
     markWgcCodecStage("closing-shared-mta");
@@ -891,7 +1003,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     }
     const auto instance = GetModuleHandleW(nullptr);
     const int result = dualCapture
-        ? smokeDualCapture(instance, [](Frame const*, Frame const&) {}, [](bool) {})
+        ? smokeDualCapture(instance, [](Frame const*, Frame const&) { return true; }, [](bool) { return true; })
         : smoke(instance);
 #endif
     std::printf("WGC smoke result: %d\n", result);

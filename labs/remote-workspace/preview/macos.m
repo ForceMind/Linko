@@ -768,17 +768,14 @@ static BOOL deliverLiveFrame(struct WorkerControl const *worker, struct SckLiveC
     if (!takeSckLiveFrame(codec, &frame)) {
         return NO;
     }
-    uint8_t record[WorkerMessageSize + WorkerFrameHeaderBytes + WorkerFrameBytes];
-    formatWorkerMessage(record, WorkerFrame, generation);
-    formatWorkerFrameHeader(record + WorkerMessageSize, sequence);
-    memcpy(record + WorkerMessageSize + WorkerFrameHeaderBytes, frame.data, sizeof(frame.data));
+    uint8_t record[WorkerFrameRecordBytes];
+    formatWorkerFrameRecord(record, generation, &frame, sequence);
     return exchangeLiveBytes(fileno(worker->events), record, sizeof(record), YES);
 }
 
 static BOOL expectLiveReceipt(uint64_t generation, unsigned char sequence) {
-    uint8_t expected[WorkerMessageSize + 4] = {0};
-    formatWorkerMessage(expected, WorkerDisplayed, generation);
-    expected[WorkerMessageSize + 3] = sequence;
+    uint8_t expected[WorkerDisplayReceiptBytes];
+    formatWorkerDisplayReceipt(expected, generation, sequence);
     uint8_t actual[sizeof(expected)];
     if (!exchangeLiveBytes(fileno(stdin), actual, sizeof(actual), NO) ||
         memcmp(expected, actual, sizeof(expected)) != 0) {
