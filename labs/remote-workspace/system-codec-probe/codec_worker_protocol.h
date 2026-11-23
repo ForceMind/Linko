@@ -8,9 +8,11 @@
 
 // Fixed records on the child process's inherited control pipes.
 enum WorkerMessage {
-    WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame, WorkerPresented, WorkerPresent
+    WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame, WorkerPresented, WorkerPresent,
+    WorkerDisplayed
 };
 enum { WorkerVersion = 1, WorkerMessageSize = 16, WorkerGenerationOffset = 8 };
+enum { WorkerFrameHeaderBytes = 12 };
 enum { WorkerFrameWidth = 128, WorkerFrameHeight = 96, WorkerFrameCount = 2 };
 enum { WorkerFrameBytes = WorkerFrameWidth * WorkerFrameHeight * 3 / 2 };
 enum { WorkerRgbaBytes = WorkerFrameWidth * WorkerFrameHeight * 4 };
@@ -103,13 +105,21 @@ static inline bool readWorkerMessage(struct WorkerControl const *control, enum W
     return true;
 }
 
-static inline bool sendWorkerMessage(struct WorkerControl const *control, enum WorkerMessage kind) {
-    unsigned char message[WorkerMessageSize] = {'L', 'R', 'W', '4', WorkerVersion, (unsigned char)kind};
-    uint64_t generation = control->generation;
-    for (size_t index = sizeof(message); index > WorkerGenerationOffset;) {
+static inline void formatWorkerMessage(unsigned char message[WorkerMessageSize], enum WorkerMessage kind,
+                                       uint64_t generation) {
+    memset(message, 0, WorkerMessageSize);
+    memcpy(message, "LRW4", 4);
+    message[4] = WorkerVersion;
+    message[5] = (unsigned char)kind;
+    for (size_t index = WorkerMessageSize; index > WorkerGenerationOffset;) {
         message[--index] = (unsigned char)(generation & 0xff);
         generation >>= 8;
     }
+}
+
+static inline bool sendWorkerMessage(struct WorkerControl const *control, enum WorkerMessage kind) {
+    unsigned char message[WorkerMessageSize];
+    formatWorkerMessage(message, kind, control->generation);
     return fwrite(message, 1, sizeof(message), control->events) == sizeof(message) &&
            fflush(control->events) == 0;
 }
@@ -130,12 +140,18 @@ static inline bool copyWorkerNv12(struct WorkerFramePixels *frame, uint8_t const
     return true;
 }
 
-static inline bool sendWorkerFrame(struct WorkerControl const *control,
-                                   struct WorkerFramePixels const *frame, unsigned char sequence) {
-    const uint8_t geometry[12] = {
+static inline void formatWorkerFrameHeader(uint8_t header[WorkerFrameHeaderBytes], unsigned char sequence) {
+    const uint8_t geometry[WorkerFrameHeaderBytes] = {
         0, 0, 0, sequence, 0, WorkerFrameWidth, 0, WorkerFrameHeight,
         0, 0, WorkerFrameBytes >> 8, WorkerFrameBytes & 0xff,
     };
+    memcpy(header, geometry, sizeof(geometry));
+}
+
+static inline bool sendWorkerFrame(struct WorkerControl const *control,
+                                   struct WorkerFramePixels const *frame, unsigned char sequence) {
+    uint8_t geometry[WorkerFrameHeaderBytes];
+    formatWorkerFrameHeader(geometry, sequence);
     return sendWorkerMessage(control, WorkerFrame) &&
            fwrite(geometry, 1, sizeof(geometry), control->events) == sizeof(geometry) &&
            fwrite(frame->data, 1, sizeof(frame->data), control->events) == sizeof(frame->data) &&

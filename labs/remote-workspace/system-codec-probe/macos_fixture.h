@@ -12,9 +12,10 @@ bool encodeSckWindowFrames(struct WorkerControl const *control, struct SckWindow
 
 struct SckLiveCodec;
 enum SckLiveStatus { SckLivePending, SckLiveDecoded, SckLiveFailed };
-struct SckLiveCodec *startSckLiveCodec(void);
+struct SckLiveCodec *startSckLiveCodec(bool exportPixels);
 bool submitSckLiveFrame(struct SckLiveCodec *codec, struct SckWindowFrame const *frame);
 enum SckLiveStatus pollSckLiveFrame(struct SckLiveCodec *codec);
+bool takeSckLiveFrame(struct SckLiveCodec *codec, struct WorkerFramePixels *packed);
 void stopSckLiveCodec(struct SckLiveCodec *codec);
 
 #endif

@@ -33,6 +33,7 @@ struct Probe {
     int workerLuma;
     struct WorkerControl const *worker;
     bool exportPixels;
+    _Atomic(CVPixelBufferRef) liveOutput;
     _Atomic(CVPixelBufferRef) exported[WorkerFrameCount];
     CFStringRef softwareEncoder;
     _Atomic(CMSampleBufferRef) encoded[MaxFrames];
@@ -159,28 +160,32 @@ static void decodedOutput(void *state, void *source, OSStatus status, VTDecodeIn
     if (status != noErr || (flags & kVTDecodeInfo_FrameDropped) || index < 0 ||
         !matchesFixture(frame, probe, (unsigned)index) || atomic_exchange(&probe->decodedAt[index], received)) {
         atomic_store(&probe->callbackError, status == noErr ? -3 : status);
+    } else if (probe->liveWindow && probe->exportPixels) {
+        atomic_store(&probe->liveOutput, CVPixelBufferRetain(frame));
     } else if (probe->exportPixels && index < WorkerFrameCount) {
         atomic_store(&probe->exported[index], CVPixelBufferRetain(frame));
     }
 }
 
+static bool packDecodedPixels(CVPixelBufferRef pixels, struct WorkerFramePixels *packed) {
+    if (!pixels || CVPixelBufferGetPlaneCount(pixels) != 2 ||
+        CVPixelBufferGetHeightOfPlane(pixels, 0) < WorkerFrameHeight ||
+        CVPixelBufferGetHeightOfPlane(pixels, 1) < WorkerFrameHeight / 2 ||
+        CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != noErr) {
+        return false;
+    }
+    const bool copied = copyWorkerNv12(packed, CVPixelBufferGetBaseAddressOfPlane(pixels, 0),
+                                      CVPixelBufferGetBytesPerRowOfPlane(pixels, 0),
+                                      CVPixelBufferGetBaseAddressOfPlane(pixels, 1),
+                                      CVPixelBufferGetBytesPerRowOfPlane(pixels, 1));
+    return CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) == noErr && copied;
+}
+
 static bool sendDecodedPixels(struct Probe *probe) {
     for (unsigned index = 0; index < WorkerFrameCount; ++index) {
-        CVPixelBufferRef pixels = atomic_load(&probe->exported[index]);
-        if (!pixels || CVPixelBufferGetPlaneCount(pixels) != 2 ||
-            CVPixelBufferGetHeightOfPlane(pixels, 0) < WorkerFrameHeight ||
-            CVPixelBufferGetHeightOfPlane(pixels, 1) < WorkerFrameHeight / 2 ||
-            CVPixelBufferLockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly) != noErr) {
-            return false;
-        }
         struct WorkerFramePixels packed;
-        const bool copied =
-            copyWorkerNv12(&packed, CVPixelBufferGetBaseAddressOfPlane(pixels, 0),
-                           CVPixelBufferGetBytesPerRowOfPlane(pixels, 0),
-                           CVPixelBufferGetBaseAddressOfPlane(pixels, 1),
-                           CVPixelBufferGetBytesPerRowOfPlane(pixels, 1));
-        const OSStatus unlock = CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
-        if (!copied || unlock != noErr || !sendWorkerFrame(probe->worker, &packed, (unsigned char)(index + 2))) {
+        if (!packDecodedPixels(atomic_load(&probe->exported[index]), &packed) ||
+            !sendWorkerFrame(probe->worker, &packed, (unsigned char)(index + 2))) {
             return false;
         }
     }
@@ -765,7 +770,7 @@ struct SckLiveCodec {
     unsigned checked;
 };
 
-struct SckLiveCodec *startSckLiveCodec(void) {
+struct SckLiveCodec *startSckLiveCodec(bool exportPixels) {
     struct SckLiveCodec *codec = calloc(1, sizeof(*codec));
     if (!codec) {
         return NULL;
@@ -774,6 +779,8 @@ struct SckLiveCodec *startSckLiveCodec(void) {
     codec->probe.height = WorkerFrameHeight;
     codec->probe.frames = MaxFrames;
     codec->probe.liveWindow = true;
+    codec->probe.exportPixels = exportPixels;
+    atomic_init(&codec->probe.liveOutput, NULL);
     atomic_init(&codec->probe.callbackError, noErr);
     for (unsigned index = 0; index < MaxFrames; ++index) {
         atomic_init(&codec->probe.encoded[index], NULL);
@@ -790,7 +797,8 @@ struct SckLiveCodec *startSckLiveCodec(void) {
 }
 
 bool submitSckLiveFrame(struct SckLiveCodec *codec, struct SckWindowFrame const *frame) {
-    if (!codec || codec->submitted >= MaxFrames || codec->submitted != codec->checked) {
+    if (!codec || codec->submitted >= MaxFrames || codec->submitted != codec->checked ||
+        atomic_load(&codec->probe.liveOutput)) {
         return false;
     }
     struct WorkerFramePixels packed;
@@ -831,7 +839,7 @@ enum SckLiveStatus pollSckLiveFrame(struct SckLiveCodec *codec) {
     }
     const unsigned index = codec->checked;
     const uint64_t received = atomic_load(&codec->probe.decodedAt[index]);
-    if (!received) {
+    if (!received || (codec->probe.exportPixels && !atomic_load(&codec->probe.liveOutput))) {
         return SckLivePending;
     }
     if (received <= codec->probe.submittedAt[index]) {
@@ -849,6 +857,16 @@ enum SckLiveStatus pollSckLiveFrame(struct SckLiveCodec *codec) {
     return SckLiveDecoded;
 }
 
+bool takeSckLiveFrame(struct SckLiveCodec *codec, struct WorkerFramePixels *packed) {
+    CVPixelBufferRef pixels = atomic_exchange(&codec->probe.liveOutput, NULL);
+    if (!pixels) {
+        return false;
+    }
+    const bool passed = packDecodedPixels(pixels, packed);
+    CVPixelBufferRelease(pixels);
+    return passed;
+}
+
 void stopSckLiveCodec(struct SckLiveCodec *codec) {
     if (!codec) {
         return;
@@ -859,6 +877,10 @@ void stopSckLiveCodec(struct SckLiveCodec *codec) {
     }
     VTCompressionSessionInvalidate(codec->encoder);
     CFRelease(codec->encoder);
+    CVPixelBufferRef unusedOutput = atomic_exchange(&codec->probe.liveOutput, NULL);
+    if (unusedOutput) {
+        CVPixelBufferRelease(unusedOutput);
+    }
     for (unsigned index = codec->delivered; index < codec->submitted; ++index) {
         CMSampleBufferRef unused = atomic_exchange(&codec->probe.encoded[index], NULL);
         if (unused) {

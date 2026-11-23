@@ -6,6 +6,7 @@
 //! consent. No existing PeerGlide v5 protocol or permission is extended here.
 #![forbid(unsafe_code)]
 
+pub mod codec_fixture;
 pub mod coordinator;
 pub mod frame_binding;
 pub mod geometry;

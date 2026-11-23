@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use linko_workspace_lab::codec_fixture::{nv12_rgba, NV12_BYTES};
 use linko_workspace_lab::coordinator::{Coordinator, Fault, SurfaceSpec, ViewId};
 use linko_workspace_lab::frame_binding::{FrameMatch, FrameMatcher, MediaFrame, MediaTrack};
 use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect, Rotation, SourceGeometry};
@@ -52,7 +53,6 @@ const NATIVE_PIXELS: PixelSize = PixelSize {
 };
 const NATIVE_WIDTH: usize = NATIVE_PIXELS.width as usize;
 const NATIVE_HEIGHT: usize = NATIVE_PIXELS.height as usize;
-const NV12_BYTES: usize = NATIVE_WIDTH * NATIVE_HEIGHT * 3 / 2;
 
 #[derive(Clone, Copy)]
 enum FixturePixels {
@@ -273,7 +273,7 @@ fn read_worker_frame(
     {
         return Err(invalid_worker_data("invalid decoded frame header"));
     }
-    let mut nv12 = vec![0; NV12_BYTES];
+    let mut nv12 = [0; NV12_BYTES];
     stdout.read_exact(&mut nv12)?;
 
     let rgba = nv12_rgba(&nv12);
@@ -305,28 +305,6 @@ fn matches_window_color(rgba: &[u8], resized: bool) -> bool {
         .zip(expected)
         .all(|(&decoded, expected)| decoded.abs_diff(expected) <= 24)
         && rgba[center + 3] == 255
-}
-
-// The bounded SDR fixture uses the limited-range BT.601 matrix.
-fn nv12_rgba(nv12: &[u8]) -> Vec<u8> {
-    let (luma, chroma) = nv12.split_at(NATIVE_WIDTH * NATIVE_HEIGHT);
-    let mut rgba = Vec::with_capacity(luma.len() * 4);
-    let channel = |value: i32| ((value + 128) >> 8).clamp(0, 255) as u8;
-    for (index, &y) in luma.iter().enumerate() {
-        let row = index / NATIVE_WIDTH;
-        let column = index % NATIVE_WIDTH;
-        let uv = row / 2 * NATIVE_WIDTH + (column & !1);
-        let c = 298 * (i32::from(y) - 16);
-        let d = i32::from(chroma[uv]) - 128;
-        let e = i32::from(chroma[uv + 1]) - 128;
-        rgba.extend_from_slice(&[
-            channel(c + 409 * e),
-            channel(c - 100 * d - 208 * e),
-            channel(c + 516 * d),
-            255,
-        ]);
-    }
-    rgba
 }
 
 fn run_child() -> io::Result<()> {
