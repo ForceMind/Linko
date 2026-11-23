@@ -28,6 +28,23 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     raise TimeoutError("GUI window did not appear")
                 time.sleep(1)
                 subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
+                if name == "rw06-layout":
+                    layout = pathlib.Path(arguments[-1]) / "workspace-layout.json"
+                    assert not layout.exists(), "opening the canvas must not save a layout"
+                    subprocess.run(
+                        ["xdotool", "key", "--delay", "100", "3", "shift+Left", "ctrl+s"],
+                        check=True,
+                        timeout=5,
+                    )
+                    for _ in range(30):
+                        if layout.exists():
+                            break
+                        time.sleep(0.1)
+                    saved = json.loads(layout.read_text(encoding="utf-8"))
+                    assert saved == {"store_version": 1, "data": {
+                        "layout_version": 1, "panel_order": [1, 3, 2, 4], "focused_panel": 3,
+                    }}
+                    print("PASS: native workspace reordered and explicitly saved only layout preferences")
                 if name == "gesture-lab":
                     # Fixed-size, scale-1 virtual window. This is synthetic GUI
                     # input on our isolated X server, never a user desktop.
@@ -103,3 +120,11 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
             [], "rw06-workspace", binary="examples/workspace_lab", title="Linko Workspace Lab",
             destination=pathlib.Path(workspace_dest),
         )
+        layout_dir = pathlib.Path(temporary) / "workspace-layout"
+        layout_dir.mkdir()
+        for name in ("rw06-layout", "rw06-layout-restored"):
+            capture(
+                ["--layout-dir", str(layout_dir)], name,
+                binary="examples/workspace_lab", title="Linko Workspace Lab",
+                destination=pathlib.Path(workspace_dest),
+            )
