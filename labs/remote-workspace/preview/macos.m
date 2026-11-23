@@ -489,7 +489,7 @@ static BOOL copyFixtureCrop(NSImage *image, struct SckWindowFrame *frame) {
                                 color, kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst)
         : NULL;
     const BOOL copied = context != NULL;
-    if (*(bool const *)context) {
+    if (context) {
         CGContextSetBlendMode(context, kCGBlendModeCopy);
         CGContextDrawImage(context, CGRectMake(0, 0, WorkerFrameWidth, WorkerFrameHeight), crop);
         CGContextRelease(context);
@@ -702,7 +702,7 @@ static bool presentSckFrame(struct WorkerControl const *worker) {
 
 static bool runSckWorker(struct WorkerControl const *worker, void *context) {
     struct WorkerControl session = *worker;
-    if (context) {
+    if (*(bool const *)context) {
         session.present = presentSckFrame;
     }
     return checkNativeCapture(&session) == 0;

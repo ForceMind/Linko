@@ -22,9 +22,9 @@ const FIXTURE_READY: u8 = 1;
 const WORKER_VERSION: u8 = 1;
 const WORKER_START: u8 = 1;
 const WORKER_READY: u8 = 2;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const WORKER_STOP: u8 = 3;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const WORKER_STOPPED: u8 = 4;
 const WORKER_FRAME: u8 = 5;
 const WORKER_PRESENTED: u8 = 6;
@@ -91,10 +91,11 @@ impl CoordinatedWorker {
         binding: Binding,
         generation: u64,
         fixture: FixturePixels,
+        present_in_worker: bool,
     ) -> io::Result<(Self, [Vec<u8>; 2])> {
         // The Actions launcher provides the path to its freshly built fixture.
         let mut command = Command::new(binary);
-        if cfg!(target_os = "macos") && matches!(fixture, FixturePixels::Window) {
+        if present_in_worker {
             command.arg("--worker-present");
         } else {
             command.arg("--worker-pixels");
@@ -441,10 +442,15 @@ fn main() -> SimulationResult<()> {
     c.destination_ready(handoff, 0)?;
     c.acknowledge_hidden(handoff, 0)?;
 
+    let present_in_worker = cfg!(target_os = "macos") && matches!(fixture, FixturePixels::Window);
     let (mut worker, [pixels, late_pixels]) = match codec.as_deref() {
-        Some(binary) => {
-            CoordinatedWorker::start_codec(Path::new(binary), binding, WORKER_GENERATION, fixture)?
-        }
+        Some(binary) => CoordinatedWorker::start_codec(
+            Path::new(binary),
+            binding,
+            WORKER_GENERATION,
+            fixture,
+            present_in_worker,
+        )?,
         None => (
             CoordinatedWorker::start_fixture(binding)?,
             [vec![0; 16], vec![0; 16]],
@@ -476,7 +482,7 @@ fn main() -> SimulationResult<()> {
     assert!(worker.poll_exit(&mut c, 1)?.is_none());
     assert!(c.snapshot(first, 1)?.presentation_pending);
     let late_ticket = if let (Some(binary), FixturePixels::Window) = (codec.as_deref(), fixture) {
-        if cfg!(target_os = "macos") {
+        if present_in_worker {
             worker.send_command(WORKER_PRESENT, WORKER_GENERATION)?;
             worker.write_presentation(waiting.frame.pixels())?;
             worker.expect_event(
@@ -529,15 +535,20 @@ fn main() -> SimulationResult<()> {
     c.acknowledge_presentation(other.ticket, 2)?;
 
     println!("Worker exit: views cleared, late frame rejected, recovery and connection kept.");
-    #[cfg(windows)]
-    if let Some(binary) = codec.as_deref() {
+    #[cfg(any(windows, target_os = "macos"))]
+    if let Some(binary) = codec.as_deref().filter(|_| cfg!(windows) || present_in_worker) {
         let replacement = Binding {
             nonce: [5; 16],
             ..binding
         };
         let generation = WORKER_GENERATION + 1;
-        let (mut next, _) =
-            CoordinatedWorker::start_codec(Path::new(binary), replacement, generation, fixture)?;
+        let (mut next, _) = CoordinatedWorker::start_codec(
+            Path::new(binary),
+            replacement,
+            generation,
+            fixture,
+            false,
+        )?;
         next.send_command(WORKER_STOP, generation)?;
         next.expect_event(
             worker_record(WORKER_STOPPED, generation),
@@ -547,7 +558,7 @@ fn main() -> SimulationResult<()> {
         assert!(status.success());
         assert_eq!(closed, 0);
         assert!(c.snapshot(survivor, 3)?.viewing_allowed);
-        println!("Native worker: verified Windows replacement and clean STOPPED.");
+        println!("Native worker: verified capture-only replacement and clean STOPPED.");
     }
     Ok(())
 }
