@@ -122,6 +122,11 @@ jobs:
             -framework VideoToolbox -o "$RUNNER_TEMP/rw04-sck-h264"
           cargo run --locked --offline --manifest-path labs/remote-workspace/Cargo.toml \
             --example worker_exit_simulation -- --native-window "$RUNNER_TEMP/rw04-sck-h264"
+      - name: Roundtrip two live ScreenCaptureKit windows through persistent VideoToolbox sessions
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 1
+        run: '"$RUNNER_TEMP/rw04-sck-h264" --dual-codec'
       - uses: actions/upload-artifact@v4
         with:
           name: rw06-window-fixture-${{ matrix.os }}
