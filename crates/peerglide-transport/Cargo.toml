@@ -12,3 +12,6 @@ rcgen.workspace = true
 blake3.workspace = true
 peerglide-protocol.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+linko-workspace-lab = { path = "../../labs/remote-workspace" }
