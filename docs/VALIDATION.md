@@ -469,4 +469,6 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 
 - [PR #380](https://github.com/ForceMind/Linko/pull/380)，`c75b5f61326bb46007573e98bd911883098852ec`。两个 Windows 自建窗口分别将 WGC 实采帧交给持续运行的 Media Foundation 系统软件 H.264 编解码会话。2.564 秒内各核对四帧的时间戳、亮度和色度，全部在排空前解码。第一路采集与编解码释放后，第二路成功解出第五帧，随后释放。[Windows 原生链路](https://github.com/ForceMind/Linko/actions/runs/45152753692/job/137617983828)
 
-本批验证覆盖协调器、单槽进程交接、离线面板操作、本机双面板各一帧和两端双路持续采集及编解码。下一步先接通 macOS 上持续解码到 eframe 绘制，再接 Windows，并记录进程内存与纹理占用。实际 GPU 预算和跨设备观看待验证。
+- [PR #381](https://github.com/ForceMind/Linko/pull/381)，`4b2938a3f66cefff3b9ba282037d8f991da27770`。macOS 两路 ScreenCaptureKit 实采画面由持续运行的 VideoToolbox 硬件编解码会话处理，经本机管道逐帧更新 eframe 纹理。在 2.976 秒内回读四组画面，每处九点均匹配后才发回来源和序号对应的展示回执。第一路释放后，回读第一处清空、第二处仍显示新第五帧。最后两处清空且原生子进程正常退出。[macOS 绘制](https://github.com/ForceMind/Linko/actions/runs/45154675015/job/137629943999)
+
+本批验证覆盖协调器、单槽进程交接、离线面板操作、两端双路持续采集及编解码，以及 macOS 本机持续绘制。下一步接通 Windows 持续绘制，并测量两端进程内存与纹理占用。实际 GPU 预算和跨设备观看待验证。
