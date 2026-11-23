@@ -499,3 +499,5 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 ## A17 同一来源的本机只读镜像（2026-11-23）
 
 - [PR #390](https://github.com/ForceMind/Linko/pull/390)，`ff55c2ac6f0076e68168447a008e4797340273d6`。主面板和镜像共用授权、帧邮箱和一份解码分配。三端模型回归覆盖主面板或镜像单独可见、两处可见、两处离屏、撤权和重授、跨实例句柄、镜像移动和拆除。镜像单独的展示回执不续期主面板输入。[三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45185814449)
+
+- [PR #391](https://github.com/ForceMind/Linko/pull/391)，`b715dea469dff39d8dc6731fd3d21f4049dd3ae7`。Windows WGC/Media Foundation 和 macOS ScreenCaptureKit/VideoToolbox 各用一个原生来源进程、一个解码分配和一份纹理。每次先完成九点像素回读、再让来源采下一组颜色。前后顺序是双区域显示、拆镜像后主区域更新且镜像为空、重挂后双区域显示第三组新帧。撤销本机观看后立即释放共享纹理，确认两处清屏、采集与编解码停止及进程正常退出。较早提交的 Windows 既有双路试验出现一次 `0x8000FFFF`，当前提交通过，根因待确认。[Windows 回读](https://github.com/ForceMind/Linko/actions/runs/45187152305/job/137742215572) · [macOS 回读](https://github.com/ForceMind/Linko/actions/runs/45187152305/job/137742215546) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45187152300) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45187152550) · [较早 Windows 作业](https://github.com/ForceMind/Linko/actions/runs/45186942899/job/137741406629)
