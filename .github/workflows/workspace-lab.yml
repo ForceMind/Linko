@@ -105,6 +105,14 @@ jobs:
           name: linko-rw03-${{ matrix.os }}
           path: ${{ runner.temp }}/rw03-artifact
           if-no-files-found: error
+      - name: Verify two live WGC streams and independent source close
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 1
+        working-directory: ${{ runner.temp }}
+        run: |
+          .\rw03-smoke.exe --dual-capture
+          exit $LASTEXITCODE
       - name: Verify two live ScreenCaptureKit streams and independent source close
         if: runner.os == 'macOS'
         shell: bash

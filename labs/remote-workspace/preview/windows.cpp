@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <iterator>
@@ -496,7 +497,9 @@ LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lp
         RECT area{};
         auto dc = BeginPaint(window, &paint);
         GetClientRect(window, &area);
-        auto brush = CreateSolidBrush(area.right > 400 ? RGB(30, 70, 190) : RGB(190, 30, 70));
+        const auto color = static_cast<COLORREF>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        const auto fallback = area.right > 400 ? RGB(30, 70, 190) : RGB(190, 30, 70);
+        auto brush = CreateSolidBrush(color ? color : fallback);
         FillRect(dc, &area, brush);
         DeleteObject(brush);
         EndPaint(window, &paint);
@@ -514,6 +517,126 @@ bool registerFixture(HINSTANCE instance, wchar_t const* className = L"LinkoRW03F
     fixtureType.lpszClassName = className;
     return RegisterClassW(&fixtureType) != 0;
 }
+
+#ifndef LINKO_RW04_WGC_CODEC_CI
+constexpr int dualRounds = 4;
+constexpr COLORREF dualColors[2][dualRounds + 1] = {
+    {RGB(190, 30, 70), RGB(190, 100, 70), RGB(190, 170, 70), RGB(190, 30, 150)},
+    {RGB(30, 70, 190), RGB(30, 145, 190), RGB(30, 220, 190), RGB(95, 70, 190), RGB(30, 140, 115)},
+};
+
+void paintCaptureFixture(HWND window, COLORREF color) {
+    SetWindowLongPtrW(window, GWLP_USERDATA, static_cast<LONG_PTR>(color));
+    RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+}
+
+bool captureMatches(Preview& preview, COLORREF color) {
+    const auto frame = preview.view().second;
+    if (!frame || frame->width <= 0 || frame->height <= 0) {
+        return false;
+    }
+    const auto center = 4 * (static_cast<std::size_t>(frame->height / 2) * frame->width + frame->width / 2);
+    if (frame->pixels.size() < center + 4) {
+        return false;
+    }
+    return std::abs(std::to_integer<int>(frame->pixels[center]) - GetBValue(color)) <= 16 &&
+           std::abs(std::to_integer<int>(frame->pixels[center + 1]) - GetGValue(color)) <= 16 &&
+           std::abs(std::to_integer<int>(frame->pixels[center + 2]) - GetRValue(color)) <= 16;
+}
+
+Source captureFixtureSource(HWND window) {
+    DWORD process{};
+    const auto thread = GetWindowThreadProcessId(window, &process);
+    return {window, process, thread, title(window)};
+}
+
+int verifyDualFixtures(HWND& left, HWND& right) {
+    Preview first;
+    Preview second;
+    first.start(captureFixtureSource(left));
+    second.start(captureFixtureSource(right));
+    if (!waitForFixture([&] {
+        return captureMatches(first, dualColors[0][0]) && captureMatches(second, dualColors[1][0]);
+    })) {
+        ::fwprintf(stderr, L"WGC dual capture: initial pair unavailable (%ls / %ls).\n",
+                   first.view().first, second.view().first);
+        return 12;
+    }
+    const auto started = Clock::now();
+    for (int round = 1; round < dualRounds; ++round) {
+        const auto next = started + 800ms * round;
+        if (!waitForFixture([&] { return Clock::now() >= next; })) {
+            return 13;
+        }
+        paintCaptureFixture(left, dualColors[0][round]);
+        paintCaptureFixture(right, dualColors[1][round]);
+        if (!waitForFixture([&] {
+            return captureMatches(first, dualColors[0][round]) && captureMatches(second, dualColors[1][round]);
+        })) {
+            ::fwprintf(stderr, L"WGC dual capture: pair %d not updated (%ls / %ls).\n",
+                       round, first.view().first, second.view().first);
+            return 13;
+        }
+    }
+    const auto elapsed = Clock::now() - started;
+    if (elapsed <= 2s) {
+        return 13;
+    }
+    std::printf("WGC dual capture: %d distinct pairs over %.3f seconds.\n",
+                dualRounds, std::chrono::duration<double>(elapsed).count());
+    if (!DestroyWindow(left)) {
+        return 14;
+    }
+    left = nullptr;
+    if (!waitForFixture([&] { return !first.view().second; })) {
+        std::fputs("WGC dual capture: first closed source did not clear.\n", stderr);
+        return 14;
+    }
+    first.stop();
+    paintCaptureFixture(right, dualColors[1][dualRounds]);
+    if (first.view().second || !waitForFixture([&] { return captureMatches(second, dualColors[1][dualRounds]); })) {
+        std::fputs("WGC dual capture: remaining source did not deliver a fresh frame.\n", stderr);
+        return 15;
+    }
+    std::puts("WGC dual capture: first source cleared, remaining source updated.");
+    if (!DestroyWindow(right)) {
+        return 16;
+    }
+    right = nullptr;
+    if (!waitForFixture([&] { return !second.view().second; })) {
+        std::fputs("WGC dual capture: second closed source did not clear.\n", stderr);
+        return 16;
+    }
+    second.stop();
+    std::puts("WGC dual capture: both closed sources cleared and released.");
+    return 0;
+}
+
+int smokeDualCapture(HINSTANCE instance) {
+    if (!registerFixture(instance)) {
+        return 11;
+    }
+    auto left = CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko capture fixture A",
+                                WS_POPUP, 40, 40, 250, 160, nullptr, nullptr, instance, nullptr);
+    auto right = CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko capture fixture B",
+                                 WS_POPUP, 330, 40, 250, 160, nullptr, nullptr, instance, nullptr);
+    int result = 11;
+    if (left && right) {
+        ShowWindow(left, SW_SHOWNOACTIVATE);
+        ShowWindow(right, SW_SHOWNOACTIVATE);
+        paintCaptureFixture(left, dualColors[0][0]);
+        paintCaptureFixture(right, dualColors[1][0]);
+        result = verifyDualFixtures(left, right);
+    }
+    if (left) {
+        DestroyWindow(left);
+    }
+    if (right) {
+        DestroyWindow(right);
+    }
+    return result;
+}
+#endif
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
 LRESULT CALLBACK presenterProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -705,7 +828,12 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     markWgcCodecStage("closing-shared-mta");
     CoUninitialize();
 #else
-    const int result = smoke(GetModuleHandleW(nullptr));
+    const bool dualCapture = argc == 2 && std::strcmp(argv[1], "--dual-capture") == 0;
+    if (argc != 1 && !dualCapture) {
+        return 2;
+    }
+    const auto instance = GetModuleHandleW(nullptr);
+    const int result = dualCapture ? smokeDualCapture(instance) : smoke(instance);
 #endif
     std::printf("WGC smoke result: %d\n", result);
     return result;
