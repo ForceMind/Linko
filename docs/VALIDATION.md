@@ -473,4 +473,11 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 
 - [PR #382](https://github.com/ForceMind/Linko/pull/382)，`c16987c3b054c074edfa06edf91da9586e0b647a`。两个 Windows WGC 实采来源经 Media Foundation 系统软件 H.264 和本机有界管道进入 eframe，使用 Direct3D 12 CPU 适配器。四组双面板回读跨度 3.786 秒，同一提交的 macOS 对照为 2.998 秒。两端均在第一路释放后回读空面板与第二路第五帧，随后核对两处清空及原生进程正常退出。[Windows 绘制](https://github.com/ForceMind/Linko/actions/runs/45157971244/job/137641155337) · [macOS 绘制](https://github.com/ForceMind/Linko/actions/runs/45157971244/job/137641155368)
 
-本批验证覆盖协调器、单槽进程交接、离线面板操作及两端本机双路持续采集、编解码和实际绘制。下一步测量两端查看器与原生进程的驻留内存并核对视频纹理释放。实际 GPU 预算和跨设备观看待验证。
+- [PR #383](https://github.com/ForceMind/Linko/pull/383)，`f1202ad3b5904eb6ca9aa4a07936970108f0d642`。约每 200 ms 采样两端的查看器和原生采集编解码进程。四组双路回读保持各路原有纹理 ID，确认活动视频纹理按 2、1、0 个回收，像素数据字节分别为 98,304、49,152、0。[Windows 测量](https://github.com/ForceMind/Linko/actions/runs/45160974105/job/137652425714) · [macOS 测量](https://github.com/ForceMind/Linko/actions/runs/45160974105/job/137652425717) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45160974056)
+
+| 托管环境 | 查看器首个样本 / 采样峰值（字节） · 次数 / 跨度 | 原生进程首个样本 / 采样峰值（字节） · 次数 / 跨度 |
+| --- | --- | --- |
+| Windows Direct3D 12 CPU 适配器，系统工作集 | 4968448 / 241106944 · 33 次 / 7031 ms | 1794048 / 181534720 · 28 次 / 5953 ms |
+| macOS，系统 RSS | 7602176 / 119259136 · 27 次 / 6187 ms | 9093120 / 84246528 · 23 次 / 5345 ms |
+
+本批验证覆盖两端本机双路采集、编解码、实际绘制、工作集或 RSS 短时采样和应用视频纹理释放。首个样本来自进程启动窗口。后续验收包含长时间驻留、硬件 GPU 实测和跨设备观看。
