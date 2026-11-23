@@ -307,6 +307,17 @@ impl SessionGate {
         self.next_epoch()
     }
 
+    pub(crate) fn invalidate_media(&mut self, now: u64) -> Result<(), Error> {
+        self.check_time(now)?;
+        if !self.connected {
+            return Err(Error::Disconnected);
+        }
+        self.next_view_epoch()?;
+        self.last_frame = None;
+        self.pending_check = None;
+        Ok(())
+    }
+
     pub fn revoke_all(&mut self, now: u64) -> Result<(), Error> {
         self.check_time(now)?;
         self.view_until = None;

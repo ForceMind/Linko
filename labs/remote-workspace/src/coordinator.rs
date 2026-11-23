@@ -294,6 +294,20 @@ impl Coordinator {
         Ok(())
     }
 
+    /// End a decoder lifetime while retaining the existing consent deadline.
+    /// Adapters must stop forwarding this instance and retain its original stamps.
+    pub fn invalidate_media(&mut self, view: ViewId, now: u64) -> Result<(), Error> {
+        self.clock(now)?;
+        let s = self.surface_mut(view)?;
+        s.gate.invalidate_media(now)?;
+        s.clear_media();
+        s.frames = LatestFrame::new(&s.gate, s.geometry.pixels)?;
+        s.parking_allowed = false;
+        s.cancel_handoff();
+        self.stop_view_input(view);
+        Ok(())
+    }
+
     /// Trusted source geometry only. Invalid input is rejected before mutation.
     pub fn revise_geometry(
         &mut self,
