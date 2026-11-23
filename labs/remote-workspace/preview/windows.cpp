@@ -607,10 +607,20 @@ int main() {
         debugProcess = nullptr;
     }
     SetUnhandledExceptionFilter(reportWgcCodecException);
+    // Keep the process MTA alive between joining the WGC thread and starting Media Foundation.
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(apartment)) {
+        std::fprintf(stderr, "WGC codec shared MTA failed: 0x%08X.\n", static_cast<unsigned>(apartment));
+        return 16;
+    }
 #endif
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     static_cast<void>(&windowProc);
     auto result = smoke(GetModuleHandleW(nullptr));
+#ifdef LINKO_RW04_WGC_CODEC_CI
+    markWgcCodecStage("closing-shared-mta");
+    CoUninitialize();
+#endif
     std::printf("WGC smoke result: %d\n", result);
     return result;
 }
