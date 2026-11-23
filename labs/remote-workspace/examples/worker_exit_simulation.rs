@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use linko_workspace_lab::coordinator::{Coordinator, Fault, SurfaceSpec, ViewId};
+use linko_workspace_lab::frame_binding::{FrameMatch, FrameMatcher, MediaFrame, MediaTrack};
 use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect, Rotation, SourceGeometry};
 use linko_workspace_lab::handoff::Command as WindowCommand;
 use linko_workspace_lab::media::RawFrame;
@@ -21,6 +22,11 @@ const WORKER_VERSION: u8 = 1;
 const WORKER_START: u8 = 1;
 const WORKER_READY: u8 = 2;
 const WORKER_GENERATION: u64 = 0x0102_0304_0506_0708;
+const MEDIA_TRACK: MediaTrack = MediaTrack {
+    generation: WORKER_GENERATION,
+    track: 1,
+    ssrc: 2,
+};
 
 type SimulationResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -192,6 +198,27 @@ fn queue(c: &mut Coordinator, view: ViewId, sequence: u64, now: u64) -> Result<(
     Ok(())
 }
 
+fn match_frame(
+    c: &Coordinator,
+    view: ViewId,
+    matcher: &mut FrameMatcher,
+    sequence: u32,
+    now: u64,
+) -> Result<(RawFrame, FrameMatch), Error> {
+    let gate = c.view_gate(view)?;
+    let media = MediaFrame {
+        track: MEDIA_TRACK,
+        timestamp: sequence,
+    };
+    let stamp = gate.frame_stamp(u64::from(sequence));
+    assert!(matcher.decoded(gate, media, now)?.is_none());
+    let matched = matcher
+        .describe(gate, media, stamp, now)?
+        .ok_or(Error::StaleFrame)?;
+    let frame = RawFrame::new(stamp, PIXELS, vec![0; 16])?;
+    Ok((frame, matched))
+}
+
 fn main() -> SimulationResult<()> {
     let mut args = std::env::args_os().skip(1);
     let codec = match args.next().as_deref() {
@@ -234,8 +261,11 @@ fn main() -> SimulationResult<()> {
     c.destination_ready(handoff, 0)?;
     c.acknowledge_hidden(handoff, 0)?;
 
-    queue(&mut c, first, 2, 1)?;
+    let mut matcher = FrameMatcher::new(c.view_gate(first)?, MEDIA_TRACK, 0, 0)?;
+    let (frame, matched) = match_frame(&c, first, &mut matcher, 2, 1)?;
+    c.receive_matched(first, frame, matched, 1)?;
     let waiting = c.take_for_present(first, 1)?.ok_or(Error::StaleFrame)?;
+    let (late_frame, late_match) = match_frame(&c, first, &mut matcher, 3, 1)?;
     queue(&mut c, second, 1, 1)?;
     queue(&mut c, survivor, 1, 1)?;
     let mut worker = match codec.as_deref() {
@@ -258,6 +288,10 @@ fn main() -> SimulationResult<()> {
     }
     let late_ack = c.acknowledge_presentation(waiting.ticket, 2);
     assert_eq!(late_ack, Err(Error::WrongAcknowledgement));
+    let late_delivery = c.receive_matched(first, late_frame, late_match, 2);
+    assert_eq!(late_delivery, Err(Error::StaleTarget));
+    let matcher_expired = matcher.expire(c.view_gate(first)?, 2);
+    assert_eq!(matcher_expired, Err(Error::StaleTarget));
     assert!(c.pending_release().is_some());
     let restore = c.window_intent(first, 2)?.ok_or(Error::InvalidState)?;
     assert_eq!(restore.token, handoff);
@@ -267,6 +301,6 @@ fn main() -> SimulationResult<()> {
     let other = c.take_for_present(survivor, 2)?.ok_or(Error::StaleFrame)?;
     c.acknowledge_presentation(other.ticket, 2)?;
 
-    println!("Worker exit: reaped child; two views cleared, recovery and second connection kept.");
+    println!("Worker exit: views cleared, late frame rejected, recovery and connection kept.");
     Ok(())
 }
