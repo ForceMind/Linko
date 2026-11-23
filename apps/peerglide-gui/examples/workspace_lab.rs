@@ -660,7 +660,6 @@ mod tests {
         let output = context.run_ui(
             egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
-                modifiers,
                 events: vec![egui::Event::Key {
                     key,
                     physical_key: None,
