@@ -376,7 +376,9 @@ impl eframe::App for WorkspaceApp {
             .and_then(|finished| {
                 if !finished {
                     let preview = native.textures(now);
-                    if let [Some(first), Some(second)] = self.workspace.show(root, now, Some(preview)) {
+                    if let [Some(first), Some(second)] =
+                        self.workspace.show(root, now, Some(preview))
+                    {
                         native.verify_paint(&context, [first, second])?;
                     }
                 }

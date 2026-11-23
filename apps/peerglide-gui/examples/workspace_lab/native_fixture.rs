@@ -126,7 +126,9 @@ impl Source {
 
     fn require_running(&mut self) -> io::Result<()> {
         if let Some(status) = self.process.try_wait()? {
-            return Err(io::Error::other(format!("native window source exited early: {status}")));
+            return Err(io::Error::other(format!(
+                "native window source exited early: {status}"
+            )));
         }
         Ok(())
     }
@@ -136,7 +138,9 @@ impl Source {
             return Ok(false);
         };
         if !status.success() {
-            return Err(io::Error::other(format!("native decoder failed to stop: {status}")).into());
+            return Err(
+                io::Error::other(format!("native decoder failed to stop: {status}")).into(),
+            );
         }
         coordinator.close(self.view, Fault::SourceClosed, now)?;
         self.draw = None;
@@ -234,14 +238,21 @@ impl NativeFixture {
                     if source.draw.is_none() {
                         match source.next_event()? {
                             Some(SourceEvent::Frame(frame)) => {
-                                let draw = prepare_draw(coordinator, source.view, context, frame, now)?;
+                                let draw =
+                                    prepare_draw(coordinator, source.view, context, frame, now)?;
                                 if !colors_match(draw.color, expected, 24) {
-                                    return Err(io::Error::other("decoded source color did not match panel").into());
+                                    return Err(io::Error::other(
+                                        "decoded source color did not match panel",
+                                    )
+                                    .into());
                                 }
                                 source.draw = Some(draw);
                             }
                             Some(SourceEvent::Ready) => {
-                                return Err(io::Error::other("duplicate native source ready record").into());
+                                return Err(io::Error::other(
+                                    "duplicate native source ready record",
+                                )
+                                .into());
                             }
                             None => {}
                         }
@@ -261,7 +272,9 @@ impl NativeFixture {
                         let draw = source.fresh_draw(now).ok_or(Error::StaleFrame)?;
                         coordinator.acknowledge_presentation(draw.ticket, now)?;
                     }
-                    println!("Workspace panels: two native frames confirmed in one eframe readback.");
+                    println!(
+                        "Workspace panels: two native frames confirmed in one eframe readback."
+                    );
                     self.sources[0].send_command(2)?;
                     self.phase = Phase::StoppingFirst;
                 }
@@ -302,7 +315,11 @@ impl NativeFixture {
         if matches!(self.phase, Phase::Starting | Phase::Receiving) {
             return [None; PANELS];
         }
-        std::array::from_fn(|index| self.sources[index].fresh_draw(now).map(|draw| &draw.texture))
+        std::array::from_fn(|index| {
+            self.sources[index]
+                .fresh_draw(now)
+                .map(|draw| &draw.texture)
+        })
     }
 
     pub(super) fn verify_paint(
@@ -318,7 +335,9 @@ impl NativeFixture {
                 self.drawn_areas = Some(areas);
                 [self.source_color(0)?, self.source_color(1)?]
             }
-            Phase::FirstCleared if self.drawn_areas == Some(areas) => [CANVAS, self.source_color(1)?],
+            Phase::FirstCleared if self.drawn_areas == Some(areas) => {
+                [CANVAS, self.source_color(1)?]
+            }
             Phase::BothCleared if self.drawn_areas == Some(areas) => [CANVAS; PANELS],
             Phase::FirstCleared | Phase::BothCleared => {
                 return Err(io::Error::other("panels moved before clear readback"))
