@@ -481,3 +481,5 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 | macOS，系统 RSS | 7602176 / 119259136 · 27 次 / 6187 ms | 9093120 / 84246528 · 23 次 / 5345 ms |
 
 本批验证覆盖两端本机双路采集、编解码、实际绘制、工作集或 RSS 短时采样和应用视频纹理释放。首个样本来自进程启动窗口。后续验收包含长时间驻留、硬件 GPU 实测和跨设备观看。
+
+- [PR #384](https://github.com/ForceMind/Linko/pull/384)，`4962f946caa4e2d335271dc79969fcf7d986987a`。离线工作区使用 `--layout-dir <目录>` 启用四个示例面板的重排与显式保存。三端测试核对重开后顺序和焦点恢复、暂停的观看授权保持原样、无效文件及并发修改保留。Linux Xvfb 实际保存顺序 1、3、2、4 并重开应用，截图核对 3 号面板仍在右上且选中。文件保存模式版本、示例面板顺序和焦点偏好。[Linux 作业](https://github.com/ForceMind/Linko/actions/runs/45166056950/job/137663167173) · [原生截图](https://github.com/ForceMind/Linko/actions/runs/45166056950/artifacts/14814399680) · [三端 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45166056950)
