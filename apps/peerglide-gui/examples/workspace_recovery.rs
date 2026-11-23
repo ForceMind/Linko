@@ -142,7 +142,10 @@ fn worker_recover(
             instance: record.window,
             bounds: record.original_bounds(),
         };
-        send(output, &format!("restore {} {original}", record.transaction))?;
+        send(
+            output,
+            &format!("restore {} {original}", record.transaction),
+        )?;
     } else {
         send(output, &format!("restore {}", record.transaction))?;
     }
@@ -425,7 +428,12 @@ fn main() -> Result<()> {
         [mode, action, path, rest @ ..] if mode == "--worker" => {
             let native = match rest {
                 [] => None,
-                [observation] => Some(observation.to_str().context("invalid native observation")?.parse()?),
+                [observation] => Some(
+                    observation
+                        .to_str()
+                        .context("invalid native observation")?
+                        .parse()?,
+                ),
                 _ => bail!("invalid recovery fixture arguments"),
             };
             let mut input = io::stdin().lock();

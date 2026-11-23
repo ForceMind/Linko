@@ -20,8 +20,17 @@ impl fmt::Display for Observation {
         for byte in self.instance.backend {
             write!(formatter, "{byte:02x}")?;
         }
-        let Rect { x, y, width, height } = self.bounds;
-        write!(formatter, " {} {x} {y} {width} {height}", self.instance.object)
+        let Rect {
+            x,
+            y,
+            width,
+            height,
+        } = self.bounds;
+        write!(
+            formatter,
+            " {} {x} {y} {width} {height}",
+            self.instance.object
+        )
     }
 }
 
@@ -39,8 +48,14 @@ impl FromStr for Observation {
         for (index, byte) in backend.iter_mut().enumerate() {
             *byte = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16)?;
         }
-        let object = fields.next().context("missing native window incarnation")?.parse()?;
-        ensure!(object != 0 && backend != [0; 16], "empty native window incarnation");
+        let object = fields
+            .next()
+            .context("missing native window incarnation")?
+            .parse()?;
+        ensure!(
+            object != 0 && backend != [0; 16],
+            "empty native window incarnation"
+        );
         let bounds = Rect {
             x: fields.next().context("missing native x")?.parse()?,
             y: fields.next().context("missing native y")?.parse()?,
@@ -75,7 +90,11 @@ fn snapshot(owner: &mut Worker) -> Result<Snapshot> {
     };
     let restores = fields.next().context("missing restore count")?.parse()?;
     let window = fields.next().context("missing native window")?.parse()?;
-    Ok(Snapshot { visible, restores, window })
+    Ok(Snapshot {
+        visible,
+        restores,
+        window,
+    })
 }
 
 fn park(
@@ -153,7 +172,9 @@ pub(super) fn smoke(binary: &Path) -> Result<()> {
     check_clear(&mut worker)?;
     ensure!(snapshot(&mut owner)? == recovered);
     ensure!(Journal::open(directory)?.pending()?.is_none());
-    println!("Native recovery: original visibility and bounds restored once across two worker crashes.");
+    println!(
+        "Native recovery: original visibility and bounds restored once across two worker crashes."
+    );
 
     let _ = park(directory, &mut owner, recovered, 2)?;
     let lost = std::fs::read(directory.join(FILENAME))?;
@@ -169,6 +190,8 @@ pub(super) fn smoke(binary: &Path) -> Result<()> {
     ensure!(std::fs::read(directory.join(FILENAME))? == lost);
     replacement.write("exit")?;
     replacement.wait(true)?;
-    println!("Native recovery: a new owner was left untouched and the lost window record retained.");
+    println!(
+        "Native recovery: a new owner was left untouched and the lost window record retained."
+    );
     fixture.close()
 }
