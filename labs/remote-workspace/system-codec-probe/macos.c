@@ -24,6 +24,7 @@ struct Probe {
     int height;
     unsigned frames;
     CVPixelBufferRef fixedInput;
+    bool software;
     _Atomic(CMSampleBufferRef) encoded[MaxFrames];
     _Atomic bool encodedOnce[MaxFrames];
     _Atomic uint64_t decodedAt[MaxFrames];
@@ -235,8 +236,21 @@ static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain,
 }
 
 static OSStatus startEncoder(struct Probe *probe, VTCompressionSessionRef *encoder) {
+    CFDictionaryRef specification = NULL;
+    if (probe->software) {
+        const void *keys[] = {kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder};
+        const void *values[] = {kCFBooleanFalse};
+        specification = CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
+                                            &kCFTypeDictionaryValueCallBacks);
+        if (!specification) {
+            return -4;
+        }
+    }
     OSStatus status = VTCompressionSessionCreate(NULL, probe->width, probe->height, kCMVideoCodecType_H264,
-                                                 NULL, NULL, NULL, encodedOutput, probe, encoder);
+                                                 specification, NULL, NULL, encodedOutput, probe, encoder);
+    if (specification) {
+        CFRelease(specification);
+    }
     if (status == noErr) {
         status = VTSessionSetProperty(*encoder, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
     }
@@ -251,8 +265,10 @@ static OSStatus startEncoder(struct Probe *probe, VTCompressionSessionRef *encod
     return status;
 }
 
-static bool run(int width, int height, unsigned frames, bool paced, CVPixelBufferRef fixedInput, bool verbose) {
-    struct Probe probe = {.width = width, .height = height, .frames = frames, .fixedInput = fixedInput};
+static bool run(int width, int height, unsigned frames, bool paced, CVPixelBufferRef fixedInput,
+                bool verbose, bool software) {
+    struct Probe probe = {.width = width, .height = height, .frames = frames,
+                          .fixedInput = fixedInput, .software = software};
     VTCompressionSessionRef encoder = NULL;
     VTDecompressionSessionRef decoder = NULL;
     OSStatus status = startEncoder(&probe, &encoder);
@@ -302,8 +318,12 @@ static bool run(int width, int height, unsigned frames, bool paced, CVPixelBuffe
         }
     }
     OSStatus callbackError = atomic_load(&probe.callbackError);
-    const bool modesKnown = fixedInput ? strcmp(encodeMode, "hardware") == 0 && strcmp(decodeMode, "hardware") == 0
-                                      : strcmp(encodeMode, "unknown") != 0;
+    bool modesKnown = strcmp(encodeMode, "unknown") != 0;
+    if (software) {
+        modesKnown = strcmp(encodeMode, "software") == 0;
+    } else if (fixedInput) {
+        modesKnown = strcmp(encodeMode, "hardware") == 0 && strcmp(decodeMode, "hardware") == 0;
+    }
     if (status != noErr || callbackError != noErr || !modesKnown ||
         !report(&probe, paced, beforeDrain, delivered, elapsed, verbose)) {
         fprintf(stderr, "H.264 %dx%d result: status=%d callback=%d delivered=%u before_drain=%u paths=%s/%s\n",
@@ -390,8 +410,10 @@ static void releaseMemorySamples(struct MemorySamples *samples) {
     }
 }
 
-static bool encodeMemoryFixture(int width, int height, CVPixelBufferRef input, struct MemorySamples *samples) {
-    struct Probe probe = {.width = width, .height = height, .frames = MemoryFrames, .fixedInput = input};
+static bool encodeMemoryFixture(int width, int height, CVPixelBufferRef input,
+                                struct MemorySamples *samples, bool software) {
+    struct Probe probe = {.width = width, .height = height, .frames = MemoryFrames,
+                          .fixedInput = input, .software = software};
     VTCompressionSessionRef encoder = NULL;
     OSStatus status = startEncoder(&probe, &encoder);
     if (status != noErr) {
@@ -417,7 +439,8 @@ static bool encodeMemoryFixture(int width, int height, CVPixelBufferRef input, s
         present = present && samples->frames[index] != NULL;
     }
     OSStatus callbackError = atomic_load(&probe.callbackError);
-    if (status != noErr || callbackError != noErr || !present || strcmp(mode, "hardware") != 0) {
+    const char *expectedMode = software ? "software" : "hardware";
+    if (status != noErr || callbackError != noErr || !present || strcmp(mode, expectedMode) != 0) {
         fprintf(stderr, "VideoToolbox memory: isolated encoder status=%d callback=%d mode=%s.\n",
                 (int)status, (int)callbackError, mode);
         return false;
@@ -457,7 +480,8 @@ static bool decodeMemoryFixture(int width, int height, CVPixelBufferRef input, s
 }
 
 static bool checkMemory(int width, int height, enum MemoryStage stage, OSType format, const char *name) {
-    const unsigned cycles = strcmp(name, "encode-soak") == 0 ? 500 : 100;
+    const bool software = strcmp(name, "encode-software") == 0;
+    const unsigned cycles = software || strcmp(name, "encode-soak") == 0 ? 500 : 100;
     printf("VideoToolbox memory: size=%dx%d, stage=%s, cycles=%u.\n", width, height, name, cycles);
     CVPixelBufferRef input = makeMemoryFixture(width, height, format);
     if (!input) {
@@ -465,16 +489,16 @@ static bool checkMemory(int width, int height, enum MemoryStage stage, OSType fo
         return false;
     }
     struct MemorySamples seed = {0};
-    bool passed = stage != DecodeStage || encodeMemoryFixture(width, height, input, &seed);
+    bool passed = stage != DecodeStage || encodeMemoryFixture(width, height, input, &seed, false);
     for (unsigned cycle = 1; passed && cycle <= cycles; ++cycle) {
         if (stage == EncodeStage) {
             struct MemorySamples samples = {0};
-            passed = encodeMemoryFixture(width, height, input, &samples);
+            passed = encodeMemoryFixture(width, height, input, &samples, software);
             releaseMemorySamples(&samples);
         } else if (stage == DecodeStage) {
             passed = decodeMemoryFixture(width, height, input, &seed);
         } else {
-            passed = run(width, height, MemoryFrames, true, input, cycle == 1);
+            passed = run(width, height, MemoryFrames, true, input, cycle == 1, false);
         }
         if (passed && (cycle == 10 || cycle == 100 || cycle == 250 || cycle == cycles)) {
             passed = sampleMemory(cycle);
@@ -486,7 +510,8 @@ static bool checkMemory(int width, int height, enum MemoryStage stage, OSType fo
     releaseMemorySamples(&seed);
     CVPixelBufferRelease(input);
     if (passed) {
-        printf("VideoToolbox memory: %u standalone hardware cycles passed, stage=%s.\n", cycles, name);
+        printf("VideoToolbox memory: %u standalone %s cycles passed, stage=%s.\n",
+               cycles, software ? "software" : "hardware", name);
     }
     return passed;
 }
@@ -498,8 +523,29 @@ static int evenDimension(const char *text, int limit) {
         ? (int)value : 0;
 }
 
+static bool checkSoftware(void) {
+    struct Probe probe = {.width = 350, .height = 262, .software = true};
+    VTCompressionSessionRef encoder = NULL;
+    const OSStatus status = startEncoder(&probe, &encoder);
+    if (status == kVTCouldNotFindVideoEncoderErr) {
+        printf("VideoToolbox software H.264: unavailable (%d).\n", (int)status);
+        return true;
+    }
+    if (status != noErr) {
+        fprintf(stderr, "VideoToolbox software H.264: preflight failed (%d).\n", (int)status);
+        return false;
+    }
+    VTCompressionSessionInvalidate(encoder);
+    CFRelease(encoder);
+    return checkMemory(350, 262, EncodeStage, NV12, "encode-software") &&
+           run(1920, 1080, MaxFrames, true, NULL, true, true);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (argc == 2 && strcmp(argv[1], "--software") == 0) {
+        return checkSoftware() ? 0 : 1;
+    }
     if ((argc == 4 || argc == 5) && strcmp(argv[1], "--vm") == 0) {
         const int width = evenDimension(argv[2], 1920);
         const int height = evenDimension(argv[3], 1080);
@@ -527,6 +573,6 @@ int main(int argc, char **argv) {
     if (argc != 1) {
         return 2;
     }
-    return run(128, 96, 1, false, NULL, true) && run(1920, 1080, MaxFrames, false, NULL, true) &&
-           run(1920, 1080, MaxFrames, true, NULL, true) ? 0 : 1;
+    return run(128, 96, 1, false, NULL, true, false) && run(1920, 1080, MaxFrames, false, NULL, true, false) &&
+           run(1920, 1080, MaxFrames, true, NULL, true, false) ? 0 : 1;
 }
