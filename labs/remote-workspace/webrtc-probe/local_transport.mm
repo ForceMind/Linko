@@ -1,12 +1,15 @@
 #import <Foundation/Foundation.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -34,6 +37,7 @@
 #include "modules/audio_device/audio_device_impl.h"
 #include "p2p/base/basic_packet_socket_factory.h"
 #include "p2p/client/basic_port_allocator.h"
+#include "pc/session_description.h"
 #include "pc/video_track_source.h"
 #include "rtc_base/ip_address.h"
 #include "rtc_base/network.h"
@@ -277,8 +281,99 @@ class Endpoint {
     webrtc::Thread& signaling_;
 };
 
+struct ViewingDescription {
+    std::string mid;
+    std::string fingerprint;
+    std::string ice_user;
+    std::string ice_password;
+    webrtc::RtpTransceiverDirection direction;
+
+    bool operator==(const ViewingDescription&) const = default;
+};
+
+std::optional<ViewingDescription> ReadViewingDescription(
+    const webrtc::SessionDescriptionInterface& description) {
+    const auto* session = description.description();
+    if (!session || session->contents().size() != 1 || session->transport_infos().size() != 1) {
+        return std::nullopt;
+    }
+    const auto& media = session->contents().front();
+    const auto* description_media = media.media_description();
+    const auto* video = description_media ? description_media->as_video() : nullptr;
+    if (media.rejected || media.mid().empty() || !video ||
+        !std::any_of(video->codecs().begin(), video->codecs().end(),
+                     [](const auto& codec) { return codec.name == "H264" && codec.clockrate == 90000; })) {
+        return std::nullopt;
+    }
+    const auto bundles = session->GetGroupsByName("BUNDLE");
+    if (bundles.size() > 1 ||
+        (!bundles.empty() && (bundles.front()->content_names().size() != 1 ||
+                             !bundles.front()->HasContentName(media.mid())))) {
+        return std::nullopt;
+    }
+    const auto* transport = session->GetTransportInfoByName(media.mid());
+    if (!transport) {
+        return std::nullopt;
+    }
+    const auto& parameters = transport->description;
+    const auto* fingerprint = parameters.identity_fingerprint.get();
+    if (!fingerprint || fingerprint->algorithm != "sha-256" || fingerprint->digest.size() != 32 ||
+        parameters.ice_ufrag.empty() || parameters.ice_pwd.empty()) {
+        return std::nullopt;
+    }
+    return ViewingDescription{media.mid(), fingerprint->GetRfc4572Fingerprint(),
+                              parameters.ice_ufrag, parameters.ice_pwd, video->direction()};
+}
+
+std::unique_ptr<webrtc::SessionDescriptionInterface> ParseVerifiedDescription(
+    webrtc::SdpType type, const std::string& sdp, const ViewingDescription& expected) {
+    auto description = webrtc::CreateSessionDescription(type, sdp);
+    if (!description || ReadViewingDescription(*description) != expected) {
+        return nullptr;
+    }
+    return description;
+}
+
+bool RejectsViewingSubstitutions(webrtc::SdpType type, const std::string& sdp,
+                                const ViewingDescription& expected) {
+    const auto rejected = [&](const std::string& changed) {
+        const auto parsed = webrtc::CreateSessionDescription(type, changed);
+        return parsed && ReadViewingDescription(*parsed) &&
+               !ParseVerifiedDescription(type, changed, expected);
+    };
+    for (std::string_view prefix : {"a=fingerprint:sha-256 ", "a=ice-ufrag:", "a=ice-pwd:"}) {
+        const auto at = sdp.find(prefix);
+        if (at == std::string::npos || at + prefix.size() == sdp.size()) {
+            return false;
+        }
+        std::string changed = sdp;
+        char& first = changed[at + prefix.size()];
+        first = first == 'A' ? 'B' : 'A';
+        if (!rejected(changed)) {
+            return false;
+        }
+    }
+    const std::string direction = type == webrtc::SdpType::kOffer ? "a=sendonly" : "a=recvonly";
+    const auto at = sdp.find(direction);
+    if (at == std::string::npos) {
+        return false;
+    }
+    std::string changed = sdp;
+    changed.replace(at, direction.size(), "a=sendrecv");
+    if (!rejected(changed) || ParseVerifiedDescription(type, "", expected)) {
+        return false;
+    }
+    const std::string extra_media = sdp + "m=audio 0 UDP/TLS/RTP/SAVPF 0\r\n"
+                                          "c=IN IP4 0.0.0.0\r\n"
+                                          "a=mid:linko-extra\r\n"
+                                          "a=inactive\r\n";
+    const auto with_extra_media = webrtc::CreateSessionDescription(type, extra_media);
+    return with_extra_media && with_extra_media->description()->contents().size() == 2 &&
+           !ParseVerifiedDescription(type, extra_media, expected);
+}
+
 bool Describe(webrtc::Thread& signaling, Endpoint& from, Endpoint& to,
-              webrtc::SdpType type, std::string& sdp) {
+              webrtc::SdpType type, std::string& sdp, bool check_substitutions) {
     auto pending = webrtc::make_ref_counted<NewDescription>();
     auto created = pending->result.get_future();
     if (type == webrtc::SdpType::kOffer) {
@@ -301,17 +396,24 @@ bool Describe(webrtc::Thread& signaling, Endpoint& from, Endpoint& to,
         from.observer.invalid() || from.observer.candidates.load() == 0) {
         return false;
     }
-    const bool serialized = signaling.BlockingCall([&] {
+    const auto expected = signaling.BlockingCall([&]() -> std::optional<ViewingDescription> {
         const auto* current = from.peer->local_description();
-        return current && current->ToString(&sdp);
+        if (!current || !current->ToString(&sdp)) {
+            return std::nullopt;
+        }
+        return ReadViewingDescription(*current);
     });
-    const char* direction = type == webrtc::SdpType::kOffer ? "a=sendonly" : "a=recvonly";
-    if (!serialized || sdp.find(" H264/90000") == std::string::npos ||
-        sdp.find("a=fingerprint:sha-256 ") == std::string::npos ||
-        sdp.find(direction) == std::string::npos) {
+    const auto direction = type == webrtc::SdpType::kOffer
+                               ? webrtc::RtpTransceiverDirection::kSendOnly
+                               : webrtc::RtpTransceiverDirection::kRecvOnly;
+    if (!expected || expected->direction != direction) {
         return false;
     }
-    auto remote_description = webrtc::CreateSessionDescription(type, sdp);
+    if (check_substitutions && !RejectsViewingSubstitutions(type, sdp, *expected)) {
+        std::fputs("loopback: viewing description substitution checks failed\n", stderr);
+        return false;
+    }
+    auto remote_description = ParseVerifiedDescription(type, sdp, *expected);
     if (!remote_description) {
         return false;
     }
@@ -325,7 +427,7 @@ bool OpenPair(webrtc::Thread& signaling, webrtc::PeerConnectionFactoryInterface&
               const webrtc::Environment& environment, LoopbackNetwork& network,
               webrtc::BasicPacketSocketFactory& sockets, Endpoint& sending,
               Endpoint& receiving, const webrtc::scoped_refptr<FixtureTrack>& source,
-              std::string& offer) {
+              std::string& offer, bool check_substitutions) {
     if (!sending.Open(factory, environment, network, sockets) ||
         !receiving.Open(factory, environment, network, sockets)) {
         std::fputs("loopback: create peers failed\n", stderr);
@@ -340,8 +442,8 @@ bool OpenPair(webrtc::Thread& signaling, webrtc::PeerConnectionFactoryInterface&
         return false;
     }
     std::string answer;
-    if (!Describe(signaling, sending, receiving, webrtc::SdpType::kOffer, offer) ||
-        !Describe(signaling, receiving, sending, webrtc::SdpType::kAnswer, answer)) {
+    if (!Describe(signaling, sending, receiving, webrtc::SdpType::kOffer, offer, check_substitutions) ||
+        !Describe(signaling, receiving, sending, webrtc::SdpType::kAnswer, answer, check_substitutions)) {
         std::fprintf(stderr, "loopback: negotiate failed (host candidates %u/%u)\n",
                      sending.observer.candidates.load(), receiving.observer.candidates.load());
         return false;
@@ -404,9 +506,10 @@ class Runtime {
     }
 
     bool Connect(Endpoint& sending, Endpoint& receiving,
-                 const webrtc::scoped_refptr<FixtureTrack>& source, std::string& offer) {
+                 const webrtc::scoped_refptr<FixtureTrack>& source, std::string& offer,
+                 bool check_substitutions = false) {
         return OpenPair(*signaling, *factory, env, loopback, *sockets, sending, receiving,
-                        source, offer);
+                        source, offer, check_substitutions);
     }
 
     std::unique_ptr<webrtc::Thread> signaling = webrtc::Thread::Create();
@@ -434,12 +537,12 @@ bool KeepsReceiptTime() {
     return sink.Take(received) && received >= before && received <= after;
 }
 
-bool Exercise(Runtime& runtime, uint8_t color, std::string& offer) {
+bool Exercise(Runtime& runtime, uint8_t color, std::string& offer, bool check_substitutions) {
     Endpoint sending(*runtime.signaling, 0);
     Endpoint receiving(*runtime.signaling, color);
     auto source =
         runtime.signaling->BlockingCall([] { return webrtc::make_ref_counted<FixtureTrack>(); });
-    if (!runtime.Connect(sending, receiving, source, offer)) {
+    if (!runtime.Connect(sending, receiving, source, offer, check_substitutions)) {
         return false;
     }
     for (unsigned i = 0; i < 120 && receiving.observer.sink.matches() < 3; ++i) {
@@ -484,10 +587,11 @@ int Run() {
     }
     std::string first;
     std::string second;
-    const bool passed = Exercise(runtime, 55, first) && Exercise(runtime, 185, second);
+    const bool passed = Exercise(runtime, 55, first, true) && Exercise(runtime, 185, second, false);
     if (!passed || IceUser(first).empty() || IceUser(second).empty() || IceUser(first) == IceUser(second)) {
         return 4;
     }
+    std::puts("Loopback offer and answer: fingerprint, ICE, direction and extra media rejected.");
     std::puts("Loopback UDP/DTLS H.264: decoded video, closed peers, and fresh ICE reconnection passed.");
     return 0;
 }
