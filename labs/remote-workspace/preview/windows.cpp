@@ -518,7 +518,6 @@ bool registerFixture(HINSTANCE instance, wchar_t const* className = L"LinkoRW03F
     return RegisterClassW(&fixtureType) != 0;
 }
 
-#ifndef LINKO_RW04_WGC_CODEC_CI
 constexpr int dualRounds = 4;
 constexpr COLORREF dualColors[2][dualRounds + 1] = {
     {RGB(190, 30, 70), RGB(190, 100, 70), RGB(190, 170, 70), RGB(190, 30, 150)},
@@ -530,18 +529,19 @@ void paintCaptureFixture(HWND window, COLORREF color) {
     RedrawWindow(window, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 
-bool captureMatches(Preview& preview, COLORREF color) {
+std::shared_ptr<Frame const> matchedCapture(Preview& preview, COLORREF color) {
     const auto frame = preview.view().second;
     if (!frame || frame->width <= 0 || frame->height <= 0) {
-        return false;
+        return {};
     }
     const auto center = 4 * (static_cast<std::size_t>(frame->height / 2) * frame->width + frame->width / 2);
     if (frame->pixels.size() < center + 4) {
-        return false;
+        return {};
     }
-    return std::abs(std::to_integer<int>(frame->pixels[center]) - GetBValue(color)) <= 16 &&
-           std::abs(std::to_integer<int>(frame->pixels[center + 1]) - GetGValue(color)) <= 16 &&
-           std::abs(std::to_integer<int>(frame->pixels[center + 2]) - GetRValue(color)) <= 16;
+    const bool matches = std::abs(std::to_integer<int>(frame->pixels[center]) - GetBValue(color)) <= 16 &&
+                         std::abs(std::to_integer<int>(frame->pixels[center + 1]) - GetGValue(color)) <= 16 &&
+                         std::abs(std::to_integer<int>(frame->pixels[center + 2]) - GetRValue(color)) <= 16;
+    return matches ? frame : nullptr;
 }
 
 Source captureFixtureSource(HWND window) {
@@ -550,33 +550,43 @@ Source captureFixtureSource(HWND window) {
     return {window, process, thread, title(window)};
 }
 
-int verifyDualFixtures(HWND& left, HWND& right) {
+int verifyDualFixtures(HWND& left, HWND& right, auto decode, auto releaseCodec) {
     Preview first;
     Preview second;
     first.start(captureFixtureSource(left));
     second.start(captureFixtureSource(right));
-    if (!waitForFixture([&] {
-        return captureMatches(first, dualColors[0][0]) && captureMatches(second, dualColors[1][0]);
-    })) {
+    std::shared_ptr<Frame const> leftFrame;
+    std::shared_ptr<Frame const> rightFrame;
+    const auto waitForPair = [&](int round) {
+        return waitForFixture([&] {
+            leftFrame = matchedCapture(first, dualColors[0][round]);
+            rightFrame = matchedCapture(second, dualColors[1][round]);
+            return leftFrame && rightFrame;
+        });
+    };
+    if (!waitForPair(0)) {
         ::fwprintf(stderr, L"WGC dual capture: initial pair unavailable (%ls / %ls).\n",
                    first.view().first, second.view().first);
         return 12;
     }
     const auto started = Clock::now();
-    for (int round = 1; round < dualRounds; ++round) {
-        const auto next = started + 800ms * round;
-        if (!waitForFixture([&] { return Clock::now() >= next; })) {
-            return 13;
+    for (int round = 0; round < dualRounds; ++round) {
+        if (round) {
+            const auto next = started + 800ms * round;
+            if (!waitForFixture([&] { return Clock::now() >= next; })) {
+                return 13;
+            }
+            paintCaptureFixture(left, dualColors[0][round]);
+            paintCaptureFixture(right, dualColors[1][round]);
+            if (!waitForPair(round)) {
+                ::fwprintf(stderr, L"WGC dual capture: pair %d not updated (%ls / %ls).\n",
+                           round, first.view().first, second.view().first);
+                return 13;
+            }
         }
-        paintCaptureFixture(left, dualColors[0][round]);
-        paintCaptureFixture(right, dualColors[1][round]);
-        if (!waitForFixture([&] {
-            return captureMatches(first, dualColors[0][round]) && captureMatches(second, dualColors[1][round]);
-        })) {
-            ::fwprintf(stderr, L"WGC dual capture: pair %d not updated (%ls / %ls).\n",
-                       round, first.view().first, second.view().first);
-            return 13;
-        }
+        decode(leftFrame.get(), *rightFrame);
+        leftFrame.reset();
+        rightFrame.reset();
     }
     const auto elapsed = Clock::now() - started;
     if (elapsed <= 2s) {
@@ -593,11 +603,17 @@ int verifyDualFixtures(HWND& left, HWND& right) {
         return 14;
     }
     first.stop();
+    releaseCodec(true);
     paintCaptureFixture(right, dualColors[1][dualRounds]);
-    if (first.view().second || !waitForFixture([&] { return captureMatches(second, dualColors[1][dualRounds]); })) {
+    if (first.view().second || !waitForFixture([&] {
+        rightFrame = matchedCapture(second, dualColors[1][dualRounds]);
+        return rightFrame != nullptr;
+    })) {
         std::fputs("WGC dual capture: remaining source did not deliver a fresh frame.\n", stderr);
         return 15;
     }
+    decode(nullptr, *rightFrame);
+    rightFrame.reset();
     std::puts("WGC dual capture: first source cleared, remaining source updated.");
     if (!DestroyWindow(right)) {
         return 16;
@@ -608,37 +624,76 @@ int verifyDualFixtures(HWND& left, HWND& right) {
         return 16;
     }
     second.stop();
+    releaseCodec(false);
     std::puts("WGC dual capture: both closed sources cleared and released.");
     return 0;
 }
 
-int smokeDualCapture(HINSTANCE instance) {
+int smokeDualCapture(HINSTANCE instance, auto decode, auto releaseCodec) {
     if (!registerFixture(instance)) {
         return 11;
     }
-    auto left = CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko capture fixture A",
-                                WS_POPUP, 40, 40, 250, 160, nullptr, nullptr, instance, nullptr);
-    auto right = CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko capture fixture B",
-                                 WS_POPUP, 330, 40, 250, 160, nullptr, nullptr, instance, nullptr);
-    int result = 11;
-    if (left && right) {
-        ShowWindow(left, SW_SHOWNOACTIVATE);
-        ShowWindow(right, SW_SHOWNOACTIVATE);
-        paintCaptureFixture(left, dualColors[0][0]);
-        paintCaptureFixture(right, dualColors[1][0]);
-        result = verifyDualFixtures(left, right);
+    struct FixtureWindows {
+        HWND left;
+        HWND right;
+
+        ~FixtureWindows() {
+            if (left) {
+                DestroyWindow(left);
+            }
+            if (right) {
+                DestroyWindow(right);
+            }
+        }
+    } windows{
+        CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko capture fixture A",
+                        WS_POPUP, 40, 40, 250, 160, nullptr, nullptr, instance, nullptr),
+        CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko capture fixture B",
+                        WS_POPUP, 330, 40, 250, 160, nullptr, nullptr, instance, nullptr),
+    };
+    if (!windows.left || !windows.right) {
+        return 11;
     }
-    if (left) {
-        DestroyWindow(left);
-    }
-    if (right) {
-        DestroyWindow(right);
-    }
-    return result;
+    ShowWindow(windows.left, SW_SHOWNOACTIVATE);
+    ShowWindow(windows.right, SW_SHOWNOACTIVATE);
+    paintCaptureFixture(windows.left, dualColors[0][0]);
+    paintCaptureFixture(windows.right, dualColors[1][0]);
+    return verifyDualFixtures(windows.left, windows.right, decode, releaseCodec);
 }
-#endif
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
+int smokeDualCodec() {
+    using LiveCodec = std::unique_ptr<WgcLiveCodec, decltype(&deleteWgcLiveCodec)>;
+    LiveCodec first(nullptr, deleteWgcLiveCodec);
+    LiveCodec second(nullptr, deleteWgcLiveCodec);
+    unsigned firstFrames{};
+    unsigned secondFrames{};
+    return smokeDualCapture(GetModuleHandleW(nullptr), [&](Frame const* left, Frame const& right) {
+        if (!second) {
+            first.reset(startWgcLiveCodec());
+            second.reset(startWgcLiveCodec());
+            std::puts("Media Foundation dual capture: started two system software H.264 sessions.");
+        }
+        if (left) {
+            submitWgcLiveFrame(*first, capturedFixtureFrame(*left));
+        }
+        submitWgcLiveFrame(*second, capturedFixtureFrame(right));
+        if (left) {
+            verifyWgcLiveFrame(*first);
+            ++firstFrames;
+        }
+        verifyWgcLiveFrame(*second);
+        ++secondFrames;
+        std::printf("Media Foundation dual capture: verified decoded timestamps and colors before drain, "
+                    "first=%u second=%u.\n", firstFrames, secondFrames);
+    }, [&](bool left) {
+        auto& codec = left ? first : second;
+        finishWgcLiveCodec(*codec);
+        codec.reset();
+        std::printf("Media Foundation dual capture: released %s codec.\n", left ? "first" : "second");
+    });
+}
+
 LRESULT CALLBACK presenterProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
@@ -797,7 +852,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 #ifdef LINKO_RW04_WGC_CODEC_CI
     const bool exportPixels = argc == 2 && std::strcmp(argv[1], "--worker-pixels") == 0;
     const bool presentPixels = argc == 2 && std::strcmp(argv[1], "--present-pixels") == 0;
-    if (argc != 1 && !exportPixels && !presentPixels) {
+    const bool liveCodec = argc == 2 && std::strcmp(argv[1], "--dual-codec") == 0;
+    if (argc != 1 && !exportPixels && !presentPixels && !liveCodec) {
         return 2;
     }
     smokeThread = GetCurrentThreadId();
@@ -823,7 +879,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 #ifdef LINKO_RW04_WGC_CODEC_CI
     // The worker validates its start record before creating or capturing the fixture window.
     auto run = [](WorkerControl const* worker) { return smoke(GetModuleHandleW(nullptr), worker); };
-    const int result = presentPixels ? runWgcPresenter(presentFixture)
+    const int result = liveCodec ? runWgcLiveCodecs(smokeDualCodec)
+                    : presentPixels ? runWgcPresenter(presentFixture)
                     : exportPixels ? runWgcCodecWorker(run) : run(nullptr);
     markWgcCodecStage("closing-shared-mta");
     CoUninitialize();
@@ -833,7 +890,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
         return 2;
     }
     const auto instance = GetModuleHandleW(nullptr);
-    const int result = dualCapture ? smokeDualCapture(instance) : smoke(instance);
+    const int result = dualCapture
+        ? smokeDualCapture(instance, [](Frame const*, Frame const&) {}, [](bool) {})
+        : smoke(instance);
 #endif
     std::printf("WGC smoke result: %d\n", result);
     return result;
