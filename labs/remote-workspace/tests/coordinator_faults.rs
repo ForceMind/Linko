@@ -6,6 +6,7 @@ use linko_workspace_lab::handoff::{Command, State};
 use linko_workspace_lab::media::RawFrame;
 use linko_workspace_lab::scheduling::{Budget, Decision, PauseReason, Plan};
 use linko_workspace_lab::session::{ControlScope, SurfaceKind};
+use linko_workspace_lab::source_control::SourceControl;
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
 fn bounds() -> Rect {
@@ -73,6 +74,160 @@ fn live(c: &mut Coordinator, seed: u8) -> ViewId {
         .unwrap();
     present(c, v, 1, 0);
     v
+}
+
+fn independent_view(key: SurfaceKey) -> (Coordinator, ViewId) {
+    let mut c = Coordinator::new(key.binding.viewer, 1).unwrap();
+    let view = c.register(SurfaceSpec { key, ..spec(1) }, 0).unwrap();
+    c.grant_view(view, 0, 100).unwrap();
+    c.grant_control(view, ControlScope::WholeDesktop, 0, 100)
+        .unwrap();
+    present(&mut c, view, 1, 0);
+    (c, view)
+}
+
+#[test]
+fn two_viewers_share_viewing_but_the_source_owns_control_and_release() {
+    let original = spec(1).key;
+    let challenger = SurfaceKey {
+        binding: Binding {
+            viewer: [2; 32],
+            nonce: [2; 16],
+            ..original.binding
+        },
+        ..original
+    };
+    let reconnect = SurfaceKey {
+        binding: Binding {
+            nonce: [3; 16],
+            ..original.binding
+        },
+        ..original
+    };
+    let (mut first, a) = independent_view(original);
+    let (mut other, b) = independent_view(challenger);
+    let ticket_a = first.focus(a, 1).unwrap();
+    let ticket_b = other.focus(b, 1).unwrap();
+    let mut source = SourceControl::new(original.binding.source).unwrap();
+    let subject_a = first.authorize_input(a, ticket_a, 1, 1).unwrap();
+    let subject_b = other.authorize_input(b, ticket_b, 1, 1).unwrap();
+    let grant = |owner: &mut SourceControl, target, now| {
+        owner.grant_local(target, ControlScope::WholeDesktop, true, now, 30)
+    };
+    let lease_a = grant(&mut source, subject_a, 1).unwrap();
+    source.authorize(subject_a, &lease_a, 1, true, 1).unwrap();
+    assert!(matches!(
+        grant(&mut source, subject_b, 2),
+        Err(Error::ControlBusy)
+    ));
+    assert!(matches!(
+        grant(&mut source, subject_a, 2),
+        Err(Error::ControlBusy)
+    ));
+    for target in [subject_b, reconnect] {
+        assert_eq!(
+            source.authorize(target, &lease_a, u64::MAX, true, 2),
+            Err(Error::StaleTarget)
+        );
+    }
+    assert_eq!(
+        source.authorize(subject_a, &lease_a, 1, true, 2),
+        Err(Error::InvalidSequence)
+    );
+    source.authorize(subject_a, &lease_a, 2, true, 2).unwrap();
+
+    source.revoke_local(3).unwrap();
+    let release_a = source.pending_release().unwrap().clone();
+    assert_eq!(release_a.target(), subject_a);
+    assert_eq!(
+        source.authorize(subject_a, &lease_a, 3, true, 3),
+        Err(Error::ReleasePending)
+    );
+    assert!(matches!(
+        grant(&mut source, subject_b, 3),
+        Err(Error::ReleasePending)
+    ));
+    let mut independent_owner = SourceControl::new(original.binding.source).unwrap();
+    let _ = grant(&mut independent_owner, subject_a, 1).unwrap();
+    independent_owner.revoke_local(3).unwrap();
+    let other_release = independent_owner.pending_release().unwrap();
+    assert_eq!(
+        source.acknowledge_release(other_release),
+        Err(Error::WrongAcknowledgement)
+    );
+    assert!(first.snapshot(a, 3).unwrap().viewing_allowed);
+    assert!(other.snapshot(b, 3).unwrap().viewing_allowed);
+    source.acknowledge_release(&release_a).unwrap();
+    assert_eq!(
+        source.authorize(subject_b, &lease_a, 1, true, 3),
+        Err(Error::PermissionDenied)
+    );
+
+    let lease_b = grant(&mut source, subject_b, 4).unwrap();
+    source.disconnect(subject_a.binding, 4).unwrap();
+    assert_eq!(
+        source.authorize(subject_a, &lease_a, 3, true, 4),
+        Err(Error::StaleTarget)
+    );
+    source.authorize(subject_b, &lease_b, 1, true, 4).unwrap();
+    source.disconnect(subject_b.binding, 5).unwrap();
+    let release_b = source.pending_release().unwrap().clone();
+    assert_eq!(
+        source.acknowledge_release(&release_a),
+        Err(Error::WrongAcknowledgement)
+    );
+    assert!(matches!(
+        grant(&mut source, reconnect, 5),
+        Err(Error::ReleasePending)
+    ));
+    source.acknowledge_release(&release_b).unwrap();
+    let lease_reconnected = grant(&mut source, reconnect, 5).unwrap();
+    source.disconnect(subject_a.binding, 6).unwrap();
+    assert_eq!(
+        source.authorize(reconnect, &lease_a, 99, true, 6),
+        Err(Error::StaleTarget)
+    );
+    source
+        .authorize(reconnect, &lease_reconnected, 1, true, 6)
+        .unwrap();
+    assert!(first.snapshot(a, 6).unwrap().viewing_allowed);
+    assert!(other.snapshot(b, 6).unwrap().viewing_allowed);
+}
+
+#[test]
+fn source_control_fails_closed_on_deadline_permission_loss_and_clock_regression() {
+    let key = spec(1).key;
+    let mut source = SourceControl::new(key.binding.source).unwrap();
+    let scope = ControlScope::WholeDesktop;
+    assert!(matches!(
+        source.grant_local(key, ControlScope::WindowOnly, true, 0, 1),
+        Err(Error::PermissionDenied)
+    ));
+    assert!(matches!(
+        source.grant_local(key, scope, false, 0, 1),
+        Err(Error::PermissionDenied)
+    ));
+    let lease = source.grant_local(key, scope, true, 0, 5).unwrap();
+    source.authorize(key, &lease, 1, true, 4).unwrap();
+    source.poll(true, 5).unwrap();
+    assert_eq!(
+        source.authorize(key, &lease, 2, true, 5),
+        Err(Error::ReleasePending)
+    );
+    let release = source.pending_release().unwrap().clone();
+    source.acknowledge_release(&release).unwrap();
+
+    let lease = source.grant_local(key, scope, true, 5, 30).unwrap();
+    assert_eq!(
+        source.authorize(key, &lease, 1, false, 6),
+        Err(Error::ReleasePending)
+    );
+    let release = source.pending_release().unwrap().clone();
+    source.acknowledge_release(&release).unwrap();
+
+    let _ = source.grant_local(key, scope, true, 6, 30).unwrap();
+    assert_eq!(source.poll(true, 5), Err(Error::InvalidTime));
+    assert_eq!(source.pending_release().unwrap().target(), key);
 }
 
 fn planned_decision(plan: &Plan, seed: u8) -> Decision {
