@@ -67,7 +67,13 @@ impl Pair {
     ) -> Result<Self> {
         let addr = source_endpoint.local_addr()?;
         let incoming = async {
-            Ok::<_, anyhow::Error>(source_endpoint.accept().await.context("no incoming")?.await?)
+            Ok::<_, anyhow::Error>(
+                source_endpoint
+                    .accept()
+                    .await
+                    .context("no incoming")?
+                    .await?,
+            )
         };
         let outgoing = async {
             Ok::<_, anyhow::Error>(viewer_endpoint.connect(addr, "peerglide.local")?.await?)
@@ -220,7 +226,8 @@ async fn transfer(sender: &Connection, receiver: &Connection, bytes: &[u8]) -> R
 }
 
 #[tokio::test]
-async fn authenticates_both_descriptions_and_rejects_old_connection_or_revoked_grant() -> Result<()> {
+async fn authenticates_both_descriptions_and_rejects_old_connection_or_revoked_grant() -> Result<()>
+{
     let source = Identity::generate()?;
     let viewer = Identity::generate()?;
     let source_endpoint = test_endpoint(&source, &viewer)?;
@@ -250,7 +257,10 @@ async fn authenticates_both_descriptions_and_rejects_old_connection_or_revoked_g
     let offer = transfer(&pair.source, &pair.viewer, &offer).await?;
     let (description, media) = decode(&offer, pair.binding)?;
     model.admit(&gate, source_peer_at_viewer, &description, media, 3)?;
-    assert_eq!(model.ready(&gate, generation, 3), Err(Error::InvalidSequence));
+    assert_eq!(
+        model.ready(&gate, generation, 3),
+        Err(Error::InvalidSequence)
+    );
 
     let answer = encode(&gate, generation, Role::Answer, ANSWER, ANSWER);
     let answer = transfer(&pair.viewer, &pair.source, &answer).await?;
@@ -305,7 +315,10 @@ async fn rejects_unknown_certificate_and_v5_before_test_signal() -> Result<()> {
     for (client, require_client_rejection) in [(&wrong_cert, false), (&wrong_alpn, true)] {
         let receiving = async {
             let incoming = server.accept().await.context("no incoming")?;
-            ensure!(incoming.await.is_err(), "unexpected test signaling handshake");
+            ensure!(
+                incoming.await.is_err(),
+                "unexpected test signaling handshake"
+            );
             Ok::<_, anyhow::Error>(())
         };
         let connecting = async {
