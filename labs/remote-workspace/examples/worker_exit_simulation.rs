@@ -121,7 +121,11 @@ impl CoordinatedWorker {
         if rgba.len() != NATIVE_WIDTH * NATIVE_HEIGHT * 4 {
             return Err(invalid_worker_data("invalid renderer frame size"));
         }
-        let input = self.process.stdin.as_mut().expect("renderer stdin is piped");
+        let input = self
+            .process
+            .stdin
+            .as_mut()
+            .expect("renderer stdin is piped");
         input.write_all(rgba)?;
         input.flush()
     }

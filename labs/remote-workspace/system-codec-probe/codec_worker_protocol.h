@@ -77,6 +77,7 @@ struct WorkerControl {
     uint64_t generation;
     const char *backend;
     bool (*present)(struct WorkerControl const *);
+    void *presentationContext;
 };
 
 static inline bool readWorkerMessage(struct WorkerControl const *control, enum WorkerMessage expected, uint64_t *generation) {

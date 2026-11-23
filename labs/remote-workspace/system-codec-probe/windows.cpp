@@ -489,7 +489,7 @@ int withWorkerControl(char const* backend, auto run, WorkerMessage completion = 
         return 1;
     }
     std::setvbuf(stdout, nullptr, _IONBF, 0);
-    WorkerControl control{events.get(), 0, backend, nullptr};
+    WorkerControl control{events.get(), 0, backend, nullptr, nullptr};
     if (!readWorkerMessage(&control, WorkerStart, &control.generation)) {
         return 1;
     }
