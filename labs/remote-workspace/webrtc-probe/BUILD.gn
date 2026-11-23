@@ -123,6 +123,6 @@ if (is_mac) {
     configs += [ "//:common_objc" ]
     include_dirs = objc_includes
     frameworks = preview_frameworks
-    deps = loopback_deps
+    deps = loopback_deps + [ "//third_party/libyuv" ]
   }
 }

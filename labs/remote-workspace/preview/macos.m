@@ -5,6 +5,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <QuartzCore/QuartzCore.h>
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -19,6 +20,8 @@
 #include <unistd.h>
 #include "loopback_preview.h"
 #include "vm_probe.h"
+#include "libyuv/convert_argb.h"
+#include "libyuv/video_common.h"
 
 @interface RW04NetworkPreview : NSObject
 - (BOOL)submit:(CVPixelBufferRef)pixels;
@@ -966,12 +969,15 @@ static BOOL copyBgraRegion(CVPixelBufferRef source, CVPixelBufferRef result, siz
         const size_t resultStride = CVPixelBufferGetBytesPerRow(result);
         const uint8_t *sourceBytes = CVPixelBufferGetBaseAddress(source);
         uint8_t *resultBytes = CVPixelBufferGetBaseAddress(result);
-        copied = sourceBytes && resultBytes && fitsPixelRows(source, sourceStride, top + height, (left + width) * 4) &&
+        copied = sourceBytes && resultBytes && sourceStride % 4 == 0 &&
+                 sourceStride <= INT_MAX && resultStride <= INT_MAX &&
+                 fitsPixelRows(source, sourceStride, top + height, (left + width) * 4) &&
                  fitsPixelRows(result, resultStride, height, width * 4);
         if (copied) {
-            for (size_t row = 0; row < height; ++row) {
-                memcpy(resultBytes + row * resultStride, sourceBytes + (top + row) * sourceStride + left * 4, width * 4);
-            }
+            // libyuv calls packed BGRA bytes on little-endian hosts ARGB.
+            copied = ConvertToARGB(sourceBytes, CVPixelBufferGetDataSize(source), resultBytes, (int)resultStride,
+                                   (int)left, (int)top, (int)(sourceStride / 4), (int)sourceHeight,
+                                   (int)width, (int)height, kRotate0, FOURCC_ARGB) == 0;
         }
         copied = CVPixelBufferUnlockBaseAddress(result, 0) == kCVReturnSuccess && copied;
     }
@@ -1011,13 +1017,13 @@ static BOOL copyBgraRegion(CVPixelBufferRef source, CVPixelBufferRef result, siz
 
 static BOOL checkCpuCopy(void) {
     enum { Side = 72, Stride = 296 };
-    uint8_t pixels[Side * Stride] = {0};
-    for (size_t row = 0; row < Side; ++row) {
-        pixels[row * Stride + 4 * 4] = (uint8_t)row;
-        pixels[row * Stride + 67 * 4] = (uint8_t)(row + 100);
-    }
+    __attribute__((objc_precise_lifetime)) NSMutableData *pixels = [NSMutableData dataWithLength:Side * Stride];
+    const uint8_t first = 5;
+    const uint8_t last = 168;
+    [pixels replaceBytesInRange:NSMakeRange(5 * Stride + 4 * 4, 1) withBytes:&first];
+    [pixels replaceBytesInRange:NSMakeRange(68 * Stride + 67 * 4, 1) withBytes:&last];
     CVPixelBufferRef source = NULL;
-    if (CVPixelBufferCreateWithBytes(NULL, Side, Side, kCVPixelFormatType_32BGRA, pixels, Stride,
+    if (CVPixelBufferCreateWithBytes(NULL, Side, Side, kCVPixelFormatType_32BGRA, pixels.mutableBytes, Stride,
                                      NULL, NULL, NULL, &source) != kCVReturnSuccess) {
         return NO;
     }
@@ -1028,10 +1034,16 @@ static BOOL checkCpuCopy(void) {
     BOOL matched = NO;
     if (cropped && CVPixelBufferLockBaseAddress(cropped, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess) {
         const size_t stride = CVPixelBufferGetBytesPerRow(cropped);
-        const uint8_t *bytes = CVPixelBufferGetBaseAddress(cropped);
-        matched = bytes && CVPixelBufferGetWidth(cropped) == 64 && CVPixelBufferGetHeight(cropped) == 64 &&
-                  fitsPixelRows(cropped, stride, 64, 64 * 4) &&
-                  bytes[0] == 5 && bytes[63 * stride + 63 * 4] == 168;
+        void *bytes = CVPixelBufferGetBaseAddress(cropped);
+        if (bytes && CVPixelBufferGetWidth(cropped) == 64 && CVPixelBufferGetHeight(cropped) == 64 &&
+            fitsPixelRows(cropped, stride, 64, 64 * 4)) {
+            NSData *view = [NSData dataWithBytesNoCopy:bytes length:CVPixelBufferGetDataSize(cropped) freeWhenDone:NO];
+            uint8_t end = 0;
+            uint8_t start = 0;
+            [view getBytes:&start range:NSMakeRange(0, 1)];
+            [view getBytes:&end range:NSMakeRange(63 * stride + 63 * 4, 1)];
+            matched = start == first && end == last;
+        }
         matched = CVPixelBufferUnlockBaseAddress(cropped, kCVPixelBufferLock_ReadOnly) == kCVReturnSuccess && matched;
     }
     if (cropped) {
