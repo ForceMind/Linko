@@ -106,6 +106,13 @@ jobs:
         timeout-minutes: 3
         working-directory: labs/remote-workspace
         run: cargo run --locked --offline --example worker_exit_simulation -- --native-window "$RUNNER_TEMP/rw04-wgc-h264.exe"
+      - name: Roundtrip two live WGC windows through persistent Media Foundation sessions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 1
+        run: |
+          & "$env:RUNNER_TEMP/rw04-wgc-h264.exe" --dual-codec
+          exit $LASTEXITCODE
       - name: Route actual macOS window frames through the native codec worker
         if: runner.os == 'macOS'
         shell: bash

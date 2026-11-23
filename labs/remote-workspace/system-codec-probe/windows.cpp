@@ -44,10 +44,11 @@ struct Fixture {
 constexpr Fixture smallFixture{128, 96, 24, 200'000, false};
 constexpr Fixture hdFixture{1920, 1080, 90, 4'000'000, true};
 using CapturedSamples = std::array<std::vector<BYTE>, 2>;
+using CaptureInputs = std::span<std::vector<BYTE> const>;
 
-std::span<BYTE const> capturedSample(CapturedSamples const* samples, UINT32 index) {
-    if (samples) {
-        return (*samples)[index % samples->size()];
+std::span<BYTE const> capturedSample(CaptureInputs samples, UINT32 index) {
+    if (!samples.empty()) {
+        return samples[index % samples.size()];
     }
     return {};
 }
@@ -292,7 +293,7 @@ void verifyDecodedFrame(IMFTransform* decoder, IMFSample* sample, Fixture const&
 }
 
 void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& timing,
-                       CapturedSamples const* samples) {
+                       CaptureInputs samples) {
     for (;;) {
         stage("decoder-read-output");
         auto decoded = readOutput(decoder, fixture.nv12Bytes());
@@ -315,7 +316,7 @@ void readDecodedFrames(IMFTransform* decoder, Fixture const& fixture, Timing& ti
 }
 
 void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fixture const& fixture,
-                       UINT32& encodedCount, Timing& timing, bool lowLatency, CapturedSamples const* samples) {
+                       UINT32& encodedCount, Timing& timing, bool lowLatency, CaptureInputs samples) {
     for (;;) {
         stage("encoder-read-output");
         auto encoded = readOutput(encoder, fixture.nv12Bytes());
@@ -343,15 +344,12 @@ void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fix
     }
 }
 
-int probe(Fixture const& fixture, LatencyMode mode, char const* modeName,
-          CapturedSamples const* samples = nullptr, WorkerControl const* worker = nullptr, bool exportPixels = false) {
+ComPtr<IMFTransform> startEncoder(Fixture const& fixture, bool lowLatency, MFT_INPUT_STREAM_INFO& inputStream) {
     stage("creating-encoder");
     ComPtr<IMFTransform> encoder;
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&encoder)), "activate system H.264 encoder");
-    const bool lowLatencyEncoder = mode == LatencyMode::EncoderAndDecoder;
-    const bool lowLatencyDecoder = mode != LatencyMode::Default;
-    if (lowLatencyEncoder) {
+    if (lowLatency) {
         ComPtr<ICodecAPI> settings;
         check(encoder.As(&settings), "read H.264 encoder settings");
         VARIANT enabled{};
@@ -373,12 +371,20 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName,
     auto inputType = videoType(MFVideoFormat_NV12, fixture);
     stage("configuring-encoder-input");
     check(encoder->SetInputType(0, inputType.Get(), 0), "configure NV12 input");
-    MFT_INPUT_STREAM_INFO inputStream{};
     check(encoder->GetInputStreamInfo(0, &inputStream), "read encoder input buffer requirements");
 
     stage("starting-encoder-stream");
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0), "start media streaming");
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0), "start media stream");
+    return encoder;
+}
+
+int probe(Fixture const& fixture, LatencyMode mode, char const* modeName,
+          CaptureInputs samples = {}, WorkerControl const* worker = nullptr, bool exportPixels = false) {
+    const bool lowLatencyEncoder = mode == LatencyMode::EncoderAndDecoder;
+    const bool lowLatencyDecoder = mode != LatencyMode::Default;
+    MFT_INPUT_STREAM_INFO inputStream{};
+    auto encoder = startEncoder(fixture, lowLatencyEncoder, inputStream);
     ComPtr<IMFTransform> decoder;
     UINT32 encodedCount{};
     UINT32 maxBacklog{};
@@ -501,6 +507,12 @@ int withWorkerControl(char const* backend, auto run, WorkerMessage completion = 
 }
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
+bool validWgcFixtureFrame(WgcFixtureFrame frame) {
+    return frame.width >= smallFixture.width && frame.height >= smallFixture.height &&
+           frame.width <= 4096 && frame.height <= 2160 &&
+           static_cast<std::size_t>(frame.width) * 4 * frame.height == frame.bgra.size();
+}
+
 std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame) {
     auto const& crop = smallFixture;
     const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
@@ -517,11 +529,10 @@ std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame) {
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
 bool hasWgcFixtureColor(WgcFixtureFrame frame, bool resized) {
-    const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
-    if (frame.width < smallFixture.width || frame.height < smallFixture.height ||
-        frame.width > 4096 || frame.height > 2160 || rowBytes * frame.height != frame.bgra.size()) {
+    if (!validWgcFixtureFrame(frame)) {
         return false;
     }
+    const auto rowBytes = static_cast<std::size_t>(frame.width) * 4;
     const auto centerOffset = rowBytes * (frame.height / 2) + (frame.width / 2) * 4;
     auto const* center = reinterpret_cast<BYTE const*>(frame.bgra.data()) + centerOffset;
     const int blue = resized ? 190 : 70;
@@ -548,12 +559,65 @@ int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized, WorkerControl 
         const CapturedSamples samples{cropWgcFixture(first), cropWgcFixture(resized)};
         markWgcCodecStage("running-h264-roundtrip");
         const auto result = probe(smallFixture, LatencyMode::EncoderAndDecoder, "WGC fixture",
-                                  &samples, worker, worker != nullptr);
+                                  samples, worker, worker != nullptr);
         if (result == 0) {
             std::puts("WGC fixture H.264 roundtrip kept both source colors, luma and chroma.");
         }
         return result;
     });
+}
+
+struct WgcLiveCodec {
+    MFT_INPUT_STREAM_INFO inputStream{};
+    ComPtr<IMFTransform> encoder = startEncoder(smallFixture, true, inputStream);
+    ComPtr<IMFTransform> decoder;
+    UINT32 encoded{};
+    Timing timing{smallFixture.frames, false};
+    std::vector<BYTE> pending;
+};
+
+int runWgcLiveCodecs(int (*run)()) {
+    return withMediaFoundation(run);
+}
+
+WgcLiveCodec* startWgcLiveCodec() {
+    return new WgcLiveCodec;
+}
+
+void submitWgcLiveFrame(WgcLiveCodec& codec, WgcFixtureFrame frame) {
+    const auto index = codec.timing.submitted.size();
+    check(codec.pending.empty() && index < smallFixture.frames && validWgcFixtureFrame(frame)
+              ? S_OK : E_UNEXPECTED, "bound the live WGC frame and in-flight sample");
+    codec.pending = cropWgcFixture(frame);
+    codec.timing.submitted.push_back(submitFrame(codec.encoder.Get(), smallFixture, codec.inputStream,
+                                                 static_cast<UINT32>(index), codec.pending));
+}
+
+void verifyWgcLiveFrame(WgcLiveCodec& codec) {
+    check(codec.pending.empty() ? E_UNEXPECTED : S_OK, "require a submitted live WGC frame");
+    readEncodedFrames(codec.encoder.Get(), codec.decoder, smallFixture, codec.encoded, codec.timing,
+                      true, CaptureInputs(&codec.pending, 1));
+    const auto expected = codec.timing.submitted.size();
+    check(codec.encoded == expected && codec.timing.decodedMs.size() == expected
+              ? S_OK : E_UNEXPECTED, "encode and decode each live WGC frame before drain");
+    codec.pending.clear();
+}
+
+void finishWgcLiveCodec(WgcLiveCodec& codec) {
+    check(codec.pending.empty() && codec.decoder.Get() ? S_OK : E_UNEXPECTED, "finish a verified WGC stream");
+    check(codec.encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark live encoder input complete");
+    check(codec.encoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain live encoder");
+    readEncodedFrames(codec.encoder.Get(), codec.decoder, smallFixture, codec.encoded, codec.timing, true, {});
+    check(codec.decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark live decoder input complete");
+    check(codec.decoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain live decoder");
+    readDecodedFrames(codec.decoder.Get(), smallFixture, codec.timing, {});
+    check(codec.encoded == codec.timing.submitted.size() ? S_OK : E_UNEXPECTED, "check live encoder has no late frames");
+    check(codec.encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish live encoder streaming");
+    check(codec.decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish live decoder streaming");
+}
+
+void deleteWgcLiveCodec(WgcLiveCodec* codec) noexcept {
+    delete codec;
 }
 #else
 namespace {
@@ -562,12 +626,12 @@ int runWorker(BYTE luma, bool exportPixels) {
         return withMediaFoundation([&] {
             if (exportPixels) {
                 constexpr Fixture striped{WorkerFrameWidth, WorkerFrameHeight, 24, 200'000, true};
-                return probe(striped, LatencyMode::EncoderAndDecoder, "worker pixels", nullptr, control, true);
+                return probe(striped, LatencyMode::EncoderAndDecoder, "worker pixels", {}, control, true);
             }
             std::vector<BYTE> pixels(smallFixture.nv12Bytes(), BYTE{128});
             std::fill_n(pixels.begin(), smallFixture.lumaBytes(), luma);
             const CapturedSamples samples{pixels, pixels};
-            return probe(smallFixture, LatencyMode::EncoderAndDecoder, "worker fixture", &samples, control);
+            return probe(smallFixture, LatencyMode::EncoderAndDecoder, "worker fixture", samples, control);
         });
     });
 }
