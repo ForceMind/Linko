@@ -813,6 +813,74 @@ int smokeDualCodec(WorkerControl const* worker, bool pauseForExpiry) {
     });
 }
 
+int smokeMirrorCodec(WorkerControl const* worker, bool) {
+    const auto input = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(stdin)));
+    const auto events = reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(worker->events)));
+    DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+    if (input == INVALID_HANDLE_VALUE || events == INVALID_HANDLE_VALUE ||
+        !SetNamedPipeHandleState(events, &mode, nullptr, nullptr)) {
+        return 17;
+    }
+    const auto instance = GetModuleHandleW(nullptr);
+    if (!registerFixture(instance)) {
+        return 11;
+    }
+    struct FixtureWindow {
+        HWND handle;
+        ~FixtureWindow() {
+            if (handle) {
+                DestroyWindow(handle);
+            }
+        }
+    } window{CreateWindowExW(WS_EX_TOPMOST, L"LinkoRW03Fixture", L"Linko mirror capture fixture",
+                             WS_POPUP, 40, 40, 250, 160, nullptr, nullptr, instance, nullptr)};
+    if (!window.handle) {
+        return 11;
+    }
+    ShowWindow(window.handle, SW_SHOWNOACTIVATE);
+    paintCaptureFixture(window.handle, dualColors[0][0]);
+    Preview preview;
+    preview.start(captureFixtureSource(window.handle));
+    std::unique_ptr<WgcLiveCodec, decltype(&deleteWgcLiveCodec)> codec(startWgcLiveCodec(), deleteWgcLiveCodec);
+    constexpr unsigned char rounds = 3;
+    for (unsigned char sequence = 1; sequence <= rounds; ++sequence) {
+        const auto color = dualColors[0][sequence - 1];
+        if (sequence > 1) {
+            paintCaptureFixture(window.handle, color);
+        }
+        std::shared_ptr<Frame const> frame;
+        if (!waitForFixture([&] {
+            frame = matchedCapture(preview, color);
+            return frame != nullptr;
+        })) {
+            return 12;
+        }
+        submitWgcLiveFrame(*codec, capturedFixtureFrame(*frame));
+        frame.reset();
+        WorkerFramePixels pixels{};
+        verifyWgcLiveFrame(*codec, &pixels);
+        const auto command = sequence == rounds ? WorkerStop : WorkerDisplayed;
+        if (!deliverLiveFrame(events, pixels, worker->generation, sequence) ||
+            !expectLiveCommand(input, command, worker->generation, sequence)) {
+            return 17;
+        }
+    }
+    if (!DestroyWindow(window.handle)) {
+        return 14;
+    }
+    window.handle = nullptr;
+    if (!waitForFixture([&] { return !preview.view().second; })) {
+        return 14;
+    }
+    preview.stop();
+    finishWgcLiveCodec(*codec);
+    codec.reset();
+    std::puts("WGC mirror: one capture and codec stopped after three live frames.");
+    uint8_t record[WorkerMessageSize];
+    formatWorkerMessage(record, WorkerStopped, worker->generation);
+    return writeLiveRecord(events, record) ? 0 : 17;
+}
+
 LRESULT CALLBACK presenterProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     if (message == WM_PAINT) {
         PAINTSTRUCT paint{};
@@ -974,7 +1042,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     const bool liveCodec = argc == 2 && std::strcmp(argv[1], "--dual-codec") == 0;
     const bool livePixels = argc == 2 && std::strcmp(argv[1], "--dual-live-pixels") == 0;
     const bool stalePixels = argc == 2 && std::strcmp(argv[1], "--dual-live-stale-pixels") == 0;
-    if (argc != 1 && !exportPixels && !presentPixels && !liveCodec && !livePixels && !stalePixels) {
+    const bool mirrorPixels = argc == 2 && std::strcmp(argv[1], "--mirror-live-pixels") == 0;
+    if (argc != 1 && !exportPixels && !presentPixels && !liveCodec && !livePixels && !stalePixels && !mirrorPixels) {
         return 2;
     }
     smokeThread = GetCurrentThreadId();
@@ -1000,7 +1069,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
 #ifdef LINKO_RW04_WGC_CODEC_CI
     // The worker validates its start record before creating or capturing the fixture window.
     auto run = [](WorkerControl const* worker) { return smoke(GetModuleHandleW(nullptr), worker); };
-    const int result = (liveCodec || livePixels || stalePixels)
+    const int result = mirrorPixels ? runWgcLiveCodecs(smokeMirrorCodec, true, false)
+                    : (liveCodec || livePixels || stalePixels)
                     ? runWgcLiveCodecs(smokeDualCodec, livePixels || stalePixels, stalePixels)
                     : presentPixels ? runWgcPresenter(presentFixture)
                     : exportPixels ? runWgcCodecWorker(run) : run(nullptr);

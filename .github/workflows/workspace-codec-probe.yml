@@ -227,3 +227,14 @@ jobs:
           fixture="$RUNNER_TEMP/rw06-window-fixture/$CODEC_FIXTURE"
           launcher="$GITHUB_WORKSPACE/labs/remote-workspace/target/debug/examples/worker_exit_simulation$EXE_SUFFIX"
           "target/debug/examples/workspace_lab$EXE_SUFFIX" --viewport-window-probe "$launcher" "$fixture"
+      - name: Verify one live native decoder and texture shared by two regions
+        shell: bash
+        timeout-minutes: 2
+        env:
+          CODEC_FIXTURE: ${{ runner.os == 'Windows' && 'rw04-wgc-h264.exe' || 'rw04-sck-h264' }}
+          EXE_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
+          WGPU_BACKEND: dx12
+          WGPU_DX12_COMPILER: fxc
+        run: |
+          fixture="$RUNNER_TEMP/rw06-window-fixture/$CODEC_FIXTURE"
+          "target/debug/examples/workspace_lab$EXE_SUFFIX" --mirror-window-probe "$fixture"

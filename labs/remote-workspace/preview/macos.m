@@ -871,6 +871,8 @@ static bool runDualDisplayWorker(struct WorkerControl const *worker, void *conte
     return checkDualCodec(worker, *(bool const *)context) == 0;
 }
 
+static bool runMirrorDisplayWorker(struct WorkerControl const *worker, void *context);
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc != 2) {
@@ -879,6 +881,10 @@ int main(int argc, char **argv) {
         if (strcmp(argv[1], "--dual-codec") == 0) {
             setvbuf(stdout, NULL, _IONBF, 0);
             return checkDualCodec(NULL, false);
+        }
+        if (strcmp(argv[1], "--mirror-live-pixels") == 0) {
+            setvbuf(stdout, NULL, _IONBF, 0);
+            return withMacWorkerControl(runMirrorDisplayWorker, NULL) ? 0 : 1;
         }
         bool stalePixels = strcmp(argv[1], "--dual-live-stale-pixels") == 0;
         if (stalePixels || strcmp(argv[1], "--dual-live-pixels") == 0) {
@@ -955,6 +961,63 @@ static BOOL captureMatches(PreviewApp *preview, const uint8_t expected[3]) {
                fabs(color.blueComponent * 255 - expected[2]) <= 16;
     }
 }
+
+#ifdef LINKO_RW04_SCK_CODEC_CI
+static bool runMirrorDisplayWorker(struct WorkerControl const *worker, void *context) {
+    (void)context;
+    if (!CGPreflightScreenCaptureAccess() ||
+        !setLivePipeNonblocking(fileno(stdin)) || !setLivePipeNonblocking(fileno(worker->events))) {
+        fputs("ScreenCaptureKit mirror: hosted permission or local pipes unavailable.\n", stderr);
+        return false;
+    }
+    [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
+    [NSApp finishLaunching];
+    NSWindow *window = makeCaptureFixture(50, @"Linko mirror capture fixture", DualColors[0][0]);
+    [NSApp activate];
+    SCWindow *source = waitForFixtureWindow((CGWindowID)window.windowNumber);
+    if (!source) {
+        [window close];
+        return false;
+    }
+    PreviewApp *preview = [PreviewApp new];
+    [preview beginCapture:source];
+    struct SckLiveCodec *codec = NULL;
+    bool passed = true;
+    const unsigned char rounds = 3;
+    for (unsigned char sequence = 1; sequence <= rounds; ++sequence) {
+        const uint8_t *color = DualColors[0][sequence - 1];
+        if (sequence > 1) {
+            paintCaptureFixture(window, color);
+        }
+        if (!waitFor(^BOOL { return captureMatches(preview, color); }) ||
+            !submitCapturedImage(&codec, preview.displayedFrame, true)) {
+            passed = false;
+            break;
+        }
+        __block enum SckLiveStatus status = SckLivePending;
+        if (!waitFor(^BOOL {
+            status = pollSckLiveFrame(codec);
+            return status != SckLivePending;
+        }) || status != SckLiveDecoded ||
+            !deliverLiveFrame(worker, codec, worker->generation, sequence) ||
+            !expectLiveCommand(sequence == rounds ? WorkerStop : WorkerDisplayed,
+                               worker->generation, sequence)) {
+            passed = false;
+            break;
+        }
+    }
+    [window close];
+    const BOOL captureStopped = waitFor(^BOOL { return ![preview pollFixtureFrame] && !preview.hasStream; });
+    stopSckLiveCodec(codec);
+    if (!passed || !captureStopped) {
+        return false;
+    }
+    puts("ScreenCaptureKit mirror: one capture and codec stopped after three live frames.");
+    uint8_t record[WorkerMessageSize];
+    formatWorkerMessage(record, WorkerStopped, worker->generation);
+    return exchangeLiveBytes(fileno(worker->events), record, sizeof(record), YES);
+}
+#endif
 
 static int checkDualNativeCapture(DecodeCapturePair decode, ReleaseCaptureCodec releaseCodec) {
     if (!CGPreflightScreenCaptureAccess()) {

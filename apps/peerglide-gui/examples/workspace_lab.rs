@@ -18,6 +18,8 @@ use linko_workspace_lab::{Binding, Error, SurfaceKey};
 mod layout;
 #[path = "workspace_lab/live_fixture.rs"]
 mod live_fixture;
+#[path = "workspace_lab/mirror_fixture.rs"]
+mod mirror_fixture;
 #[path = "workspace_lab/native_fixture.rs"]
 mod native_fixture;
 #[cfg(test)]
@@ -27,6 +29,7 @@ mod test_fixture;
 mod viewport_fixture;
 use layout::LayoutProfile;
 use live_fixture::LiveFixture;
+use mirror_fixture::MirrorFixture;
 use native_fixture::{NativeFixture, PANELS as NATIVE_PANELS};
 use viewport_fixture::ViewportFixture;
 
@@ -93,6 +96,9 @@ enum ProbePaths {
         launcher: PathBuf,
         codec: PathBuf,
     },
+    Mirror {
+        codec: PathBuf,
+    },
 }
 
 struct Workspace {
@@ -106,9 +112,13 @@ struct Workspace {
 
 impl Workspace {
     fn new() -> Result<Self, Error> {
+        Self::with_panel_count(4)
+    }
+
+    fn with_panel_count(count: usize) -> Result<Self, Error> {
         let viewer = [255; 32];
-        let mut coordinator = Coordinator::new(viewer, 4)?;
-        let mut panels = Vec::with_capacity(4);
+        let mut coordinator = Coordinator::new(viewer, count)?;
+        let mut panels = Vec::with_capacity(count);
         for (index, (seed, label, shortcut)) in [
             (1, "Panel 1", egui::Key::Num1),
             (2, "Panel 2", egui::Key::Num2),
@@ -116,6 +126,7 @@ impl Workspace {
             (4, "Panel 4", egui::Key::Num4),
         ]
         .into_iter()
+        .take(count)
         .enumerate()
         {
             let key = SurfaceKey {
@@ -523,6 +534,7 @@ struct WorkspaceApp {
     started: Instant,
     native: Option<Box<dyn NativePanelProbe>>,
     viewport_probe: Option<ViewportFixture>,
+    mirror_probe: Option<MirrorFixture>,
     native_passed: Arc<AtomicBool>,
 }
 
@@ -530,7 +542,9 @@ impl eframe::App for WorkspaceApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let now = elapsed_ms(self.started);
         let context = root.ctx().clone();
-        let result = if let Some(viewport) = &mut self.viewport_probe {
+        let result = if let Some(mirror) = &mut self.mirror_probe {
+            mirror.step(&mut self.workspace.coordinator, root, now)
+        } else if let Some(viewport) = &mut self.viewport_probe {
             viewport.step(&mut self.workspace, root, now)
         } else if let Some(native) = &mut self.native {
             native
@@ -600,10 +614,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
             None,
         ),
+        [mode, codec] if mode == "--mirror-window-probe" => (
+            Some(ProbePaths::Mirror {
+                codec: PathBuf::from(codec),
+            }),
+            None,
+        ),
         _ => return Err(io::Error::other("unexpected workspace example arguments").into()),
     };
     let require_native_result = paths.is_some();
     let compact = matches!(paths, Some(ProbePaths::Viewport { .. }));
+    let mirrored = matches!(paths, Some(ProbePaths::Mirror { .. }));
     let native_passed = Arc::new(AtomicBool::new(false));
     let result = Arc::clone(&native_passed);
     let viewport = egui::ViewportBuilder::default()
@@ -650,17 +671,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             cc.egui_ctx.set_theme(egui::Theme::Light);
-            let mut workspace = Workspace::new()?;
+            let mut workspace = if mirrored {
+                Workspace::with_panel_count(1)?
+            } else {
+                Workspace::new()?
+            };
             if let Some(directory) = layout_dir {
                 workspace.open_layout(&directory)?;
             }
             let started = Instant::now();
             let mut viewport_probe = None;
+            let mut mirror_probe = None;
             let native: Option<Box<dyn NativePanelProbe>> =
                 if let Some(paths) = paths {
-                    let indices = if compact { [0, 2] } else { [0, 1] };
+                    let indices = match (compact, mirrored) {
+                        (true, _) => [0, 2],
+                        (_, true) => [0, 0],
+                        _ => [0, 1],
+                    };
                     let views = indices.map(|index| workspace.panels[index].view);
-                    for view in views {
+                    for view in views.into_iter().take(if mirrored { 1 } else { 2 }) {
                         workspace.coordinator.revise_geometry(
                             view,
                             SourceGeometry {
@@ -703,6 +733,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             )?);
                             None
                         }
+                        ProbePaths::Mirror { codec } => {
+                            mirror_probe = Some(MirrorFixture::start(
+                                &codec,
+                                &mut workspace.coordinator,
+                                views[0],
+                                started,
+                                &cc.egui_ctx,
+                            )?);
+                            None
+                        }
                     }
                 } else {
                     None
@@ -712,6 +752,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 started,
                 native,
                 viewport_probe,
+                mirror_probe,
                 native_passed: result,
             }))
         }),
