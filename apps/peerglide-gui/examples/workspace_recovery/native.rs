@@ -97,12 +97,12 @@ fn snapshot(owner: &mut Worker) -> Result<Snapshot> {
     })
 }
 
-fn park(
+fn begin_hide(
     directory: &Path,
     owner: &mut Worker,
     before: Snapshot,
     transaction: u64,
-) -> Result<Snapshot> {
+) -> Result<(Worker, String)> {
     let mut writer = Worker::start_native(directory, "hide", before.window)?;
     writer.expect("prepared")?;
     writer.write("arm")?;
@@ -111,6 +111,16 @@ fn park(
     writer.write("hide")?;
     let request = writer.message()?;
     ensure!(request == format!("hide {transaction} {}", before.window));
+    Ok((writer, request))
+}
+
+fn park(
+    directory: &Path,
+    owner: &mut Worker,
+    before: Snapshot,
+    transaction: u64,
+) -> Result<Snapshot> {
+    let (mut writer, request) = begin_hide(directory, owner, before, transaction)?;
     owner.write(&request)?;
     let receipt = owner.message()?;
     ensure!(receipt == format!("hidden {transaction}"));
@@ -130,6 +140,7 @@ fn restore(
     original: Observation,
     observed: Observation,
     transaction: u64,
+    completion: &str,
 ) -> Result<Worker> {
     let mut worker = Worker::start_native(directory, "recover", observed)?;
     worker.expect(&format!("pending {transaction}"))?;
@@ -137,38 +148,69 @@ fn restore(
     ensure!(request == format!("restore {transaction} {original}"));
     owner.write(&request)?;
     let receipt = owner.message()?;
-    ensure!(receipt == format!("restored {transaction}"));
+    ensure!(receipt == format!("{completion} {transaction}"));
     worker.write(&receipt)?;
     Ok(worker)
+}
+
+fn open_owner(directory: &Path, binary: &Path) -> Result<(Worker, Snapshot)> {
+    let mut owner = Worker::start_command(Command::new(binary))?;
+    owner.expect("ready")?;
+    let original = snapshot(&mut owner)?;
+    ensure!(original.visible && original.restores == 0);
+    let journal = Journal::open(directory)?;
+    let base = journal.clean_sequence()?;
+    owner.write(&format!("bind {base} {}", original.window))?;
+    owner.expect("bound")?;
+    Ok((owner, original))
+}
+
+fn fence_unapplied(directory: &Path, owner: &mut Worker, original: Snapshot) -> Result<()> {
+    let (mut writer, delayed_hide) = begin_hide(directory, owner, original, 1)?;
+    writer.crash()?;
+    let saved = std::fs::read(directory.join(FILENAME))?;
+    owner.write(&format!("restore 2 {}", original.window))?;
+    owner.expect("rejected")?;
+    let mut worker = restore(directory, owner, original.window, original.window, 1, "untouched")?;
+    worker.expect("before-clear")?;
+    owner.write(&delayed_hide)?;
+    owner.expect("rejected")?;
+    ensure!(snapshot(owner)? == original);
+    worker.crash()?;
+    ensure!(std::fs::read(directory.join(FILENAME))? == saved);
+    let mut worker = restore(directory, owner, original.window, original.window, 1, "untouched")?;
+    check_clear(&mut worker)?;
+    ensure!(snapshot(owner)? == original);
+    ensure!(Journal::open(directory)?.pending()?.is_none());
+    println!("Native recovery: unexecuted hide fenced, late command rejected and window unchanged.");
+    Ok(())
 }
 
 pub(super) fn smoke(binary: &Path) -> Result<()> {
     let fixture = Fixture::new()?;
     let directory = &fixture.path;
-    let mut owner = Worker::start_command(Command::new(binary))?;
-    owner.expect("ready")?;
-    let original = snapshot(&mut owner)?;
-    ensure!(original.visible && original.restores == 0);
-    let hidden = park(directory, &mut owner, original, 1)?;
+    let (mut owner, original) = open_owner(directory, binary)?;
+    fence_unapplied(directory, &mut owner, original)?;
+    let hidden = park(directory, &mut owner, original, 2)?;
     println!("Native recovery: the same owner retained a hidden moved window after worker death.");
 
     let saved = std::fs::read(directory.join(FILENAME))?;
     let mut wrong = original.window;
     wrong.instance.object += 1;
-    owner.write(&format!("restore 1 {wrong}"))?;
+    owner.write(&format!("restore 2 {wrong}"))?;
     owner.expect("rejected")?;
-    owner.write(&format!("restore 2 {}", original.window))?;
+    owner.write(&format!("restore 1 {}", original.window))?;
     owner.expect("rejected")?;
     ensure!(snapshot(&mut owner)? == hidden);
     ensure!(std::fs::read(directory.join(FILENAME))? == saved);
 
-    let mut worker = restore(directory, &mut owner, original.window, hidden.window, 1)?;
+    let mut worker = restore(directory, &mut owner, original.window, hidden.window, 2, "restored")?;
     worker.expect("before-clear")?;
     let recovered = snapshot(&mut owner)?;
     ensure!(recovered.visible && recovered.window == original.window && recovered.restores == 1);
     worker.crash()?;
     ensure!(std::fs::read(directory.join(FILENAME))? == saved);
-    let mut worker = restore(directory, &mut owner, original.window, recovered.window, 1)?;
+    let mut worker = restore(directory, &mut owner, original.window, recovered.window, 2, "restored")?;
     check_clear(&mut worker)?;
     ensure!(snapshot(&mut owner)? == recovered);
     ensure!(Journal::open(directory)?.pending()?.is_none());
@@ -176,15 +218,20 @@ pub(super) fn smoke(binary: &Path) -> Result<()> {
         "Native recovery: original visibility and bounds restored once across two worker crashes."
     );
 
-    let _ = park(directory, &mut owner, recovered, 2)?;
+    owner.write("exit")?;
+    owner.wait(true)?;
+    let (mut owner, next) = open_owner(directory, binary)?;
+    ensure!(next.window.instance != original.window.instance);
+    let _ = park(directory, &mut owner, next, 3)?;
     let lost = std::fs::read(directory.join(FILENAME))?;
     owner.crash()?;
     let mut replacement = Worker::start_command(Command::new(binary))?;
     replacement.expect("ready")?;
     let new_window = snapshot(&mut replacement)?;
-    ensure!(new_window.visible && new_window.window.instance != original.window.instance);
+    ensure!(new_window.visible && new_window.window.instance != next.window.instance);
+    ensure!(Journal::open(directory)?.clean_sequence().is_err());
     let mut worker = Worker::start_native(directory, "recover", new_window.window)?;
-    worker.expect("pending 2")?;
+    worker.expect("pending 3")?;
     worker.wait(false)?;
     ensure!(snapshot(&mut replacement)? == new_window);
     ensure!(std::fs::read(directory.join(FILENAME))? == lost);
