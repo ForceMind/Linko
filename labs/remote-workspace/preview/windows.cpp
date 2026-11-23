@@ -43,6 +43,25 @@ constexpr int startId = 101;
 constexpr int stopId = 102;
 constexpr int listId = 103;
 constexpr auto unavailableSource = L"窗口已关闭、隐藏或最小化。请重新选择。";
+constexpr auto unreadableFrame = L"无法读取窗口画面。";
+
+#ifdef LINKO_RW03_CI
+std::atomic<char const*> captureStage{"initializing"};
+
+LONG WINAPI reportCaptureException(EXCEPTION_POINTERS* exception) {
+    std::fprintf(stderr, "WGC exception 0x%08lX, stage=%s.\n",
+                 exception->ExceptionRecord->ExceptionCode, captureStage.load(std::memory_order_relaxed));
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
+void markCaptureStage(char const* stage) noexcept {
+#ifdef LINKO_RW03_CI
+    captureStage.store(stage, std::memory_order_relaxed);
+#else
+    static_cast<void>(stage);
+#endif
+}
 
 struct Source {
     HWND window{};
@@ -98,6 +117,7 @@ class Preview {
     }
 
     void capture(std::stop_token stop, Source const& source) {
+        markCaptureStage("opening");
         init_apartment(apartment_type::multi_threaded);
         struct Apartment {
             ~Apartment() { uninit_apartment(); }
@@ -142,7 +162,9 @@ class Preview {
         UINT stagingHeight{};
         session.StartCapture();
         auto lastFrame = Clock::now();
+        bool unreadable = false;
         while (!stop.stop_requested() && !closed->load() && available(source)) {
+            markCaptureStage("dequeue");
             auto captured = pool.TryGetNextFrame();
             if (!captured) {
                 check_hresult(device->GetDeviceRemovedReason());
@@ -161,9 +183,23 @@ class Preview {
                 publish(L"正在调整预览尺寸。");
                 size = next;
             }
-            auto access = captured.Surface().as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+            markCaptureStage("surface");
+            auto surface = captured.Surface();
+            if (!surface) {
+                unreadable = true;
+                break;
+            }
+            auto access = surface.try_as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+            if (!access) {
+                unreadable = true;
+                break;
+            }
             com_ptr<ID3D11Texture2D> texture;
             check_hresult(access->GetInterface(__uuidof(ID3D11Texture2D), texture.put_void()));
+            if (!texture) {
+                unreadable = true;
+                break;
+            }
             D3D11_TEXTURE2D_DESC desc{};
             texture->GetDesc(&desc);
             if (desc.Width < static_cast<UINT>(size.Width) || desc.Height < static_cast<UINT>(size.Height)) {
@@ -185,13 +221,14 @@ class Preview {
             frame->height = size.Height;
             auto const row = static_cast<std::size_t>(size.Width) * 4;
             frame->pixels.resize(row * static_cast<std::size_t>(size.Height));
+            markCaptureStage("readback");
             context->CopyResource(staging.get(), texture.get());
             D3D11_MAPPED_SUBRESOURCE mapped{};
             check_hresult(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped));
             if (!mapped.pData || mapped.RowPitch < row) {
                 context->Unmap(staging.get(), 0);
-                publish(L"无法读取窗口画面。");
-                return;
+                unreadable = true;
+                break;
             }
             for (int y = 0; y < size.Height; ++y) {
                 auto offset = static_cast<std::size_t>(y);
@@ -199,6 +236,7 @@ class Preview {
                             static_cast<std::byte const*>(mapped.pData) + offset * mapped.RowPitch, row);
             }
             context->Unmap(staging.get(), 0);
+            markCaptureStage("frame-close");
             captured.Close();
             if (!stop.stop_requested() && !closed->load() && available(source)) {
                 lastFrame = Clock::now();
@@ -206,10 +244,18 @@ class Preview {
             }
             std::this_thread::sleep_for(40ms);
         }
+        markCaptureStage("unsubscribe");
         onClosed.revoke();
+        markCaptureStage("pool-close");
         pool.Close();
+        markCaptureStage("session-close");
         session.Close();
-        publish(stop.stop_requested() ? L"预览已停止。" : unavailableSource);
+        markCaptureStage("stopped");
+        if (stop.stop_requested()) {
+            publish(L"预览已停止。");
+        } else {
+            publish(unreadable && !closed->load() && available(source) ? unreadableFrame : unavailableSource);
+        }
     }
 
 public:
@@ -233,7 +279,7 @@ public:
 #else
                     static_cast<void>(error);
 #endif
-                    publish(L"系统拒绝或中断了窗口采集。");
+                    publish(available(source) ? L"系统拒绝或中断了窗口采集。" : unavailableSource);
                 } catch (std::exception const&) {
                     publish(L"无法采集此窗口。请检查系统权限或窗口状态。");
                 } catch (...) {
@@ -518,9 +564,12 @@ int smoke(HINSTANCE instance) {
         return 11;
     }
     constexpr auto caption = L"Linko RW03 fixture";
-    FixtureWindow selected{CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, caption,
-                                          WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 320, 200,
-                                          nullptr, nullptr, instance, nullptr)};
+    auto createFixture = [&](int offset) {
+        return CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, caption,
+                               WS_OVERLAPPEDWINDOW | WS_VISIBLE, offset, offset, 320, 200,
+                               nullptr, nullptr, instance, nullptr);
+    };
+    FixtureWindow selected{createFixture(40)};
     auto fixture = selected.handle;
     if (!fixture) {
         return 11;
@@ -556,9 +605,7 @@ int smoke(HINSTANCE instance) {
     }
     std::puts("WGC resized frame confirmed.");
 
-    FixtureWindow alternate{CreateWindowExW(WS_EX_TOPMOST, fixtureType.lpszClassName, caption,
-                                           WS_OVERLAPPEDWINDOW | WS_VISIBLE, 80, 80, 320, 200,
-                                           nullptr, nullptr, instance, nullptr)};
+    FixtureWindow alternate{createFixture(80)};
     if (!alternate.handle) {
         return 14;
     }
@@ -647,6 +694,38 @@ int smoke(HINSTANCE instance) {
         return 25;
     }
     std::puts("WGC cycles: 100 capture and stop cycles passed without handle or GDI growth.");
+    for (unsigned cycle = 1; cycle <= 40; ++cycle) {
+        FixtureWindow closing{createFixture(120)};
+        if (!closing.handle) {
+            return 26;
+        }
+        UpdateWindow(closing.handle);
+        auto closingThread = GetWindowThreadProcessId(closing.handle, &process);
+        preview.start({closing.handle, process, closingThread, caption});
+        if (!wait(showsSecond)) {
+            std::fprintf(stderr, "WGC source close: first frame failed at cycle %u.\n", cycle);
+            return 26;
+        }
+        SetWindowLongPtrW(closing.handle, GWLP_USERDATA, 1);
+        if (!SetWindowPos(closing.handle, nullptr, 0, 0, 450, 300, SWP_NOMOVE | SWP_NOZORDER)) {
+            return 26;
+        }
+        RedrawWindow(closing.handle, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        if (!wait([&] {
+            auto frame = preview.view().second;
+            return frame && frame->width > previous && showsFixtureColor(*frame, true);
+        })) {
+            std::fprintf(stderr, "WGC source close: resized frame failed at cycle %u.\n", cycle);
+            return 26;
+        }
+        closing.close();
+        if (!wait(stopped)) {
+            std::fprintf(stderr, "WGC source close: stale frame at cycle %u.\n", cycle);
+            return 26;
+        }
+        preview.stop();
+    }
+    std::puts("WGC source close: 40 capture, resize, close and clear cycles passed.");
     return 0;
 }
 #endif
@@ -656,6 +735,7 @@ int smoke(HINSTANCE instance) {
 int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
+    SetUnhandledExceptionFilter(reportCaptureException);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     auto result = smoke(GetModuleHandleW(nullptr));
     std::printf("WGC smoke result: %d\n", result);
