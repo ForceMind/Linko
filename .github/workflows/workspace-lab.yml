@@ -105,3 +105,8 @@ jobs:
           name: linko-rw03-${{ matrix.os }}
           path: ${{ runner.temp }}/rw03-artifact
           if-no-files-found: error
+      - name: Verify two live ScreenCaptureKit streams and independent source close
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 1
+        run: '"$RUNNER_TEMP/rw03-smoke" --dual-capture'
