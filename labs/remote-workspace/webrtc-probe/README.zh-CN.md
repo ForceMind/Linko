@@ -30,6 +30,8 @@ macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建�
 
 `--crop-only` 对真实窗口复用 GPU 裁剪及送编缓冲池，检查生成的 BGRA 缓冲尺寸和类型，随后释放。该组使用相同的采样队列、停止回执和 100 轮资源采样，采集过程中没有创建媒体端点。
 
+`--cpu-copy` 通过固定 WebRTC 已带的 libyuv，按行间距复制真实窗口的 BGRA 内容到送编缓冲池，保留接收端呈现。开始前用有行填充和非零裁剪偏移的合成缓冲检查奇数尺寸对齐及越界拒绝。同一 runner 上与 GPU Core Image 裁剪对照各跑 100 轮。
+
 该实验调用系统 H.264。WebRTC 内建 H.264 和专有软件 codec 仍关闭。Windows codec factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
 
 - [固定 WebRTC 提交](https://webrtc.googlesource.com/src/+/692e07f2cb2f3602af5a8083b695f4f3bc2c9a6f)
