@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 #include "../webrtc-probe/vm_probe.h"
-#include "codec_worker_protocol.h"
+#include "macos_fixture.h"
 
 enum { MaxFrames = 90, FramesPerSecond = 30 };
 enum { MemoryFrames = 3 };
@@ -26,6 +26,8 @@ struct Probe {
     int height;
     unsigned frames;
     CVPixelBufferRef fixedInput;
+    CVPixelBufferRef captured[WorkerFrameCount];
+    uint8_t capturedLuma[WorkerFrameCount];
     int workerLuma;
     struct WorkerControl const *worker;
     bool exportPixels;
@@ -77,9 +79,10 @@ static void encodedOutput(void *state, void *source, OSStatus status, VTEncodeIn
 }
 
 static OSStatus submit(struct Probe *probe, VTCompressionSessionRef encoder, unsigned index) {
-    if (probe->fixedInput) {
+    CVPixelBufferRef input = probe->captured[0] ? probe->captured[index] : probe->fixedInput;
+    if (input) {
         probe->submittedAt[index] = nowNs();
-        return VTCompressionSessionEncodeFrame(encoder, probe->fixedInput, CMTimeMake(index, FramesPerSecond),
+        return VTCompressionSessionEncodeFrame(encoder, input, CMTimeMake(index, FramesPerSecond),
                                                CMTimeMake(1, FramesPerSecond), NULL, NULL, NULL);
     }
     CVPixelBufferRef pixels = NULL;
@@ -121,8 +124,10 @@ static bool matchesFixture(CVImageBufferRef frame, struct Probe const *probe, un
     bool valid = false;
     if (luma && stride >= width && CVPixelBufferGetHeightOfPlane(frame, 0) >= (size_t)probe->height) {
         const uint8_t *row = luma + stride * (size_t)(probe->height / 2);
-        const int expected = probe->workerLuma ? probe->workerLuma : probe->fixedInput ? 126 : brightness(index);
-        const int stripe = probe->fixedInput ? expected : 232 - expected;
+        const int fixedLuma = probe->workerLuma ? probe->workerLuma : 126;
+        const int expected = probe->captured[0] ? probe->capturedLuma[index]
+                                               : probe->fixedInput ? fixedLuma : brightness(index);
+        const int stripe = (probe->captured[0] || probe->fixedInput) ? expected : 232 - expected;
         valid = abs(row[width / 2] - expected) <= 6 && abs(row[width * 7 / 8] - stripe) <= 6;
     }
     return CVPixelBufferUnlockBaseAddress(frame, kCVPixelBufferLock_ReadOnly) == noErr && valid;
@@ -668,7 +673,7 @@ static bool checkWorker(int luma, struct WorkerControl const *control, bool expo
     return passed && sendWorkerMessage(control, WorkerStopped);
 }
 
-static bool runWorker(int luma, bool exportPixels) {
+bool withMacWorkerControl(bool (*run)(struct WorkerControl const *, void *), void *context) {
     // Preserve the inherited stdout pipe for protocol records. Keep diagnostics on stderr.
     const int eventsFd = dup(STDOUT_FILENO);
     if (eventsFd < 0) {
@@ -688,9 +693,64 @@ static bool runWorker(int luma, bool exportPixels) {
     }
     struct WorkerControl control = {.events = events, .backend = "VideoToolbox"};
     const bool passed = readWorkerMessage(&control, WorkerStart, &control.generation) &&
-                        checkWorker(luma, &control, exportPixels);
+                        run(&control, context);
     fclose(events);
     return passed;
+}
+
+struct WorkerFixtureOptions {
+    int luma;
+    bool exportPixels;
+};
+
+static bool runWorkerFixture(struct WorkerControl const *control, void *context) {
+    const struct WorkerFixtureOptions *options = context;
+    return checkWorker(options->luma, control, options->exportPixels);
+}
+
+static bool runWorker(int luma, bool exportPixels) {
+    struct WorkerFixtureOptions options = {luma, exportPixels};
+    return withMacWorkerControl(runWorkerFixture, &options);
+}
+
+static bool copyWindowInput(CVPixelBufferRef input, struct WorkerFramePixels const *packed) {
+    if (CVPixelBufferLockBaseAddress(input, 0) != noErr) {
+        return false;
+    }
+    bool valid = true;
+    for (size_t plane = 0; plane < 2 && valid; ++plane) {
+        uint8_t *destination = CVPixelBufferGetBaseAddressOfPlane(input, plane);
+        const size_t stride = CVPixelBufferGetBytesPerRowOfPlane(input, plane);
+        const size_t rows = WorkerFrameHeight / (plane + 1);
+        const uint8_t *source = packed->data + plane * WorkerFrameWidth * WorkerFrameHeight;
+        valid = destination && stride >= WorkerFrameWidth && CVPixelBufferGetHeightOfPlane(input, plane) >= rows;
+        if (valid) {
+            for (size_t row = 0; row < rows; ++row) {
+                memcpy(destination + row * stride, source + row * WorkerFrameWidth, WorkerFrameWidth);
+            }
+        }
+    }
+    return CVPixelBufferUnlockBaseAddress(input, 0) == noErr && valid;
+}
+
+bool encodeSckWindowFrames(struct WorkerControl const *control, struct SckWindowFrame const frames[2]) {
+    struct Probe probe = {.width = WorkerFrameWidth, .height = WorkerFrameHeight, .frames = WorkerFrameCount,
+                          .worker = control, .exportPixels = true};
+    bool ready = true;
+    for (unsigned index = 0; index < WorkerFrameCount && ready; ++index) {
+        struct WorkerFramePixels packed;
+        workerBgraToNv12(frames[index].bgra, WorkerFrameWidth * 4, packed.data);
+        probe.capturedLuma[index] = packed.data[WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2];
+        probe.captured[index] = makeMemoryFixture(WorkerFrameWidth, WorkerFrameHeight, NV12, 126);
+        ready = probe.captured[index] && copyWindowInput(probe.captured[index], &packed);
+    }
+    const bool passed = ready && runProbe(&probe, true, true);
+    for (unsigned index = 0; index < WorkerFrameCount; ++index) {
+        if (probe.captured[index]) {
+            CVPixelBufferRelease(probe.captured[index]);
+        }
+    }
+    return passed && sendWorkerMessage(control, WorkerStopped);
 }
 
 int main(int argc, char **argv) {

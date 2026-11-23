@@ -17,7 +17,7 @@ use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
 const CHILD_ARG: &str = "--fixture-child";
 const CODEC_ARG: &str = "--native-codec";
-const WGC_ARG: &str = "--native-wgc";
+const WINDOW_ARG: &str = "--native-window";
 const FIXTURE_READY: u8 = 1;
 const WORKER_VERSION: u8 = 1;
 const WORKER_START: u8 = 1;
@@ -355,8 +355,8 @@ fn main() -> SimulationResult<()> {
             run_child()?;
             return Ok(());
         }
-        Some(arg) if arg == OsStr::new(CODEC_ARG) || arg == OsStr::new(WGC_ARG) => {
-            let fixture = if arg == OsStr::new(WGC_ARG) {
+        Some(arg) if arg == OsStr::new(CODEC_ARG) || arg == OsStr::new(WINDOW_ARG) => {
+            let fixture = if arg == OsStr::new(WINDOW_ARG) {
                 FixturePixels::Window
             } else {
                 FixturePixels::Stripes

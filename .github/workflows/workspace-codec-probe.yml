@@ -5,6 +5,7 @@ on:
       - 'labs/remote-workspace/system-codec-probe/**'
       - 'labs/remote-workspace/webrtc-probe/vm_probe.*'
       - 'labs/remote-workspace/preview/windows.cpp'
+      - 'labs/remote-workspace/preview/macos.m'
       - 'labs/remote-workspace/examples/worker_exit_simulation.rs'
       - 'labs/remote-workspace/src/coordinator.rs'
       - '.github/workflows/workspace-codec-probe.yml'
@@ -97,4 +98,20 @@ jobs:
         shell: bash
         timeout-minutes: 3
         working-directory: labs/remote-workspace
-        run: cargo run --locked --offline --example worker_exit_simulation -- --native-wgc "$RUNNER_TEMP/rw04-wgc-h264.exe"
+        run: cargo run --locked --offline --example worker_exit_simulation -- --native-window "$RUNNER_TEMP/rw04-wgc-h264.exe"
+      - name: Route actual macOS window frames through the native codec worker
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          xcrun clang -std=c17 -Wall -Wextra -Werror -O2 -Dmain=linko_codec_fixture_main \
+            -c labs/remote-workspace/system-codec-probe/macos.c -o "$RUNNER_TEMP/rw04-vt-sck.o"
+          xcrun clang -std=c17 -mmacosx-version-min=14.0 -fobjc-arc -fblocks -Wall -Wextra -Werror \
+            -Wno-unused-parameter -O2 -DLINKO_RW03_CI -DLINKO_RW04_SCK_CODEC_CI \
+            -c labs/remote-workspace/preview/macos.m -o "$RUNNER_TEMP/rw04-sck.o"
+          xcrun clang++ "$RUNNER_TEMP/rw04-sck.o" "$RUNNER_TEMP/rw04-vt-sck.o" "$RUNNER_TEMP/rw04-vm.o" \
+            -framework AppKit -framework CoreFoundation -framework CoreGraphics -framework CoreImage \
+            -framework CoreMedia -framework CoreVideo -framework QuartzCore -framework ScreenCaptureKit \
+            -framework VideoToolbox -o "$RUNNER_TEMP/rw04-sck-h264"
+          cargo run --locked --offline --manifest-path labs/remote-workspace/Cargo.toml \
+            --example worker_exit_simulation -- --native-window "$RUNNER_TEMP/rw04-sck-h264"

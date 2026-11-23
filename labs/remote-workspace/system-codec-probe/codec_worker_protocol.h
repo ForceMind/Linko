@@ -16,6 +16,29 @@ struct WorkerFramePixels {
     uint8_t data[WorkerFrameBytes];
 };
 
+// The fixture provides a complete 128x96 BGRA crop with a verified row stride.
+static inline void workerBgraToNv12(uint8_t const *bgra, size_t stride, uint8_t *nv12) {
+    for (size_t y = 0; y < WorkerFrameHeight; y += 2) {
+        for (size_t x = 0; x < WorkerFrameWidth; x += 2) {
+            int u = 0;
+            int v = 0;
+            for (size_t dy = 0; dy < 2; ++dy) {
+                for (size_t dx = 0; dx < 2; ++dx) {
+                    const uint8_t *pixel = bgra + (y + dy) * stride + 4 * (x + dx);
+                    const int blue = pixel[0], green = pixel[1], red = pixel[2];
+                    nv12[(y + dy) * WorkerFrameWidth + x + dx] =
+                        (uint8_t)((66 * red + 129 * green + 25 * blue + 128) / 256 + 16);
+                    u += 112 * blue - 74 * green - 38 * red;
+                    v += 112 * red - 94 * green - 18 * blue;
+                }
+            }
+            const size_t chroma = WorkerFrameWidth * WorkerFrameHeight + (y / 2) * WorkerFrameWidth + x;
+            nv12[chroma] = (uint8_t)((u + 128 * 1024 + 512) / 1024);
+            nv12[chroma + 1] = (uint8_t)((v + 128 * 1024 + 512) / 1024);
+        }
+    }
+}
+
 struct WorkerControl {
     FILE *events;
     uint64_t generation;
