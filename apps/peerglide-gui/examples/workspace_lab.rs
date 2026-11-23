@@ -113,12 +113,8 @@ impl Workspace {
                 now,
             )?;
         }
-        self.coordinator.plan_viewport(
-            canvas_rect(viewport),
-            Some(self.focused),
-            self.budget,
-            now,
-        )
+        self.coordinator
+            .plan_viewport(canvas_rect(viewport), Some(self.focused), self.budget, now)
     }
 
     fn toggle_viewing(&mut self, panel: Panel, now: u64) -> Result<(), Error> {
