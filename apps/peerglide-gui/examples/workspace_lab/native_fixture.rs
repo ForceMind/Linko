@@ -1,4 +1,4 @@
-//! CI adapter for the existing native window codec probe.
+//! CI adapter for two independent native window codec probes.
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -14,6 +14,7 @@ use linko_workspace_lab::Error;
 
 use super::{elapsed_ms, CANVAS};
 
+pub(super) const PANELS: usize = 2;
 pub(super) const FRAME_SIZE: PixelSize = PixelSize {
     width: 128,
     height: 96,
@@ -21,12 +22,21 @@ pub(super) const FRAME_SIZE: PixelSize = PixelSize {
 pub(super) const ASPECT: f32 = 128.0 / 96.0;
 const IMAGE_SIZE: [usize; 2] = [FRAME_SIZE.width as usize, FRAME_SIZE.height as usize];
 const FRAME_BYTES: usize = IMAGE_SIZE[0] * IMAGE_SIZE[1] * 4;
+const COLORS: [Color32; PANELS] = [
+    Color32::from_rgb(190, 30, 70),
+    Color32::from_rgb(30, 70, 190),
+];
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 struct Received {
     pixels: Vec<u8>,
     first_seen: u64,
+}
+
+enum SourceEvent {
+    Ready,
+    Frame(Received),
 }
 
 struct PendingDraw {
@@ -36,19 +46,141 @@ struct PendingDraw {
     color: Color32,
 }
 
+struct Source {
+    process: Child,
+    view: ViewId,
+    events: Receiver<io::Result<SourceEvent>>,
+    ready: bool,
+    draw: Option<PendingDraw>,
+}
+
+impl Source {
+    fn start(
+        launcher: &Path,
+        codec: &Path,
+        view: ViewId,
+        frame_index: &str,
+        clock: Instant,
+        context: &egui::Context,
+    ) -> io::Result<Self> {
+        let mut process = Command::new(launcher)
+            .arg("--export-native-window")
+            .arg(codec)
+            .arg(frame_index)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let mut pipe = process.stdout.take().expect("fixture stdout is piped");
+        let (send, events) = mpsc::sync_channel(1);
+        let context = context.clone();
+        std::thread::spawn(move || {
+            let mut ready = [0];
+            let event = pipe.read_exact(&mut ready).and_then(|()| {
+                if ready == *b"R" {
+                    Ok(SourceEvent::Ready)
+                } else {
+                    Err(io::Error::other("invalid native source ready record"))
+                }
+            });
+            let ready = event.is_ok();
+            if send.send(event).is_err() {
+                return;
+            }
+            context.request_repaint();
+            if ready {
+                let mut pixels = vec![0; FRAME_BYTES];
+                let result = pipe.read_exact(&mut pixels).map(|()| {
+                    SourceEvent::Frame(Received {
+                        pixels,
+                        first_seen: elapsed_ms(clock),
+                    })
+                });
+                let _ = send.send(result);
+                context.request_repaint();
+            }
+        });
+        Ok(Self {
+            process,
+            view,
+            events,
+            ready: false,
+            draw: None,
+        })
+    }
+
+    fn next_event(&self) -> io::Result<Option<SourceEvent>> {
+        match self.events.try_recv() {
+            Ok(event) => event.map(Some),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(error) => Err(io::Error::other(error)),
+        }
+    }
+
+    fn send_command(&mut self, command: u8) -> io::Result<()> {
+        self.process
+            .stdin
+            .as_mut()
+            .expect("fixture stdin is piped")
+            .write_all(&[command])
+    }
+
+    fn require_running(&mut self) -> io::Result<()> {
+        if let Some(status) = self.process.try_wait()? {
+            return Err(io::Error::other(format!(
+                "native window source exited early: {status}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn finish_stop(&mut self, coordinator: &mut Coordinator, now: u64) -> Result<bool> {
+        let Some(status) = self.process.try_wait()? else {
+            return Ok(false);
+        };
+        if !status.success() {
+            return Err(
+                io::Error::other(format!("native decoder failed to stop: {status}")).into(),
+            );
+        }
+        coordinator.close(self.view, Fault::SourceClosed, now)?;
+        self.draw = None;
+        Ok(true)
+    }
+
+    fn fresh_draw(&self, now: u64) -> Option<&PendingDraw> {
+        self.draw
+            .as_ref()
+            .filter(|draw| now - draw.first_seen < MAX_QUEUE_AGE_MS)
+    }
+}
+
+impl Drop for Source {
+    fn drop(&mut self) {
+        if self.process.try_wait().ok().flatten().is_none() {
+            let _ = self.process.kill();
+            let _ = self.process.wait();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
-    Receiving(Receiver<io::Result<Received>>),
-    Drawing(PendingDraw),
-    Stopping(PendingDraw),
-    Clearing,
+    Starting,
+    Receiving,
+    Drawing,
+    StoppingFirst,
+    FirstCleared,
+    StoppingSecond,
+    BothCleared,
     Finished,
 }
 
 pub(super) struct NativeFixture {
-    process: Child,
+    sources: [Source; PANELS],
     phase: Phase,
+    second_started: bool,
     readback: Option<Receiver<bool>>,
-    drawn_area: Option<Rect>,
+    drawn_areas: Option<[Rect; PANELS]>,
     deadline: Instant,
 }
 
@@ -56,32 +188,25 @@ impl NativeFixture {
     pub(super) fn start(
         launcher: &Path,
         codec: &Path,
+        views: [ViewId; PANELS],
         clock: Instant,
         context: &egui::Context,
     ) -> io::Result<Self> {
-        let mut process = Command::new(launcher)
-            .arg("--export-native-window")
-            .arg(codec)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?;
-        let mut pipe = process.stdout.take().expect("fixture stdout is piped");
-        let (send, receive) = mpsc::sync_channel(1);
-        let context = context.clone();
-        std::thread::spawn(move || {
-            let mut pixels = vec![0; FRAME_BYTES];
-            let result = pipe.read_exact(&mut pixels).map(|()| Received {
-                pixels,
-                first_seen: elapsed_ms(clock),
-            });
-            let _ = send.send(result);
-            context.request_repaint();
-        });
+        let mut sources = [
+            Source::start(launcher, codec, views[0], "0", clock, context)?,
+            Source::start(launcher, codec, views[1], "1", clock, context)?,
+        ];
+        sources[0].send_command(b'S')?;
+        let second_started = !cfg!(target_os = "macos");
+        if second_started {
+            sources[1].send_command(b'S')?;
+        }
         Ok(Self {
-            process,
-            phase: Phase::Receiving(receive),
+            sources,
+            phase: Phase::Starting,
+            second_started,
             readback: None,
-            drawn_area: None,
+            drawn_areas: None,
             deadline: Instant::now() + Duration::from_secs(45),
         })
     }
@@ -89,7 +214,6 @@ impl NativeFixture {
     pub(super) fn advance(
         &mut self,
         coordinator: &mut Coordinator,
-        view: ViewId,
         context: &egui::Context,
         now: u64,
     ) -> Result<bool> {
@@ -97,95 +221,163 @@ impl NativeFixture {
             let error = io::Error::new(io::ErrorKind::TimedOut, "native panel fixture timed out");
             return Err(error.into());
         }
-        let status = self.process.try_wait()?;
-        self.phase = match std::mem::replace(&mut self.phase, Phase::Finished) {
-            Phase::Receiving(receive) => {
-                if status.is_some() {
-                    return Err(
-                        io::Error::other("native window source stopped before frame").into(),
-                    );
-                }
-                match receive.try_recv() {
-                    Ok(frame) => {
-                        Phase::Drawing(prepare_draw(coordinator, view, context, frame?, now)?)
+        match self.phase {
+            Phase::Starting => {
+                for source in &mut self.sources {
+                    source.require_running()?;
+                    if let Some(event) = source.next_event()? {
+                        if source.ready || !matches!(event, SourceEvent::Ready) {
+                            return Err(io::Error::other("unexpected native source event").into());
+                        }
+                        source.ready = true;
                     }
-                    Err(TryRecvError::Empty) => Phase::Receiving(receive),
-                    Err(error) => return Err(error.into()),
+                }
+                // Each ScreenCaptureKit fixture closes capture before READY.
+                // Let that happen before the other AppKit fixture starts.
+                if !self.second_started && self.sources[0].ready {
+                    self.sources[1].send_command(b'S')?;
+                    self.second_started = true;
+                }
+                if self.sources.iter().all(|source| source.ready) {
+                    for source in &mut self.sources {
+                        source.send_command(1)?;
+                    }
+                    self.phase = Phase::Receiving;
                 }
             }
-            Phase::Drawing(draw) => {
-                if status.is_some() || now - draw.first_seen >= MAX_QUEUE_AGE_MS {
-                    return Err(
-                        io::Error::other("native panel frame expired before readback").into(),
-                    );
+            Phase::Receiving => {
+                for (source, expected) in self.sources.iter_mut().zip(COLORS) {
+                    source.require_running()?;
+                    if source.draw.is_none() {
+                        match source.next_event()? {
+                            Some(SourceEvent::Frame(frame)) => {
+                                let draw =
+                                    prepare_draw(coordinator, source.view, context, frame, now)?;
+                                if !colors_match(draw.color, expected, 24) {
+                                    return Err(io::Error::other(
+                                        "decoded source color did not match panel",
+                                    )
+                                    .into());
+                                }
+                                source.draw = Some(draw);
+                            }
+                            Some(SourceEvent::Ready) => {
+                                return Err(io::Error::other(
+                                    "duplicate native source ready record",
+                                )
+                                .into());
+                            }
+                            None => {}
+                        }
+                    }
+                }
+                if self.sources.iter().all(|source| source.draw.is_some()) {
+                    self.phase = Phase::Drawing;
+                }
+            }
+            Phase::Drawing => {
+                for source in &mut self.sources {
+                    source.require_running()?;
+                    source.fresh_draw(now).ok_or(Error::StaleFrame)?;
                 }
                 if self.readback_confirmed()? {
-                    coordinator.acknowledge_presentation(draw.ticket, now)?;
-                    self.process
-                        .stdin
-                        .as_mut()
-                        .expect("fixture stdin is piped")
-                        .write_all(&[1])?;
+                    for source in &self.sources {
+                        let draw = source.fresh_draw(now).ok_or(Error::StaleFrame)?;
+                        coordinator.acknowledge_presentation(draw.ticket, now)?;
+                    }
                     println!(
-                        "Workspace panel: native decoded pixels confirmed by eframe readback."
+                        "Workspace panels: two native frames confirmed in one eframe readback."
                     );
-                    Phase::Stopping(draw)
-                } else {
-                    Phase::Drawing(draw)
+                    self.sources[0].send_command(2)?;
+                    self.phase = Phase::StoppingFirst;
                 }
             }
-            Phase::Stopping(draw) => match status {
-                None => Phase::Stopping(draw),
-                Some(status) if status.success() => {
-                    coordinator.close(view, Fault::SourceClosed, now)?;
-                    Phase::Clearing
+            Phase::StoppingFirst => {
+                self.sources[1].require_running()?;
+                self.sources[1].fresh_draw(now).ok_or(Error::StaleFrame)?;
+                if self.sources[0].finish_stop(coordinator, now)? {
+                    self.phase = Phase::FirstCleared;
                 }
-                Some(_) => {
-                    return Err(io::Error::other("native decoder did not stop cleanly").into())
+            }
+            Phase::FirstCleared => {
+                self.sources[1].require_running()?;
+                self.sources[1].fresh_draw(now).ok_or(Error::StaleFrame)?;
+                if self.readback_confirmed()? {
+                    println!("Workspace panels: first source cleared, second still visible.");
+                    self.sources[1].send_command(2)?;
+                    self.phase = Phase::StoppingSecond;
                 }
-            },
-            Phase::Clearing if self.readback_confirmed()? => {
-                println!("Workspace panel: source reaped, texture released and readback cleared.");
-                Phase::Finished
             }
-            phase => phase,
-        };
-        Ok(matches!(self.phase, Phase::Finished))
-    }
-
-    pub(super) fn texture(&self, now: u64) -> Option<&egui::TextureHandle> {
-        match &self.phase {
-            Phase::Drawing(draw) | Phase::Stopping(draw)
-                if now - draw.first_seen < MAX_QUEUE_AGE_MS =>
-            {
-                Some(&draw.texture)
+            Phase::StoppingSecond => {
+                if self.sources[1].finish_stop(coordinator, now)? {
+                    self.phase = Phase::BothCleared;
+                }
             }
-            _ => None,
+            Phase::BothCleared => {
+                if self.readback_confirmed()? {
+                    println!("Workspace panels: both sources reaped and both regions cleared.");
+                    self.phase = Phase::Finished;
+                }
+            }
+            Phase::Finished => {}
         }
+        Ok(self.phase == Phase::Finished)
     }
 
-    pub(super) fn verify_paint(&mut self, context: &egui::Context, area: Rect) -> io::Result<()> {
+    pub(super) fn textures(&self, now: u64) -> [Option<&egui::TextureHandle>; PANELS] {
+        if matches!(self.phase, Phase::Starting | Phase::Receiving) {
+            return [None; PANELS];
+        }
+        std::array::from_fn(|index| {
+            self.sources[index]
+                .fresh_draw(now)
+                .map(|draw| &draw.texture)
+        })
+    }
+
+    pub(super) fn verify_paint(
+        &mut self,
+        context: &egui::Context,
+        areas: [Rect; PANELS],
+    ) -> io::Result<()> {
         if self.readback.is_some() {
             return Ok(());
         }
-        let expected = match &self.phase {
-            Phase::Drawing(draw) => {
-                self.drawn_area = Some(area);
-                draw.color
+        let expected = match self.phase {
+            Phase::Drawing => {
+                self.drawn_areas = Some(areas);
+                [self.source_color(0)?, self.source_color(1)?]
             }
-            Phase::Clearing if self.drawn_area == Some(area) => CANVAS,
-            Phase::Clearing => return Err(io::Error::other("panel moved before clear readback")),
+            Phase::FirstCleared if self.drawn_areas == Some(areas) => {
+                [CANVAS, self.source_color(1)?]
+            }
+            Phase::BothCleared if self.drawn_areas == Some(areas) => [CANVAS; PANELS],
+            Phase::FirstCleared | Phase::BothCleared => {
+                return Err(io::Error::other("panels moved before clear readback"))
+            }
             _ => return Ok(()),
         };
         let scale = context.pixels_per_point();
         let (send, receive) = mpsc::sync_channel(1);
         let callback_context = context.clone();
         context.request_screenshot(move |image| {
-            let _ = send.send(matches_pixels(&image, area, scale, expected));
+            let pass = areas
+                .into_iter()
+                .zip(expected)
+                .all(|(area, color)| matches_pixels(&image, area, scale, color));
+            let _ = send.send(pass);
             callback_context.request_repaint();
         });
         self.readback = Some(receive);
         Ok(())
+    }
+
+    fn source_color(&self, index: usize) -> io::Result<Color32> {
+        self.sources[index]
+            .draw
+            .as_ref()
+            .map(|draw| draw.color)
+            .ok_or_else(|| io::Error::other("native panel has no decoded frame"))
     }
 
     fn readback_confirmed(&mut self) -> io::Result<bool> {
@@ -197,18 +389,12 @@ impl NativeFixture {
                 self.readback = None;
                 Ok(true)
             }
-            Ok(false) => Err(io::Error::other("workspace panel readback did not match")),
+            Ok(false) => Err(io::Error::other(format!(
+                "workspace panel readback did not match in {:?}",
+                self.phase
+            ))),
             Err(TryRecvError::Empty) => Ok(false),
             Err(error) => Err(io::Error::other(error)),
-        }
-    }
-}
-
-impl Drop for NativeFixture {
-    fn drop(&mut self) {
-        if self.process.try_wait().ok().flatten().is_none() {
-            let _ = self.process.kill();
-            let _ = self.process.wait();
         }
     }
 }
@@ -243,17 +429,17 @@ fn prepare_draw(
     let presentation = coordinator
         .take_for_present(view, now)?
         .ok_or(Error::StaleFrame)?;
-    let rgba = presentation.frame.pixels();
+    let pixels = presentation.frame.pixels();
     let center = (IMAGE_SIZE[1] / 2 * IMAGE_SIZE[0] + IMAGE_SIZE[0] / 2) * 4;
     Ok(PendingDraw {
         texture: context.load_texture(
             "native-window",
-            egui::ColorImage::from_rgba_unmultiplied(IMAGE_SIZE, rgba),
+            egui::ColorImage::from_rgba_unmultiplied(IMAGE_SIZE, pixels),
             egui::TextureOptions::NEAREST,
         ),
         ticket: presentation.ticket,
         first_seen,
-        color: Color32::from_rgb(rgba[center], rgba[center + 1], rgba[center + 2]),
+        color: Color32::from_rgb(pixels[center], pixels[center + 1], pixels[center + 2]),
     })
 }
 
@@ -267,13 +453,16 @@ fn matches_pixels(image: &egui::ColorImage, area: Rect, scale: f32, expected: Co
                 return false;
             }
             let actual = image.pixels[y * width + x];
-            if actual.r().abs_diff(expected.r()) > 18
-                || actual.g().abs_diff(expected.g()) > 18
-                || actual.b().abs_diff(expected.b()) > 18
-            {
+            if !colors_match(actual, expected, 18) {
                 return false;
             }
         }
     }
     true
+}
+
+fn colors_match(actual: Color32, expected: Color32, tolerance: u8) -> bool {
+    actual.r().abs_diff(expected.r()) <= tolerance
+        && actual.g().abs_diff(expected.g()) <= tolerance
+        && actual.b().abs_diff(expected.b()) <= tolerance
 }
