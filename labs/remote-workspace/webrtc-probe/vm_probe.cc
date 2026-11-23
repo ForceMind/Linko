@@ -68,6 +68,8 @@ extern "C" bool linko_rw04_sample_vm_regions(bool save_baseline) {
     if (!ReadMappings(current)) {
         return false;
     }
+    std::printf("Loopback VM absolute: IOAccelerator resident_bytes=%" PRIu64 "\n",
+                current.at(VM_MEMORY_IOACCELERATOR).resident);
     if (save_baseline) {
         baseline = current;
         baseline_ready = true;
