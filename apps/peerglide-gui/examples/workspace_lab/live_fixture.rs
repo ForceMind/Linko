@@ -16,11 +16,11 @@ use super::native_fixture::{
 };
 use super::{elapsed_ms, NativePanelProbe, CANVAS};
 
-const GENERATION: u64 = 0x0102_0a04_051a_0708;
-const START: u8 = 1;
+pub(super) const GENERATION: u64 = 0x0102_0a04_051a_0708;
+pub(super) const START: u8 = 1;
 const STOPPED: u8 = 4;
 const FRAME: u8 = 5;
-const DISPLAYED: u8 = 8;
+pub(super) const DISPLAYED: u8 = 8;
 const RESUME: u8 = 9;
 const PAIRS: u32 = 4;
 const SURVIVOR: u32 = PAIRS + 1;
@@ -46,7 +46,7 @@ const COLORS: [[[u8; 3]; SURVIVOR as usize]; PANELS] = [
 
 type ProbeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-enum Event {
+pub(super) enum Event {
     Frame { source: usize, frame: Received },
     Stopped(usize),
     End,
@@ -495,14 +495,14 @@ impl Drop for LiveFixture {
     }
 }
 
-fn record(kind: u8, generation: u64) -> [u8; 16] {
+pub(super) fn record(kind: u8, generation: u64) -> [u8; 16] {
     let mut record = *b"LRW4\x01\0\0\0\0\0\0\0\0\0\0\0";
     record[5] = kind;
     record[8..].copy_from_slice(&generation.to_be_bytes());
     record
 }
 
-fn read_event(pipe: &mut impl Read, clock: Instant) -> io::Result<Event> {
+pub(super) fn read_event(pipe: &mut impl Read, clock: Instant) -> io::Result<Event> {
     let mut header = [0; 16];
     match pipe.read_exact(&mut header[..1]) {
         Ok(()) => {}
