@@ -4,6 +4,7 @@ use linko_workspace_lab::frame_binding::{FrameMatch, FrameMatcher, MediaFrame, M
 use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect, Rotation, SourceGeometry};
 use linko_workspace_lab::handoff::{Command, State};
 use linko_workspace_lab::media::RawFrame;
+use linko_workspace_lab::scheduling::{Budget, Decision, PauseReason, Plan};
 use linko_workspace_lab::session::{ControlScope, SurfaceKind};
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
@@ -72,6 +73,106 @@ fn live(c: &mut Coordinator, seed: u8) -> ViewId {
         .unwrap();
     present(c, v, 1, 0);
     v
+}
+
+fn planned_decision(plan: &Plan, seed: u8) -> Decision {
+    let key = spec(seed).key;
+    plan.surfaces
+        .iter()
+        .find(|surface| surface.key == key)
+        .unwrap()
+        .decision
+}
+
+#[test]
+fn viewport_admission_tracks_registered_layout_viewing_focus_and_grants() {
+    let mut c = coordinator();
+    let controlled = live(&mut c, 1);
+    let viewing = c.register(spec(2), 0).unwrap();
+    let offscreen = c.register(spec(3), 0).unwrap();
+    let denied = c.register(spec(4), 0).unwrap();
+    c.grant_view(viewing, 0, 4).unwrap();
+    c.grant_view(offscreen, 0, 100).unwrap();
+    let outside = Rect {
+        x: bounds().width,
+        ..bounds()
+    };
+    c.relayout(offscreen, spec(3).camera, outside, 0).unwrap();
+    let ticket = c.focus(controlled, 0).unwrap();
+    let budget = Budget {
+        decoders: 1,
+        ..Budget::default()
+    };
+
+    let plan = c.plan_viewport(bounds(), Some(viewing), budget, 1).unwrap();
+    assert_eq!(plan.usage.decoders, 1);
+    assert_eq!(
+        planned_decision(&plan, 1),
+        Decision::Pause(PauseReason::ResourceLimit)
+    );
+    assert!(matches!(
+        planned_decision(&plan, 2),
+        Decision::Stream(allocation) if allocation.fps == budget.focused.fps
+    ));
+    assert_eq!(
+        planned_decision(&plan, 3),
+        Decision::Pause(PauseReason::Offscreen)
+    );
+    assert_eq!(
+        planned_decision(&plan, 4),
+        Decision::Pause(PauseReason::Unauthorized)
+    );
+    assert!(!c.snapshot(viewing, 1).unwrap().control_policy_ready);
+    c.authorize_input(controlled, ticket, 1, 1).unwrap();
+
+    let expired = c.plan_viewport(bounds(), Some(viewing), budget, 4).unwrap();
+    assert_eq!(
+        planned_decision(&expired, 2),
+        Decision::Pause(PauseReason::Unauthorized)
+    );
+    assert!(matches!(
+        planned_decision(&expired, 1),
+        Decision::Stream(allocation) if allocation.fps == budget.preview.fps
+    ));
+
+    c.relayout(offscreen, spec(3).camera, bounds(), 5).unwrap();
+    let revised_pixels = PixelSize {
+        width: 640,
+        height: 360,
+    };
+    c.revise_geometry(
+        offscreen,
+        SourceGeometry {
+            pixels: revised_pixels,
+            revision: 2,
+            ..spec(3).geometry
+        },
+        5,
+    )
+    .unwrap();
+    let visible = c.plan_viewport(bounds(), Some(offscreen), budget, 5).unwrap();
+    assert!(matches!(
+        planned_decision(&visible, 3),
+        Decision::Stream(allocation)
+            if allocation.fps == budget.focused.fps && allocation.size == revised_pixels
+    ));
+    c.close(offscreen, Fault::SourceClosed, 6).unwrap();
+    let closed = c.plan_viewport(bounds(), Some(offscreen), budget, 6).unwrap();
+    assert_eq!(
+        planned_decision(&closed, 3),
+        Decision::Pause(PauseReason::Unauthorized)
+    );
+    assert!(c.snapshot(controlled, 6).unwrap().input_active);
+    assert!(!c.snapshot(denied, 6).unwrap().viewing_allowed);
+    c.retire(offscreen, 6).unwrap();
+    assert!(matches!(
+        c.plan_viewport(bounds(), Some(offscreen), budget, 6),
+        Err(Error::StaleTarget)
+    ));
+    assert!(matches!(
+        c.plan_viewport(bounds(), None, budget, 5),
+        Err(Error::InvalidTime)
+    ));
 }
 
 #[test]
