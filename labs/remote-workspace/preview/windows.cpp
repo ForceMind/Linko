@@ -26,6 +26,8 @@
 #include <thread>
 #include <vector>
 
+struct WorkerControl;
+
 #ifdef LINKO_RW04_WGC_CODEC_CI
 #include <dbghelp.h>
 
@@ -484,7 +486,7 @@ LRESULT CALLBACK fixtureProc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     return DefWindowProcW(window, message, wparam, lparam);
 }
 
-int smoke(HINSTANCE instance) {
+int smoke(HINSTANCE instance, [[maybe_unused]] WorkerControl const* worker = nullptr) {
     if (valid({0, 16}) || valid({4096, 4096}) || !valid({1920, 1080})) {
         return 10;
     }
@@ -583,7 +585,7 @@ int smoke(HINSTANCE instance) {
     }
 #ifdef LINKO_RW04_WGC_CODEC_CI
     markWgcCodecStage("retained-fixture-frames");
-    return checkWgcCodec(capturedFixtureFrame(*first), capturedFixtureFrame(*resized));
+    return checkWgcCodec(capturedFixtureFrame(*first), capturedFixtureFrame(*resized), worker);
 #else
     return 0;
 #endif
@@ -592,10 +594,14 @@ int smoke(HINSTANCE instance) {
 } // namespace
 
 #ifdef LINKO_RW03_CI
-int main() {
+int main([[maybe_unused]] int argc, [[maybe_unused]] char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
 #ifdef LINKO_RW04_WGC_CODEC_CI
+    const bool exportPixels = argc == 2 && std::strcmp(argv[1], "--worker-pixels") == 0;
+    if (argc != 1 && !exportPixels) {
+        return 2;
+    }
     smokeThread = GetCurrentThreadId();
     SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_NO_PROMPTS | SYMOPT_FAIL_CRITICAL_ERRORS);
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
@@ -616,10 +622,14 @@ int main() {
 #endif
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     static_cast<void>(&windowProc);
-    auto result = smoke(GetModuleHandleW(nullptr));
 #ifdef LINKO_RW04_WGC_CODEC_CI
+    // The worker validates its start record before creating or capturing the fixture window.
+    auto run = [](WorkerControl const* worker) { return smoke(GetModuleHandleW(nullptr), worker); };
+    const int result = exportPixels ? runWgcCodecWorker(run) : run(nullptr);
     markWgcCodecStage("closing-shared-mta");
     CoUninitialize();
+#else
+    const int result = smoke(GetModuleHandleW(nullptr));
 #endif
     std::printf("WGC smoke result: %d\n", result);
     return result;

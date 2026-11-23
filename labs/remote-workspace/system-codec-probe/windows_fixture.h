@@ -9,6 +9,9 @@ struct WgcFixtureFrame {
     unsigned height;
 };
 
+struct WorkerControl;
+
 bool hasWgcFixtureColor(WgcFixtureFrame frame, bool resized);
 void markWgcCodecStage(char const* stage) noexcept;
-int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized);
+int runWgcCodecWorker(int (*run)(WorkerControl const*));
+int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized, WorkerControl const* worker);

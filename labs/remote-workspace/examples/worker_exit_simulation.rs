@@ -17,6 +17,7 @@ use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
 const CHILD_ARG: &str = "--fixture-child";
 const CODEC_ARG: &str = "--native-codec";
+const WGC_ARG: &str = "--native-wgc";
 const FIXTURE_READY: u8 = 1;
 const WORKER_VERSION: u8 = 1;
 const WORKER_START: u8 = 1;
@@ -47,6 +48,12 @@ const NATIVE_PIXELS: PixelSize = PixelSize {
 const NATIVE_WIDTH: usize = NATIVE_PIXELS.width as usize;
 const NATIVE_HEIGHT: usize = NATIVE_PIXELS.height as usize;
 const NV12_BYTES: usize = NATIVE_WIDTH * NATIVE_HEIGHT * 3 / 2;
+
+#[derive(Clone, Copy)]
+enum FixturePixels {
+    Stripes,
+    Window,
+}
 const BOUNDS: Rect = Rect {
     x: 0.0,
     y: 0.0,
@@ -81,6 +88,7 @@ impl CoordinatedWorker {
         binary: &Path,
         binding: Binding,
         generation: u64,
+        fixture: FixturePixels,
     ) -> io::Result<(Self, [Vec<u8>; 2])> {
         // The Actions launcher provides the path to its freshly built fixture.
         let mut command = Command::new(binary);
@@ -88,8 +96,8 @@ impl CoordinatedWorker {
         let mut worker = Self::spawn(command, binding)?;
         worker.send_command(WORKER_START, generation)?;
         let frames = worker.read_event(Duration::from_secs(90), move |stdout| {
-            let first = read_worker_frame(stdout, generation, 2)?;
-            let second = read_worker_frame(stdout, generation, 3)?;
+            let first = read_worker_frame(stdout, generation, 2, fixture)?;
+            let second = read_worker_frame(stdout, generation, 3, fixture)?;
             expect_record(stdout, worker_record(WORKER_READY, generation))?;
             Ok([first, second])
         })?;
@@ -198,6 +206,7 @@ fn read_worker_frame(
     stdout: &mut impl Read,
     generation: u64,
     sequence: u32,
+    fixture: FixturePixels,
 ) -> io::Result<Vec<u8>> {
     expect_record(stdout, worker_record(WORKER_FRAME, generation))?;
     let mut header = [0; 12];
@@ -212,14 +221,31 @@ fn read_worker_frame(
     let mut nv12 = vec![0; NV12_BYTES];
     stdout.read_exact(&mut nv12)?;
 
-    let expected = if sequence == 2 { 24 } else { 32 };
-    let middle_row = NATIVE_HEIGHT / 2 * NATIVE_WIDTH;
-    let left = i32::from(nv12[middle_row + NATIVE_WIDTH / 2]);
-    let right = i32::from(nv12[middle_row + NATIVE_WIDTH * 7 / 8]);
-    if (left - expected).abs() > 6 || (right - (232 - expected)).abs() > 6 {
+    let rgba = nv12_rgba(&nv12);
+    let valid = match fixture {
+        FixturePixels::Window => matches_window_color(&rgba, sequence == 3),
+        FixturePixels::Stripes => {
+            let expected = if sequence == 2 { 24 } else { 32 };
+            let middle_row = NATIVE_HEIGHT / 2 * NATIVE_WIDTH;
+            let left = i32::from(nv12[middle_row + NATIVE_WIDTH / 2]);
+            let right = i32::from(nv12[middle_row + NATIVE_WIDTH * 7 / 8]);
+            (left - expected).abs() <= 6 && (right - (232 - expected)).abs() <= 6
+        }
+    };
+    if !valid {
         return Err(invalid_worker_data("unexpected decoded fixture pixels"));
     }
-    Ok(nv12_rgba(&nv12))
+    Ok(rgba)
+}
+
+fn matches_window_color(rgba: &[u8], resized: bool) -> bool {
+    let center = (NATIVE_HEIGHT / 2 * NATIVE_WIDTH + NATIVE_WIDTH / 2) * 4;
+    let expected = if resized { [30, 70, 190] } else { [190, 30, 70] };
+    rgba[center..center + 3]
+        .iter()
+        .zip(expected)
+        .all(|(&decoded, expected)| decoded.abs_diff(expected) <= 24)
+        && rgba[center + 3] == 255
 }
 
 // The bounded SDR fixture uses the limited-range BT.601 matrix.
@@ -319,18 +345,23 @@ fn match_frame(
 
 fn main() -> SimulationResult<()> {
     let mut args = std::env::args_os().skip(1);
-    let codec = match args.next().as_deref() {
-        None => None,
+    let (codec, fixture) = match args.next().as_deref() {
+        None => (None, FixturePixels::Stripes),
         Some(arg) if arg == OsStr::new(CHILD_ARG) => {
             run_child()?;
             return Ok(());
         }
-        Some(arg) if arg == OsStr::new(CODEC_ARG) => Some(args.next().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "missing native codec fixture path",
-            )
-        })?),
+        Some(arg) if arg == OsStr::new(CODEC_ARG) || arg == OsStr::new(WGC_ARG) => {
+            let fixture = if arg == OsStr::new(WGC_ARG) {
+                FixturePixels::Window
+            } else {
+                FixturePixels::Stripes
+            };
+            let binary = args
+                .next()
+                .ok_or_else(|| invalid_worker_data("missing native codec fixture path"))?;
+            (Some(binary), fixture)
+        }
         Some(_) => {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "unknown fixture mode").into());
         }
@@ -366,7 +397,7 @@ fn main() -> SimulationResult<()> {
 
     let (mut worker, [pixels, late_pixels]) = match codec.as_deref() {
         Some(binary) => {
-            CoordinatedWorker::start_codec(Path::new(binary), binding, WORKER_GENERATION)?
+            CoordinatedWorker::start_codec(Path::new(binary), binding, WORKER_GENERATION, fixture)?
         }
         None => (
             CoordinatedWorker::start_fixture(binding)?,
@@ -379,12 +410,17 @@ fn main() -> SimulationResult<()> {
     c.receive_matched(first, frame, matched, 1)?;
     let waiting = c.take_for_present(first, 1)?.ok_or(Error::StaleFrame)?;
     if codec.is_some() {
-        let middle = NATIVE_HEIGHT / 2 * NATIVE_WIDTH;
-        let dark = (middle + NATIVE_WIDTH / 2) * 4;
-        let bright = (middle + NATIVE_WIDTH * 7 / 8) * 4;
         let rgba = waiting.frame.pixels();
-        assert!(rgba[dark] < 32 && rgba[bright] > 175);
-        assert_eq!(rgba[bright + 3], 255);
+        match fixture {
+            FixturePixels::Window => assert!(matches_window_color(rgba, false)),
+            FixturePixels::Stripes => {
+                let middle = NATIVE_HEIGHT / 2 * NATIVE_WIDTH;
+                let dark = (middle + NATIVE_WIDTH / 2) * 4;
+                let bright = (middle + NATIVE_WIDTH * 7 / 8) * 4;
+                assert!(rgba[dark] < 32 && rgba[bright] > 175);
+                assert_eq!(rgba[bright + 3], 255);
+            }
+        }
         println!("Native worker: coordinator returned a decoded 128x96 frame.");
     }
     let late_frame = RawFrame::new(c.frame_stamp(first, 3)?, size, late_pixels)?;
@@ -429,7 +465,7 @@ fn main() -> SimulationResult<()> {
         };
         let generation = WORKER_GENERATION + 1;
         let (mut next, _) =
-            CoordinatedWorker::start_codec(Path::new(binary), replacement, generation)?;
+            CoordinatedWorker::start_codec(Path::new(binary), replacement, generation, fixture)?;
         next.send_command(WORKER_STOP, generation)?;
         next.expect_event(
             worker_record(WORKER_STOPPED, generation),
@@ -456,15 +492,18 @@ mod tests {
         packet.extend_from_slice(&(NATIVE_HEIGHT as u16).to_be_bytes());
         packet.extend_from_slice(&(NV12_BYTES as u32).to_be_bytes());
 
-        let wrong_generation = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION + 1, 2);
+        let read = |mut bytes: &[u8], generation| {
+            read_worker_frame(&mut bytes, generation, 2, FixturePixels::Stripes)
+        };
+        let wrong_generation = read(&packet, WORKER_GENERATION + 1);
         assert_eq!(
             wrong_generation.unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
-        let truncated = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION, 2);
+        let truncated = read(&packet, WORKER_GENERATION);
         assert_eq!(truncated.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
         packet[24] = 0xff;
-        let oversized = read_worker_frame(&mut packet.as_slice(), WORKER_GENERATION, 2);
+        let oversized = read(&packet, WORKER_GENERATION);
         assert_eq!(oversized.unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 }
