@@ -5,6 +5,8 @@ on:
       - 'labs/remote-workspace/system-codec-probe/**'
       - 'labs/remote-workspace/webrtc-probe/vm_probe.*'
       - 'labs/remote-workspace/preview/windows.cpp'
+      - 'labs/remote-workspace/examples/worker_exit_simulation.rs'
+      - 'labs/remote-workspace/src/coordinator.rs'
       - '.github/workflows/workspace-codec-probe.yml'
 permissions:
   contents: read
@@ -82,3 +84,11 @@ jobs:
         shell: bash
         timeout-minutes: 5
         run: python labs/remote-workspace/system-codec-probe/worker_smoke.py "$RUNNER_TEMP/rw04-h264"
+      - uses: dtolnay/rust-toolchain@1.95.0
+        if: runner.os == 'macOS'
+      - name: Route actual VideoToolbox worker exit through the workspace coordinator
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 3
+        working-directory: labs/remote-workspace
+        run: cargo run --locked --offline --example worker_exit_simulation -- --native-codec "$RUNNER_TEMP/rw04-h264"
