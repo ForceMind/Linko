@@ -103,7 +103,9 @@ impl MirrorFixture {
         now: u64,
     ) -> Result<bool> {
         if Instant::now() >= self.deadline {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "workspace mirror timed out").into());
+            return Err(
+                io::Error::new(io::ErrorKind::TimedOut, "workspace mirror timed out").into(),
+            );
         }
         coordinator.poll(now)?;
         let context = root.ctx().clone();
@@ -147,7 +149,8 @@ impl MirrorFixture {
         )?;
         let planned = plan.surfaces.first().ok_or(Error::InvalidState)?;
         let expected = if self.phase == Phase::Revoked {
-            plan.usage.decoders == 0 && planned.decision == Decision::Pause(PauseReason::Unauthorized)
+            plan.usage.decoders == 0
+                && planned.decision == Decision::Pause(PauseReason::Unauthorized)
         } else {
             plan.usage.decoders == 1 && matches!(planned.decision, Decision::Stream(_))
         };
@@ -162,7 +165,14 @@ impl MirrorFixture {
                     if now - draw.first_seen >= MAX_QUEUE_AGE_MS {
                         return Err(Error::StaleFrame.into());
                     }
-                    let colors = [draw.color, if self.mirror.is_some() { draw.color } else { CANVAS }];
+                    let colors = [
+                        draw.color,
+                        if self.mirror.is_some() {
+                            draw.color
+                        } else {
+                            CANVAS
+                        },
+                    ];
                     self.request_readback(&context, colors);
                 }
                 Phase::Revoked => self.request_readback(&context, [CANVAS; 2]),
@@ -189,7 +199,9 @@ impl MirrorFixture {
         let texture = self.draw.take().map(|draw| draw.texture);
         let draw = prepare_draw(coordinator, self.view, context, frame, now, texture)?;
         if !colors_match(draw.color, COLORS[self.sequence as usize - 1], 24) {
-            return Err(io::Error::other("live mirror color did not match the source revision").into());
+            return Err(
+                io::Error::other("live mirror color did not match the source revision").into(),
+            );
         }
         let id = draw.texture.id();
         if self.texture_id.replace(id).is_some_and(|old| old != id) {
@@ -215,7 +227,8 @@ impl MirrorFixture {
                 println!("Workspace mirror: frame 1 shared by both regions; mirror detached.");
             }
             2 => {
-                self.mirror = Some(coordinator.attach_mirror(self.view, canvas_rect(self.areas[1]), now)?);
+                self.mirror =
+                    Some(coordinator.attach_mirror(self.view, canvas_rect(self.areas[1]), now)?);
                 println!("Workspace mirror: frame 2 updated primary only; mirror attached again.");
             }
             3 => {
@@ -239,7 +252,9 @@ impl MirrorFixture {
     }
 
     fn paint(&self, root: &mut egui::Ui, now: u64) -> [Rect; 2] {
-        let texture = self.draw.as_ref()
+        let texture = self
+            .draw
+            .as_ref()
             .filter(|draw| now - draw.first_seen < MAX_QUEUE_AGE_MS)
             .map(|draw| &draw.texture);
         egui::CentralPanel::default()
@@ -268,7 +283,9 @@ impl MirrorFixture {
         let (send, receive) = mpsc::sync_channel(1);
         let wake = context.clone();
         context.request_screenshot(move |image| {
-            let matched = areas.into_iter().zip(colors)
+            let matched = areas
+                .into_iter()
+                .zip(colors)
                 .all(|(area, color)| matches_pixels(&image, area, scale, color));
             let _ = send.send(matched);
             wake.request_repaint();
@@ -286,7 +303,8 @@ impl MirrorFixture {
                 Ok(true)
             }
             Ok(false) => Err(io::Error::other(format!(
-                "workspace mirror pixels did not match for frame {}", self.sequence
+                "workspace mirror pixels did not match for frame {}",
+                self.sequence
             ))),
             Err(TryRecvError::Empty) => Ok(false),
             Err(error) => Err(io::Error::other(error)),
@@ -314,7 +332,9 @@ impl MirrorFixture {
             return Ok(false);
         };
         if !status.success() {
-            return Err(io::Error::other(format!("native mirror worker failed: {status}")));
+            return Err(io::Error::other(format!(
+                "native mirror worker failed: {status}"
+            )));
         }
         Ok(self.ended)
     }
@@ -327,7 +347,11 @@ impl MirrorFixture {
     }
 
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        self.worker.stdin.as_mut().expect("mirror stdin is piped").write_all(bytes)
+        self.worker
+            .stdin
+            .as_mut()
+            .expect("mirror stdin is piped")
+            .write_all(bytes)
     }
 }
 

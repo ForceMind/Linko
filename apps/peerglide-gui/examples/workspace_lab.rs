@@ -615,7 +615,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None,
         ),
         [mode, codec] if mode == "--mirror-window-probe" => (
-            Some(ProbePaths::Mirror { codec: PathBuf::from(codec) }),
+            Some(ProbePaths::Mirror {
+                codec: PathBuf::from(codec),
+            }),
             None,
         ),
         _ => return Err(io::Error::other("unexpected workspace example arguments").into()),
