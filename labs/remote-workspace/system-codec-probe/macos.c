@@ -15,6 +15,8 @@
 #include "../webrtc-probe/vm_probe.h"
 
 enum { MaxFrames = 90, FramesPerSecond = 30 };
+enum { MemoryFrames = 3 };
+enum MemoryStage { BothStages, EncodeStage, DecodeStage };
 static const OSType NV12 = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
 
 struct Probe {
@@ -232,19 +234,31 @@ static bool report(struct Probe const *probe, bool paced, unsigned beforeDrain,
     return true;
 }
 
+static OSStatus startEncoder(struct Probe *probe, VTCompressionSessionRef *encoder) {
+    OSStatus status = VTCompressionSessionCreate(NULL, probe->width, probe->height, kCMVideoCodecType_H264,
+                                                 NULL, NULL, NULL, encodedOutput, probe, encoder);
+    if (status == noErr) {
+        status = VTSessionSetProperty(*encoder, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+    }
+    if (status == noErr) {
+        status = VTSessionSetProperty(*encoder, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
+    }
+    if (status != noErr && *encoder) {
+        VTCompressionSessionInvalidate(*encoder);
+        CFRelease(*encoder);
+        *encoder = NULL;
+    }
+    return status;
+}
+
 static bool run(int width, int height, unsigned frames, bool paced, CVPixelBufferRef fixedInput, bool verbose) {
     struct Probe probe = {.width = width, .height = height, .frames = frames, .fixedInput = fixedInput};
     VTCompressionSessionRef encoder = NULL;
     VTDecompressionSessionRef decoder = NULL;
-    OSStatus status = VTCompressionSessionCreate(NULL, width, height, kCMVideoCodecType_H264, NULL, NULL, NULL,
-                                                 encodedOutput, &probe, &encoder);
+    OSStatus status = startEncoder(&probe, &encoder);
     if (status != noErr) {
         fprintf(stderr, "create H.264 encoder: %d\n", (int)status);
         return false;
-    }
-    status = VTSessionSetProperty(encoder, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
-    if (status == noErr) {
-        status = VTSessionSetProperty(encoder, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
     }
     unsigned delivered = 0;
     uint64_t started = nowNs();
@@ -299,7 +313,18 @@ static bool run(int width, int height, unsigned frames, bool paced, CVPixelBuffe
     return true;
 }
 
-static CVPixelBufferRef makeBgraFixture(int width, int height) {
+static bool fillMemoryPlane(CVPixelBufferRef pixels, size_t plane, int value) {
+    void *bytes = CVPixelBufferGetBaseAddressOfPlane(pixels, plane);
+    const size_t stride = CVPixelBufferGetBytesPerRowOfPlane(pixels, plane);
+    const size_t rows = CVPixelBufferGetHeightOfPlane(pixels, plane);
+    if (!bytes || !stride || !rows || stride > SIZE_MAX / rows) {
+        return false;
+    }
+    memset(bytes, value, stride * rows);
+    return true;
+}
+
+static CVPixelBufferRef makeMemoryFixture(int width, int height, OSType format) {
     CFDictionaryRef empty = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks,
                                                         &kCFTypeDictionaryValueCallBacks);
     if (!empty) {
@@ -315,19 +340,23 @@ static CVPixelBufferRef makeBgraFixture(int width, int height) {
         return NULL;
     }
     CVPixelBufferRef pixels = NULL;
-    OSStatus status = CVPixelBufferCreate(NULL, (size_t)width, (size_t)height, kCVPixelFormatType_32BGRA,
-                                         attributes, &pixels);
+    OSStatus status = CVPixelBufferCreate(NULL, (size_t)width, (size_t)height, format, attributes, &pixels);
     CFRelease(attributes);
     if (status != noErr) {
         return NULL;
     }
     bool initialized = false;
     if (CVPixelBufferLockBaseAddress(pixels, 0) == noErr) {
-        void *bytes = CVPixelBufferGetBaseAddress(pixels);
-        const size_t length = CVPixelBufferGetDataSize(pixels);
-        initialized = bytes && length >= (size_t)width * (size_t)height * 4;
-        if (initialized) {
-            memset(bytes, 0x80, length);
+        if (format == NV12) {
+            initialized = CVPixelBufferGetPlaneCount(pixels) == 2 &&
+                          fillMemoryPlane(pixels, 0, 126) && fillMemoryPlane(pixels, 1, 128);
+        } else {
+            void *bytes = CVPixelBufferGetBaseAddress(pixels);
+            const size_t length = CVPixelBufferGetDataSize(pixels);
+            initialized = bytes && length >= (size_t)width * (size_t)height * 4;
+            if (initialized) {
+                memset(bytes, 0x80, length);
+            }
         }
         initialized = CVPixelBufferUnlockBaseAddress(pixels, 0) == noErr && initialized;
     }
@@ -348,26 +377,116 @@ static bool sampleMemory(unsigned cycle) {
     return linko_rw04_sample_vm_regions(cycle == 10);
 }
 
-static bool checkMemory(int width, int height) {
-    printf("VideoToolbox memory: size=%dx%d, fixed BGRA input.\n", width, height);
-    CVPixelBufferRef input = makeBgraFixture(width, height);
-    if (!input) {
-        fputs("VideoToolbox memory: could not create the BGRA fixture.\n", stderr);
+struct MemorySamples {
+    CMSampleBufferRef frames[MemoryFrames];
+};
+
+static void releaseMemorySamples(struct MemorySamples *samples) {
+    for (unsigned index = 0; index < MemoryFrames; ++index) {
+        if (samples->frames[index]) {
+            CFRelease(samples->frames[index]);
+            samples->frames[index] = NULL;
+        }
+    }
+}
+
+static bool encodeMemoryFixture(int width, int height, CVPixelBufferRef input, struct MemorySamples *samples) {
+    struct Probe probe = {.width = width, .height = height, .frames = MemoryFrames, .fixedInput = input};
+    VTCompressionSessionRef encoder = NULL;
+    OSStatus status = startEncoder(&probe, &encoder);
+    if (status != noErr) {
+        fprintf(stderr, "VideoToolbox memory: create isolated encoder failed: %d.\n", (int)status);
         return false;
     }
-    bool passed = true;
-    for (unsigned cycle = 1; passed && cycle <= 100; ++cycle) {
-        passed = run(width, height, 3, true, input, cycle == 1);
-        if (passed && (cycle == 10 || cycle == 100)) {
+    const struct timespec interval = {.tv_nsec = 1000000000 / FramesPerSecond};
+    for (unsigned index = 0; index < MemoryFrames && status == noErr; ++index) {
+        status = submit(&probe, encoder, index);
+        if (status == noErr) {
+            nanosleep(&interval, NULL);
+        }
+    }
+    if (status == noErr) {
+        status = VTCompressionSessionCompleteFrames(encoder, kCMTimeInvalid);
+    }
+    const char *mode = hardwareMode(encoder, kVTCompressionPropertyKey_UsingHardwareAcceleratedVideoEncoder);
+    VTCompressionSessionInvalidate(encoder);
+    CFRelease(encoder);
+    bool present = true;
+    for (unsigned index = 0; index < MemoryFrames; ++index) {
+        samples->frames[index] = atomic_exchange(&probe.encoded[index], NULL);
+        present = present && samples->frames[index] != NULL;
+    }
+    OSStatus callbackError = atomic_load(&probe.callbackError);
+    if (status != noErr || callbackError != noErr || !present || strcmp(mode, "hardware") != 0) {
+        fprintf(stderr, "VideoToolbox memory: isolated encoder status=%d callback=%d mode=%s.\n",
+                (int)status, (int)callbackError, mode);
+        return false;
+    }
+    return true;
+}
+
+static bool decodeMemoryFixture(int width, int height, CVPixelBufferRef input, struct MemorySamples const *samples) {
+    struct Probe probe = {.width = width, .height = height, .frames = MemoryFrames, .fixedInput = input};
+    VTDecompressionSessionRef decoder = NULL;
+    CMFormatDescriptionRef type = CMSampleBufferGetFormatDescription(samples->frames[0]);
+    OSStatus status = startDecoder(&probe, type, &decoder);
+    if (status != noErr) {
+        fprintf(stderr, "VideoToolbox memory: create isolated decoder failed: %d.\n", (int)status);
+        return false;
+    }
+    for (unsigned index = 0; index < MemoryFrames && status == noErr; ++index) {
+        status = VTDecompressionSessionDecodeFrame(decoder, samples->frames[index], 0, NULL, NULL);
+    }
+    if (status == noErr) {
+        status = VTDecompressionSessionWaitForAsynchronousFrames(decoder);
+    }
+    const char *mode = hardwareMode(decoder, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder);
+    VTDecompressionSessionInvalidate(decoder);
+    CFRelease(decoder);
+    bool present = true;
+    for (unsigned index = 0; index < MemoryFrames; ++index) {
+        present = present && atomic_load(&probe.decodedAt[index]) != 0;
+    }
+    OSStatus callbackError = atomic_load(&probe.callbackError);
+    if (status != noErr || callbackError != noErr || !present || strcmp(mode, "hardware") != 0) {
+        fprintf(stderr, "VideoToolbox memory: isolated decoder status=%d callback=%d mode=%s.\n",
+                (int)status, (int)callbackError, mode);
+        return false;
+    }
+    return true;
+}
+
+static bool checkMemory(int width, int height, enum MemoryStage stage, OSType format, const char *name) {
+    const unsigned cycles = strcmp(name, "encode-soak") == 0 ? 500 : 100;
+    printf("VideoToolbox memory: size=%dx%d, stage=%s, cycles=%u.\n", width, height, name, cycles);
+    CVPixelBufferRef input = makeMemoryFixture(width, height, format);
+    if (!input) {
+        fputs("VideoToolbox memory: could not create the fixed input.\n", stderr);
+        return false;
+    }
+    struct MemorySamples seed = {0};
+    bool passed = stage != DecodeStage || encodeMemoryFixture(width, height, input, &seed);
+    for (unsigned cycle = 1; passed && cycle <= cycles; ++cycle) {
+        if (stage == EncodeStage) {
+            struct MemorySamples samples = {0};
+            passed = encodeMemoryFixture(width, height, input, &samples);
+            releaseMemorySamples(&samples);
+        } else if (stage == DecodeStage) {
+            passed = decodeMemoryFixture(width, height, input, &seed);
+        } else {
+            passed = run(width, height, MemoryFrames, true, input, cycle == 1);
+        }
+        if (passed && (cycle == 10 || cycle == 100 || cycle == 250 || cycle == cycles)) {
             passed = sampleMemory(cycle);
         }
         if (!passed) {
             fprintf(stderr, "VideoToolbox memory: stopped at cycle %u.\n", cycle);
         }
     }
+    releaseMemorySamples(&seed);
     CVPixelBufferRelease(input);
     if (passed) {
-        puts("VideoToolbox memory: 100 standalone hardware encode/decode cycles passed.");
+        printf("VideoToolbox memory: %u standalone hardware cycles passed, stage=%s.\n", cycles, name);
     }
     return passed;
 }
@@ -381,14 +500,29 @@ static int evenDimension(const char *text, int limit) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc == 4 && strcmp(argv[1], "--vm") == 0) {
+    if ((argc == 4 || argc == 5) && strcmp(argv[1], "--vm") == 0) {
         const int width = evenDimension(argv[2], 1920);
         const int height = evenDimension(argv[3], 1080);
         if (!width || !height) {
             fputs("VideoToolbox memory: expected bounded even dimensions.\n", stderr);
             return 2;
         }
-        return checkMemory(width, height) ? 0 : 1;
+        enum MemoryStage stage = BothStages;
+        OSType format = kCVPixelFormatType_32BGRA;
+        const char *name = argc == 5 ? argv[4] : "both";
+        if (argc == 5) {
+            if (strcmp(name, "encode") == 0 || strcmp(name, "encode-soak") == 0) {
+                stage = EncodeStage;
+            } else if (strcmp(name, "encode-nv12") == 0) {
+                stage = EncodeStage;
+                format = NV12;
+            } else if (strcmp(name, "decode") == 0) {
+                stage = DecodeStage;
+            } else {
+                return 2;
+            }
+        }
+        return checkMemory(width, height, stage, format, name) ? 0 : 1;
     }
     if (argc != 1) {
         return 2;
