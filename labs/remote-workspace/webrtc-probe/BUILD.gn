@@ -58,6 +58,7 @@ if (is_mac) {
     "//modules/audio_device:audio_device_impl",
     "//p2p:basic_packet_socket_factory",
     "//p2p:basic_port_allocator",
+    "//pc:session_description",
     "//pc:video_track_source",
     "//rtc_base:ip_address",
     "//rtc_base:network",
