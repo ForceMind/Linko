@@ -27,6 +27,7 @@ const WORKER_STOP: u8 = 3;
 #[cfg(windows)]
 const WORKER_STOPPED: u8 = 4;
 const WORKER_FRAME: u8 = 5;
+const WORKER_PRESENTED: u8 = 6;
 // Include LF and Ctrl-Z so the Windows test also checks binary pipe mode.
 const WORKER_GENERATION: u64 = 0x0102_0a04_051a_0708;
 const MEDIA_TRACK: MediaTrack = MediaTrack {
@@ -177,6 +178,32 @@ impl Drop for CoordinatedWorker {
             let _ = self.process.wait();
         }
     }
+}
+
+fn prove_window_pixels(
+    binary: &Path,
+    binding: Binding,
+    generation: u64,
+    rgba: &[u8],
+) -> io::Result<()> {
+    if rgba.len() != NATIVE_WIDTH * NATIVE_HEIGHT * 4 {
+        return Err(invalid_worker_data("invalid renderer frame size"));
+    }
+    let mut command = Command::new(binary);
+    command.arg("--present-pixels");
+    let mut presenter = CoordinatedWorker::spawn(command, binding)?;
+    presenter.send_command(WORKER_START, generation)?;
+    let mut input = presenter.process.stdin.take().expect("renderer stdin is piped");
+    input.write_all(rgba)?;
+    drop(input);
+    presenter.expect_event(
+        worker_record(WORKER_PRESENTED, generation),
+        Duration::from_secs(15),
+    )?;
+    if !presenter.process.wait()?.success() {
+        return Err(io::Error::other("native presenter did not exit successfully"));
+    }
+    Ok(())
 }
 
 fn worker_record(kind: u8, generation: u64) -> [u8; 16] {
@@ -433,6 +460,23 @@ fn main() -> SimulationResult<()> {
     queue(&mut c, survivor, 1, 1, FIXTURE_PIXELS)?;
     assert!(worker.poll_exit(&mut c, 1)?.is_none());
     assert!(c.snapshot(first, 1)?.presentation_pending);
+    let late_ticket = if let (Some(binary), FixturePixels::Window) = (codec.as_deref(), fixture) {
+        prove_window_pixels(
+            Path::new(binary),
+            binding,
+            WORKER_GENERATION,
+            waiting.frame.pixels(),
+        )?;
+        c.acknowledge_presentation(waiting.ticket, 1)?;
+        assert!(!c.snapshot(first, 1)?.presentation_pending);
+        println!("Native worker: coordinator accepted the verified presentation receipt.");
+
+        let pending = c.take_for_present(second, 1)?.ok_or(Error::StaleFrame)?;
+        queue(&mut c, second, 2, 1, FIXTURE_PIXELS)?;
+        pending.ticket
+    } else {
+        waiting.ticket
+    };
     assert!(c.snapshot(second, 1)?.frame_queued);
     worker.process.kill()?;
     let (status, closed) = worker.await_exit(&mut c, 2)?;
@@ -445,7 +489,7 @@ fn main() -> SimulationResult<()> {
         assert!(!state.connected && !state.viewing_allowed);
         assert!(!state.frame_queued && !state.presentation_pending && !state.input_active);
     }
-    let late_ack = c.acknowledge_presentation(waiting.ticket, 2);
+    let late_ack = c.acknowledge_presentation(late_ticket, 2);
     assert_eq!(late_ack, Err(Error::WrongAcknowledgement));
     let late_delivery = c.receive_matched(first, late_frame, late_match, 2);
     assert_eq!(late_delivery, Err(Error::StaleTarget));

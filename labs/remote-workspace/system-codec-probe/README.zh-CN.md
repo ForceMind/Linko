@@ -28,6 +28,8 @@ Windows 托管桌面测试还会通过 WGC 捕获一个测试窗口缩放前后�
 
 两端另将窗口冒烟程序作为 Rust 的原生子进程执行。Windows 走 WGC 和 Media Foundation，macOS 走 ScreenCaptureKit 和 VideoToolbox。开始记录有效后才创建测试窗口。捕获、缩放、关闭和两种颜色通过检查后，从本机管道发送实际解码的两帧。Rust 核对两帧中心颜色，并验证第一帧经过协调器、第二帧在退出后被拒收。两端的固定图样回归继续运行。
 
+窗口回归把第一帧从协调器送到另一个原生展示进程。展示进程绘制隔离测试窗口，再通过 WGC 或 ScreenCaptureKit 回采该窗口并校验中心像素。收到本次进程的展示回执后，Rust 才确认该帧。视图策略时间仍由实验控制，退出时也检查另一张尚未确认的展示票据会失效。
+
 这里验证系统编解码入口。Windows 硬件编码、WebRTC codec factory 接线、端到端延迟、完整许可及实际 GPU 性能仍待验证。
 
 - [Media Foundation H.264 编码器](https://learn.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder)

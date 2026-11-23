@@ -471,7 +471,7 @@ int withMediaFoundation(auto run) {
 }
 
 
-int withWorkerControl(char const* backend, auto run) {
+int withWorkerControl(char const* backend, auto run, WorkerMessage completion = WorkerStopped) {
     const int eventsFd = _dup(_fileno(stdout));
     if (eventsFd < 0) {
         std::perror("duplicate worker event pipe");
@@ -497,7 +497,7 @@ int withWorkerControl(char const* backend, auto run) {
     if (result != 0) {
         return result;
     }
-    return sendWorkerMessage(&control, WorkerStopped) ? 0 : 1;
+    return sendWorkerMessage(&control, completion) ? 0 : 1;
 }
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
@@ -533,6 +533,10 @@ bool hasWgcFixtureColor(WgcFixtureFrame frame, bool resized) {
 
 int runWgcCodecWorker(int (*run)(WorkerControl const*)) {
     return withWorkerControl("WGC/Media Foundation", run);
+}
+
+int runWgcPresenter(int (*run)(WorkerControl const*)) {
+    return withWorkerControl("WGC presenter", run, WorkerPresented);
 }
 
 int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized, WorkerControl const* worker) {

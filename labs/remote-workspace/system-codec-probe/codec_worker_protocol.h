@@ -7,14 +7,33 @@
 #include <string.h>
 
 // Fixed records on the child process's inherited control pipes.
-enum WorkerMessage { WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame };
+enum WorkerMessage { WorkerStart = 1, WorkerReady, WorkerStop, WorkerStopped, WorkerFrame, WorkerPresented };
 enum { WorkerVersion = 1, WorkerMessageSize = 16, WorkerGenerationOffset = 8 };
 enum { WorkerFrameWidth = 128, WorkerFrameHeight = 96, WorkerFrameCount = 2 };
 enum { WorkerFrameBytes = WorkerFrameWidth * WorkerFrameHeight * 3 / 2 };
+enum { WorkerRgbaBytes = WorkerFrameWidth * WorkerFrameHeight * 4 };
 
 struct WorkerFramePixels {
     uint8_t data[WorkerFrameBytes];
 };
+
+struct WorkerRgbaPixels {
+    uint8_t data[WorkerRgbaBytes];
+};
+
+static inline bool readWorkerRgba(struct WorkerRgbaPixels *pixels) {
+    return fread(pixels->data, 1, sizeof(pixels->data), stdin) == sizeof(pixels->data);
+}
+
+static inline bool matchesWorkerRgb(uint8_t const *capturedBgra, uint8_t const *expectedRgba) {
+    for (size_t channel = 0; channel < 3; ++channel) {
+        const int difference = (int)capturedBgra[2 - channel] - expectedRgba[channel];
+        if (difference < -16 || difference > 16) {
+            return false;
+        }
+    }
+    return true;
+}
 
 // The fixture provides a complete 128x96 BGRA crop with a verified row stride.
 static inline void workerBgraToNv12(uint8_t const *bgra, size_t stride, uint8_t *nv12) {

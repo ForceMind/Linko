@@ -436,8 +436,41 @@ static BOOL waitFor(BOOL (^predicate)(void)) {
     return NO;
 }
 
+
+static SCWindow *waitForFixtureWindow(CGWindowID window) {
+    BOOL visible = waitFor(^BOOL { return sourceExists(window, NSProcessInfo.processInfo.processIdentifier); });
+    if (!visible) {
+        fputs("macOS hosted WindowServer did not register the test window.\n", stderr);
+        return nil;
+    }
+    __block SCWindow *source;
+    __block NSError *queryError;
+    __block NSUInteger count = 0;
+    __block BOOL queried = NO;
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO
+                                               completionHandler:^(SCShareableContent *content, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            queryError = error;
+            count = content.windows.count;
+            for (SCWindow *candidate in content.windows) {
+                if (candidate.windowID == window) {
+                    source = candidate;
+                    break;
+                }
+            }
+            queried = YES;
+        });
+    }];
+    if (!waitFor(^BOOL { return queried; }) || !source) {
+        fprintf(stderr, "macOS hosted fixture missing from ScreenCaptureKit (query completed=%d windows=%lu error=%ld).\n",
+                queried, (unsigned long)count, (long)queryError.code);
+        return nil;
+    }
+    return source;
+}
+
 #ifdef LINKO_RW04_SCK_CODEC_CI
-static BOOL copyFixtureCrop(NSImage *image, struct SckWindowFrame *frame, BOOL resized) {
+static BOOL copyFixtureCrop(NSImage *image, struct SckWindowFrame *frame) {
     CGImageRef full = [image CGImageForProposedRect:NULL context:nil hints:nil];
     if (!full || CGImageGetWidth(full) < WorkerFrameWidth || CGImageGetHeight(full) < WorkerFrameHeight) {
         return NO;
@@ -463,9 +496,13 @@ static BOOL copyFixtureCrop(NSImage *image, struct SckWindowFrame *frame, BOOL r
     if (crop) {
         CGImageRelease(crop);
     }
+    return copied;
+}
+
+static BOOL copySourceFixtureCrop(NSImage *image, struct SckWindowFrame *frame, BOOL resized) {
+    const uint8_t expected[3] = {resized ? 30 : 190, resized ? 70 : 30, resized ? 190 : 70};
     const uint8_t *center = frame->bgra + 4 * (WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2);
-    return copied && abs(center[0] - (resized ? 190 : 70)) <= 16 &&
-           abs(center[1] - (resized ? 70 : 30)) <= 16 && abs(center[2] - (resized ? 30 : 190)) <= 16;
+    return copyFixtureCrop(image, frame) && matchesWorkerRgb(center, expected);
 }
 #endif
 
@@ -502,39 +539,15 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
     [fixture orderFrontRegardless];
     [fixture displayIfNeeded];
     CGWindowID window = (CGWindowID)fixture.windowNumber;
-    BOOL visible = waitFor(^BOOL { return sourceExists(window, NSProcessInfo.processInfo.processIdentifier); });
-    if (!visible) {
-        fputs("macOS hosted WindowServer did not register the test window.\n", stderr);
-        return 5;
-    }
-    __block SCWindow *source;
-    __block NSError *queryError;
-    __block NSUInteger count = 0;
-    __block BOOL queried = NO;
-    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO
-                                               completionHandler:^(SCShareableContent *content, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            queryError = error;
-            count = content.windows.count;
-            for (SCWindow *candidate in content.windows) {
-                if (candidate.windowID == window) {
-                    source = candidate;
-                    break;
-                }
-            }
-            queried = YES;
-        });
-    }];
-    if (!waitFor(^BOOL { return queried; }) || !source) {
-        fprintf(stderr, "macOS hosted fixture missing from ScreenCaptureKit (query completed=%d windows=%lu error=%ld).\n",
-                queried, (unsigned long)count, (long)queryError.code);
+    SCWindow *source = waitForFixtureWindow(window);
+    if (!source) {
         return 5;
     }
     [preview beginCapture:source];
     if (!waitFor(^BOOL {
 #ifdef LINKO_RW04_SCK_CODEC_CI
         if (worker) {
-            return copyFixtureCrop(preview.displayedFrame, first, NO);
+            return copySourceFixtureCrop(preview.displayedFrame, first, NO);
         }
 #endif
         return preview.displayedFrame != nil;
@@ -557,7 +570,7 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
         }
 #ifdef LINKO_RW04_SCK_CODEC_CI
         if (worker) {
-            return copyFixtureCrop(preview.displayedFrame, resized, YES);
+            return copySourceFixtureCrop(preview.displayedFrame, resized, YES);
         }
 #endif
         return YES;
@@ -581,6 +594,81 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
 }
 
 #ifdef LINKO_RW04_SCK_CODEC_CI
+static NSImage *presentationImage(struct WorkerRgbaPixels const *input) {
+    CFDataRef data = CFDataCreate(NULL, input->data, sizeof(input->data));
+    CGDataProviderRef provider = data ? CGDataProviderCreateWithCFData(data) : NULL;
+    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGImageRef pixels = provider && color
+        ? CGImageCreate(WorkerFrameWidth, WorkerFrameHeight, 8, 32, WorkerFrameWidth * 4, color,
+                        kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast,
+                        provider, NULL, false, kCGRenderingIntentDefault)
+        : NULL;
+    NSImage *image = pixels ? [[NSImage alloc] initWithCGImage:pixels size:NSZeroSize] : nil;
+    if (pixels) {
+        CGImageRelease(pixels);
+    }
+    if (color) {
+        CGColorSpaceRelease(color);
+    }
+    if (provider) {
+        CGDataProviderRelease(provider);
+    }
+    if (data) {
+        CFRelease(data);
+    }
+    return image;
+}
+
+static bool runSckPresenter(struct WorkerControl const *worker, void *context) {
+    (void)context;
+    struct WorkerRgbaPixels input;
+    if (!readWorkerRgba(&input) || !CGPreflightScreenCaptureAccess()) {
+        fputs("ScreenCaptureKit presenter could not read its frame or capture its window.\n", stderr);
+        return false;
+    }
+    [NSApplication sharedApplication].activationPolicy = NSApplicationActivationPolicyRegular;
+    [NSApp finishLaunching];
+    NSImage *image = presentationImage(&input);
+    if (!image) {
+        return false;
+    }
+    PreviewApp *preview = [PreviewApp new];
+    [preview applicationDidFinishLaunching:
+        [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(40, 40, 220, 150)
+                                                  styleMask:NSWindowStyleMaskTitled
+                                                    backing:NSBackingStoreBuffered defer:NO];
+    window.releasedWhenClosed = NO;
+    window.title = @"Linko presentation fixture";
+    NSImageView *imageView = [[NSImageView alloc] initWithFrame:window.contentView.bounds];
+    imageView.image = image;
+    imageView.imageScaling = NSImageScaleAxesIndependently;
+    window.contentView = imageView;
+    [window makeKeyAndOrderFront:nil];
+    [window orderFrontRegardless];
+    [window displayIfNeeded];
+
+    SCWindow *source = waitForFixtureWindow((CGWindowID)window.windowNumber);
+    BOOL shown = NO;
+    if (source) {
+        [preview beginCapture:source];
+        const size_t center = 4 * (WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2);
+        const uint8_t *expected = input.data + center;
+        shown = waitFor(^BOOL {
+            struct SckWindowFrame captured;
+            return copyFixtureCrop(preview.displayedFrame, &captured) &&
+                   matchesWorkerRgb(captured.bgra + center, expected);
+        });
+    }
+    [window close];
+    if (!waitFor(^BOOL { return !preview.displayedFrame && !preview.hasStream; }) || !shown) {
+        fputs("ScreenCaptureKit presenter did not recapture and close the drawn window.\n", stderr);
+        return false;
+    }
+    puts("ScreenCaptureKit presenter: recaptured the drawn native window.");
+    return sendWorkerMessage(worker, WorkerPresented);
+}
+
 static bool runSckWorker(struct WorkerControl const *worker, void *context) {
     (void)context;
     return checkNativeCapture(worker) == 0;
@@ -588,10 +676,16 @@ static bool runSckWorker(struct WorkerControl const *worker, void *context) {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        if (argc != 2 || strcmp(argv[1], "--worker-pixels") != 0) {
+        if (argc != 2) {
             return 2;
         }
         setvbuf(stdout, NULL, _IONBF, 0);
+        if (strcmp(argv[1], "--present-pixels") == 0) {
+            return withMacWorkerControl(runSckPresenter, NULL) ? 0 : 1;
+        }
+        if (strcmp(argv[1], "--worker-pixels") != 0) {
+            return 2;
+        }
         return withMacWorkerControl(runSckWorker, NULL) ? 0 : 1;
     }
 }
