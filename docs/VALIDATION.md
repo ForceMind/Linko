@@ -457,4 +457,6 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 
 - [PR #374](https://github.com/ForceMind/Linko/pull/374)，`f176c05645c409d5a0b15ac46480dd65ba53eaeb`。现有 eframe 工程的离线示例通过三端焦点、离屏、暂停和恢复回归。逐张核对 916×584 和 640×300 的 Linux 原生窗口截图。紧凑窗口按 4 后完整显示底部两张卡片，第四面板获得全画质分配。[截图](https://github.com/ForceMind/Linko/actions/runs/45128907777/artifacts/14797650518) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45128907777) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45128907770)
 
-本批验证覆盖协调器、单槽进程交接和离线面板操作。实际多路媒体呈现、GPU 预算和跨设备观看待验证。
+- [PR #375](https://github.com/ForceMind/Linko/pull/375)，`5103f591c57d1ea00e694dc04c2df80742271182`。Windows 和 macOS 采集自建测试窗口并实际编码、解码。第一帧进入 eframe 面板，回读九点后确认展示。原生子进程退出后释放纹理并核对同一区域清屏。Windows 托管机的作业使用日志确认的 Direct3D 12 CPU 适配器。[Windows](https://github.com/ForceMind/Linko/actions/runs/45133563888/job/137558485891) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45133563888/job/137558485759) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45133563889) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45133563885)
+
+本批验证覆盖协调器、单槽进程交接、离线面板操作和本机单帧绘制。持续多路媒体呈现、实际 GPU 预算和跨设备观看待验证。
