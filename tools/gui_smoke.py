@@ -11,15 +11,15 @@ root = pathlib.Path(__file__).resolve().parent.parent
 with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
     env = os.environ.copy()
     env.update(XDG_DATA_HOME=temporary, LIBGL_ALWAYS_SOFTWARE="1", WINIT_X11_SCALE_FACTOR="1")
-    def capture(arguments, name):
+    def capture(arguments, name, *, binary="peerglide-gui", title="PeerGlide", destination=None):
         log = pathlib.Path(temporary) / f"{name}.log"
         with log.open("w") as output:
-            gui = subprocess.Popen([str(root / "target/release/peerglide-gui"), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
+            gui = subprocess.Popen([str(root / "target/release" / binary), *arguments], env=env, stdout=output, stderr=subprocess.STDOUT)
             try:
                 for _ in range(100):
                     if gui.poll() is not None:
                         raise RuntimeError(log.read_text())
-                    found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid), "--name", "PeerGlide"], capture_output=True, text=True)
+                    found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(gui.pid), "--name", title], capture_output=True, text=True)
                     if found.returncode == 0 and found.stdout.strip():
                         window = found.stdout.splitlines()[0]
                         break
@@ -70,12 +70,19 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     print("PASS: synthetic canvas drawing stayed in memory, then explicit Save exported one labelled sample")
                     print("PASS: offline evaluator preserves the independent negative label and reports its false match")
                     time.sleep(0.2)
-                dest = root / "dist"
+                dest = destination if destination is not None else root / "dist"
                 dest.mkdir(exist_ok=True)
                 # Capture the virtual display; helper windows are not app windows.
                 path = dest / f"peerglide-{name}.png"
-                subprocess.run(["import", "-window", "root", str(path)], check=True)
+                subprocess.run(["import", "-window", window if destination is not None else "root", str(path)], check=True)
                 assert path.stat().st_size > 1000
+                if name == "rw06-workspace":
+                    subprocess.run(["xdotool", "windowsize", "--sync", window, "640", "300"], check=True, timeout=5)
+                    subprocess.run(["xdotool", "key", "4"], check=True)
+                    time.sleep(0.7)
+                    compact = dest / "linko-rw06-compact.png"
+                    subprocess.run(["import", "-window", window, str(compact)], check=True)
+                    assert compact.stat().st_size > 1000
                 subprocess.run(["xdotool", "windowclose", window], check=True)
                 try:
                     gui.wait(timeout=3)
@@ -90,3 +97,9 @@ with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
                     gui.wait()
     capture([], "home")
     capture(["--gesture-lab"], "gesture-lab")
+    workspace_dest = os.environ.get("LINKO_WORKSPACE_SMOKE_DEST")
+    if workspace_dest:
+        capture(
+            [], "rw06-workspace", binary="examples/workspace_lab", title="Linko Workspace Lab",
+            destination=pathlib.Path(workspace_dest),
+        )

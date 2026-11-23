@@ -17,6 +17,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Derive the workspace example version from commit time (UTC+08:00)
+        shell: bash
+        run: python tools/build_version.py >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
@@ -36,12 +39,18 @@ jobs:
             cargo test -p peerglide-gui --locked -- --test-threads=8
           done
       - run: cargo build --release --workspace --locked
+      - name: Build and test the offline workspace canvas
+        run: |
+          cargo test --locked -p peerglide-gui --example workspace_lab
+          cargo build --locked --release -p peerglide-gui --example workspace_lab
       - run: python tools/smoke.py
       - run: python tools/reconnect_smoke.py
       - run: python -m unittest discover -s tools -p test_third_party.py
       - run: python tools/third_party.py
       - name: GUI runtime smoke on isolated Linux display
         if: runner.os == 'Linux'
+        env:
+          LINKO_WORKSPACE_SMOKE_DEST: ${{ runner.temp }}/rw06-workspace
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb xdotool imagemagick libxkbcommon-x11-0 libegl1 libgl1-mesa-dri
@@ -51,6 +60,12 @@ jobs:
         with:
           name: peerglide-gui-screenshots
           path: dist/peerglide-*.png
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: linko-rw06-workspace-screenshots
+          path: ${{ runner.temp }}/rw06-workspace/*.png
           if-no-files-found: error
       - run: python tools/package.py
       - uses: actions/upload-artifact@v4
