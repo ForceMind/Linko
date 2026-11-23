@@ -169,6 +169,9 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (NSImage *)displayedFrame;
 - (BOOL)hasStream;
 - (BOOL)captureActive;
+#ifdef LINKO_RW04_SCK_CODEC_CI
+- (void)closeFixturePreview;
+#endif
 #endif
 @end
 
@@ -405,6 +408,16 @@ static BOOL sourceExists(CGWindowID window, pid_t owner) {
 - (BOOL)captureActive {
     return _stream != nil && !_starting && !_stopRequested;
 }
+#ifdef LINKO_RW04_SCK_CODEC_CI
+- (void)closeFixturePreview {
+    [_timer invalidate];
+    _timer = nil;
+    _window.delegate = nil;
+    _window.releasedWhenClosed = NO;
+    [_window close];
+    _window = nil;
+}
+#endif
 #endif
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -507,6 +520,26 @@ static BOOL copySourceFixtureCrop(NSImage *image, struct SckWindowFrame *frame, 
     const uint8_t expected[3] = {resized ? 30 : 190, resized ? 70 : 30, resized ? 190 : 70};
     const uint8_t *center = frame->bgra + 4 * (WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2);
     return copyFixtureCrop(image, frame) && matchesWorkerRgb(center, expected);
+}
+
+static bool runCaptureOnlyCodec(struct WorkerControl const *worker,
+                                struct SckWindowFrame const *frames) {
+    __block BOOL done = NO;
+    __block bool passed = false;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const bool result = encodeSckWindowFrames(worker, frames);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            passed = result;
+            done = YES;
+        });
+    });
+    // The decoder can remain alive while another AppKit fixture acquires its
+    // own window. Keep servicing WindowServer while waiting for the stop pipe.
+    while (!done) {
+        [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode
+                              beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+    return passed;
 }
 
 struct SckPresentationContext {
@@ -613,7 +646,8 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
     puts("ScreenCaptureKit fixture start, resize and source close passed.");
 #ifdef LINKO_RW04_SCK_CODEC_CI
     if (worker) {
-        return encodeSckWindowFrames(worker, frames) ? 0 : 9;
+        [preview closeFixturePreview];
+        return runCaptureOnlyCodec(worker, frames) ? 0 : 9;
     }
 #endif
     return 0;
