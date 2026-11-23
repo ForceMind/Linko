@@ -3,7 +3,7 @@ use crate::{advance, Error, SurfaceKey};
 
 pub const FRAME_FRESHNESS_MS: u64 = 2_000;
 pub const CONTENT_CHECK_MS: u64 = 1_000;
-const MAX_GRANT_MS: u64 = 86_400_000;
+pub(crate) const MAX_GRANT_MS: u64 = 86_400_000;
 
 /// Window imagery alone does not imply window-only input isolation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

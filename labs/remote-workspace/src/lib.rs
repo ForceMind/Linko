@@ -15,6 +15,7 @@ pub mod media;
 pub mod routing;
 pub mod scheduling;
 pub mod session;
+pub mod source_control;
 
 /// Identity and connection generation supplied by the authenticated runtime.
 /// Never construct production identities from fixture IDs, PIDs, or timestamps.
@@ -68,6 +69,7 @@ pub enum Error {
     StaleFrame,
     StaleTarget,
     OutsideContent,
+    ControlBusy,
     ReleasePending,
     WrongAcknowledgement,
     Capacity,
