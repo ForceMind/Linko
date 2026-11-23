@@ -539,9 +539,8 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
     if (worker) {
         NSView *colorView = [[NSView alloc] initWithFrame:fixture.contentView.bounds];
         colorView.wantsLayer = YES;
-        colorView.layer.backgroundColor = worker->present
-            ? NSColor.blackColor.CGColor
-            : [NSColor colorWithSRGBRed:190.0 / 255 green:30.0 / 255 blue:70.0 / 255 alpha:1].CGColor;
+        colorView.layer.backgroundColor =
+            [NSColor colorWithSRGBRed:190.0 / 255 green:30.0 / 255 blue:70.0 / 255 alpha:1].CGColor;
         fixture.contentView = colorView;
     }
 #endif
@@ -554,20 +553,6 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
         return 5;
     }
     [preview beginCapture:source];
-#ifdef LINKO_RW04_SCK_CODEC_CI
-    if (worker && worker->present) {
-        if (!waitFor(^BOOL { return preview.captureActive; })) {
-            fputs("ScreenCaptureKit presenter capture did not start.\n", stderr);
-            return 6;
-        }
-        fixture.contentView.layer.backgroundColor =
-            [NSColor colorWithSRGBRed:190.0 / 255 green:30.0 / 255 blue:70.0 / 255 alpha:1].CGColor;
-        [fixture setContentSize:NSMakeSize(235, 150)];
-        [fixture displayIfNeeded];
-        [CATransaction flush];
-        puts("ScreenCaptureKit presenter: capture started before the first fixture update.");
-    }
-#endif
     if (!waitFor(^BOOL {
 #ifdef LINKO_RW04_SCK_CODEC_CI
         if (worker) {
@@ -635,6 +620,18 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
 }
 
 #ifdef LINKO_RW04_SCK_CODEC_CI
+@interface FixturePresentationView : NSView
+@property(nonatomic, strong) NSImage *frameImage;
+@property(nonatomic) BOOL drewFrame;
+@end
+
+@implementation FixturePresentationView
+- (void)drawRect:(NSRect)dirtyRect {
+    [self.frameImage drawInRect:self.bounds fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1];
+    self.drewFrame = YES;
+}
+@end
+
 static CGImageRef createPresentationImage(struct WorkerRgbaPixels const *input) {
     CFDataRef data = CFDataCreate(NULL, input->data, sizeof(input->data));
     CGDataProviderRef provider = data ? CGDataProviderCreateWithCFData(data) : NULL;
@@ -677,26 +674,26 @@ static bool presentSckFrame(struct WorkerControl const *worker) {
         return false;
     }
     const CGFloat oldWidth = preview.displayedFrame.size.width;
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    window.contentView.layer.contents = (__bridge id)image;
-    window.contentView.layer.contentsGravity = kCAGravityResize;
-    [CATransaction commit];
+    FixturePresentationView *view = [[FixturePresentationView alloc] initWithFrame:window.contentView.bounds];
+    view.frameImage = [[NSImage alloc] initWithCGImage:image size:NSZeroSize];
     CGImageRelease(image);
+    window.contentView = view;
     [window setContentSize:NSMakeSize(365, 240)];
+    view.needsDisplay = YES;
     [window displayIfNeeded];
     [CATransaction flush];
     const uint8_t *expected = input.data;
     const BOOL shown = waitFor(^BOOL {
         NSImage *readback = preview.displayedFrame;
         struct SckWindowFrame captured;
-        return readback.size.width > oldWidth && copyFixtureCrop(readback, &captured) &&
+        return view.drewFrame && readback.size.width > oldWidth && copyFixtureCrop(readback, &captured) &&
                matchesWorkerPresentation(captured.bgra, expected);
     });
     [window close];
     const BOOL stopped = waitFor(^BOOL { return !preview.displayedFrame && !preview.hasStream; });
     if (!shown || !stopped) {
-        fprintf(stderr, "ScreenCaptureKit presenter: matched=%d stopped=%d.\n", shown, stopped);
+        fprintf(stderr, "ScreenCaptureKit presenter: drawn=%d matched=%d stopped=%d.\n",
+                view.drewFrame, shown, stopped);
         return false;
     }
     puts("ScreenCaptureKit presenter: recaptured the drawn native window.");
