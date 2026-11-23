@@ -45,6 +45,16 @@ jobs:
           cargo build --locked --release -p peerglide-gui --example workspace_lab
       - name: Verify recovery journal across forced process termination
         run: cargo run --locked -p peerglide-gui --example workspace_recovery -- --smoke
+      - name: Verify a Win32 window survives recovery worker crashes
+        if: runner.os == 'Windows'
+        shell: cmd
+        timeout-minutes: 3
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /W4 /WX /EHsc /O2 /Fo:"%RUNNER_TEMP%\linko-recovery.obj" labs\remote-workspace\preview\windows_recovery.cpp /link user32.lib bcrypt.lib /out:"%RUNNER_TEMP%\linko-recovery.exe"
+          if errorlevel 1 exit /b 1
+          cargo run --locked -p peerglide-gui --example workspace_recovery -- --native-smoke "%RUNNER_TEMP%\linko-recovery.exe"
       - run: python tools/smoke.py
       - run: python tools/reconnect_smoke.py
       - run: python -m unittest discover -s tools -p test_third_party.py

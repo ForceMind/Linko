@@ -15,9 +15,12 @@ use linko_workspace_lab::{Binding, SurfaceKey};
 
 #[path = "workspace_recovery/journal.rs"]
 mod journal;
+#[path = "workspace_recovery/native.rs"]
+mod native;
 #[path = "../src/test_fixture.rs"]
 mod test_fixture;
 use journal::{Journal, WindowInstance, FILENAME};
+use native::Observation;
 use test_fixture::Fixture;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -32,7 +35,7 @@ const BOUNDS: Rect = Rect {
     height: 550.0,
 };
 
-fn handoff() -> Result<(Coordinator, ViewId, HandoffToken)> {
+fn handoff(bounds: Rect) -> Result<(Coordinator, ViewId, HandoffToken)> {
     let mut coordinator = Coordinator::new([2; 32], 1)?;
     let size = PixelSize {
         width: 2,
@@ -52,7 +55,7 @@ fn handoff() -> Result<(Coordinator, ViewId, HandoffToken)> {
             kind: SurfaceKind::Window,
             geometry: SourceGeometry {
                 pixels: size,
-                logical: BOUNDS,
+                logical: bounds,
                 rotation: Rotation::None,
                 revision: 1,
             },
@@ -60,7 +63,7 @@ fn handoff() -> Result<(Coordinator, ViewId, HandoffToken)> {
                 origin: Point { x: 0.0, y: 0.0 },
                 zoom: 1.0,
             },
-            panel: BOUNDS,
+            panel: bounds,
         },
         0,
     )?;
@@ -73,25 +76,38 @@ fn handoff() -> Result<(Coordinator, ViewId, HandoffToken)> {
         .context("fixture frame")?;
     coordinator.acknowledge_presentation(frame.ticket, 0)?;
     coordinator.allow_parking(view, true, 0)?;
-    let token = coordinator.begin_handoff(view, BOUNDS, 0, 500)?;
+    let token = coordinator.begin_handoff(view, bounds, 0, 500)?;
     coordinator.destination_ready(token, 0)?;
     Ok((coordinator, view, token))
 }
 
-fn worker_hide(directory: &Path, input: &mut impl BufRead, output: &mut impl Write) -> Result<()> {
+fn worker_hide(
+    directory: &Path,
+    input: &mut impl BufRead,
+    output: &mut impl Write,
+    native: Option<Observation>,
+) -> Result<()> {
     let mut journal = Journal::open(directory)?;
-    let (mut coordinator, view, token) = handoff()?;
+    let observed = native.unwrap_or(Observation {
+        instance: OWNER,
+        bounds: BOUNDS,
+    });
+    let (mut coordinator, view, token) = handoff(observed.bounds)?;
     let current = coordinator.window_intent(view, 0)?.context("hide intent")?;
     ensure!(current.token == token && current.command == WindowCommand::HideSource);
     send(output, "prepared")?;
     ensure!(read(input)? == "arm");
-    let record = journal.arm(OWNER, BOUNDS)?;
+    let record = journal.arm(observed.instance, observed.bounds)?;
     send(output, &format!("armed {}", record.transaction))?;
     ensure!(read(input)? == "hide");
     ensure!(coordinator.window_intent(view, 1)? == Some(current));
     // The simulated native owner validates this request independently and
     // holds the window state even if this process is killed.
-    send(output, &format!("hide {}", record.transaction))?;
+    if native.is_some() {
+        send(output, &format!("hide {} {observed}", record.transaction))?;
+    } else {
+        send(output, &format!("hide {}", record.transaction))?;
+    }
     ensure!(read(input)? == format!("hidden {}", record.transaction));
     coordinator.acknowledge_hidden(token, 2)?;
     send(output, "parked")?;
@@ -103,6 +119,7 @@ fn worker_recover(
     directory: &Path,
     input: &mut impl BufRead,
     output: &mut impl Write,
+    native: Option<Observation>,
 ) -> Result<()> {
     let mut journal = Journal::open(directory)?;
     let Some(pending) = journal.pending()? else {
@@ -110,13 +127,25 @@ fn worker_recover(
         return Ok(());
     };
     send(output, &format!("pending {}", pending.transaction))?;
-    let observed = match read(input)?.as_str() {
-        "same-window" => OWNER,
-        "replaced-window" => WindowInstance { object: 8, ..OWNER },
-        _ => bail!("invalid simulated window observation"),
+    let observed = if let Some(native) = native {
+        native.instance
+    } else {
+        match read(input)?.as_str() {
+            "same-window" => OWNER,
+            "replaced-window" => WindowInstance { object: 8, ..OWNER },
+            _ => bail!("invalid simulated window observation"),
+        }
     };
     let record = journal.recovery_for(observed)?;
-    send(output, &format!("restore {}", record.transaction))?;
+    if native.is_some() {
+        let original = Observation {
+            instance: record.window,
+            bounds: record.original_bounds(),
+        };
+        send(output, &format!("restore {} {original}", record.transaction))?;
+    } else {
+        send(output, &format!("restore {}", record.transaction))?;
+    }
     let evidence = read(input)?;
     let confirmed_transaction = evidence
         .strip_prefix("restored ")
@@ -150,9 +179,22 @@ struct Worker {
 
 impl Worker {
     fn start(directory: &Path, action: &str) -> Result<Self> {
-        let mut process = Command::new(std::env::current_exe()?)
+        let mut command = Command::new(std::env::current_exe()?);
+        command.args(["--worker", action]).arg(directory);
+        Self::start_command(command)
+    }
+
+    fn start_native(directory: &Path, action: &str, observation: Observation) -> Result<Self> {
+        let mut command = Command::new(std::env::current_exe()?);
+        command
             .args(["--worker", action])
             .arg(directory)
+            .arg(observation.to_string());
+        Self::start_command(command)
+    }
+
+    fn start_command(mut command: Command) -> Result<Self> {
+        let mut process = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()?;
@@ -176,9 +218,13 @@ impl Worker {
     }
 
     fn expect(&self, expected: &str) -> Result<()> {
-        let actual = self.messages.recv_timeout(WAIT)??;
+        let actual = self.message()?;
         ensure!(actual == expected, "expected {expected}, received {actual}");
         Ok(())
+    }
+
+    fn message(&self) -> Result<String> {
+        self.messages.recv_timeout(WAIT)?
     }
 
     fn wait(&mut self, success: bool) -> Result<()> {
@@ -375,12 +421,18 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
         [mode] if mode == "--smoke" => smoke(),
-        [mode, action, path] if mode == "--worker" => {
+        [mode, binary] if mode == "--native-smoke" => native::smoke(Path::new(binary)),
+        [mode, action, path, rest @ ..] if mode == "--worker" => {
+            let native = match rest {
+                [] => None,
+                [observation] => Some(observation.to_str().context("invalid native observation")?.parse()?),
+                _ => bail!("invalid recovery fixture arguments"),
+            };
             let mut input = io::stdin().lock();
             let mut output = io::stdout().lock();
             match action.to_str() {
-                Some("hide") => worker_hide(Path::new(path), &mut input, &mut output),
-                Some("recover") => worker_recover(Path::new(path), &mut input, &mut output),
+                Some("hide") => worker_hide(Path::new(path), &mut input, &mut output, native),
+                Some("recover") => worker_recover(Path::new(path), &mut input, &mut output, native),
                 _ => bail!("unknown recovery fixture action"),
             }
         }
