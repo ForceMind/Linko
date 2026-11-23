@@ -203,7 +203,14 @@ jobs:
             options+=(--features workspace-lab-dx12)
           fi
           cargo build --locked -p peerglide-gui --example workspace_lab "${options[@]}"
-          python tools/workspace_panel_memory.py "target/debug/examples/workspace_lab$EXE_SUFFIX" "$fixture"
+          runs=1
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            runs=8
+          fi
+          for ((round = 1; round <= runs; ++round)); do
+            printf 'Live window run %d/%d\n' "$round" "$runs"
+            python tools/workspace_panel_memory.py "target/debug/examples/workspace_lab$EXE_SUFFIX" "$fixture"
+          done
       - name: Verify expired frames release textures and clear before resuming
         shell: bash
         timeout-minutes: 2

@@ -775,10 +775,10 @@ int smokeDualCodec(WorkerControl const* worker, bool pauseForExpiry) {
         WorkerFramePixels leftOutput{};
         WorkerFramePixels rightOutput{};
         if (left) {
-            verifyWgcLiveFrame(*first, worker ? &leftOutput : nullptr);
+            verifyWgcLiveFrame(*first, "first", worker ? &leftOutput : nullptr);
             ++firstFrames;
         }
-        verifyWgcLiveFrame(*second, worker ? &rightOutput : nullptr);
+        verifyWgcLiveFrame(*second, "second", worker ? &rightOutput : nullptr);
         ++secondFrames;
         std::printf("Media Foundation dual capture: verified decoded timestamps and colors before drain, "
                     "first=%u second=%u.\n", firstFrames, secondFrames);
@@ -858,7 +858,7 @@ int smokeMirrorCodec(WorkerControl const* worker, bool) {
         submitWgcLiveFrame(*codec, capturedFixtureFrame(*frame));
         frame.reset();
         WorkerFramePixels pixels{};
-        verifyWgcLiveFrame(*codec, &pixels);
+        verifyWgcLiveFrame(*codec, "mirror", &pixels);
         const auto command = sequence == rounds ? WorkerStop : WorkerDisplayed;
         if (!deliverLiveFrame(events, pixels, worker->generation, sequence) ||
             !expectLiveCommand(input, command, worker->generation, sequence)) {
