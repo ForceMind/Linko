@@ -15,6 +15,7 @@
 - **`coordinator`**：把上述策略/媒体/输入/交接模块纳入统一生命周期；最多16条有界注册、不可复用本地ViewId、独立观看/控制、一次性展示收据、几何/布局失效、空闲watchdog、精确Binding的多窗口终态关闭、默认禁止停放、释放/恢复确认后才能注销。没有第二个InputRouter或原生hook。
 - `tests/coordinator_faults.rs`：36项新增跨模块集成测试，包括六类故障、迟到/重复ACK、重授权、失焦、连接级故障、队列期限、容量和100次模型授权循环。
 - `examples/workspace_simulation.rs`：原有双来源离线场景，执行断言后输出明确的fixture结果；不是原生远控演示。
+- `examples/worker_exit_simulation.rs`：实际终止并回收本机测试子进程，确认只关闭匹配连接的两个视图、拒绝迟到展示回执，并保留原有输入释放和窗口恢复义务。窗口、输入和像素均为模型素材。
 
 ## 执行
 
