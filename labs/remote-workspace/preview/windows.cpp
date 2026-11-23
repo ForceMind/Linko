@@ -27,28 +27,78 @@
 #include <vector>
 
 #ifdef LINKO_RW04_WGC_CODEC_CI
+#include <dbghelp.h>
+
 #include "../system-codec-probe/windows_fixture.h"
 
 namespace {
 std::atomic<char const*> wgcCodecStage{"opening"};
+std::atomic_flag reportingException{};
+DWORD smokeThread{};
+HANDLE debugProcess{};
 
-LONG WINAPI reportWgcCodecException(EXCEPTION_POINTERS* exception) {
-    auto const* record = exception->ExceptionRecord;
-    std::fprintf(stderr, "WGC codec exception=0x%08lX, last_stage=%s.\n",
-                 record->ExceptionCode, wgcCodecStage.load(std::memory_order_relaxed));
+bool reportCodecFrame(unsigned depth, DWORD64 address) {
     HMODULE module{};
     if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           reinterpret_cast<LPCWSTR>(record->ExceptionAddress), &module)) {
+                           reinterpret_cast<LPCWSTR>(address), &module)) {
         wchar_t path[MAX_PATH]{};
         const auto length = GetModuleFileNameW(module, path, static_cast<DWORD>(std::size(path)));
         if (length && length < std::size(path)) {
             const std::wstring_view name(path, length);
             const auto lastSeparator = name.find_last_of(L'\\');
-            const auto offset = reinterpret_cast<std::uintptr_t>(record->ExceptionAddress) -
-                                reinterpret_cast<std::uintptr_t>(module);
-            std::fprintf(stderr, "WGC codec exception module=%ls offset=0x%llX.\n",
-                         path + (lastSeparator == std::wstring_view::npos ? 0 : lastSeparator + 1),
+            const auto offset = address - reinterpret_cast<std::uintptr_t>(module);
+            std::fprintf(stderr, "WGC codec frame=%u module=%ls offset=0x%llX.\n",
+                         depth, path + (lastSeparator == std::wstring_view::npos ? 0 : lastSeparator + 1),
                          static_cast<unsigned long long>(offset));
+            return true;
+        }
+    }
+    std::fprintf(stderr, "WGC codec frame=%u module=unknown.\n", depth);
+    return false;
+}
+
+LONG WINAPI reportWgcCodecException(EXCEPTION_POINTERS* exception) {
+    if (reportingException.test_and_set(std::memory_order_relaxed)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    auto const* record = exception->ExceptionRecord;
+    std::fprintf(stderr, "WGC codec exception=0x%08lX, last_stage=%s, thread=%lu, smoke_thread=%lu.\n",
+                 record->ExceptionCode, wgcCodecStage.load(std::memory_order_relaxed),
+                 GetCurrentThreadId(), smokeThread);
+    CONTEXT context = *exception->ContextRecord;
+    unsigned depth = 0;
+    const bool mapped = reportCodecFrame(depth++, context.Rip);
+    if (!debugProcess) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    if (!mapped && record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+        record->NumberParameters >= 2 && record->ExceptionInformation[0] == 8) {
+        // A failed indirect call can leave RIP outside a loaded image and its return address at RSP.
+        DWORD64 possibleCaller{};
+        SIZE_T bytesRead{};
+        if (ReadProcessMemory(debugProcess, reinterpret_cast<void const*>(context.Rsp),
+                              &possibleCaller, sizeof(possibleCaller), &bytesRead) &&
+            bytesRead == sizeof(possibleCaller) && reportCodecFrame(depth++, possibleCaller)) {
+            std::fputs("WGC codec unwinding from possible caller.\n", stderr);
+            context.Rip = possibleCaller;
+            context.Rsp += sizeof(possibleCaller);
+        }
+    }
+    SymRefreshModuleList(debugProcess);
+    STACKFRAME64 frame{};
+    frame.AddrPC = {context.Rip, 0, AddrModeFlat};
+    frame.AddrStack = {context.Rsp, 0, AddrModeFlat};
+    frame.AddrFrame = {context.Rbp, 0, AddrModeFlat};
+    auto previous = context.Rip;
+    for (unsigned step = 0; step < 12 && depth < 12; ++step) {
+        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, debugProcess, GetCurrentThread(), &frame, &context,
+                         nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr) ||
+            !frame.AddrPC.Offset) {
+            break;
+        }
+        if (frame.AddrPC.Offset != previous) {
+            reportCodecFrame(depth++, frame.AddrPC.Offset);
+            previous = frame.AddrPC.Offset;
         }
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -546,6 +596,16 @@ int main() {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
 #ifdef LINKO_RW04_WGC_CODEC_CI
+    smokeThread = GetCurrentThreadId();
+    SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_NO_PROMPTS | SYMOPT_FAIL_CRITICAL_ERRORS);
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(),
+                         &debugProcess, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        std::fprintf(stderr, "WGC codec diagnostic process handle failed: %lu.\n", GetLastError());
+    } else if (!SymInitialize(debugProcess, ".", TRUE)) {
+        std::fprintf(stderr, "WGC codec diagnostic initialization failed: %lu.\n", GetLastError());
+        CloseHandle(debugProcess);
+        debugProcess = nullptr;
+    }
     SetUnhandledExceptionFilter(reportWgcCodecException);
 #endif
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
