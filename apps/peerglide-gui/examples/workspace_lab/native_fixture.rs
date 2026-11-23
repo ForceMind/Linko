@@ -35,7 +35,7 @@ pub(super) struct Received {
     pub(super) sequence: u32,
 }
 
-enum SourceEvent {
+pub(super) enum SourceEvent {
     Ready,
     Frame(Received),
 }
@@ -47,7 +47,7 @@ pub(super) struct PendingDraw {
     pub(super) color: Color32,
 }
 
-struct Source {
+pub(super) struct Source {
     process: Child,
     view: ViewId,
     events: Receiver<io::Result<SourceEvent>>,
@@ -56,7 +56,7 @@ struct Source {
 }
 
 impl Source {
-    fn start(
+    pub(super) fn start(
         launcher: &Path,
         codec: &Path,
         view: ViewId,
@@ -110,7 +110,7 @@ impl Source {
         })
     }
 
-    fn next_event(&self) -> io::Result<Option<SourceEvent>> {
+    pub(super) fn next_event(&self) -> io::Result<Option<SourceEvent>> {
         match self.events.try_recv() {
             Ok(event) => event.map(Some),
             Err(TryRecvError::Empty) => Ok(None),
@@ -118,7 +118,7 @@ impl Source {
         }
     }
 
-    fn send_command(&mut self, command: u8) -> io::Result<()> {
+    pub(super) fn send_command(&mut self, command: u8) -> io::Result<()> {
         self.process
             .stdin
             .as_mut()
@@ -126,7 +126,7 @@ impl Source {
             .write_all(&[command])
     }
 
-    fn require_running(&mut self) -> io::Result<()> {
+    pub(super) fn require_running(&mut self) -> io::Result<()> {
         if let Some(status) = self.process.try_wait()? {
             return Err(io::Error::other(format!(
                 "native window source exited early: {status}"
@@ -135,14 +135,21 @@ impl Source {
         Ok(())
     }
 
-    fn finish_stop(&mut self, coordinator: &mut Coordinator, now: u64) -> Result<bool> {
+    pub(super) fn poll_stopped(&mut self) -> io::Result<bool> {
         let Some(status) = self.process.try_wait()? else {
             return Ok(false);
         };
         if !status.success() {
-            return Err(
-                io::Error::other(format!("native decoder failed to stop: {status}")).into(),
-            );
+            return Err(io::Error::other(format!(
+                "native decoder failed to stop: {status}"
+            )));
+        }
+        Ok(true)
+    }
+
+    fn finish_stop(&mut self, coordinator: &mut Coordinator, now: u64) -> Result<bool> {
+        if !self.poll_stopped()? {
+            return Ok(false);
         }
         coordinator.close(self.view, Fault::SourceClosed, now)?;
         self.draw = None;
@@ -158,9 +165,16 @@ impl Source {
 
 impl Drop for Source {
     fn drop(&mut self) {
-        if self.process.try_wait().ok().flatten().is_none() {
-            let _ = self.process.kill();
-            let _ = self.process.wait();
+        // EOF lets the relay unwind and reap its own codec child.
+        drop(self.process.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while let Ok(None) = self.process.try_wait() {
+            if Instant::now() >= deadline {
+                let _ = self.process.kill();
+                let _ = self.process.wait();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 }
