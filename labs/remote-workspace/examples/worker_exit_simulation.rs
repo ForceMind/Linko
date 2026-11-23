@@ -240,7 +240,11 @@ fn read_worker_frame(
 
 fn matches_window_color(rgba: &[u8], resized: bool) -> bool {
     let center = (NATIVE_HEIGHT / 2 * NATIVE_WIDTH + NATIVE_WIDTH / 2) * 4;
-    let expected = if resized { [30, 70, 190] } else { [190, 30, 70] };
+    let expected = if resized {
+        [30, 70, 190]
+    } else {
+        [190, 30, 70]
+    };
     rgba[center..center + 3]
         .iter()
         .zip(expected)
