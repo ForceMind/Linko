@@ -576,7 +576,9 @@ static int checkNativeCapture(struct WorkerControl const *worker) {
 #endif
         return preview.displayedFrame != nil;
     })) {
-        fputs("macOS ScreenCaptureKit fixture did not deliver a viewable frame.\n", stderr);
+        fprintf(stderr, "macOS ScreenCaptureKit fixture did not deliver the expected first frame"
+                        " (stream=%d active=%d received=%d).\n",
+                preview.hasStream, preview.captureActive, preview.displayedFrame != nil);
         return 6;
     }
     CGFloat width = preview.displayedFrame.size.width;
