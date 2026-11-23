@@ -243,7 +243,8 @@ impl Workspace {
                         } else {
                             None
                         };
-                        preview_area = Some(render_native_preview(ui, texture, status_height + 24.0));
+                        preview_area =
+                            Some(render_native_preview(ui, texture, status_height + 24.0));
                     } else {
                         render_status(ui, decision, self.budget, status_height);
                     }
@@ -332,7 +333,11 @@ fn render_status(ui: &mut egui::Ui, decision: Decision, budget: Budget, height: 
         });
 }
 
-fn render_native_preview(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, height: f32) -> Rect {
+fn render_native_preview(
+    ui: &mut egui::Ui,
+    texture: Option<&egui::TextureHandle>,
+    height: f32,
+) -> Rect {
     let (slot, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
@@ -446,7 +451,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     0,
                 )?;
-                Some(NativeFixture::start(&launcher, &codec, started, &cc.egui_ctx)?)
+                Some(NativeFixture::start(
+                    &launcher,
+                    &codec,
+                    started,
+                    &cc.egui_ctx,
+                )?)
             } else {
                 None
             };

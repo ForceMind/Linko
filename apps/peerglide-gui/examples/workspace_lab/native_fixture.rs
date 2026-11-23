@@ -101,7 +101,9 @@ impl NativeFixture {
         self.phase = match std::mem::replace(&mut self.phase, Phase::Finished) {
             Phase::Receiving(receive) => {
                 if status.is_some() {
-                    return Err(io::Error::other("native window source stopped before frame").into());
+                    return Err(
+                        io::Error::other("native window source stopped before frame").into(),
+                    );
                 }
                 match receive.try_recv() {
                     Ok(frame) => {
@@ -113,7 +115,9 @@ impl NativeFixture {
             }
             Phase::Drawing(draw) => {
                 if status.is_some() || now - draw.first_seen >= MAX_QUEUE_AGE_MS {
-                    return Err(io::Error::other("native panel frame expired before readback").into());
+                    return Err(
+                        io::Error::other("native panel frame expired before readback").into(),
+                    );
                 }
                 if self.readback_confirmed()? {
                     coordinator.acknowledge_presentation(draw.ticket, now)?;
@@ -122,7 +126,9 @@ impl NativeFixture {
                         .as_mut()
                         .expect("fixture stdin is piped")
                         .write_all(&[1])?;
-                    println!("Workspace panel: native decoded pixels confirmed by eframe readback.");
+                    println!(
+                        "Workspace panel: native decoded pixels confirmed by eframe readback."
+                    );
                     Phase::Stopping(draw)
                 } else {
                     Phase::Drawing(draw)
@@ -134,7 +140,9 @@ impl NativeFixture {
                     coordinator.close(view, Fault::SourceClosed, now)?;
                     Phase::Clearing
                 }
-                Some(_) => return Err(io::Error::other("native decoder did not stop cleanly").into()),
+                Some(_) => {
+                    return Err(io::Error::other("native decoder did not stop cleanly").into())
+                }
             },
             Phase::Clearing if self.readback_confirmed()? => {
                 println!("Workspace panel: source reaped, texture released and readback cleared.");
