@@ -56,7 +56,9 @@ Windows Actions 尝试在托管桌面采集临时的本机窗口并验证尺寸�
 
 `DecoderReservations` 在解码进程启动、运行和停止期间保留参考预算。替换进程必须等旧进程退出并用对应票据释放资源。原生 Actions 用一个解码槽进行替换，旧进程回执不能释放新槽位。
 
-现有桌面工程的 `workspace_lab` 示例提供四个离线面板。点击标题或按 1–4 切换观看焦点，使用 Pause、Resume 切换面板的测试授权。缩小窗口或滚动画布可以观察面板离开视口后的预算变化。示例显示调度状态，媒体接线留到后续。GitHub Actions 的 `linko-rw06-workspace-screenshots` 记录实际 eframe 窗口。
+现有桌面工程的 `workspace_lab` 示例默认提供四个离线面板。点击标题或按 1–4 切换观看焦点，使用 Pause、Resume 切换面板的测试授权。缩小窗口或滚动画布可以观察面板离开视口后的预算变化。GitHub Actions 的 `linko-rw06-workspace-screenshots` 记录实际 eframe 窗口。
+
+Windows 和 macOS 的原生 CI 还用自建测试窗口向第一个面板送入一帧实际解码画面。eframe 回读面板九个位置后确认展示。子进程退出后释放纹理，并回读同一区域确认清屏。画面只通过本机管道和渲染缓冲区传递。
 
 ## 必须遵守的边界
 

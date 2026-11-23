@@ -1,4 +1,8 @@
 //! Interactive RW06 layout and scheduling with four offline fixture surfaces.
+use std::io;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Rect, RichText, Stroke};
@@ -9,6 +13,10 @@ use linko_workspace_lab::geometry::{
 use linko_workspace_lab::scheduling::{Budget, Decision, PauseReason, Plan};
 use linko_workspace_lab::session::SurfaceKind;
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
+
+#[path = "workspace_lab/native_fixture.rs"]
+mod native_fixture;
+use native_fixture::NativeFixture;
 
 const ORIGIN: Camera = Camera {
     origin: Point { x: 0.0, y: 0.0 },
@@ -29,6 +37,11 @@ struct Panel {
     key: SurfaceKey,
     label: &'static str,
     shortcut: egui::Key,
+}
+
+#[derive(Clone, Copy)]
+struct NativePreview<'a> {
+    texture: Option<&'a egui::TextureHandle>,
 }
 
 struct Workspace {
@@ -126,7 +139,12 @@ impl Workspace {
         }
     }
 
-    fn show(&mut self, root: &mut egui::Ui, now: u64) {
+    fn show(
+        &mut self,
+        root: &mut egui::Ui,
+        now: u64,
+        preview: Option<NativePreview<'_>>,
+    ) -> Option<Rect> {
         let shortcut = self
             .panels
             .iter()
@@ -138,17 +156,27 @@ impl Workspace {
             .frame(egui::Frame::new().fill(CANVAS).inner_margin(24))
             .show(root, |ui| {
                 ui.heading(RichText::new("Workspace").size(34.0).strong());
-                ui.label(RichText::new("Offline fixtures  ·  2 decoder slots").color(MUTED));
+                let subtitle = if preview.is_some() {
+                    "Native window fixture  ·  2 decoder slots"
+                } else {
+                    "Offline fixtures  ·  2 decoder slots"
+                };
+                ui.label(RichText::new(subtitle).color(MUTED));
                 ui.add_space(18.0);
                 let result = egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show_viewport(ui, |ui, viewport| {
-                        self.show_tiles(ui, viewport, shortcut, now)
+                        self.show_tiles(ui, viewport, shortcut, now, preview)
                     });
-                if let Err(error) = result.inner {
-                    ui.colored_label(Color32::DARK_RED, error.to_string());
+                match result.inner {
+                    Ok(area) => area,
+                    Err(error) => {
+                        ui.colored_label(Color32::DARK_RED, error.to_string());
+                        None
+                    }
                 }
-            });
+            })
+            .inner
     }
 
     fn show_tiles(
@@ -157,9 +185,10 @@ impl Workspace {
         viewport: Rect,
         shortcut: Option<usize>,
         now: u64,
-    ) -> Result<(), Error> {
+        preview: Option<NativePreview<'_>>,
+    ) -> Result<Option<Rect>, Error> {
         if viewport.width() <= GAP || viewport.height() <= 0.0 {
-            return Ok(());
+            return Ok(None);
         }
         let plan = self.plan(viewport, now)?;
         let height = row_height(viewport);
@@ -178,6 +207,7 @@ impl Workspace {
                 Some(egui::Align::Center),
             );
         }
+        let mut preview_area = None;
         for index in 0..self.panels.len() {
             let panel = self.panels[index];
             let bounds = tile(index, viewport.width(), height);
@@ -207,7 +237,16 @@ impl Workspace {
                         .selectable_label(selected, RichText::new(panel.label).size(16.0))
                         .clicked();
                     ui.add_space(spacing);
-                    render_status(ui, decision, self.budget, status_height);
+                    if let (0, Some(preview)) = (index, preview) {
+                        let texture = if matches!(decision, Decision::Stream(_)) {
+                            preview.texture
+                        } else {
+                            None
+                        };
+                        preview_area = Some(render_native_preview(ui, texture, status_height + 24.0));
+                    } else {
+                        render_status(ui, decision, self.budget, status_height);
+                    }
                     ui.add_space(spacing);
                     let toggle = ui
                         .button(if decision == Decision::Pause(PauseReason::Unauthorized) {
@@ -229,7 +268,7 @@ impl Workspace {
                 ui.ctx().request_repaint();
             }
         }
-        Ok(())
+        Ok(preview_area)
     }
 }
 
@@ -293,20 +332,86 @@ fn render_status(ui: &mut egui::Ui, decision: Decision, budget: Budget, height: 
         });
 }
 
+fn render_native_preview(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, height: f32) -> Rect {
+    let (slot, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let height = slot.height().min(slot.width() / native_fixture::ASPECT);
+    let size = egui::vec2(height * native_fixture::ASPECT, height);
+    let area = Rect::from_center_size(slot.center(), size);
+    ui.painter().rect_filled(slot, 8, CANVAS);
+    if let Some(texture) = texture {
+        ui.painter().image(
+            texture.id(),
+            area,
+            Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+    }
+    area
+}
+
 struct WorkspaceApp {
     workspace: Workspace,
     started: Instant,
+    native: Option<NativeFixture>,
+    native_passed: Arc<AtomicBool>,
 }
 
 impl eframe::App for WorkspaceApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.workspace.show(root, now);
-        root.ctx().request_repaint_after(Duration::from_secs(1));
+        let now = elapsed_ms(self.started);
+        let context = root.ctx().clone();
+        let Some(native) = &mut self.native else {
+            let _ = self.workspace.show(root, now, None);
+            context.request_repaint_after(Duration::from_secs(1));
+            return;
+        };
+        let view = self.workspace.panels[0].view;
+        let result = native
+            .advance(&mut self.workspace.coordinator, view, &context, now)
+            .and_then(|finished| {
+                if !finished {
+                    let preview = NativePreview {
+                        texture: native.texture(now),
+                    };
+                    if let Some(area) = self.workspace.show(root, now, Some(preview)) {
+                        native.verify_paint(&context, area)?;
+                    }
+                }
+                Ok(finished)
+            });
+        match result {
+            Ok(true) => {
+                self.native_passed.store(true, Ordering::Relaxed);
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Ok(false) => context.request_repaint_after(Duration::from_millis(20)),
+            Err(error) => {
+                eprintln!("Workspace panel: {error}");
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
     }
 }
 
-fn main() -> eframe::Result<()> {
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let paths = match args.as_slice() {
+        [] => None,
+        [mode, launcher, codec] if mode == "--native-window-probe" => {
+            Some((PathBuf::from(launcher), PathBuf::from(codec)))
+        }
+        _ => return Err(io::Error::other("unexpected workspace example arguments").into()),
+    };
+    let require_native_result = paths.is_some();
+    let native_passed = Arc::new(AtomicBool::new(false));
+    let result = Arc::clone(&native_passed);
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([916.0, 584.0])
         .with_min_inner_size([560.0, 300.0]);
@@ -320,14 +425,43 @@ fn main() -> eframe::Result<()> {
             viewport,
             ..Default::default()
         },
-        Box::new(|cc| {
+        Box::new(move |cc| {
             cc.egui_ctx.set_theme(egui::Theme::Light);
+            let mut workspace = Workspace::new()?;
+            let started = Instant::now();
+            let native = if let Some((launcher, codec)) = paths {
+                let view = workspace.panels[0].view;
+                workspace.coordinator.revise_geometry(
+                    view,
+                    SourceGeometry {
+                        pixels: native_fixture::FRAME_SIZE,
+                        logical: CanvasRect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 128.0,
+                            height: 96.0,
+                        },
+                        rotation: Rotation::None,
+                        revision: 2,
+                    },
+                    0,
+                )?;
+                Some(NativeFixture::start(&launcher, &codec, started, &cc.egui_ctx)?)
+            } else {
+                None
+            };
             Ok(Box::new(WorkspaceApp {
-                workspace: Workspace::new()?,
-                started: Instant::now(),
+                workspace,
+                started,
+                native,
+                native_passed: result,
             }))
         }),
-    )
+    )?;
+    if require_native_result && !native_passed.load(Ordering::Relaxed) {
+        return Err(io::Error::other("native window draw and clear were not verified").into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -351,7 +485,9 @@ mod tests {
                 }],
                 ..Default::default()
             },
-            |root| workspace.show(root, 1),
+            |root| {
+                let _ = workspace.show(root, 1, None);
+            },
         );
         assert!(!output.shapes.is_empty());
         output.drop_without_applying_deltas();

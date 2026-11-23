@@ -8,6 +8,8 @@ on:
       - 'labs/remote-workspace/preview/macos.m'
       - 'labs/remote-workspace/examples/worker_exit_simulation.rs'
       - 'labs/remote-workspace/src/coordinator.rs'
+      - 'apps/peerglide-gui/examples/workspace_lab.rs'
+      - 'apps/peerglide-gui/examples/workspace_lab/**'
       - '.github/workflows/workspace-codec-probe.yml'
 permissions:
   contents: read
@@ -119,3 +121,43 @@ jobs:
             -framework VideoToolbox -o "$RUNNER_TEMP/rw04-sck-h264"
           cargo run --locked --offline --manifest-path labs/remote-workspace/Cargo.toml \
             --example worker_exit_simulation -- --native-window "$RUNNER_TEMP/rw04-sck-h264"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rw06-window-fixture-${{ matrix.os }}
+          path: ${{ runner.temp }}/${{ runner.os == 'Windows' && 'rw04-wgc-h264.exe' || 'rw04-sck-h264' }}
+          retention-days: 1
+          if-no-files-found: error
+
+  native-workspace-panel:
+    needs: native-h264
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Derive build version from commit time (UTC+08:00)
+        shell: bash
+        run: python tools/build_version.py >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: rw06-window-fixture-${{ matrix.os }}
+          path: ${{ runner.temp }}/rw06-window-fixture
+      - name: Verify window pixels and clearing in the native eframe panel
+        shell: bash
+        env:
+          CODEC_FIXTURE: ${{ runner.os == 'Windows' && 'rw04-wgc-h264.exe' || 'rw04-sck-h264' }}
+          EXE_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: |
+          fixture="$RUNNER_TEMP/rw06-window-fixture/$CODEC_FIXTURE"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            chmod +x "$fixture"
+          fi
+          cargo build --locked --offline --manifest-path labs/remote-workspace/Cargo.toml --example worker_exit_simulation
+          launcher="$GITHUB_WORKSPACE/labs/remote-workspace/target/debug/examples/worker_exit_simulation$EXE_SUFFIX"
+          cargo run --locked -p peerglide-gui --example workspace_lab -- --native-window-probe "$launcher" "$fixture"
