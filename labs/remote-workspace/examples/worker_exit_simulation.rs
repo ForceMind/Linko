@@ -417,7 +417,9 @@ fn start_mac_window_codec(
         Ok(bgra)
     })?;
     if !capture.process.wait()?.success() {
-        return Err(io::Error::other("AppKit capture process did not exit cleanly"));
+        return Err(io::Error::other(
+            "AppKit capture process did not exit cleanly",
+        ));
     }
     eprintln!("Native window source: AppKit capture process reaped.");
     let mut command = Command::new(binary);
