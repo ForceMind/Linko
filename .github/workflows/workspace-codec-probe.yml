@@ -53,12 +53,13 @@ jobs:
             -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework VideoToolbox \
             -o "$RUNNER_TEMP/rw04-h264"
           "$RUNNER_TEMP/rw04-h264"
-          for mode in --vm-small --vm-matched; do
+          for size in '224 144' '350 262' '352 262' '350 272' '352 272'; do
+            read -r width height <<< "$size"
             status=0
-            "$RUNNER_TEMP/rw04-h264" "$mode" || status=$?
+            "$RUNNER_TEMP/rw04-h264" --vm "$width" "$height" || status=$?
             if [[ "$status" == 139 ]]; then
               xcrun lldb --no-lldbinit --batch -o run -k 'thread backtrace all' \
-                -- "$RUNNER_TEMP/rw04-h264" "$mode" || true
+                -- "$RUNNER_TEMP/rw04-h264" --vm "$width" "$height" || true
             fi
             if [[ "$status" != 0 ]]; then
               exit "$status"

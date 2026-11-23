@@ -372,13 +372,26 @@ static bool checkMemory(int width, int height) {
     return passed;
 }
 
+static int evenDimension(const char *text, int limit) {
+    char *end = NULL;
+    const long value = strtol(text, &end, 10);
+    return end != text && *end == '\0' && value >= 64 && value <= limit && value % 2 == 0
+        ? (int)value : 0;
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (argc == 2 && strcmp(argv[1], "--vm-small") == 0) {
-        return checkMemory(224, 144) ? 0 : 1;
+    if (argc == 4 && strcmp(argv[1], "--vm") == 0) {
+        const int width = evenDimension(argv[2], 1920);
+        const int height = evenDimension(argv[3], 1080);
+        if (!width || !height) {
+            fputs("VideoToolbox memory: expected bounded even dimensions.\n", stderr);
+            return 2;
+        }
+        return checkMemory(width, height) ? 0 : 1;
     }
-    if (argc == 2 && strcmp(argv[1], "--vm-matched") == 0) {
-        return checkMemory(350, 262) ? 0 : 1;
+    if (argc != 1) {
+        return 2;
     }
     return run(128, 96, 1, false, NULL, true) && run(1920, 1080, MaxFrames, false, NULL, true) &&
            run(1920, 1080, MaxFrames, true, NULL, true) ? 0 : 1;
