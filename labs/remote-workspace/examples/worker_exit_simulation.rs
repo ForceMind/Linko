@@ -12,6 +12,7 @@ use linko_workspace_lab::frame_binding::{FrameMatch, FrameMatcher, MediaFrame, M
 use linko_workspace_lab::geometry::{Camera, PixelSize, Point, Rect, Rotation, SourceGeometry};
 use linko_workspace_lab::handoff::Command as WindowCommand;
 use linko_workspace_lab::media::RawFrame;
+use linko_workspace_lab::scheduling::{Budget, Decision, DecoderReservations};
 use linko_workspace_lab::session::{ControlScope, SurfaceKind};
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
@@ -442,6 +443,26 @@ fn main() -> SimulationResult<()> {
     c.destination_ready(handoff, 0)?;
     c.acknowledge_hidden(handoff, 0)?;
 
+    let budget = Budget {
+        decoders: 1,
+        ..Budget::default()
+    };
+    let plan = c.plan_viewport(BOUNDS, Some(first), budget, 0)?;
+    let planned = plan.surfaces.first().ok_or(Error::InvalidState)?;
+    assert_eq!(planned.key, c.view_gate(first)?.key());
+    let Decision::Stream(allocation) = planned.decision else {
+        return Err(Error::Capacity.into());
+    };
+    let mut reservations = DecoderReservations::new(budget)?;
+    let reservation = reservations.reserve(planned.key, allocation)?;
+    let replacement = Binding {
+        nonce: [5; 16],
+        ..binding
+    };
+    let replacement_key = SurfaceKey {
+        binding: replacement,
+        ..planned.key
+    };
     let present_in_worker = cfg!(target_os = "macos") && matches!(fixture, FixturePixels::Window);
     let (mut worker, [pixels, late_pixels]) = match codec.as_deref() {
         Some(binary) => CoordinatedWorker::start_codec(
@@ -509,9 +530,15 @@ fn main() -> SimulationResult<()> {
     };
     assert!(c.snapshot(second, 1)?.frame_queued);
     worker.process.kill()?;
+    assert!(matches!(
+        reservations.reserve(replacement_key, allocation),
+        Err(Error::Capacity)
+    ));
     let (status, closed) = worker.await_exit(&mut c, 2)?;
     assert!(!status.success());
     assert_eq!(closed, 2);
+    reservations.release(&reservation)?;
+    println!("Worker exit: the decoder slot stayed reserved until the process was reaped.");
     assert!(worker.poll_exit(&mut c, 2)?.is_none());
     for view in [first, second] {
         let state = c.snapshot(view, 2)?;
@@ -540,10 +567,11 @@ fn main() -> SimulationResult<()> {
         .as_deref()
         .filter(|_| cfg!(windows) || present_in_worker)
     {
-        let replacement = Binding {
-            nonce: [5; 16],
-            ..binding
-        };
+        let next_reservation = reservations.reserve(replacement_key, allocation)?;
+        assert_eq!(
+            reservations.release(&reservation),
+            Err(Error::WrongAcknowledgement)
+        );
         let generation = WORKER_GENERATION + 1;
         let (mut next, _) = CoordinatedWorker::start_codec(
             Path::new(binary),
@@ -560,6 +588,7 @@ fn main() -> SimulationResult<()> {
         let (status, closed) = next.await_exit(&mut c, 3)?;
         assert!(status.success());
         assert_eq!(closed, 0);
+        reservations.release(&next_reservation)?;
         assert!(c.snapshot(survivor, 3)?.viewing_allowed);
         println!("Native worker: verified capture-only replacement and clean STOPPED.");
     }
