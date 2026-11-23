@@ -470,6 +470,36 @@ int withMediaFoundation(auto run) {
     }
 }
 
+
+int withWorkerControl(char const* backend, auto run) {
+    const int eventsFd = _dup(_fileno(stdout));
+    if (eventsFd < 0) {
+        std::perror("duplicate worker event pipe");
+        return 1;
+    }
+    std::unique_ptr<FILE, decltype(&std::fclose)> events(_fdopen(eventsFd, "wb"), &std::fclose);
+    if (!events) {
+        std::perror("open worker event pipe");
+        _close(eventsFd);
+        return 1;
+    }
+    if (_setmode(_fileno(stdin), _O_BINARY) < 0 || _setmode(eventsFd, _O_BINARY) < 0 ||
+        _dup2(_fileno(stderr), _fileno(stdout)) < 0) {
+        std::perror("configure worker control pipes");
+        return 1;
+    }
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    WorkerControl control{events.get(), 0, backend};
+    if (!readWorkerMessage(&control, WorkerStart, &control.generation)) {
+        return 1;
+    }
+    const int result = run(&control);
+    if (result != 0) {
+        return result;
+    }
+    return sendWorkerMessage(&control, WorkerStopped) ? 0 : 1;
+}
+
 #ifdef LINKO_RW04_WGC_CODEC_CI
 std::vector<BYTE> cropWgcFixture(WgcFixtureFrame frame) {
     auto const& crop = smallFixture;
@@ -523,7 +553,11 @@ bool hasWgcFixtureColor(WgcFixtureFrame frame, bool resized) {
            std::abs(center[2] - red) <= 8;
 }
 
-int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
+int runWgcCodecWorker(int (*run)(WorkerControl const*)) {
+    return withWorkerControl("WGC/Media Foundation", run);
+}
+
+int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized, WorkerControl const* worker) {
     return withMediaFoundation([&] {
         markWgcCodecStage("checking-fixture-colors");
         check(hasWgcFixtureColor(first, false) && hasWgcFixtureColor(resized, true)
@@ -531,7 +565,8 @@ int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
         markWgcCodecStage("converting-bgra");
         const CapturedSamples samples{cropWgcFixture(first), cropWgcFixture(resized)};
         markWgcCodecStage("running-h264-roundtrip");
-        const auto result = probe(smallFixture, LatencyMode::EncoderAndDecoder, "WGC fixture", &samples);
+        const auto result = probe(smallFixture, LatencyMode::EncoderAndDecoder, "WGC fixture",
+                                  &samples, worker, worker != nullptr);
         if (result == 0) {
             std::puts("WGC fixture H.264 roundtrip kept both source colors, luma and chroma.");
         }
@@ -541,41 +576,18 @@ int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
 #else
 namespace {
 int runWorker(BYTE luma, bool exportPixels) {
-    const int eventsFd = _dup(_fileno(stdout));
-    if (eventsFd < 0) {
-        std::perror("duplicate worker event pipe");
-        return 1;
-    }
-    std::unique_ptr<FILE, decltype(&std::fclose)> events(_fdopen(eventsFd, "wb"), &std::fclose);
-    if (!events) {
-        std::perror("open worker event pipe");
-        _close(eventsFd);
-        return 1;
-    }
-    if (_setmode(_fileno(stdin), _O_BINARY) < 0 || _setmode(eventsFd, _O_BINARY) < 0 ||
-        _dup2(_fileno(stderr), _fileno(stdout)) < 0) {
-        std::perror("configure worker control pipes");
-        return 1;
-    }
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-    WorkerControl control{events.get(), 0, "Media Foundation"};
-    if (!readWorkerMessage(&control, WorkerStart, &control.generation)) {
-        return 1;
-    }
-    const int result = withMediaFoundation([&] {
-        if (exportPixels) {
-            constexpr Fixture striped{WorkerFrameWidth, WorkerFrameHeight, 24, 200'000, true};
-            return probe(striped, LatencyMode::EncoderAndDecoder, "worker pixels", nullptr, &control, true);
-        }
-        std::vector<BYTE> pixels(smallFixture.nv12Bytes(), BYTE{128});
-        std::fill_n(pixels.begin(), smallFixture.lumaBytes(), luma);
-        const CapturedSamples samples{pixels, pixels};
-        return probe(smallFixture, LatencyMode::EncoderAndDecoder, "worker fixture", &samples, &control);
+    return withWorkerControl("Media Foundation", [&](WorkerControl const* control) {
+        return withMediaFoundation([&] {
+            if (exportPixels) {
+                constexpr Fixture striped{WorkerFrameWidth, WorkerFrameHeight, 24, 200'000, true};
+                return probe(striped, LatencyMode::EncoderAndDecoder, "worker pixels", nullptr, control, true);
+            }
+            std::vector<BYTE> pixels(smallFixture.nv12Bytes(), BYTE{128});
+            std::fill_n(pixels.begin(), smallFixture.lumaBytes(), luma);
+            const CapturedSamples samples{pixels, pixels};
+            return probe(smallFixture, LatencyMode::EncoderAndDecoder, "worker fixture", &samples, control);
+        });
     });
-    if (result != 0) {
-        return result;
-    }
-    return sendWorkerMessage(&control, WorkerStopped) ? 0 : 1;
 }
 }
 

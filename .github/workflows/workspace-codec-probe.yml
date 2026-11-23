@@ -92,3 +92,9 @@ jobs:
         env:
           CODEC_FIXTURE: ${{ runner.os == 'Windows' && 'rw04-h264.exe' || 'rw04-h264' }}
         run: cargo run --locked --offline --example worker_exit_simulation -- --native-codec "$RUNNER_TEMP/$CODEC_FIXTURE"
+      - name: Route actual Windows window frames through the native codec worker
+        if: runner.os == 'Windows'
+        shell: bash
+        timeout-minutes: 3
+        working-directory: labs/remote-workspace
+        run: cargo run --locked --offline --example worker_exit_simulation -- --native-wgc "$RUNNER_TEMP/rw04-wgc-h264.exe"

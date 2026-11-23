@@ -26,6 +26,8 @@ Windows 另用双端低延迟配置处理连续 90 帧 1920×1080 NV12。输入�
 
 Windows 托管桌面测试还会通过 WGC 捕获一个测试窗口缩放前后的两帧。检查关闭后清空预览，再将这两帧的中央区域转换成 NV12，交替送入同一对低延迟编解码器，检查解码后亮度、色度和时间戳。测试画面只留在进程内存。
 
+Windows 另将同一 WGC 冒烟程序作为 Rust 的原生子进程执行。它先校验启动记录，再创建测试窗口。捕获、缩放、关闭和两种颜色通过原有检查后，从本机管道发送实际解码的两帧。Rust 核对两帧中心颜色，并验证第一帧经过协调器、第二帧在退出后被拒收。Windows 固定图样和 macOS 回归继续运行。
+
 这里验证系统编解码入口。Windows 硬件编码、WebRTC codec factory 接线、端到端延迟、完整许可及实际 GPU 性能仍待验证。
 
 - [Media Foundation H.264 编码器](https://learn.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder)
