@@ -178,6 +178,7 @@ enum Phase {
 pub(super) struct NativeFixture {
     sources: [Source; PANELS],
     phase: Phase,
+    second_started: bool,
     readback: Option<Receiver<bool>>,
     drawn_areas: Option<[Rect; PANELS]>,
     deadline: Instant,
@@ -191,13 +192,19 @@ impl NativeFixture {
         clock: Instant,
         context: &egui::Context,
     ) -> io::Result<Self> {
-        let sources = [
+        let mut sources = [
             Source::start(launcher, codec, views[0], "0", clock, context)?,
             Source::start(launcher, codec, views[1], "1", clock, context)?,
         ];
+        sources[0].send_command(b'S')?;
+        let second_started = !cfg!(target_os = "macos");
+        if second_started {
+            sources[1].send_command(b'S')?;
+        }
         Ok(Self {
             sources,
             phase: Phase::Starting,
+            second_started,
             readback: None,
             drawn_areas: None,
             deadline: Instant::now() + Duration::from_secs(45),
@@ -224,6 +231,12 @@ impl NativeFixture {
                         }
                         source.ready = true;
                     }
+                }
+                // Each ScreenCaptureKit fixture closes capture before READY.
+                // Let that happen before the other AppKit fixture starts.
+                if !self.second_started && self.sources[0].ready {
+                    self.sources[1].send_command(b'S')?;
+                    self.second_started = true;
                 }
                 if self.sources.iter().all(|source| source.ready) {
                     for source in &mut self.sources {

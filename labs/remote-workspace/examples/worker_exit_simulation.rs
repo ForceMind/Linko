@@ -397,6 +397,12 @@ fn match_frame(
 fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()> {
     // Each relay captures its own window. Wait for the desktop fixture to
     // synchronize delivery before sending one already validated RGBA frame.
+    let mut command = [0];
+    io::stdin().read_exact(&mut command)?;
+    if command != *b"S" {
+        return Err(invalid_worker_data("invalid native source start request").into());
+    }
+    eprintln!("Native window source {frame_index}: starting capture.");
     let binding = Binding {
         source: [1; 32],
         viewer: [2; 32],
@@ -409,10 +415,10 @@ fn export_window_frame(binary: &Path, frame_index: usize) -> SimulationResult<()
         FixturePixels::Window,
         false,
     )?;
+    eprintln!("Native window source {frame_index}: capture finished, decoder ready.");
     let mut output = io::stdout().lock();
     output.write_all(b"R")?;
     output.flush()?;
-    let mut command = [0];
     io::stdin().read_exact(&mut command)?;
     if command != [1] {
         return Err(invalid_worker_data("invalid renderer delivery request").into());
