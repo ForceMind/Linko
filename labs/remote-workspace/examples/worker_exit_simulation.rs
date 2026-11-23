@@ -21,7 +21,12 @@ const FIXTURE_READY: u8 = 1;
 const WORKER_VERSION: u8 = 1;
 const WORKER_START: u8 = 1;
 const WORKER_READY: u8 = 2;
-const WORKER_GENERATION: u64 = 0x0102_0304_0506_0708;
+#[cfg(windows)]
+const WORKER_STOP: u8 = 3;
+#[cfg(windows)]
+const WORKER_STOPPED: u8 = 4;
+// Include LF and Ctrl-Z so the Windows test also checks binary pipe mode.
+const WORKER_GENERATION: u64 = 0x0102_0a04_051a_0708;
 const MEDIA_TRACK: MediaTrack = MediaTrack {
     generation: WORKER_GENERATION,
     track: 1,
@@ -64,21 +69,24 @@ impl CoordinatedWorker {
         Ok(worker)
     }
 
-    fn start_codec(binary: &Path, binding: Binding) -> io::Result<Self> {
+    fn start_codec(binary: &Path, binding: Binding, generation: u64) -> io::Result<Self> {
         // The Actions launcher provides the path to its freshly built fixture.
         let mut command = Command::new(binary);
         command.args(["--worker-fixture", "80"]);
         let mut worker = Self::spawn(command, binding)?;
-        let input = worker
-            .process
-            .stdin
-            .as_mut()
-            .expect("worker stdin is piped");
-        input.write_all(&worker_record(WORKER_START))?;
-        input.flush()?;
-        worker.expect_event(worker_record(WORKER_READY), Duration::from_secs(90))?;
-        println!("Native worker: verified VideoToolbox READY for this generation.");
+        worker.send_command(WORKER_START, generation)?;
+        worker.expect_event(
+            worker_record(WORKER_READY, generation),
+            Duration::from_secs(90),
+        )?;
+        println!("Native worker: verified codec READY for this generation.");
         Ok(worker)
+    }
+
+    fn send_command(&mut self, kind: u8, generation: u64) -> io::Result<()> {
+        let input = self.process.stdin.as_mut().expect("worker stdin is piped");
+        input.write_all(&worker_record(kind, generation))?;
+        input.flush()
     }
 
     fn expect_event<const N: usize>(
@@ -145,13 +153,13 @@ impl Drop for CoordinatedWorker {
     }
 }
 
-fn worker_record(kind: u8) -> [u8; 16] {
+fn worker_record(kind: u8, generation: u64) -> [u8; 16] {
     // This local record matches the native fixture's control channel.
     let mut record = [0; 16];
     record[..4].copy_from_slice(b"LRW4");
     record[4] = WORKER_VERSION;
     record[5] = kind;
-    record[8..].copy_from_slice(&WORKER_GENERATION.to_be_bytes());
+    record[8..].copy_from_slice(&generation.to_be_bytes());
     record
 }
 
@@ -269,7 +277,9 @@ fn main() -> SimulationResult<()> {
     queue(&mut c, second, 1, 1)?;
     queue(&mut c, survivor, 1, 1)?;
     let mut worker = match codec.as_deref() {
-        Some(binary) => CoordinatedWorker::start_codec(Path::new(binary), binding)?,
+        Some(binary) => {
+            CoordinatedWorker::start_codec(Path::new(binary), binding, WORKER_GENERATION)?
+        }
         None => CoordinatedWorker::start_fixture(binding)?,
     };
     assert!(worker.poll_exit(&mut c, 1)?.is_none());
@@ -302,5 +312,24 @@ fn main() -> SimulationResult<()> {
     c.acknowledge_presentation(other.ticket, 2)?;
 
     println!("Worker exit: views cleared, late frame rejected, recovery and connection kept.");
+    #[cfg(windows)]
+    if let Some(binary) = codec.as_deref() {
+        let replacement = Binding {
+            nonce: [5; 16],
+            ..binding
+        };
+        let generation = WORKER_GENERATION + 1;
+        let mut next = CoordinatedWorker::start_codec(Path::new(binary), replacement, generation)?;
+        next.send_command(WORKER_STOP, generation)?;
+        next.expect_event(
+            worker_record(WORKER_STOPPED, generation),
+            Duration::from_secs(10),
+        )?;
+        let (status, closed) = next.await_exit(&mut c, 3)?;
+        assert!(status.success());
+        assert_eq!(closed, 0);
+        assert!(c.snapshot(survivor, 3)?.viewing_allowed);
+        println!("Native worker: verified Windows replacement and clean STOPPED.");
+    }
     Ok(())
 }

@@ -1,6 +1,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <codecapi.h>
+#include <fcntl.h>
+#include <io.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
@@ -14,7 +16,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <vector>
+#include "codec_worker_protocol.h"
 #include "windows_fixture.h"
 
 using Microsoft::WRL::ComPtr;
@@ -326,7 +330,8 @@ void readEncodedFrames(IMFTransform* encoder, ComPtr<IMFTransform>& decoder, Fix
     }
 }
 
-int probe(Fixture const& fixture, LatencyMode mode, char const* modeName, CapturedSamples const* samples = nullptr) {
+int probe(Fixture const& fixture, LatencyMode mode, char const* modeName,
+          CapturedSamples const* samples = nullptr, WorkerControl const* worker = nullptr) {
     stage("creating-encoder");
     ComPtr<IMFTransform> encoder;
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
@@ -378,8 +383,10 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName, Captur
     check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0), "mark input complete");
     check(encoder->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0), "drain encoder");
     readEncodedFrames(encoder.Get(), decoder, fixture, encodedCount, timing, lowLatencyDecoder, samples);
-    stage("ending-encoder-stream");
-    check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish media streaming");
+    if (!worker) {
+        stage("ending-encoder-stream");
+        check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish media streaming");
+    }
     if (!decoder) {
         return 2;
     }
@@ -388,7 +395,9 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName, Captur
     readDecodedFrames(decoder.Get(), fixture, timing, samples);
     const auto decodedCount = timing.decodedMs.size();
     const double elapsed = std::chrono::duration<double>(Clock::now() - started).count();
-    check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish decoder streaming");
+    if (!worker) {
+        check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish decoder streaming");
+    }
     std::printf("Media Foundation system software H.264 (%s, %ux%u): "
                 "%u encoded and %zu decoded before drain, "
                 "%u encoded and %zu decoded total, maximum backlog %u.\n",
@@ -401,6 +410,14 @@ int probe(Fixture const& fixture, LatencyMode mode, char const* modeName, Captur
     std::printf("Verified NV12 dimensions, timestamps and brightness. Unpaced throughput %.1f frames/s.\n",
                 static_cast<double>(decodedCount) / elapsed);
     timing.report();
+    if (worker) {
+        const bool stopped = waitForWorkerStop(worker);
+        check(encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish worker encoder");
+        check(decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0), "finish worker decoder");
+        if (!stopped) {
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -505,7 +522,54 @@ int checkWgcCodec(WgcFixtureFrame first, WgcFixtureFrame resized) {
     });
 }
 #else
-int main() {
+namespace {
+int runWorker(BYTE luma) {
+    const int eventsFd = _dup(_fileno(stdout));
+    if (eventsFd < 0) {
+        std::perror("duplicate worker event pipe");
+        return 1;
+    }
+    std::unique_ptr<FILE, decltype(&std::fclose)> events(_fdopen(eventsFd, "wb"), &std::fclose);
+    if (!events) {
+        std::perror("open worker event pipe");
+        _close(eventsFd);
+        return 1;
+    }
+    if (_setmode(_fileno(stdin), _O_BINARY) < 0 || _setmode(eventsFd, _O_BINARY) < 0 ||
+        _dup2(_fileno(stderr), _fileno(stdout)) < 0) {
+        std::perror("configure worker control pipes");
+        return 1;
+    }
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    WorkerControl control{events.get(), 0, "Media Foundation"};
+    if (!readWorkerMessage(&control, WorkerStart, &control.generation)) {
+        return 1;
+    }
+    std::vector<BYTE> pixels(smallFixture.nv12Bytes(), BYTE{128});
+    std::fill_n(pixels.begin(), smallFixture.lumaBytes(), luma);
+    const CapturedSamples samples{pixels, pixels};
+    const int result = withMediaFoundation([&] {
+        return probe(smallFixture, LatencyMode::EncoderAndDecoder, "worker fixture", &samples, &control);
+    });
+    if (result != 0) {
+        return result;
+    }
+    return sendWorkerMessage(&control, WorkerStopped) ? 0 : 1;
+}
+}
+
+int main(int argc, char** argv) {
+    if (argc == 3 && std::strcmp(argv[1], "--worker-fixture") == 0) {
+        char* end{};
+        const long luma = std::strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end || luma < 16 || luma > 220 || luma % 2) {
+            return 2;
+        }
+        return runWorker(static_cast<BYTE>(luma));
+    }
+    if (argc != 1) {
+        return 2;
+    }
     return withMediaFoundation([] {
         const int baseline = probe(smallFixture, LatencyMode::Default, "default");
         if (baseline != 0) {
