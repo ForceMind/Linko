@@ -102,6 +102,7 @@ struct Workspace {
     budget: Budget,
     layout: Option<LayoutProfile>,
     scroll_to_focus: bool,
+    keyboard_focus_target: Option<ViewId>,
 }
 
 impl Workspace {
@@ -169,6 +170,7 @@ impl Workspace {
             },
             layout: None,
             scroll_to_focus: false,
+            keyboard_focus_target: None,
         })
     }
 
@@ -294,7 +296,14 @@ impl Workspace {
             .iter()
             .position(|panel| root.input(|input| input.key_pressed(panel.shortcut)));
         if let Some(index) = shortcut {
-            self.select(self.panels[index].view);
+            let view = self.panels[index].view;
+            self.select(view);
+            self.keyboard_focus_target = Some(view);
+            root.memory_mut(|memory| {
+                if let Some(focused) = memory.focused() {
+                    memory.surrender_focus(focused);
+                }
+            });
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(CANVAS).inner_margin(24))
@@ -372,8 +381,9 @@ impl Workspace {
                 .find(|surface| surface.key == panel.key)
                 .ok_or(Error::InvalidState)?
                 .decision;
+            // The number of preceding visible tiles changes as the viewport scrolls.
             let builder = egui::UiBuilder::new()
-                .id_salt(panel.slot - 1)
+                .scope_id(ui.make_persistent_id(("workspace-panel", panel.slot)))
                 .max_rect(screen);
             let mut card = ui.new_child(builder);
             card.set_clip_rect(ui.clip_rect().intersect(screen));
@@ -385,9 +395,15 @@ impl Workspace {
                 .show(&mut card, |ui| {
                     let frame_padding = 2.0 * f32::from(margin) + 2.0;
                     ui.set_min_size(screen.size() - egui::vec2(frame_padding, frame_padding));
-                    let focus = ui
-                        .selectable_label(selected, RichText::new(panel.label).size(16.0))
-                        .clicked();
+                    let header =
+                        ui.selectable_label(selected, RichText::new(panel.label).size(16.0));
+                    if self.keyboard_focus_target == Some(panel.view)
+                        && ui.clip_rect().contains_rect(header.rect)
+                    {
+                        header.request_focus();
+                        self.keyboard_focus_target = None;
+                    }
+                    let focus = header.clicked();
                     ui.add_space(spacing);
                     let promoted = preview.as_ref().and_then(|preview| {
                         preview
@@ -419,6 +435,7 @@ impl Workspace {
                 .inner;
             if focus {
                 self.select(panel.view);
+                self.keyboard_focus_target = None;
             }
             if toggle {
                 self.toggle_viewing(panel, now)?;
@@ -753,6 +770,59 @@ mod tests {
         );
         assert!(!output.shapes.is_empty());
         output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn number_shortcut_moves_keyboard_focus_to_the_scrolled_panel() -> anyhow::Result<()> {
+        let mut workspace = Workspace::new()?;
+        let context = egui::Context::default();
+        let size = egui::vec2(640.0, 300.0);
+        let render = |workspace: &mut Workspace, now, key: Option<egui::Key>| {
+            let output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    time: Some(Duration::from_millis(now).as_secs_f64()),
+                    events: key
+                        .map(|key| egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers: egui::Modifiers::NONE,
+                        })
+                        .into_iter()
+                        .collect(),
+                    ..Default::default()
+                },
+                |root| {
+                    let _ = workspace.show(root, now, None, None);
+                },
+            );
+            output.drop_without_applying_deltas();
+        };
+        render(&mut workspace, 0, None);
+        render(&mut workspace, 16, Some(egui::Key::Num1));
+        let first = context
+            .memory(|memory| memory.focused())
+            .expect("first panel focus");
+        render(&mut workspace, 32, Some(egui::Key::Num4));
+        for now in (48..576).step_by(16) {
+            render(&mut workspace, now, None);
+        }
+        assert_eq!(workspace.focused_index(), 3);
+        assert!(workspace.keyboard_focus_target.is_none());
+        let fourth = context
+            .memory(|memory| memory.focused())
+            .expect("fourth panel focus");
+        assert_ne!(fourth, first);
+        render(&mut workspace, 576, Some(egui::Key::Tab));
+        render(&mut workspace, 592, Some(egui::Key::Enter));
+        for panel in workspace.panels {
+            let snapshot = workspace.coordinator.snapshot(panel.view, 592)?;
+            assert_eq!(snapshot.viewing_allowed, panel.slot != 4);
+            assert!(!snapshot.input_active);
+        }
+        Ok(())
     }
 
     #[test]
