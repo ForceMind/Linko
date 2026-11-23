@@ -441,6 +441,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &title,
         native_options,
         Box::new(move |cc| {
+            #[cfg(all(windows, feature = "workspace-lab-dx12"))]
+            if require_native_result {
+                let state = cc
+                    .wgpu_render_state
+                    .as_ref()
+                    .ok_or_else(|| io::Error::other("missing DX12 render state"))?;
+                let adapter = state.adapter.get_info();
+                if adapter.backend != wgpu::Backend::Dx12 {
+                    return Err(io::Error::other("expected a DX12 render adapter").into());
+                }
+                println!(
+                    "Workspace panel: Direct3D 12 adapter class {:?}.",
+                    adapter.device_type
+                );
+            }
             cc.egui_ctx.set_theme(egui::Theme::Light);
             let mut workspace = Workspace::new()?;
             let started = Instant::now();
