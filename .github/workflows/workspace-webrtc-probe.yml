@@ -24,6 +24,53 @@ jobs:
       - name: Derive build version from commit time (UTC+08:00)
         shell: bash
         run: python tools/build_version.py >> "$GITHUB_ENV"
+      - name: Provision the Windows SDK required by pinned Chromium
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10'
+          $requiredFiles = @(
+            'Include/10.0.28000.0/um/windows.h',
+            'Lib/10.0.28000.0/um/x64/kernel32.lib',
+            'Lib/10.0.28000.0/ucrt/x64/ucrt.lib',
+            'bin/10.0.28000.0/x64/rc.exe'
+          )
+          $missingFiles = @($requiredFiles | Where-Object {
+            !(Test-Path -LiteralPath (Join-Path $sdkRoot $_) -PathType Leaf)
+          })
+          if ($missingFiles.Count -gt 0) {
+            # Windows SDK 10.0.28000.2270, the release used by the pinned Chromium build.
+            $installer = Join-Path $env:RUNNER_TEMP 'winsdksetup-10.0.28000.2270.exe'
+            try {
+              Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/?linkid=2370315' -OutFile $installer
+              $signature = Get-AuthenticodeSignature -LiteralPath $installer
+              if ($signature.Status -ne 'Valid' -or
+                  $signature.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation(?:,|$)') {
+                throw 'The Windows SDK installer must have a valid Microsoft Corporation signature.'
+              }
+              $arguments = @(
+                '/quiet', '/norestart', '/features',
+                'OptionId.DesktopCPPx86', 'OptionId.DesktopCPPx64',
+                'OptionId.WindowsDesktopDebuggers'
+              )
+              $setup = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+              Write-Host "Windows SDK setup exit code: $($setup.ExitCode)"
+              if ($setup.ExitCode -notin @(0, 3010)) {
+                throw "Windows SDK installation failed with exit code $($setup.ExitCode)."
+              }
+            } finally {
+              if (Test-Path -LiteralPath $installer) {
+                Remove-Item -LiteralPath $installer
+              }
+            }
+          }
+          foreach ($file in $requiredFiles) {
+            $path = Join-Path $sdkRoot $file
+            if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required Windows SDK file missing: $path"
+            }
+            Write-Host "Verified Windows SDK file: $path"
+          }
       - name: Build and run a pinned WebRTC VideoFrame probe
         shell: pwsh
         run: ./labs/remote-workspace/webrtc-probe/build.ps1
