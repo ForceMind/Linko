@@ -631,6 +631,10 @@ static int checkNativeCapture(struct WorkerControl const *worker, BOOL captureOn
     return 0;
 }
 
+typedef BOOL (^DecodeCapturePair)(NSImage *, NSImage *);
+typedef void (^ReleaseCaptureCodec)(BOOL);
+static int checkDualNativeCapture(DecodeCapturePair decode, ReleaseCaptureCodec releaseCodec);
+
 #ifdef LINKO_RW04_SCK_CODEC_CI
 @interface FixturePresentationView : NSView
 @property(nonatomic, strong) NSImage *frameImage;
@@ -728,10 +732,66 @@ static bool runSckWorker(struct WorkerControl const *worker, void *context) {
     return checkNativeCapture(&session, mode == SckCaptureOnly) == 0;
 }
 
+static bool submitCapturedImage(struct SckLiveCodec **codec, NSImage *image) {
+    if (!*codec) {
+        *codec = startSckLiveCodec();
+    }
+    struct SckWindowFrame crop;
+    return *codec && copyFixtureCrop(image, &crop) && submitSckLiveFrame(*codec, &crop);
+}
+
+static int checkDualCodec(void) {
+    __block struct SckLiveCodec *first = NULL;
+    __block struct SckLiveCodec *second = NULL;
+    __block unsigned firstFrames = 0;
+    __block unsigned secondFrames = 0;
+    const int result = checkDualNativeCapture(^BOOL(NSImage *left, NSImage *right) {
+        if ((left && !submitCapturedImage(&first, left)) || !submitCapturedImage(&second, right)) {
+            fputs("VideoToolbox dual capture: could not submit both requested crops.\n", stderr);
+            return NO;
+        }
+        __block enum SckLiveStatus leftStatus = SckLivePending;
+        __block enum SckLiveStatus rightStatus = SckLivePending;
+        if (!waitFor(^BOOL {
+            leftStatus = left ? pollSckLiveFrame(first) : SckLiveDecoded;
+            rightStatus = pollSckLiveFrame(second);
+            return leftStatus == SckLiveFailed || rightStatus == SckLiveFailed ||
+                   (leftStatus == SckLiveDecoded && rightStatus == SckLiveDecoded);
+        }) || leftStatus != SckLiveDecoded || rightStatus != SckLiveDecoded) {
+            fprintf(stderr, "VideoToolbox dual capture: decode incomplete (first=%d second=%d after %u/%u frames).\n",
+                    leftStatus, rightStatus, firstFrames, secondFrames);
+            return NO;
+        }
+        if (left) {
+            ++firstFrames;
+        }
+        ++secondFrames;
+        printf("VideoToolbox dual capture: verified decoded timestamps and colors, first=%u second=%u.\n",
+               firstFrames, secondFrames);
+        return YES;
+    }, ^(BOOL left) {
+        if (left) {
+            stopSckLiveCodec(first);
+            first = NULL;
+        } else {
+            stopSckLiveCodec(second);
+            second = NULL;
+        }
+        printf("VideoToolbox dual capture: released %s codec.\n", left ? "first" : "second");
+    });
+    stopSckLiveCodec(first);
+    stopSckLiveCodec(second);
+    return result;
+}
+
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc != 2) {
             return 2;
+        }
+        if (strcmp(argv[1], "--dual-codec") == 0) {
+            setvbuf(stdout, NULL, _IONBF, 0);
+            return checkDualCodec();
         }
         enum SckFixtureMode mode;
         if (strcmp(argv[1], "--worker-pixels") == 0) {
@@ -749,7 +809,8 @@ int main(int argc, char **argv) {
         return withMacWorkerControl(runSckWorker, &mode) ? 0 : 1;
     }
 }
-#else
+#endif
+
 enum { DualRounds = 4 };
 static const uint8_t DualColors[2][DualRounds + 1][3] = {
     {{190, 30, 70}, {190, 100, 70}, {190, 170, 70}, {190, 30, 150}},
@@ -803,7 +864,7 @@ static BOOL captureMatches(PreviewApp *preview, const uint8_t expected[3]) {
     }
 }
 
-static int checkDualNativeCapture(void) {
+static int checkDualNativeCapture(DecodeCapturePair decode, ReleaseCaptureCodec releaseCodec) {
     if (!CGPreflightScreenCaptureAccess()) {
         fputs("ScreenCaptureKit dual capture requires the hosted capture permission.\n", stderr);
         return 5;
@@ -835,6 +896,9 @@ static int checkDualNativeCapture(void) {
         return 8;
     }
     const NSTimeInterval started = uptime();
+    if (decode && !decode(first.displayedFrame, second.displayedFrame)) {
+        return 9;
+    }
     for (size_t round = 1; round < DualRounds; ++round) {
         const NSTimeInterval nextUpdate = started + 0.8 * round;
         if (!waitFor(^BOOL {
@@ -855,6 +919,9 @@ static int checkDualNativeCapture(void) {
                     round, first.captureActive, second.captureActive);
             return 10;
         }
+        if (decode && !decode(first.displayedFrame, second.displayedFrame)) {
+            return 10;
+        }
     }
     const NSTimeInterval elapsed = uptime() - started;
     if (elapsed <= FrameLifetime) {
@@ -868,9 +935,15 @@ static int checkDualNativeCapture(void) {
         fputs("ScreenCaptureKit dual capture: first closed source did not release.\n", stderr);
         return 12;
     }
+    if (releaseCodec) {
+        releaseCodec(YES);
+    }
     paintCaptureFixture(right, DualColors[1][DualRounds]);
     if (first.hasStream || !waitFor(^BOOL { return captureMatches(second, DualColors[1][DualRounds]); })) {
         fputs("ScreenCaptureKit dual capture: remaining source did not deliver a fresh frame.\n", stderr);
+        return 13;
+    }
+    if (decode && !decode(nil, second.displayedFrame)) {
         return 13;
     }
     puts("ScreenCaptureKit dual capture: first source cleared, remaining source updated.");
@@ -880,14 +953,18 @@ static int checkDualNativeCapture(void) {
         fputs("ScreenCaptureKit dual capture: second closed source did not release.\n", stderr);
         return 14;
     }
+    if (releaseCodec) {
+        releaseCodec(NO);
+    }
     puts("ScreenCaptureKit dual capture: both closed sources cleared and released.");
     return 0;
 }
 
+#ifndef LINKO_RW04_SCK_CODEC_CI
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc == 2 && strcmp(argv[1], "--dual-capture") == 0) {
-            return checkDualNativeCapture();
+            return checkDualNativeCapture(nil, nil);
         }
         if (argc != 1) {
             return 2;

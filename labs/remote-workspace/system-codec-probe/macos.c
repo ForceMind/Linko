@@ -28,6 +28,8 @@ struct Probe {
     CVPixelBufferRef fixedInput;
     CVPixelBufferRef captured[WorkerFrameCount];
     uint8_t capturedLuma[WorkerFrameCount];
+    bool liveWindow;
+    uint8_t liveColor[MaxFrames][3];
     int workerLuma;
     struct WorkerControl const *worker;
     bool exportPixels;
@@ -78,12 +80,17 @@ static void encodedOutput(void *state, void *source, OSStatus status, VTEncodeIn
     atomic_store(&probe->encoded[index], (CMSampleBufferRef)CFRetain(sample));
 }
 
+static OSStatus submitPixels(struct Probe *probe, VTCompressionSessionRef encoder, unsigned index,
+                             CVPixelBufferRef input) {
+    probe->submittedAt[index] = nowNs();
+    return VTCompressionSessionEncodeFrame(encoder, input, CMTimeMake(index, FramesPerSecond),
+                                           CMTimeMake(1, FramesPerSecond), NULL, NULL, NULL);
+}
+
 static OSStatus submit(struct Probe *probe, VTCompressionSessionRef encoder, unsigned index) {
     CVPixelBufferRef input = probe->captured[0] ? probe->captured[index] : probe->fixedInput;
     if (input) {
-        probe->submittedAt[index] = nowNs();
-        return VTCompressionSessionEncodeFrame(encoder, input, CMTimeMake(index, FramesPerSecond),
-                                               CMTimeMake(1, FramesPerSecond), NULL, NULL, NULL);
+        return submitPixels(probe, encoder, index, input);
     }
     CVPixelBufferRef pixels = NULL;
     OSStatus status = CVPixelBufferCreate(NULL, (size_t)probe->width, (size_t)probe->height, NV12, NULL, &pixels);
@@ -104,9 +111,7 @@ static OSStatus submit(struct Probe *probe, VTCompressionSessionRef encoder, uns
         status = CVPixelBufferUnlockBaseAddress(pixels, 0);
     }
     if (status == noErr) {
-        probe->submittedAt[index] = nowNs();
-        status = VTCompressionSessionEncodeFrame(encoder, pixels, CMTimeMake(index, FramesPerSecond),
-                                                 CMTimeMake(1, FramesPerSecond), NULL, NULL, NULL);
+        status = submitPixels(probe, encoder, index, pixels);
     }
     CVPixelBufferRelease(pixels);
     return status;
@@ -124,11 +129,22 @@ static bool matchesFixture(CVImageBufferRef frame, struct Probe const *probe, un
     bool valid = false;
     if (luma && stride >= width && CVPixelBufferGetHeightOfPlane(frame, 0) >= (size_t)probe->height) {
         const uint8_t *row = luma + stride * (size_t)(probe->height / 2);
-        const int fixedLuma = probe->workerLuma ? probe->workerLuma : 126;
-        const int expected = probe->captured[0] ? probe->capturedLuma[index]
-                                               : probe->fixedInput ? fixedLuma : brightness(index);
-        const int stripe = (probe->captured[0] || probe->fixedInput) ? expected : 232 - expected;
-        valid = abs(row[width / 2] - expected) <= 6 && abs(row[width * 7 / 8] - stripe) <= 6;
+        if (probe->liveWindow) {
+            const uint8_t *expected = probe->liveColor[index];
+            const size_t uvStride = CVPixelBufferGetBytesPerRowOfPlane(frame, 1);
+            const uint8_t *uv = CVPixelBufferGetBaseAddressOfPlane(frame, 1);
+            if (uv && uvStride >= width && CVPixelBufferGetHeightOfPlane(frame, 1) >= (size_t)probe->height / 2) {
+                const uint8_t *center = uv + uvStride * (size_t)(probe->height / 4) + width / 2;
+                valid = abs(row[width / 2] - expected[0]) <= 6 &&
+                        abs(center[0] - expected[1]) <= 10 && abs(center[1] - expected[2]) <= 10;
+            }
+        } else {
+            const int fixedLuma = probe->workerLuma ? probe->workerLuma : 126;
+            const int expected = probe->captured[0] ? probe->capturedLuma[index]
+                                                   : probe->fixedInput ? fixedLuma : brightness(index);
+            const int stripe = (probe->captured[0] || probe->fixedInput) ? expected : 232 - expected;
+            valid = abs(row[width / 2] - expected) <= 6 && abs(row[width * 7 / 8] - stripe) <= 6;
+        }
     }
     return CVPixelBufferUnlockBaseAddress(frame, kCVPixelBufferLock_ReadOnly) == noErr && valid;
 }
@@ -738,6 +754,118 @@ static bool copyWindowInput(CVPixelBufferRef input, struct WorkerFramePixels con
         }
     }
     return CVPixelBufferUnlockBaseAddress(input, 0) == noErr && valid;
+}
+
+struct SckLiveCodec {
+    struct Probe probe;
+    VTCompressionSessionRef encoder;
+    VTDecompressionSessionRef decoder;
+    unsigned submitted;
+    unsigned delivered;
+    unsigned checked;
+};
+
+struct SckLiveCodec *startSckLiveCodec(void) {
+    struct SckLiveCodec *codec = calloc(1, sizeof(*codec));
+    if (!codec) {
+        return NULL;
+    }
+    codec->probe.width = WorkerFrameWidth;
+    codec->probe.height = WorkerFrameHeight;
+    codec->probe.frames = MaxFrames;
+    codec->probe.liveWindow = true;
+    atomic_init(&codec->probe.callbackError, noErr);
+    for (unsigned index = 0; index < MaxFrames; ++index) {
+        atomic_init(&codec->probe.encoded[index], NULL);
+        atomic_init(&codec->probe.encodedOnce[index], false);
+        atomic_init(&codec->probe.decodedAt[index], 0);
+    }
+    const OSStatus status = startEncoder(&codec->probe, &codec->encoder);
+    if (status != noErr) {
+        fprintf(stderr, "VideoToolbox live window: create encoder status=%d.\n", (int)status);
+        free(codec);
+        return NULL;
+    }
+    return codec;
+}
+
+bool submitSckLiveFrame(struct SckLiveCodec *codec, struct SckWindowFrame const *frame) {
+    if (!codec || codec->submitted >= MaxFrames || codec->submitted != codec->checked) {
+        return false;
+    }
+    struct WorkerFramePixels packed;
+    workerBgraToNv12(frame->bgra, WorkerFrameWidth * 4, packed.data);
+    const size_t center = WorkerFrameWidth * (WorkerFrameHeight / 2) + WorkerFrameWidth / 2;
+    const size_t chroma = WorkerFrameWidth * (WorkerFrameHeight + WorkerFrameHeight / 4) + WorkerFrameWidth / 2;
+    uint8_t *expected = codec->probe.liveColor[codec->submitted];
+    expected[0] = packed.data[center];
+    expected[1] = packed.data[chroma];
+    expected[2] = packed.data[chroma + 1];
+    CVPixelBufferRef input = makeMemoryFixture(WorkerFrameWidth, WorkerFrameHeight, NV12, 126);
+    if (!input) {
+        return false;
+    }
+    const OSStatus status = copyWindowInput(input, &packed)
+        ? submitPixels(&codec->probe, codec->encoder, codec->submitted, input) : -4;
+    CVPixelBufferRelease(input);
+    if (status != noErr) {
+        fprintf(stderr, "VideoToolbox live window: submit status=%d.\n", (int)status);
+        return false;
+    }
+    ++codec->submitted;
+    return true;
+}
+
+enum SckLiveStatus pollSckLiveFrame(struct SckLiveCodec *codec) {
+    if (!codec || !codec->submitted) {
+        return SckLiveFailed;
+    }
+    const OSStatus status = deliverSamples(&codec->probe, &codec->decoder, &codec->delivered);
+    const OSStatus callback = atomic_load(&codec->probe.callbackError);
+    if (status != noErr || callback != noErr) {
+        fprintf(stderr, "VideoToolbox live window: delivery status=%d callback=%d.\n", (int)status, (int)callback);
+        return SckLiveFailed;
+    }
+    if (codec->checked == codec->submitted) {
+        return SckLiveDecoded;
+    }
+    const unsigned index = codec->checked;
+    const uint64_t received = atomic_load(&codec->probe.decodedAt[index]);
+    if (!received) {
+        return SckLivePending;
+    }
+    if (received <= codec->probe.submittedAt[index]) {
+        return SckLiveFailed;
+    }
+    if (!index) {
+        const char *encodeMode = encoderMode(codec->encoder, NULL);
+        const char *decodeMode = hardwareMode(codec->decoder, kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder);
+        printf("VideoToolbox live window: encoder=%s decoder=%s.\n", encodeMode, decodeMode);
+        if (strcmp(encodeMode, "hardware") || strcmp(decodeMode, "hardware")) {
+            return SckLiveFailed;
+        }
+    }
+    ++codec->checked;
+    return SckLiveDecoded;
+}
+
+void stopSckLiveCodec(struct SckLiveCodec *codec) {
+    if (!codec) {
+        return;
+    }
+    if (codec->decoder) {
+        VTDecompressionSessionInvalidate(codec->decoder);
+        CFRelease(codec->decoder);
+    }
+    VTCompressionSessionInvalidate(codec->encoder);
+    CFRelease(codec->encoder);
+    for (unsigned index = codec->delivered; index < codec->submitted; ++index) {
+        CMSampleBufferRef unused = atomic_exchange(&codec->probe.encoded[index], NULL);
+        if (unused) {
+            CFRelease(unused);
+        }
+    }
+    free(codec);
 }
 
 bool encodeSckWindowFrames(struct WorkerControl const *control, struct SckWindowFrame const frames[2]) {
