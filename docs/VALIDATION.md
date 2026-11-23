@@ -459,4 +459,6 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 
 - [PR #375](https://github.com/ForceMind/Linko/pull/375)，`5103f591c57d1ea00e694dc04c2df80742271182`。Windows 和 macOS 采集自建测试窗口并实际编码、解码。第一帧进入 eframe 面板，回读九点后确认展示。原生子进程退出后释放纹理并核对同一区域清屏。Windows 托管机的作业使用日志确认的 Direct3D 12 CPU 适配器。[Windows](https://github.com/ForceMind/Linko/actions/runs/45133563888/job/137558485891) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45133563888/job/137558485759) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45133563889) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45133563885)
 
-本批验证覆盖协调器、单槽进程交接、离线面板操作和本机单帧绘制。持续多路媒体呈现、实际 GPU 预算和跨设备观看待验证。
+- [PR #376](https://github.com/ForceMind/Linko/pull/376)，`1adf55e842a3daf0743039fd30c08bab5f4519a4`。Windows 和 macOS 在同一次 eframe 回读中确认两个原生窗口分别显示各自的一帧。第一路退出后仅第一处清空，第二路退出后两处均已清空。macOS 依次回收采集进程，两个解码进程同时存活。首次运行的合成编解码步骤出现 `UnexpectedEof`，同一提交重跑通过。[Windows](https://github.com/ForceMind/Linko/actions/runs/45142539207/job/137595325702) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45142539207/job/137595325721) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45142539318) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45142539201)
+
+本批验证覆盖协调器、单槽进程交接、离线面板操作和本机双面板各一帧。持续多路媒体呈现、实际 GPU 预算和跨设备观看待验证。
