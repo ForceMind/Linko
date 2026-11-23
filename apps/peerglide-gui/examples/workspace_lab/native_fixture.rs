@@ -12,7 +12,7 @@ use linko_workspace_lab::geometry::PixelSize;
 use linko_workspace_lab::media::{RawFrame, MAX_QUEUE_AGE_MS};
 use linko_workspace_lab::Error;
 
-use super::{elapsed_ms, CANVAS};
+use super::{elapsed_ms, NativePanelProbe, CANVAS};
 
 pub(super) const PANELS: usize = 2;
 pub(super) const FRAME_SIZE: PixelSize = PixelSize {
@@ -29,9 +29,10 @@ const COLORS: [Color32; PANELS] = [
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-struct Received {
-    pixels: Vec<u8>,
-    first_seen: u64,
+pub(super) struct Received {
+    pub(super) pixels: Vec<u8>,
+    pub(super) first_seen: u64,
+    pub(super) sequence: u32,
 }
 
 enum SourceEvent {
@@ -39,11 +40,11 @@ enum SourceEvent {
     Frame(Received),
 }
 
-struct PendingDraw {
-    texture: egui::TextureHandle,
-    ticket: PresentationTicket,
-    first_seen: u64,
-    color: Color32,
+pub(super) struct PendingDraw {
+    pub(super) texture: egui::TextureHandle,
+    pub(super) ticket: PresentationTicket,
+    pub(super) first_seen: u64,
+    pub(super) color: Color32,
 }
 
 struct Source {
@@ -93,6 +94,7 @@ impl Source {
                     SourceEvent::Frame(Received {
                         pixels,
                         first_seen: elapsed_ms(clock),
+                        sequence: 1,
                     })
                 });
                 let _ = send.send(result);
@@ -210,8 +212,10 @@ impl NativeFixture {
             deadline: Instant::now() + Duration::from_secs(45),
         })
     }
+}
 
-    pub(super) fn advance(
+impl NativePanelProbe for NativeFixture {
+    fn advance(
         &mut self,
         coordinator: &mut Coordinator,
         context: &egui::Context,
@@ -251,8 +255,14 @@ impl NativeFixture {
                     if source.draw.is_none() {
                         match source.next_event()? {
                             Some(SourceEvent::Frame(frame)) => {
-                                let draw =
-                                    prepare_draw(coordinator, source.view, context, frame, now)?;
+                                let draw = prepare_draw(
+                                    coordinator,
+                                    source.view,
+                                    context,
+                                    frame,
+                                    now,
+                                    None,
+                                )?;
                                 if !colors_match(draw.color, expected, 24) {
                                     return Err(io::Error::other(
                                         "decoded source color did not match panel",
@@ -324,7 +334,7 @@ impl NativeFixture {
         Ok(self.phase == Phase::Finished)
     }
 
-    pub(super) fn textures(&self, now: u64) -> [Option<&egui::TextureHandle>; PANELS] {
+    fn textures(&self, now: u64) -> [Option<&egui::TextureHandle>; PANELS] {
         if matches!(self.phase, Phase::Starting | Phase::Receiving) {
             return [None; PANELS];
         }
@@ -335,11 +345,7 @@ impl NativeFixture {
         })
     }
 
-    pub(super) fn verify_paint(
-        &mut self,
-        context: &egui::Context,
-        areas: [Rect; PANELS],
-    ) -> io::Result<()> {
+    fn verify_paint(&mut self, context: &egui::Context, areas: [Rect; PANELS]) -> io::Result<()> {
         if self.readback.is_some() {
             return Ok(());
         }
@@ -371,7 +377,9 @@ impl NativeFixture {
         self.readback = Some(receive);
         Ok(())
     }
+}
 
+impl NativeFixture {
     fn source_color(&self, index: usize) -> io::Result<Color32> {
         self.sources[index]
             .draw
@@ -399,15 +407,16 @@ impl NativeFixture {
     }
 }
 
-fn prepare_draw(
+pub(super) fn prepare_draw(
     coordinator: &mut Coordinator,
     view: ViewId,
     context: &egui::Context,
     frame: Received,
     now: u64,
+    texture: Option<egui::TextureHandle>,
 ) -> Result<PendingDraw> {
     let first_seen = frame.first_seen.min(now);
-    let frame_stamp = coordinator.frame_stamp(view, 1)?;
+    let frame_stamp = coordinator.frame_stamp(view, u64::from(frame.sequence))?;
     let raw = RawFrame::new(frame_stamp, FRAME_SIZE, frame.pixels)?;
     let media = MediaFrame {
         track: MediaTrack {
@@ -415,7 +424,7 @@ fn prepare_draw(
             track: 1,
             ssrc: 1,
         },
-        timestamp: 1,
+        timestamp: frame.sequence,
     };
     let gate = coordinator.view_gate(view)?;
     let mut matcher = FrameMatcher::new(gate, media.track, 0, first_seen)?;
@@ -431,19 +440,28 @@ fn prepare_draw(
         .ok_or(Error::StaleFrame)?;
     let pixels = presentation.frame.pixels();
     let center = (IMAGE_SIZE[1] / 2 * IMAGE_SIZE[0] + IMAGE_SIZE[0] / 2) * 4;
+    let image = egui::ColorImage::from_rgba_unmultiplied(IMAGE_SIZE, pixels);
+    let options = egui::TextureOptions::NEAREST;
+    let texture = if let Some(mut texture) = texture {
+        texture.set(image, options);
+        texture
+    } else {
+        context.load_texture("native-window", image, options)
+    };
     Ok(PendingDraw {
-        texture: context.load_texture(
-            "native-window",
-            egui::ColorImage::from_rgba_unmultiplied(IMAGE_SIZE, pixels),
-            egui::TextureOptions::NEAREST,
-        ),
+        texture,
         ticket: presentation.ticket,
         first_seen,
         color: Color32::from_rgb(pixels[center], pixels[center + 1], pixels[center + 2]),
     })
 }
 
-fn matches_pixels(image: &egui::ColorImage, area: Rect, scale: f32, expected: Color32) -> bool {
+pub(super) fn matches_pixels(
+    image: &egui::ColorImage,
+    area: Rect,
+    scale: f32,
+    expected: Color32,
+) -> bool {
     let [width, height] = image.size;
     for vertical in [0.25, 0.5, 0.75] {
         for horizontal in [0.25, 0.5, 0.75] {
@@ -461,7 +479,7 @@ fn matches_pixels(image: &egui::ColorImage, area: Rect, scale: f32, expected: Co
     true
 }
 
-fn colors_match(actual: Color32, expected: Color32, tolerance: u8) -> bool {
+pub(super) fn colors_match(actual: Color32, expected: Color32, tolerance: u8) -> bool {
     actual.r().abs_diff(expected.r()) <= tolerance
         && actual.g().abs_diff(expected.g()) <= tolerance
         && actual.b().abs_diff(expected.b()) <= tolerance

@@ -14,8 +14,11 @@ use linko_workspace_lab::scheduling::{Budget, Decision, PauseReason, Plan};
 use linko_workspace_lab::session::SurfaceKind;
 use linko_workspace_lab::{Binding, Error, SurfaceKey};
 
+#[path = "workspace_lab/live_fixture.rs"]
+mod live_fixture;
 #[path = "workspace_lab/native_fixture.rs"]
 mod native_fixture;
+use live_fixture::LiveFixture;
 use native_fixture::{NativeFixture, PANELS as NATIVE_PANELS};
 
 const ORIGIN: Camera = Camera {
@@ -41,6 +44,26 @@ struct Panel {
 
 type NativePreview<'a> = [Option<&'a egui::TextureHandle>; NATIVE_PANELS];
 type PreviewAreas = [Option<Rect>; NATIVE_PANELS];
+
+trait NativePanelProbe {
+    fn advance(
+        &mut self,
+        coordinator: &mut Coordinator,
+        context: &egui::Context,
+        now: u64,
+    ) -> Result<bool, Box<dyn std::error::Error>>;
+    fn textures(&self, now: u64) -> NativePreview<'_>;
+    fn verify_paint(
+        &mut self,
+        context: &egui::Context,
+        areas: [Rect; NATIVE_PANELS],
+    ) -> io::Result<()>;
+}
+
+enum ProbePaths {
+    Single { launcher: PathBuf, codec: PathBuf },
+    Live(PathBuf),
+}
 
 struct Workspace {
     coordinator: Coordinator,
@@ -358,7 +381,7 @@ fn render_native_preview(
 struct WorkspaceApp {
     workspace: Workspace,
     started: Instant,
-    native: Option<NativeFixture>,
+    native: Option<Box<dyn NativePanelProbe>>,
     native_passed: Arc<AtomicBool>,
 }
 
@@ -406,8 +429,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let paths = match args.as_slice() {
         [] => None,
-        [mode, launcher, codec] if mode == "--native-window-probe" => {
-            Some((PathBuf::from(launcher), PathBuf::from(codec)))
+        [mode, launcher, codec] if mode == "--native-window-probe" => Some(ProbePaths::Single {
+            launcher: PathBuf::from(launcher),
+            codec: PathBuf::from(codec),
+        }),
+        [mode, codec] if mode == "--live-window-probe" => {
+            Some(ProbePaths::Live(PathBuf::from(codec)))
         }
         _ => return Err(io::Error::other("unexpected workspace example arguments").into()),
     };
@@ -456,7 +483,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cc.egui_ctx.set_theme(egui::Theme::Light);
             let mut workspace = Workspace::new()?;
             let started = Instant::now();
-            let native = if let Some((launcher, codec)) = paths {
+            let native: Option<Box<dyn NativePanelProbe>> = if let Some(paths) = paths {
                 let views = [workspace.panels[0].view, workspace.panels[1].view];
                 for view in views {
                     workspace.coordinator.revise_geometry(
@@ -475,13 +502,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         0,
                     )?;
                 }
-                Some(NativeFixture::start(
-                    &launcher,
-                    &codec,
-                    views,
-                    started,
-                    &cc.egui_ctx,
-                )?)
+                Some(match paths {
+                    ProbePaths::Single { launcher, codec } => Box::new(NativeFixture::start(
+                        &launcher,
+                        &codec,
+                        views,
+                        started,
+                        &cc.egui_ctx,
+                    )?),
+                    ProbePaths::Live(codec) => {
+                        Box::new(LiveFixture::start(&codec, views, started, &cc.egui_ctx)?)
+                    }
+                })
             } else {
                 None
             };

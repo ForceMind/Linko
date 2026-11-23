@@ -180,3 +180,10 @@ jobs:
             options+=(--features workspace-lab-dx12)
           fi
           cargo run --locked -p peerglide-gui --example workspace_lab "${options[@]}" -- --native-window-probe "$launcher" "$fixture"
+      - name: Verify live macOS frame updates, receipts and independent panel clearing
+        if: runner.os == 'macOS'
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          fixture="$RUNNER_TEMP/rw06-window-fixture/rw04-sck-h264"
+          cargo run --locked -p peerglide-gui --example workspace_lab -- --live-window-probe "$fixture"

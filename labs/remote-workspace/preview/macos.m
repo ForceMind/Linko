@@ -8,6 +8,9 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 struct WorkerControl;
 #ifdef LINKO_RW04_SCK_CODEC_CI
@@ -632,7 +635,7 @@ static int checkNativeCapture(struct WorkerControl const *worker, BOOL captureOn
 }
 
 typedef BOOL (^DecodeCapturePair)(NSImage *, NSImage *);
-typedef void (^ReleaseCaptureCodec)(BOOL);
+typedef BOOL (^ReleaseCaptureCodec)(BOOL);
 static int checkDualNativeCapture(DecodeCapturePair decode, ReleaseCaptureCodec releaseCodec);
 
 #ifdef LINKO_RW04_SCK_CODEC_CI
@@ -732,21 +735,80 @@ static bool runSckWorker(struct WorkerControl const *worker, void *context) {
     return checkNativeCapture(&session, mode == SckCaptureOnly) == 0;
 }
 
-static bool submitCapturedImage(struct SckLiveCodec **codec, NSImage *image) {
+static BOOL setLivePipeNonblocking(int fd) {
+    const int flags = fcntl(fd, F_GETFL, 0);
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+// The viewer may still be drawing. Keep AppKit dispatching while the local
+// pipes move data, and stop if an entire record cannot be exchanged.
+static BOOL exchangeLiveBytes(int fd, uint8_t *bytes, size_t length, BOOL writing) {
+    __block size_t offset = 0;
+    __block BOOL broken = NO;
+    const BOOL completed = waitFor(^BOOL {
+        ssize_t amount = writing ? write(fd, bytes + offset, length - offset)
+                                 : read(fd, bytes + offset, length - offset);
+        if (amount > 0) {
+            offset += (size_t)amount;
+        } else if (!amount || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+            broken = YES;
+        }
+        return broken || offset == length;
+    });
+    if (!completed || broken) {
+        fprintf(stderr, "VideoToolbox live display: %s record incomplete.\n", writing ? "output" : "receipt");
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL deliverLiveFrame(struct WorkerControl const *worker, struct SckLiveCodec *codec,
+                             uint64_t generation, unsigned char sequence) {
+    struct WorkerFramePixels frame;
+    if (!takeSckLiveFrame(codec, &frame)) {
+        return NO;
+    }
+    uint8_t record[WorkerMessageSize + WorkerFrameHeaderBytes + WorkerFrameBytes];
+    formatWorkerMessage(record, WorkerFrame, generation);
+    formatWorkerFrameHeader(record + WorkerMessageSize, sequence);
+    memcpy(record + WorkerMessageSize + WorkerFrameHeaderBytes, frame.data, sizeof(frame.data));
+    return exchangeLiveBytes(fileno(worker->events), record, sizeof(record), YES);
+}
+
+static BOOL expectLiveReceipt(uint64_t generation, unsigned char sequence) {
+    uint8_t expected[WorkerMessageSize + 4] = {0};
+    formatWorkerMessage(expected, WorkerDisplayed, generation);
+    expected[WorkerMessageSize + 3] = sequence;
+    uint8_t actual[sizeof(expected)];
+    if (!exchangeLiveBytes(fileno(stdin), actual, sizeof(actual), NO) ||
+        memcmp(expected, actual, sizeof(expected)) != 0) {
+        fputs("VideoToolbox live display: receipt did not match source and sequence.\n", stderr);
+        return NO;
+    }
+    return YES;
+}
+
+static bool submitCapturedImage(struct SckLiveCodec **codec, NSImage *image, bool exportPixels) {
     if (!*codec) {
-        *codec = startSckLiveCodec();
+        *codec = startSckLiveCodec(exportPixels);
     }
     struct SckWindowFrame crop;
     return *codec && copyFixtureCrop(image, &crop) && submitSckLiveFrame(*codec, &crop);
 }
 
-static int checkDualCodec(void) {
+static int checkDualCodec(struct WorkerControl const *worker) {
+    if (worker && (worker->generation == UINT64_MAX ||
+                   !setLivePipeNonblocking(fileno(stdin)) || !setLivePipeNonblocking(fileno(worker->events)))) {
+        fputs("VideoToolbox live display: cannot prepare bounded local pipes.\n", stderr);
+        return 16;
+    }
     __block struct SckLiveCodec *first = NULL;
     __block struct SckLiveCodec *second = NULL;
     __block unsigned firstFrames = 0;
     __block unsigned secondFrames = 0;
     const int result = checkDualNativeCapture(^BOOL(NSImage *left, NSImage *right) {
-        if ((left && !submitCapturedImage(&first, left)) || !submitCapturedImage(&second, right)) {
+        if ((left && !submitCapturedImage(&first, left, worker != NULL)) ||
+            !submitCapturedImage(&second, right, worker != NULL)) {
             fputs("VideoToolbox dual capture: could not submit both requested crops.\n", stderr);
             return NO;
         }
@@ -768,8 +830,17 @@ static int checkDualCodec(void) {
         ++secondFrames;
         printf("VideoToolbox dual capture: verified decoded timestamps and colors, first=%u second=%u.\n",
                firstFrames, secondFrames);
+        if (worker) {
+            const uint64_t firstGeneration = worker->generation;
+            const uint64_t secondGeneration = firstGeneration + 1;
+            const unsigned char sequence = (unsigned char)secondFrames;
+            return (!left || deliverLiveFrame(worker, first, firstGeneration, sequence)) &&
+                   deliverLiveFrame(worker, second, secondGeneration, sequence) &&
+                   (!left || expectLiveReceipt(firstGeneration, sequence)) &&
+                   expectLiveReceipt(secondGeneration, sequence);
+        }
         return YES;
-    }, ^(BOOL left) {
+    }, ^BOOL(BOOL left) {
         if (left) {
             stopSckLiveCodec(first);
             first = NULL;
@@ -778,10 +849,21 @@ static int checkDualCodec(void) {
             second = NULL;
         }
         printf("VideoToolbox dual capture: released %s codec.\n", left ? "first" : "second");
+        if (worker) {
+            uint8_t record[WorkerMessageSize];
+            formatWorkerMessage(record, WorkerStopped, worker->generation + (left ? 0 : 1));
+            return exchangeLiveBytes(fileno(worker->events), record, sizeof(record), YES);
+        }
+        return YES;
     });
     stopSckLiveCodec(first);
     stopSckLiveCodec(second);
     return result;
+}
+
+static bool runDualDisplayWorker(struct WorkerControl const *worker, void *context) {
+    (void)context;
+    return checkDualCodec(worker) == 0;
 }
 
 int main(int argc, char **argv) {
@@ -791,7 +873,11 @@ int main(int argc, char **argv) {
         }
         if (strcmp(argv[1], "--dual-codec") == 0) {
             setvbuf(stdout, NULL, _IONBF, 0);
-            return checkDualCodec();
+            return checkDualCodec(NULL);
+        }
+        if (strcmp(argv[1], "--dual-live-pixels") == 0) {
+            setvbuf(stdout, NULL, _IONBF, 0);
+            return withMacWorkerControl(runDualDisplayWorker, NULL) ? 0 : 1;
         }
         enum SckFixtureMode mode;
         if (strcmp(argv[1], "--worker-pixels") == 0) {
@@ -895,10 +981,10 @@ static int checkDualNativeCapture(DecodeCapturePair decode, ReleaseCaptureCodec 
                 first.captureActive, second.captureActive);
         return 8;
     }
-    const NSTimeInterval started = uptime();
     if (decode && !decode(first.displayedFrame, second.displayedFrame)) {
         return 9;
     }
+    const NSTimeInterval started = uptime();
     for (size_t round = 1; round < DualRounds; ++round) {
         const NSTimeInterval nextUpdate = started + 0.8 * round;
         if (!waitFor(^BOOL {
@@ -935,8 +1021,8 @@ static int checkDualNativeCapture(DecodeCapturePair decode, ReleaseCaptureCodec 
         fputs("ScreenCaptureKit dual capture: first closed source did not release.\n", stderr);
         return 12;
     }
-    if (releaseCodec) {
-        releaseCodec(YES);
+    if (releaseCodec && !releaseCodec(YES)) {
+        return 12;
     }
     paintCaptureFixture(right, DualColors[1][DualRounds]);
     if (first.hasStream || !waitFor(^BOOL { return captureMatches(second, DualColors[1][DualRounds]); })) {
@@ -953,8 +1039,8 @@ static int checkDualNativeCapture(DecodeCapturePair decode, ReleaseCaptureCodec 
         fputs("ScreenCaptureKit dual capture: second closed source did not release.\n", stderr);
         return 14;
     }
-    if (releaseCodec) {
-        releaseCodec(NO);
+    if (releaseCodec && !releaseCodec(NO)) {
+        return 14;
     }
     puts("ScreenCaptureKit dual capture: both closed sources cleared and released.");
     return 0;
