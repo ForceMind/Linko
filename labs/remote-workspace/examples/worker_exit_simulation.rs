@@ -536,7 +536,10 @@ fn main() -> SimulationResult<()> {
 
     println!("Worker exit: views cleared, late frame rejected, recovery and connection kept.");
     #[cfg(any(windows, target_os = "macos"))]
-    if let Some(binary) = codec.as_deref().filter(|_| cfg!(windows) || present_in_worker) {
+    if let Some(binary) = codec
+        .as_deref()
+        .filter(|_| cfg!(windows) || present_in_worker)
+    {
         let replacement = Binding {
             nonce: [5; 16],
             ..binding
