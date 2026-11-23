@@ -24,8 +24,20 @@ const DISPLAYED: u8 = 8;
 const PAIRS: u32 = 4;
 const SURVIVOR: u32 = PAIRS + 1;
 const COLORS: [[[u8; 3]; SURVIVOR as usize]; PANELS] = [
-    [[190, 30, 70], [190, 100, 70], [190, 170, 70], [190, 30, 150], [0; 3]],
-    [[30, 70, 190], [30, 145, 190], [30, 220, 190], [95, 70, 190], [30, 140, 115]],
+    [
+        [190, 30, 70],
+        [190, 100, 70],
+        [190, 170, 70],
+        [190, 30, 150],
+        [0; 3],
+    ],
+    [
+        [30, 70, 190],
+        [30, 145, 190],
+        [30, 220, 190],
+        [95, 70, 190],
+        [30, 140, 115],
+    ],
 ];
 
 type ProbeResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -171,8 +183,14 @@ impl LiveFixture {
             if let Some(frame) = incoming.take() {
                 let [r, g, b] = COLORS[source][(self.round - 1) as usize];
                 let old_texture = self.draws[source].take().map(|draw| draw.texture);
-                let draw =
-                    prepare_draw(coordinator, self.views[source], context, frame, now, old_texture)?;
+                let draw = prepare_draw(
+                    coordinator,
+                    self.views[source],
+                    context,
+                    frame,
+                    now,
+                    old_texture,
+                )?;
                 if !colors_match(draw.color, Color32::from_rgb(r, g, b), 24) {
                     return Err(io::Error::other("unexpected native frame color").into());
                 }
@@ -196,8 +214,8 @@ impl LiveFixture {
         for draw in self.draws.iter().flatten() {
             coordinator.acknowledge_presentation(draw.ticket, now)?;
         }
-        for source in 0..PANELS {
-            if self.draws[source].is_some() {
+        for (source, stopped) in self.stopped.into_iter().enumerate() {
+            if !stopped {
                 self.write(&record(DISPLAYED, GENERATION + source as u64))?;
                 self.write(&self.round.to_be_bytes())?;
             }
@@ -226,7 +244,9 @@ impl LiveFixture {
                 self.readback = None;
                 Ok(true)
             }
-            Ok(_) => Err(io::Error::other("live panel readback did not match the round")),
+            Ok(_) => Err(io::Error::other(
+                "live panel readback did not match the round",
+            )),
             Err(TryRecvError::Empty) => Ok(false),
             Err(error) => Err(io::Error::other(error)),
         }
@@ -247,31 +267,40 @@ impl NativePanelProbe for LiveFixture {
         }
         match self.phase {
             Phase::Receiving => self.receive(coordinator, context, now)?,
-            Phase::Drawing if self.readback_confirmed()? => self.confirm_draws(coordinator, now)?,
-            Phase::Clearing if self.readback_confirmed()? => self.phase = Phase::Exiting,
+            Phase::Drawing => {
+                if self.readback_confirmed()? {
+                    self.confirm_draws(coordinator, now)?;
+                }
+            }
+            Phase::Clearing => {
+                if self.readback_confirmed()? {
+                    self.phase = Phase::Exiting;
+                }
+            }
             Phase::Exiting => {
                 if !self.ended {
                     match self.next_event()? {
                         Some(Event::End) => self.ended = true,
                         None => return Ok(false),
                         _ => {
-                            return Err(
-                                io::Error::other("unexpected frames after both sources closed").into()
-                            );
+                            return Err(io::Error::other(
+                                "unexpected frames after both sources closed",
+                            )
+                            .into());
                         }
                     }
                 }
                 if let Some(status) = self.process.try_wait()? {
                     if !status.success() {
-                        return Err(
-                            io::Error::other(format!("native live source exited: {status}")).into(),
-                        );
+                        return Err(io::Error::other(format!(
+                            "native live source exited: {status}"
+                        ))
+                        .into());
                     }
                     println!("Live panels: both regions cleared and native fixture reaped.");
                     return Ok(true);
                 }
             }
-            _ => {}
         }
         Ok(false)
     }

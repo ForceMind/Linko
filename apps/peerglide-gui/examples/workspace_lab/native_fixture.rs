@@ -212,7 +212,6 @@ impl NativeFixture {
             deadline: Instant::now() + Duration::from_secs(45),
         })
     }
-
 }
 
 impl NativePanelProbe for NativeFixture {
@@ -346,11 +345,7 @@ impl NativePanelProbe for NativeFixture {
         })
     }
 
-    fn verify_paint(
-        &mut self,
-        context: &egui::Context,
-        areas: [Rect; PANELS],
-    ) -> io::Result<()> {
+    fn verify_paint(&mut self, context: &egui::Context, areas: [Rect; PANELS]) -> io::Result<()> {
         if self.readback.is_some() {
             return Ok(());
         }
@@ -382,7 +377,6 @@ impl NativePanelProbe for NativeFixture {
         self.readback = Some(receive);
         Ok(())
     }
-
 }
 
 impl NativeFixture {

@@ -53,7 +53,11 @@ trait NativePanelProbe {
         now: u64,
     ) -> Result<bool, Box<dyn std::error::Error>>;
     fn textures(&self, now: u64) -> NativePreview<'_>;
-    fn verify_paint(&mut self, context: &egui::Context, areas: [Rect; NATIVE_PANELS]) -> io::Result<()>;
+    fn verify_paint(
+        &mut self,
+        context: &egui::Context,
+        areas: [Rect; NATIVE_PANELS],
+    ) -> io::Result<()>;
 }
 
 enum ProbePaths {
@@ -506,12 +510,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         started,
                         &cc.egui_ctx,
                     )?),
-                    ProbePaths::Live(codec) => Box::new(LiveFixture::start(
-                        &codec,
-                        views,
-                        started,
-                        &cc.egui_ctx,
-                    )?),
+                    ProbePaths::Live(codec) => {
+                        Box::new(LiveFixture::start(&codec, views, started, &cc.egui_ctx)?)
+                    }
                 })
             } else {
                 None
