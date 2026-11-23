@@ -471,4 +471,6 @@ RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://git
 
 - [PR #381](https://github.com/ForceMind/Linko/pull/381)，`4b2938a3f66cefff3b9ba282037d8f991da27770`。macOS 两路 ScreenCaptureKit 实采画面由持续运行的 VideoToolbox 硬件编解码会话处理，经本机管道逐帧更新 eframe 纹理。在 2.976 秒内回读四组画面，每处九点均匹配后才发回来源和序号对应的展示回执。第一路释放后，回读第一处清空、第二处仍显示新第五帧。最后两处清空且原生子进程正常退出。[macOS 绘制](https://github.com/ForceMind/Linko/actions/runs/45154675015/job/137629943999)
 
-本批验证覆盖协调器、单槽进程交接、离线面板操作、两端双路持续采集及编解码，以及 macOS 本机持续绘制。下一步接通 Windows 持续绘制，并测量两端进程内存与纹理占用。实际 GPU 预算和跨设备观看待验证。
+- [PR #382](https://github.com/ForceMind/Linko/pull/382)，`c16987c3b054c074edfa06edf91da9586e0b647a`。两个 Windows WGC 实采来源经 Media Foundation 系统软件 H.264 和本机有界管道进入 eframe，使用 Direct3D 12 CPU 适配器。四组双面板回读跨度 3.786 秒，同一提交的 macOS 对照为 2.998 秒。两端均在第一路释放后回读空面板与第二路第五帧，随后核对两处清空及原生进程正常退出。[Windows 绘制](https://github.com/ForceMind/Linko/actions/runs/45157971244/job/137641155337) · [macOS 绘制](https://github.com/ForceMind/Linko/actions/runs/45157971244/job/137641155368)
+
+本批验证覆盖协调器、单槽进程交接、离线面板操作及两端本机双路持续采集、编解码和实际绘制。下一步测量两端查看器与原生进程的驻留内存并核对视频纹理释放。实际 GPU 预算和跨设备观看待验证。
