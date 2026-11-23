@@ -58,7 +58,7 @@ impl ViewportFixture {
         views: [ViewId; 2],
         started: Instant,
         budget: Budget,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, Error> {
         Ok(Self {
             launcher,
             codec,
@@ -81,7 +81,9 @@ impl ViewportFixture {
         now: u64,
     ) -> Result<bool> {
         if self.started.elapsed() >= Duration::from_secs(60) {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "workspace viewport timed out").into());
+            return Err(
+                io::Error::new(io::ErrorKind::TimedOut, "workspace viewport timed out").into(),
+            );
         }
         let context = root.ctx().clone();
         let preview = NativeTiles {
@@ -123,7 +125,10 @@ impl ViewportFixture {
                     && !finishing
                     && decision != Decision::Pause(PauseReason::Offscreen)
                 {
-                    return Err(io::Error::other("shown panel lost its slot before going offscreen").into());
+                    return Err(io::Error::other(
+                        "shown panel lost its slot before going offscreen",
+                    )
+                    .into());
                 }
                 self.readback = None;
                 active.stop(&mut workspace.coordinator, view, &context, now)?;
@@ -137,20 +142,31 @@ impl ViewportFixture {
                             .coordinator
                             .acknowledge_presentation(draw.ticket, now)?;
                         if ORDER.get(self.displayed) != Some(&active.slot) {
-                            return Err(io::Error::other("workspace displayed panels out of order").into());
+                            return Err(io::Error::other(
+                                "workspace displayed panels out of order",
+                            )
+                            .into());
                         }
                         if self.displayed == 0 {
                             self.first_epoch = Some(active.scope.view_epoch);
                         } else if self.displayed == 2
-                            && self.first_epoch.is_none_or(|epoch| epoch >= active.scope.view_epoch)
+                            && self
+                                .first_epoch
+                                .is_none_or(|epoch| epoch >= active.scope.view_epoch)
                         {
-                            return Err(io::Error::other("re-entered panel reused the old media epoch").into());
+                            return Err(io::Error::other(
+                                "re-entered panel reused the old media epoch",
+                            )
+                            .into());
                         }
                         self.displayed += 1;
                         active.state = State::Displayed;
                         workspace.select(view);
                         self.scroll_to = ORDER.get(self.displayed).map(|&next| self.indices[next]);
-                        println!("Workspace viewport: read back native panel {}.", active.slot);
+                        println!(
+                            "Workspace viewport: read back native panel {}.",
+                            active.slot
+                        );
                     } else if self.readback.is_none() {
                         self.readback = Some(request_readback(&context, area, draw.color));
                     }
