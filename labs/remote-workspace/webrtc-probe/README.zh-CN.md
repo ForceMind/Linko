@@ -6,7 +6,7 @@ macOS 再从独立 C 文件跨过固定布局的 ABI，使用 WebRTC 的 VideoTo
 
 macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建把单窗口像素送入 WebRTC H.264，再由预览控件绘制解码输出。托管机验证红色到绿色、窗口缩放和关闭时清屏。该探针使用系统现有录屏许可，不会请求新许可。
 
-单机传输实验建立两个 WebRTC 端点，在 `127.0.0.1` 上以 UDP 和 DTLS 传送合成 H.264 视频。检查接收帧的尺寸与亮度，关闭端点后重新协商有新 ICE 凭据的连接。端点使用虚拟音频设备和本机生成的视频，测试不连接 STUN/TURN，也不接入用户设备配对。
+单机传输实验建立两个 WebRTC 端点，在 `127.0.0.1` 上以 UDP 和 DTLS 传送合成视频。macOS 使用 VideoToolbox H.264，Windows 使用只提供 VP8 的 libvpx 工厂。两端检查接收帧的尺寸与亮度、关闭后停止收帧、重连的 ICE 凭据更新，以及 offer 和 answer 的指纹、ICE 凭据、媒体方向与额外媒体被替换时的拒绝。端点使用虚拟音频设备和本机生成的视频。
 
 整链路探针把 ScreenCaptureKit 采集的测试窗口接到同一对回环端点。发送端只发视频，接收端只接视频。AppKit 从最新的解码帧绘制，测试核对绘制像素由红转绿、窗口尺寸变化和来源关闭后清屏。画面留在托管机内存，探针不打包成应用。
 
@@ -34,7 +34,7 @@ macOS 的窗口探针沿用 RW03 的 ScreenCaptureKit 和 AppKit。专用构建�
 
 独立媒体对照使用同一种合成 BGRA 图案。保留 224×144 的跨会话复用组，再用真实窗口只收帧组报告的送编尺寸分别跑跨会话复用和每轮重建缓冲。各组都新建媒体端点并跑 100 轮，用于区分像素尺寸和缓冲生命周期的影响。
 
-该实验调用系统 H.264。WebRTC 内建 H.264 和专有软件 codec 仍关闭。Windows codec factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
+macOS H.264 实验调用系统编解码器。Windows H.264 factory、局域网设备信令、远端窗口呈现与分发许可继续按 RW04 方案推进。产物仅包含验证报告。
 
 - [固定 WebRTC 提交](https://webrtc.googlesource.com/src/+/692e07f2cb2f3602af5a8083b695f4f3bc2c9a6f)
 - [固定 depot_tools 提交](https://chromium.googlesource.com/chromium/tools/depot_tools/+/1b0972d3d5e5b1e78055147cb3576361e274b9ed)
