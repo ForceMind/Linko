@@ -78,6 +78,7 @@ $out = 'out/linko-rw04'
 $null = New-Item -ItemType Directory -Path $out, linko_probe -Force
 foreach ($file in @('BUILD.gn', 'frame_probe.cc', 'h264_probe.h', 'h264_probe_main.c', 'h264_probe.mm',
                     'local_transport.mm', 'local_transport_common.inc', 'local_transport_windows.cc',
+                    'windows_h264_rtp.cc',
                     'loopback_preview.h', 'vm_probe.cc', 'vm_probe.h')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination linko_probe
 }
@@ -96,7 +97,7 @@ if ($IsMacOS) {
     $targets += @('linko_rw04_macos_h264', 'linko_rw04_macos_window', 'linko_rw04_macos_loopback',
                   'linko_rw04_macos_window_loopback')
 } elseif ($IsWindows) {
-    $targets += 'linko_rw04_windows_loopback.exe'
+    $targets += @('linko_rw04_windows_loopback.exe', 'linko_rw04_windows_h264_rtp.exe')
 }
 Invoke-Checked $autoninja $targets
 $program = Join-Path (Join-Path $source $out) $exe
@@ -105,6 +106,8 @@ Add-Content -LiteralPath $report -Value 'Synthetic I420 VideoFrame and RTP times
 if ($IsWindows) {
     $loopback = Join-Path (Join-Path $source $out) 'linko_rw04_windows_loopback.exe'
     Invoke-Checked $loopback @() | Tee-Object -FilePath (Join-Path $reports 'windows-loopback.txt')
+    $h264Rtp = Join-Path (Join-Path $source $out) 'linko_rw04_windows_h264_rtp.exe'
+    Invoke-Checked $h264Rtp @() | Tee-Object -FilePath (Join-Path $reports 'windows-h264-rtp.txt')
 }
 
 if ($IsMacOS) {
