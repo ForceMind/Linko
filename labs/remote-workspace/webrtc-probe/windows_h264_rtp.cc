@@ -117,16 +117,16 @@ ComPtr<IMFTransform> startEncoder(Fixture const& settings, bool lowLatency, MFT_
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&encoder)), "activate system H.264 encoder");
     if (lowLatency) {
-        ComPtr<ICodecAPI> settings;
-        check(encoder.As(&settings), "read H.264 encoder settings");
+        ComPtr<ICodecAPI> controls;
+        check(encoder.As(&controls), "read H.264 encoder settings");
         VARIANT enabled{};
         enabled.vt = VT_BOOL;
         enabled.boolVal = VARIANT_TRUE;
-            check(settings->SetValue(&CODECAPI_AVLowLatencyMode, &enabled), "enable H.264 low-latency encoding");
+        check(controls->SetValue(&CODECAPI_AVLowLatencyMode, &enabled), "enable H.264 low-latency encoding");
         VARIANT threads{};
         threads.vt = VT_UI4;
         threads.ulVal = 1;
-            check(settings->SetValue(&CODECAPI_AVEncNumWorkerThreads, &threads), "configure one encoder worker");
+        check(controls->SetValue(&CODECAPI_AVEncNumWorkerThreads, &threads), "configure one encoder worker");
     }
     auto outputType = videoType(MFVideoFormat_H264, settings);
     check(outputType->SetUINT32(MF_MT_AVG_BITRATE, settings.bitrate), "set output bitrate");
