@@ -11,7 +11,10 @@ group("linko_rw04_all_probes") {
     ]
   }
   if (is_win) {
-    deps += [ ":linko_rw04_windows_loopback" ]
+    deps += [
+      ":linko_rw04_windows_loopback",
+      ":linko_rw04_windows_h264_rtp",
+    ]
   }
 }
 
@@ -54,6 +57,21 @@ loopback_deps = [
 ]
 
 if (is_win) {
+  rtc_executable("linko_rw04_windows_h264_rtp") {
+    sources = [ "windows_h264_rtp.cc" ]
+    deps = [
+      "//common_video",
+      "//modules/rtp_rtcp:rtp_rtcp",
+      "//modules/video_coding:video_coding",
+    ]
+    libs = [
+      "mf.lib",
+      "mfplat.lib",
+      "mfuuid.lib",
+      "ole32.lib",
+      "wmcodecdspuuid.lib",
+    ]
+  }
   rtc_executable("linko_rw04_windows_loopback") {
     sources = [
       "local_transport_common.inc",
