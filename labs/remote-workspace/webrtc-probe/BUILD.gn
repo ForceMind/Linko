@@ -10,6 +10,9 @@ group("linko_rw04_all_probes") {
       ":linko_rw04_macos_window_loopback",
     ]
   }
+  if (is_win) {
+    deps += [ ":linko_rw04_windows_loopback" ]
+  }
 }
 
 rtc_executable("linko_rw04_probe") {
@@ -17,11 +20,57 @@ rtc_executable("linko_rw04_probe") {
   deps = [ "//api/video:video_frame" ]
 }
 
+codec_core_deps = [
+  "//api/environment:environment_factory",
+  "//api/video:video_frame",
+  "//api/video_codecs:video_codecs_api",
+]
+loopback_deps = [
+  "//api:candidate",
+  "//api:create_modular_peer_connection_factory",
+  "//api:enable_media",
+  "//api:jsep",
+  "//api:media_stream_interface",
+  "//api:peer_connection_interface",
+  "//api:rtp_receiver_interface",
+  "//api:rtp_transceiver_interface",
+  "//api:set_local_description_observer_interface",
+  "//api:set_remote_description_observer_interface",
+  "//api/audio:audio_device",
+  "//api/audio_codecs:builtin_audio_decoder_factory",
+  "//api/audio_codecs:builtin_audio_encoder_factory",
+  "//api/video:video_broadcaster",
+  "//modules/audio_device:audio_device_impl",
+  "//p2p:basic_packet_socket_factory",
+  "//p2p:basic_port_allocator",
+  "//pc:session_description",
+  "//pc:video_track_source",
+  "//rtc_base:ip_address",
+  "//rtc_base:network",
+  "//rtc_base:socket_address",
+  "//rtc_base:socket_server",
+  "//rtc_base:ssl",
+  "//rtc_base:threading",
+]
+
+if (is_win) {
+  rtc_executable("linko_rw04_windows_loopback") {
+    sources = [
+      "local_transport_common.inc",
+      "local_transport_windows.cc",
+    ]
+    deps = codec_core_deps + loopback_deps + [
+      "//api/video_codecs:video_decoder_factory_template",
+      "//api/video_codecs:video_decoder_factory_template_libvpx_vp8_adapter",
+      "//api/video_codecs:video_encoder_factory_template",
+      "//api/video_codecs:video_encoder_factory_template_libvpx_vp8_adapter",
+      "//rtc_base:win32_socket_init",
+    ]
+  }
+}
+
 if (is_mac) {
-  codec_deps = [
-    "//api/environment:environment_factory",
-    "//api/video:video_frame",
-    "//api/video_codecs:video_codecs_api",
+  codec_deps = codec_core_deps + [
     "//sdk:native_api",
     "//sdk:videoframebuffer_objc",
     "//sdk:videotoolbox_objc",
@@ -39,33 +88,6 @@ if (is_mac) {
     "Foundation.framework",
     "QuartzCore.framework",
     "ScreenCaptureKit.framework",
-  ]
-  loopback_deps = codec_deps + [
-    "//api:candidate",
-    "//api:create_modular_peer_connection_factory",
-    "//api:enable_media",
-    "//api:jsep",
-    "//api:media_stream_interface",
-    "//api:peer_connection_interface",
-    "//api:rtp_receiver_interface",
-    "//api:rtp_transceiver_interface",
-    "//api:set_local_description_observer_interface",
-    "//api:set_remote_description_observer_interface",
-    "//api/audio:audio_device",
-    "//api/audio_codecs:builtin_audio_decoder_factory",
-    "//api/audio_codecs:builtin_audio_encoder_factory",
-    "//api/video:video_broadcaster",
-    "//modules/audio_device:audio_device_impl",
-    "//p2p:basic_packet_socket_factory",
-    "//p2p:basic_port_allocator",
-    "//pc:session_description",
-    "//pc:video_track_source",
-    "//rtc_base:ip_address",
-    "//rtc_base:network",
-    "//rtc_base:socket_address",
-    "//rtc_base:socket_server",
-    "//rtc_base:ssl",
-    "//rtc_base:threading",
   ]
   rtc_executable("linko_rw04_macos_h264") {
     sources = [
@@ -99,6 +121,7 @@ if (is_mac) {
   rtc_executable("linko_rw04_macos_loopback") {
     sources = [
       "local_transport.mm",
+      "local_transport_common.inc",
       "loopback_preview.h",
     ]
     configs += [ "//:common_objc" ]
@@ -107,11 +130,12 @@ if (is_mac) {
       "CoreVideo.framework",
       "Foundation.framework",
     ]
-    deps = loopback_deps
+    deps = codec_deps + loopback_deps
   }
   rtc_executable("linko_rw04_macos_window_loopback") {
     sources = [
       "local_transport.mm",
+      "local_transport_common.inc",
       "loopback_preview.h",
       "macos_capture.m",
       "vm_probe.cc",
@@ -124,6 +148,6 @@ if (is_mac) {
     configs += [ "//:common_objc" ]
     include_dirs = objc_includes
     frameworks = preview_frameworks
-    deps = loopback_deps + [ "//third_party/libyuv" ]
+    deps = codec_deps + loopback_deps + [ "//third_party/libyuv" ]
   }
 }
