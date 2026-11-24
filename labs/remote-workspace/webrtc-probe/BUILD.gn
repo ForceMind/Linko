@@ -14,6 +14,7 @@ group("linko_rw04_all_probes") {
     deps += [
       ":linko_rw04_windows_loopback",
       ":linko_rw04_windows_h264_rtp",
+      ":linko_rw04_windows_h264_peer",
     ]
   }
 }
@@ -57,6 +58,27 @@ loopback_deps = [
 ]
 
 if (is_win) {
+  rtc_executable("linko_rw04_windows_h264_peer") {
+    defines = [ "LINKO_RW04_MF_H264" ]
+    sources = [
+      "local_transport_common.inc",
+      "windows_h264_factory.h",
+      "windows_h264_factory.cc",
+      "windows_h264_peer.cc",
+    ]
+    deps = codec_core_deps + loopback_deps + [
+      "//common_video",
+      "//rtc_base:win32_socket_init",
+      "//third_party/libyuv",
+    ]
+    libs = [
+      "mf.lib",
+      "mfplat.lib",
+      "mfuuid.lib",
+      "ole32.lib",
+      "wmcodecdspuuid.lib",
+    ]
+  }
   rtc_executable("linko_rw04_windows_h264_rtp") {
     sources = [ "windows_h264_rtp.cc" ]
     deps = [

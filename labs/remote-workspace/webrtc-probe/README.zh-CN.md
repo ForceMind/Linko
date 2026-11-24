@@ -1,5 +1,7 @@
 # RW04 WebRTC 源码探针
 
+Windows H.264 PeerConnection 探针用独立的 Media Foundation 编码和解码工厂，通过本机 ICE/DTLS 发送合成画面。固定 128×96、单层 constrained-baseline level 1.3、packetization-mode=1，分别核对实际 SDP 和编码 SPS。两次连接验证远端解码亮度、旧连接关闭和新 ICE 凭据，同时报告实际 MFT 编解码回调及实例释放次数。实际窗口采集和双机观看留待后续验证。
+
 Windows H.264 RTP 探针将系统 Media Foundation 编码输出交给固定 WebRTC 的分包器。接收端从实际 RTP 字节经 WebRTC 解包和参数集跟踪器重建 Annex B，独立 Media Foundation 解码器只接受收到的数据。12 帧覆盖 SPS/PPS/IDR、后续非 IDR 帧、变化亮度、尺寸和 RTP 时间戳回绕。64 字节的 payload 上限强制触发 FU-A，最终检查实际分片计数。发送端在样本缺参数集时，从编码器提取并随首个访问单元发送。接收器按收到的参数集初始化媒体内容。
 
 Actions 从固定的 WebRTC 和 depot_tools 提交同步源码及 DEPS，构建一个最小的 VideoFrame 探针。程序生成 I420 测试帧，从 WebRTC API 读回尺寸、采样时间和回绕前后的 RTP 时间戳。两个平台分别上传源码、DEPS 和许可证文件的 Git 标识，以及构建参数和探针结果。仓库只保存探针和配置。
