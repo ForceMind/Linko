@@ -12,6 +12,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef LINKO_RW04_MF_H264
+#include "api/video_codecs/h264_profile_level_id.h"
+#endif
+
 #include "api/audio/audio_device.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
@@ -298,6 +302,16 @@ std::optional<ViewingDescription> ReadViewingDescription(
                      })) {
         return std::nullopt;
     }
+#ifdef LINKO_RW04_MF_H264
+    for (const auto& codec : video->codecs()) {
+        if (codec.name != "H264") continue;
+        const auto profile = webrtc::ParseSdpForH264ProfileLevelId(codec.params);
+        const auto mode = codec.params.find("packetization-mode");
+        if (!profile || profile->profile != webrtc::H264Profile::kProfileConstrainedBaseline ||
+            profile->level != webrtc::H264Level::kLevel1_3 ||
+            mode == codec.params.end() || mode->second != "1") return std::nullopt;
+    }
+#endif
     const auto bundles = session->GetGroupsByName("BUNDLE");
     if (bundles.size() > 1 ||
         (!bundles.empty() && (bundles.front()->content_names().size() != 1 ||
