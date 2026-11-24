@@ -1,4 +1,6 @@
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <codecapi.h>
 #include <mfapi.h>
@@ -46,12 +48,12 @@ void check(HRESULT result, char const* operation) {
     }
 }
 
-ComPtr<IMFMediaType> videoType(GUID const& codec, Fixture const& fixture) {
+ComPtr<IMFMediaType> videoType(GUID const& codec, Fixture const& settings) {
     ComPtr<IMFMediaType> type;
     check(MFCreateMediaType(&type), "create video type");
     check(type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video), "set video major type");
     check(type->SetGUID(MF_MT_SUBTYPE, codec), "set video subtype");
-    check(MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, fixture.width, fixture.height), "set frame size");
+    check(MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, settings.width, settings.height), "set frame size");
     check(MFSetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, 30, 1), "set frame rate");
     check(MFSetAttributeRatio(type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1), "set aspect ratio");
     check(type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive), "set scan type");
@@ -110,7 +112,7 @@ void selectDecodedType(IMFTransform* decoder) {
     check(MF_E_INVALIDMEDIATYPE, "find NV12 decoder output");
 }
 
-ComPtr<IMFTransform> startEncoder(Fixture const& fixture, bool lowLatency, MFT_INPUT_STREAM_INFO& inputStream) {
+ComPtr<IMFTransform> startEncoder(Fixture const& settings, bool lowLatency, MFT_INPUT_STREAM_INFO& inputStream) {
     ComPtr<IMFTransform> encoder;
     check(CoCreateInstance(CLSID_CMSH264EncoderMFT, nullptr, CLSCTX_INPROC_SERVER,
                            IID_PPV_ARGS(&encoder)), "activate system H.264 encoder");
@@ -126,11 +128,11 @@ ComPtr<IMFTransform> startEncoder(Fixture const& fixture, bool lowLatency, MFT_I
         threads.ulVal = 1;
             check(settings->SetValue(&CODECAPI_AVEncNumWorkerThreads, &threads), "configure one encoder worker");
     }
-    auto outputType = videoType(MFVideoFormat_H264, fixture);
-    check(outputType->SetUINT32(MF_MT_AVG_BITRATE, fixture.bitrate), "set output bitrate");
+    auto outputType = videoType(MFVideoFormat_H264, settings);
+    check(outputType->SetUINT32(MF_MT_AVG_BITRATE, settings.bitrate), "set output bitrate");
     check(outputType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base), "set H.264 profile");
     check(encoder->SetOutputType(0, outputType.Get(), 0), "configure H.264 output");
-    auto inputType = videoType(MFVideoFormat_NV12, fixture);
+    auto inputType = videoType(MFVideoFormat_NV12, settings);
     check(encoder->SetInputType(0, inputType.Get(), 0), "configure NV12 input");
     check(encoder->GetInputStreamInfo(0, &inputStream), "read encoder input buffer requirements");
 
@@ -146,7 +148,8 @@ std::vector<BYTE> bytesOf(IMFSample* sample) {
     DWORD length{};
     check(buffer->Lock(&data, nullptr, &length), "lock sample");
     require(length > 0 && length <= 128 * 1024, "bounded sample");
-    std::vector<BYTE> bytes(data, data + length);
+    const std::span<const BYTE> source(data, length);
+    std::vector<BYTE> bytes(source.begin(), source.end());
     check(buffer->Unlock(), "unlock sample");
     return bytes;
 }
@@ -159,11 +162,14 @@ ComPtr<IMFSample> inputFrame(UINT32 index, MFT_INPUT_STREAM_INFO stream) {
                                   std::max<DWORD>(stream.cbAlignment, MF_16_BYTE_ALIGNMENT), buffer);
     BYTE* pixels{};
     check(buffer->Lock(&pixels, nullptr, nullptr), "lock input");
-    std::memset(pixels, luma(index), width * height);
+    std::span<BYTE> image(pixels, width * height * 3 / 2);
+    std::fill(image.begin(), image.begin() + width * height, static_cast<BYTE>(luma(index)));
     for (UINT32 row = 0; row < height; ++row) {
-        std::memset(pixels + row * width + width * 3 / 4, 232 - luma(index), width / 4);
+        auto stripe = image.subspan(row * width + width * 3 / 4, width / 4);
+        std::fill(stripe.begin(), stripe.end(), static_cast<BYTE>(232 - luma(index)));
     }
-    std::memset(pixels + width * height, 128, width * height / 2);
+    auto chroma = image.subspan(width * height);
+    std::fill(chroma.begin(), chroma.end(), 128);
     check(buffer->Unlock(), "unlock input");
     check(buffer->SetCurrentLength(width * height * 3 / 2), "commit input");
     check(sample->SetSampleTime(frameDuration * (index + 1)), "input timestamp");
@@ -249,8 +255,8 @@ struct Receiver {
             auto fixed = tracker.CopyAndFixBitstream(parsed->video_payload, &parsed->video_header);
             require(fixed.action == webrtc::video_coding::H264SpsPpsTracker::kInsert,
                     "WebRTC receiver reconstructs Annex B");
-            accessUnit.insert(accessUnit.end(), fixed.bitstream.data(),
-                              fixed.bitstream.data() + fixed.bitstream.size());
+            const std::span<const BYTE> fragment(fixed.bitstream.data(), fixed.bitstream.size());
+            accessUnit.insert(accessUnit.end(), fragment.begin(), fragment.end());
             ++packets;
         }
         require(accessUnit.size() <= 128 * 1024, "bounded received access unit");
