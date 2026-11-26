@@ -538,6 +538,7 @@ pub(super) async fn run_with_diagnostics(
     let mut motion_outbox = MotionOutbox::new(tokio::time::Instant::now());
     let mut last_received_motion = None;
     let mut position = (0.5, 0.5);
+    let mut return_pressure = 0.0;
     let mut local_return = (0.5, 0.5);
     let mut size = (1920.0, 1080.0);
     let mut last_pong = 0u64;
@@ -644,6 +645,7 @@ pub(super) async fn run_with_diagnostics(
             PendingStep::Committed{lease,epoch}=>{
                 count(Count::Committed);
                 motion_outbox.latest=None;
+                return_pressure=0.0;
                 input_status.reporter.switch(super::WorkerSwitchState::Idle);edge_gate.require_interior();outgoing=Some(Outgoing{lease,epoch});sequence=0;last_pong=now_ms();
                 if let Some(cap)=&capture{cap.gate.refresh();}
                 if let (Some((file, request)), Some(scope)) = (file_lease, &drop_scope) {
@@ -770,7 +772,7 @@ pub(super) async fn run_with_diagnostics(
                         count(Count::PongTimeout);
                         input_status.restore(capture.as_ref())?;
                         outgoing=None; send(&mut tx,&Message::Release { lease, cursor: None }).await?;
-                    }else if file_lease.is_none() && input.is_empty() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
+                    }else if file_lease.is_none() && input.is_empty() && return_pressure >= RETURN_PRESSURE && input_status.restore_at_boundary(capture.as_ref(),CaptureRoute::Remote(epoch))? {
                         count(Count::EdgeReturn);
                         // A motion can wake this task before its callback drops.
                         // Retry on the existing tick after older captured input
@@ -1136,10 +1138,10 @@ pub(super) async fn run_with_diagnostics(
                     Captured::Motion{dx,dy,route}=>{if let Some(lease)=capture.as_ref().and_then(|cap|forwarding_lease(route,outgoing,&cap.gate)) {
                         // Sign tallies only; displacement values are never recorded.
                         if dx>0.0 {count(Count::MovePositive);} else if dx<0.0 {count(Count::MoveNegative);}
-                        let (dx,dy)=departure.motion(dx/size.0,dy/size.1);
-                        position.0=(position.0+dx).clamp(0.0,1.0);position.1=(position.1+dy).clamp(0.0,1.0);
+                        position=departure.advance(position,(dx,dy),size,&mut return_pressure);
+                        if file_lease.is_some(){return_pressure=0.0;}
                         sequence=sequence.checked_add(1).ok_or_else(||anyhow::anyhow!("input sequence exhausted"))?;let m=Motion{lease,sequence,x:position.0,y:position.1};
-                        if file_lease.is_none() && departure.crossed_back(position) && input_status.restore_at_boundary(capture.as_ref(),route)? {
+                        if file_lease.is_none() && return_pressure >= RETURN_PRESSURE && input_status.restore_at_boundary(capture.as_ref(),route)? {
                             count(Count::EdgeReturn);
                             // Same reliable stream as earlier discrete input: motion cannot
                             // overtake those events and revoke their lease at the receiver.
@@ -1493,6 +1495,9 @@ fn primary_edge_entry(
     gate.update(at_edge, now).then_some(along)
 }
 
+// Source coordinate units beyond the receiver's entry edge before returning.
+const RETURN_PRESSURE: f64 = 8.0;
+
 #[derive(Clone, Copy)]
 struct OutgoingEdges {
     local: Edge,
@@ -1519,8 +1524,24 @@ impl OutgoingEdges {
         )
     }
 
-    fn crossed_back(&self, (x, y): (f64, f64)) -> bool {
-        distance(self.remote, x, y) <= 0.001
+    fn advance(
+        &self,
+        (x, y): (f64, f64),
+        (dx, dy): (f64, f64),
+        (width, height): (f64, f64),
+        return_pressure: &mut f64,
+    ) -> (f64, f64) {
+        let (dx, dy) = self.motion(dx / width, dy / height);
+        let (x, y) = (x + dx, y + dy);
+        let source_extent = match self.local {
+            Edge::Left | Edge::Right => width,
+            Edge::Top | Edge::Bottom => height,
+        };
+        // Measure before clamping so pushing past the edge accumulates and
+        // moving back inside cancels that progress. Along-edge motion adds none.
+        *return_pressure = (*return_pressure - distance(self.remote, x, y) * source_extent)
+            .clamp(0.0, RETURN_PRESSURE);
+        (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))
     }
 
     fn motion(&self, dx: f64, dy: f64) -> (f64, f64) {
@@ -2305,7 +2326,8 @@ mod tests {
     }
 
     #[test]
-    fn source_return_boundary_handles_all_edges_without_minimum_travel() {
+    fn source_return_resists_edge_jitter_but_allows_immediate_deliberate_return() {
+        let size = (1920.0, 1080.0);
         for edge in [Edge::Left, Edge::Right, Edge::Top, Edge::Bottom] {
             let departure = OutgoingEdges::new(edge, None);
             let (entry, local_return) = departure.positions(0.5);
@@ -2313,15 +2335,22 @@ mod tests {
             assert_eq!(entry, entry_position(edge.opposite(), 0.5));
             assert_eq!(local_return, entry_position(edge, 0.5));
             assert_eq!(departure.motion(0.1, -0.25), (0.1, -0.25));
-            assert!(!departure.crossed_back(entry));
-            assert!(!departure.crossed_back((0.5, 0.5)));
-            let boundary = match edge {
-                Edge::Left => (1.0, 0.5),
-                Edge::Right => (0.0, 0.5),
-                Edge::Top => (0.5, 1.0),
-                Edge::Bottom => (0.5, 0.0),
+            let (dx, dy) = match edge {
+                Edge::Left => (1.0, 0.0),
+                Edge::Right => (-1.0, 0.0),
+                Edge::Top => (0.0, 1.0),
+                Edge::Bottom => (0.0, -1.0),
             };
-            assert!(departure.crossed_back(boundary));
+            let mut pressure = 0.0;
+            let jitter = departure.advance(entry, (4.0 * dx, 4.0 * dy), size, &mut pressure);
+            assert!(distance(edge.opposite(), jitter.0, jitter.1) <= 0.001);
+            assert!(pressure < RETURN_PRESSURE);
+            let along = departure.advance(jitter, (dy, dx), size, &mut pressure);
+            assert!(pressure < RETURN_PRESSURE);
+            let _ = departure.advance(along, (12.0 * dx, 12.0 * dy), size, &mut pressure);
+            assert_eq!(pressure, RETURN_PRESSURE);
+            let _ = departure.advance(along, (-dx, -dy), size, &mut pressure);
+            assert!(pressure < RETURN_PRESSURE);
         }
     }
 
@@ -2334,8 +2363,15 @@ mod tests {
         assert_eq!(local_return, (0.998, 0.25));
         assert_eq!(departure.motion(0.1, 0.25), (0.25, 0.1));
         assert_eq!(departure.motion(-0.1, 0.25), (0.25, -0.1));
-        assert!(departure.crossed_back((0.25, 0.0)));
-        assert!(!departure.crossed_back((0.0, 0.25)));
+        let mut pressure = 0.0;
+        let size = (1920.0, 1080.0);
+        let mut position = departure.advance(entry, (-4.0, 0.0), size, &mut pressure);
+        assert_eq!(position, (0.25, 0.0));
+        assert!(pressure < 1.0);
+        for _ in 0..3 {
+            position = departure.advance(position, (-3.0, 1.0), size, &mut pressure);
+        }
+        assert_eq!(pressure, RETURN_PRESSURE);
     }
     #[test]
     fn physical_takeover_at_each_edge_cannot_immediately_reverse_control() {
