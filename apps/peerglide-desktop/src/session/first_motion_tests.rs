@@ -176,7 +176,10 @@ async fn probe_source(
     else {
         anyhow::bail!("expected Acquire after the edge position");
     };
-    ensure!(requested == edge && along == 0.5, "unexpected Acquire route");
+    ensure!(
+        requested == edge && along == 0.5,
+        "unexpected Acquire route"
+    );
     ensure!(gate.is_current(local), "source committed before Granted");
     send(tx, &Message::Granted { lease })
         .await
