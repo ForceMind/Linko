@@ -31,7 +31,7 @@ import { setupPlatformDownloads } from './download-platform.js';
       const url = new URL(value);
       const path = /^\/ForceMind\/Linko\/actions\/runs\/\d+(?:\/artifacts\/\d+)?\/?$/;
       return url.protocol === "https:" && url.hostname === "github.com" &&
-        !url.port && !url.username && !url.password && !url.search && !url.hash && (path.test(url.pathname) || /^\/ForceMind\/Linko\/releases\/download\/v\d+\.\d+\.\d+-dev\/Linko-\d+\.\d+\.\d+-dev-(?:darwin-arm64|windows-amd64)\.zip$/.test(url.pathname))
+        !url.port && !url.username && !url.password && !url.search && !url.hash && (path.test(url.pathname) || /^\/ForceMind\/Linko\/releases\/download\/v(\d+\.\d+\.\d+-dev|\d{4}\.\d{2}\.\d{2}-\d{4})\/Linko-\1-(?:darwin-arm64|windows-amd64)\.zip$/.test(url.pathname))
         ? url.href : null;
     } catch {
       return null;
@@ -51,7 +51,7 @@ import { setupPlatformDownloads } from './download-platform.js';
       if (!response.ok) return;
       const release = await response.json();
       if (release?.releaseStatus !== "experimental") return;
-      if (typeof release.version === "string" && /^\d+\.\d+\.\d+-dev$/.test(release.version)) {
+      if (typeof release.version === "string" && /^(?:\d+\.\d+\.\d+-dev|\d{4}\.\d{2}\.\d{2}-\d{4})$/.test(release.version)) {
         document.querySelectorAll("[data-release-version]").forEach((element) => {
           element.textContent = release.version;
         });
