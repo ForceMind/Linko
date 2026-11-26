@@ -1388,6 +1388,8 @@ async fn run_inner(
             secondary: secondary.as_ref(),
             rebuilding_display_layout,
             remote_entry_edge: o.remote_entry_edge.map(Edge::from),
+            #[cfg(test)]
+            source_capture: None,
         },
     )
     .await;

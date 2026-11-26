@@ -369,6 +369,8 @@ pub(super) struct SessionControls<'a> {
     pub secondary: Option<&'a super::secondary_layout::Routes>,
     pub rebuilding_display_layout: bool,
     pub remote_entry_edge: Option<Edge>,
+    #[cfg(test)]
+    pub source_capture: Option<first_motion_tests::SourceCapture>,
 }
 
 // Store the optional network negotiation outside the inline session future.
@@ -414,6 +416,8 @@ pub(super) async fn run_with_diagnostics(
         secondary,
         rebuilding_display_layout,
         remote_entry_edge,
+        #[cfg(test)]
+        source_capture,
     } = controls;
     let Policy {
         allow,
@@ -497,6 +501,12 @@ pub(super) async fn run_with_diagnostics(
     } else {
         None
     };
+    #[cfg(test)]
+    let mut source_events = source_capture.and_then(|probe| {
+        let capture = capture.as_ref()?;
+        let _ = probe.installed.send(capture.gate.clone());
+        Some(probe.events)
+    });
     let (driver, driver_error) = match capture.as_mut() {
         Some(capture) => match capture.take_receive_driver() {
             Ok(driver) => (driver, None),
@@ -685,6 +695,19 @@ pub(super) async fn run_with_diagnostics(
         }
         let acquire_wake=pending.map(PendingAcquire::wake_at);
         let departure=OutgoingEdges::new(edge,remote_entry_edge);
+        #[cfg(not(test))]
+        let captured = input.recv();
+        #[cfg(test)]
+        let captured = async {
+            if let Some(events) = &mut source_events {
+                tokio::select! {
+                    event = input.recv() => event,
+                    Some(event) = events.recv() => Some(event),
+                }
+            } else {
+                input.recv().await
+            }
+        };
         tokio::select! {
             _=super::stop_requested(&mut stop)=>return Ok(()),
             changed=&mut display_change,if native && cfg!(any(windows,target_os="macos"))=>return changed,
@@ -999,7 +1022,7 @@ pub(super) async fn run_with_diagnostics(
                     }
                 }
             },
-            e=input.recv(),if native=>{
+            e=captured,if native=>{
                 if session_stopping(&stop) {return Ok(());}
                 let Some(e)=e else{
                     if session_stopping(&stop) && recovery.outcome()!=ReceiveAck::RecoveryRequired{return Ok(());}
