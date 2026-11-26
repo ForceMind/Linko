@@ -1,5 +1,13 @@
 # 屏跃：本机 Codex 接手开发
 
+## 当前官网发布接手（2026-11-25）
+
+官网 [linko-63e.pages.dev](https://linko-63e.pages.dev/#preview) 已上线 0.1.10，公开下载为 Windows x64/macOS Apple 芯片同版 `2026.11.20-1322`。[开发预览](https://github.com/ForceMind/Linko/releases/tag/v2026.11.20-1322) 已发布，用户可免登录下载四项核心功能验收包。原 ZIP 来自 PR180 `3790a804` 的 Actions，两端包内版本、构建来源、原随包摘要及 GitHub 服务端摘要已核对。完整证据见 VALIDATION.md 的「官网 0.1.10 与公开验收包」。
+
+官网源码在 PR402 `2ae5213`，准确提交的官网检查、三端 Rust CI 与依赖审计、配对上游检查通过。部署使用 Actions 产物，实际网站构建提交为 `d7d1f9d`，Cloudflare 正式部署 `b99ab8c2`。正式域名与独立部署域名的本次修改文件和构建清单均通过 HTTP 摘要核对，两端匿名下载端点可用。浏览器未验证，双机验收待用户统一完成。
+
+项目记忆保留本次单目标 Cloudflare Pages 授权，现有项目为 linko，正式分支标识为 main。应用源码主分支未合并。所有编译和测试继续在 Actions，本机不安装软件。Mac 来源的 Wrangler node_modules 无法在本机直接运行，本次使用已有会话和官方 API。后续更新下载时应同步 release.json、无 JS 下载链接、版本校验规则和原 ZIP 摘要。官网 sourceCommit 与 App sourceCommit 分别记录，禁止混用。远程窗口支线从 PR401 继续；它的实验结果不代表已进入本公开验收包。
+
 这是既有 Rust 工程的延续，不是重建项目。仓库 ForceMind/PeerGlide，main，MIT。
 先重新读取 GitHub 当前 main/PR/Issues/CI，不把本文件中的历史 SHA 当作最新状态。
 PR #27 的云端基础候选 6ebeda55b22a3edba159c8f88f34f09784134fa8 已通过三平台

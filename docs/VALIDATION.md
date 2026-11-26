@@ -1,5 +1,13 @@
 # Validation record
 
+## 官网 0.1.10 与公开验收包（2026-11-25）
+
+- 用户授权公开开发预览并部署现有 Cloudflare Pages 正式站点。[Release v2026.11.20-1322](https://github.com/ForceMind/Linko/releases/tag/v2026.11.20-1322) 已公开且标记 prerelease。复用 Actions `44680582417` 原始 Windows amd64、macOS arm64 ZIP，未重新构建或打包。两包的 review_commit 均为 `3790a80483dd5c739474e8f7ff0589c708d847a4`，checkout_commit 均为 `877c7ee409771354ba12725559e3102eea3dc2db`，源码树与候选一致。
+- Windows ZIP 为 43,947,293 字节，SHA-256 `56b75ebaef3083554df37e04b50020998f80b8fd0ecb2da857ba0fda674b02ed`。macOS ZIP 为 43,425,491 字节，SHA-256 `85933d5ad3ddbe2cc35ecfbbf9d5fbc12975b5d1497a8cf5781e77e1da9d4948`。原随包校验文件、本地原 ZIP 与 GitHub 上传后 digest 一致。匿名 HEAD 跟随跳转后，两端下载端点均成功并返回匹配 Content-Length。未重复完整下载公开端点的 ZIP。
+- [PR #402](https://github.com/ForceMind/Linko/pull/402) 最终提交 `2ae52137f36f5126ac2a6dd56eed224ee1d3602d`。官网 0.1.10 同步日期版本、公开链接、摘要及 FAQ。复用既有 rustix 1.1.6 锁文件修复后，[官网检查](https://github.com/ForceMind/Linko/actions/runs/45752371418)、[完整 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45752371345) 和 [配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45752371315) 全部通过，审计继续拒绝全部告警。
+- 部署使用上述官网检查生成的原始静态产物，外层 artifact SHA-256 `650b60ff09dea2cb0c8a25017c555ffbb92dba759431e9be8a13f46bf6cbe58c`。asset-manifest 记录实际 PR 构建提交 `d7d1f9d97f13d26b2db7c690318d4b77e75e10ed`。Cloudflare `linko` 正式部署 `b99ab8c2-eead-4bed-98e0-fc022e032171` 状态 success。[正式站点](https://linko-63e.pages.dev/) 与 [独立部署](https://b99ab8c2.linko-63e.pages.dev/) 的首页、main.js、release.json SHA-256 和构建清单逐项匹配 Actions 产物，安全响应头通过。浏览器未验证。
+- 本机原 Wrangler 依赖为 macOS 版本，改用已有 OAuth 会话及 Cloudflare 官方 API 上传同一静态产物。没有安装软件。发布和部署保留独立授权边界，main 未合并。双机物理验收仍待用户完成，远程窗口实验尚未进入公开验收包。
+
 2026-10-22, isolated cloud Linux development environment. No user Mac/PC changes.
 
 | Check | Result |
