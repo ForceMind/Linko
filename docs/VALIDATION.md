@@ -1,5 +1,12 @@
 # Validation record
 
+## 双连接角色的首次移动（2026-11-26）
+
+- [PR180 `5a79351`](https://github.com/ForceMind/Linko/commit/5a79351e0618c99a707f5674e2d300d48111339c) 的三端工作区测试中，使用固定证书的本机 QUIC 连接，让发起方和监听方分别发送控制请求。测试等到接收端回应就绪，再发送 `Acquire`，收到匹配的 `Granted` 后才发送首个移动数据报，最后检查 `Release` 处理和退出。发送端使用协议测试端，接收端运行正式会话代码。[Rust CI](https://github.com/ForceMind/Linko/actions/runs/45874950570)
+- Windows 托管输入桌面两轮都读回了预期系统光标位置。接收端两轮各有 `acq_rx=1 rx=1 apply=1 sdk=2 sdk_fail=0 moved=1`，两个 SDK 提交分别对应入口定位和首个移动。日志未记录 `first_rx_to`，既有原生接收压力检查也通过。macOS 与 Ubuntu 验证到接收处理。Ubuntu 的独立 X11 来源测试验证等待授权后才发出首个移动数据报。[Windows 日志](https://github.com/ForceMind/Linko/actions/runs/45874950570/job/140099564140) · [Ubuntu 日志](https://github.com/ForceMind/Linko/actions/runs/45874950570/job/140099564338)
+- 本轮未复现首个移动失败或 Windows 原生接收超时。真实 Mac 和 Windows 双向触边、发送端捕获提交、macOS 原生注入属于用户的统一双机验收。[#3/C06](https://github.com/ForceMind/Linko/issues/3)
+- 候选 `2026.11.27-0219` 的三端包通过来源、架构和校验检查。升级演练从 `2026.11.27-0118` 启动新版工作进程，拒绝篡改回滚后成功恢复旧包。[Windows](https://github.com/ForceMind/Linko/actions/runs/45874950570/artifacts/15144923624) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45874950570/artifacts/15145840216) · [Linux](https://github.com/ForceMind/Linko/actions/runs/45874950570/artifacts/15144149388)
+
 ## 跨屏回程修复（2026-11-26）
 
 - 从代码确认，旧版在接收边缘内侧入场，随后轻微反向移动就可能满足自动回程条件。参考固定提交的 Oink 边缘阻力，[PR #180](https://github.com/ForceMind/Linko/pull/180) `983c169` 在原生出站会话内累计越过接收边缘的位移。达到 8 个来源坐标单位才自动回程，向屏幕内移动抵消累计值。保留持键、持按钮和紧急恢复路径。参考依据见 PR180 的 `docs/REFERENCE_RESEARCH.md`。
