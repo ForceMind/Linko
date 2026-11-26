@@ -8,6 +8,8 @@ C06 尚未通过，原失败会话是否已取权仍未知。若统一双机验�
 
 PR180 `5a79351` 增加交换连接角色的首个移动测试。两种角色都通过取权并发送首个移动，Windows 托管桌面读回预期光标位置且无 `first_rx_to`，macOS 与 Ubuntu 验证到会话接收处理。发送端使用协议测试端，真实触边和 macOS 注入随 C06 验收。遇到故障先对照发送端 `acq_tx/grant/commit/tx` 和接收端 `acq_rx/rx/apply/sdk_fail/first_rx_to`，从第一个断点继续。详见 `VALIDATION.md`。[Actions](https://github.com/ForceMind/Linko/actions/runs/45874950570)
 
+PR180 `28d2ffa` 补上 Windows 托管桌面标准会话的发送端测试。两种连接角色均从模拟边缘位置经过真捕获提交和 QUIC 发送，首包及本地恢复通过。候选 `2026.11.27-0310` 三端升级回滚通过。后续 C06 使用同一候选核对真实触边以及两端首个阶段计数，分段布局和 macOS 原生路径仍待现场验证。[Actions](https://github.com/ForceMind/Linko/actions/runs/45881596535)
+
 ## 当前官网发布接手（2026-11-25）
 
 官网 [linko-63e.pages.dev](https://linko-63e.pages.dev/#preview) 已上线 0.1.10，公开下载为 Windows x64/macOS Apple 芯片同版 `2026.11.20-1322`。[开发预览](https://github.com/ForceMind/Linko/releases/tag/v2026.11.20-1322) 已发布，用户可免登录下载四项核心功能验收包。原 ZIP 来自 PR180 `3790a804` 的 Actions，两端包内版本、构建来源、原随包摘要及 GitHub 服务端摘要已核对。完整证据见 VALIDATION.md 的「官网 0.1.10 与公开验收包」。

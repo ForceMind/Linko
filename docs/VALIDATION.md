@@ -1,5 +1,11 @@
 # Validation record
 
+## Windows 发送端捕获提交与首个移动（2026-11-26）
+
+- [PR180 `28d2ffa`](https://github.com/ForceMind/Linko/commit/28d2ffafb78cf273d0a6b33921b977f2db73755b) 在 Windows 托管桌面运行标准双机会话的真实捕获生命周期。测试从会话消费端提交模拟边缘位置和移动，保留正式捕获门控、授权处理、QUIC 与释放。两个连接角色均验证授权前保持本地，授权后提交原生捕获，测试对端收到对应租约与方向的首个数据报，释放后还原本地捕获。[Windows 日志](https://github.com/ForceMind/Linko/actions/runs/45881596535/job/140122015826)
+- 两轮均记录 `edge_hit=1 acq_tx=1 grant=1 commit=1 tx=1 peer_rel=1`，没有请求超时或取消。未复现上述会话处理路径的发送故障。Windows 物理事件进入钩子、macOS 原生捕获、独立分段布局路由及实际双机链路仍需覆盖。[#3/C06](https://github.com/ForceMind/Linko/issues/3)
+- [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45881596535)、[GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/45881596529)及[配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45881596620)通过。三端 `2026.11.27-0310` 均成功从 `2026.11.27-0219` 升级启动、拒绝篡改回滚并恢复旧包。[Windows](https://github.com/ForceMind/Linko/actions/runs/45881596535/artifacts/15148790970) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45881596535/artifacts/15148106588) · [Linux](https://github.com/ForceMind/Linko/actions/runs/45881596535/artifacts/15148935649)
+
 ## 双连接角色的首次移动（2026-11-26）
 
 - [PR180 `5a79351`](https://github.com/ForceMind/Linko/commit/5a79351e0618c99a707f5674e2d300d48111339c) 的三端工作区测试中，使用固定证书的本机 QUIC 连接，让发起方和监听方分别发送控制请求。测试等到接收端回应就绪，再发送 `Acquire`，收到匹配的 `Granted` 后才发送首个移动数据报，最后检查 `Release` 处理和退出。发送端使用协议测试端，接收端运行正式会话代码。[Rust CI](https://github.com/ForceMind/Linko/actions/runs/45874950570)
