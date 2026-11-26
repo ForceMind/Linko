@@ -522,6 +522,85 @@ mod tests {
         .await??;
         Ok(())
     }
+    fn viewing_connection_nonce(
+        connection: &quinn::Connection,
+        expected_peer: &[u8],
+        role_context: &[u8; 64],
+    ) -> Result<[u8; 16]> {
+        verify_peer(connection, expected_peer)?;
+        let mut nonce = [0; 16];
+        connection
+            .export_keying_material(&mut nonce, b"EXPORTER-Linko-Test-RW04", role_context)
+            .map_err(|_| anyhow::anyhow!("could not export the connection binding"))?;
+        Ok(nonce)
+    }
+
+    #[tokio::test]
+    async fn authenticated_viewing_binding_changes_on_reconnect() -> Result<()> {
+        let source = Identity::generate()?;
+        let viewer = Identity::generate()?;
+        let source_endpoint = endpoint("127.0.0.1:0".parse()?, &source, &viewer.certificate)?;
+        let viewer_endpoint = endpoint("127.0.0.1:0".parse()?, &viewer, &source.certificate)?;
+        let address = source_endpoint.local_addr()?;
+        let mut role_context = [0; 64];
+        role_context[..32].copy_from_slice(blake3::hash(&source.certificate).as_bytes());
+        role_context[32..].copy_from_slice(blake3::hash(&viewer.certificate).as_bytes());
+        let mut swapped_roles = role_context;
+        swapped_roles.rotate_left(32);
+
+        let mut previous = None;
+        for _ in 0..2 {
+            let incoming = async {
+                let connection = source_endpoint.accept().await.context("no incoming")?;
+                Ok::<_, anyhow::Error>(connection.await?)
+            };
+            let outgoing = async {
+                Ok::<_, anyhow::Error>(viewer_endpoint.connect(address, "peerglide.local")?.await?)
+            };
+            let (source_connection, viewer_connection) =
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    tokio::try_join!(incoming, outgoing)
+                })
+                .await??;
+
+            let at_source =
+                viewing_connection_nonce(&source_connection, &viewer.certificate, &role_context)?;
+            let at_viewer =
+                viewing_connection_nonce(&viewer_connection, &source.certificate, &role_context)?;
+            let wrong_direction =
+                viewing_connection_nonce(&source_connection, &viewer.certificate, &swapped_roles)?;
+            anyhow::ensure!(
+                at_source == at_viewer && at_source != [0; 16],
+                "binding mismatch"
+            );
+            anyhow::ensure!(
+                at_source != wrong_direction,
+                "roles did not change the binding"
+            );
+            anyhow::ensure!(
+                previous != Some(at_source),
+                "reconnection reused the old binding"
+            );
+            anyhow::ensure!(
+                viewing_connection_nonce(&source_connection, &source.certificate, &role_context)
+                    .is_err(),
+                "a certificate outside the enrolled role was accepted"
+            );
+            previous = Some(at_source);
+
+            viewer_connection.close(0u32.into(), b"fixture complete");
+            anyhow::ensure!(
+                matches!(
+                    tokio::time::timeout(Duration::from_secs(5), source_connection.closed())
+                        .await?,
+                    quinn::ConnectionError::ApplicationClosed(_)
+                ),
+                "source did not observe the viewer closing"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn rejects_unenrolled_client() -> Result<()> {
         let a = Identity::generate()?;
