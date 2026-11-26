@@ -31,7 +31,9 @@ async fn exercise(source_dials: bool, edge: Edge, native: bool) -> Result<()> {
         let (connected, accepted) = tokio::try_join!(
             async {
                 Ok::<_, anyhow::Error>(
-                    dialer.connect(listener.local_addr()?, "peerglide.local")?.await?,
+                    dialer
+                        .connect(listener.local_addr()?, "peerglide.local")?
+                        .await?,
                 )
             },
             async {
@@ -169,8 +171,7 @@ async fn probe(
             {
                 let moved = expected.is_none_or(|point| {
                     peerglide_platform::cursor_position().is_some_and(|current| {
-                        (current[0] - point[0]).abs() <= 4.0
-                            && (current[1] - point[1]).abs() <= 4.0
+                        (current[0] - point[0]).abs() <= 4.0 && (current[1] - point[1]).abs() <= 4.0
                     })
                 });
                 if moved {
@@ -182,7 +183,14 @@ async fn probe(
     })
     .await
     .context("first motion did not reach pointer application or native cursor")?;
-    send(tx, &Message::Release { lease: LEASE, cursor: None }).await?;
+    send(
+        tx,
+        &Message::Release {
+            lease: LEASE,
+            cursor: None,
+        },
+    )
+    .await?;
     send(tx, &Message::Ping { lease: 0 }).await?;
     ensure!(
         matches!(transport::receive(rx).await?, Message::Pong { lease: 0 }),
