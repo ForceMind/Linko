@@ -18,6 +18,8 @@ use tokio::sync::mpsc;
 
 #[cfg(test)]
 mod data_isolation_tests;
+#[cfg(test)]
+mod first_motion_tests;
 mod recovery;
 pub(super) mod routed_source;
 #[cfg(target_os = "linux")]
