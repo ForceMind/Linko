@@ -365,6 +365,7 @@ impl<'a> Source<'a> {
     ) -> Result<Exit> {
         let remote = CaptureRoute::Remote(epoch);
         let mut last_pong = now_ms();
+        let mut return_pressure = 0.0;
         self.capture.gate.refresh();
         let mut outbox = MotionOutbox::new(tokio::time::Instant::now());
         let mut sequence = 0u64;
@@ -377,7 +378,7 @@ impl<'a> Source<'a> {
                 stop = &mut self.ending => return Ok(Exit::Stop(stop)),
                 _ = tick.tick() => {
                     if now_ms().saturating_sub(last_pong) >= 1000 { return Ok(Exit::Local(None)); }
-                    if self.input.is_empty() && edges.crossed_back(position) && self.capture.restore_at_boundary(epoch)? {
+                    if self.input.is_empty() && return_pressure >= RETURN_PRESSURE && self.capture.restore_at_boundary(epoch)? {
                         return Ok(Exit::Local(Some(next_motion(&mut sequence, position)?)));
                     }
                     if !link.send(&Message::Ping { lease: LEASE }).await? { return Ok(Exit::Local(None)); }
@@ -400,11 +401,9 @@ impl<'a> Source<'a> {
                     if captured_route(event) != Some(remote) || !self.capture.gate.is_current(remote) { continue; }
                     match event {
                         Captured::Motion { dx, dy, .. } => {
-                            let (dx, dy) = edges.motion(dx / size.0, dy / size.1);
-                            position.0 = (position.0 + dx).clamp(0.0, 1.0);
-                            position.1 = (position.1 + dy).clamp(0.0, 1.0);
+                            position = edges.advance(position, (dx, dy), size, &mut return_pressure);
                             let cursor = next_motion(&mut sequence, position)?;
-                            if edges.crossed_back(position) && self.capture.restore_at_boundary(epoch)? {
+                            if return_pressure >= RETURN_PRESSURE && self.capture.restore_at_boundary(epoch)? {
                                 return Ok(Exit::Local(Some(cursor)));
                             }
                             outbox.latest = Some(cursor);

@@ -1524,6 +1524,11 @@ impl OutgoingEdges {
         )
     }
 
+    #[cfg(target_os = "linux")]
+    fn crossed_back(&self, (x, y): (f64, f64)) -> bool {
+        distance(self.remote, x, y) <= 0.001
+    }
+
     fn advance(
         &self,
         (x, y): (f64, f64),
