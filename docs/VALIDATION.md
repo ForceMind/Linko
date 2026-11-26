@@ -1,5 +1,12 @@
 # Validation record
 
+## 跨屏回程修复（2026-11-26）
+
+- 从代码确认，旧版在接收边缘内侧入场，随后轻微反向移动就可能满足自动回程条件。参考固定提交的 Oink 边缘阻力，[PR #180](https://github.com/ForceMind/Linko/pull/180) `983c169` 在原生出站会话内累计越过接收边缘的位移。达到 8 个来源坐标单位才自动回程，向屏幕内移动抵消累计值。保留持键、持按钮和紧急恢复路径。参考依据见 PR180 的 `docs/REFERENCE_RESEARCH.md`。
+- 已验证 [Rust CI 45866678224](https://github.com/ForceMind/Linko/actions/runs/45866678224) 的三端 fmt、严格 Clippy、锁定测试和打包校验。四边轻微反向移动、异向边缘、持键或持按钮回程保护均有通过日志，Windows 托管输入桌面的原生接收检查通过。[GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/45866678353)及[配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45866678254)通过。
+- 候选 `2026.11.27-0118` 已生成 [Windows x64](https://github.com/ForceMind/Linko/actions/runs/45866678224/artifacts/15141143355)、[macOS Apple 芯片](https://github.com/ForceMind/Linko/actions/runs/45866678224/artifacts/15141039161) 和 [Linux x86_64](https://github.com/ForceMind/Linko/actions/runs/45866678224/artifacts/15141168613) 三端包。三端均从 `2026.11.20-1322` 成功升级并启动新版工作进程，拒绝篡改回滚后成功恢复原包。
+- 上述结果覆盖取权后瞬时回程。用户此前报告的双向故障是否达到取权阶段仍待确定，[#3/C06](https://github.com/ForceMind/Linko/issues/3) 仍待统一双机验收。
+
 ## 双机验收反馈（2026-11-25）
 
 用户从官网安装两端验收候选后报告鼠标跨屏失败，进一步确认 Mac → Windows 和 Windows → Mac 两个方向均失败。此为用户真机反馈，当前未取得失败会话的状态原文和 KVM-DIAG/5，根因未定位。既有 CI 通过结论保留在其覆盖范围内，C06 尚未通过。
