@@ -2500,14 +2500,32 @@ mod tests {
         };
         let multi = Layout::new(primary.id, vec![primary, right]).unwrap();
         let mut gate = EdgeGate::default();
-        let on_secondary =
-            primary_edge_entry(&mut gate, Edge::Right, (1925.0, 200.0), size, 500, Some(&multi));
+        let on_secondary = primary_edge_entry(
+            &mut gate,
+            Edge::Right,
+            (1925.0, 200.0),
+            size,
+            500,
+            Some(&multi),
+        );
         assert_eq!(on_secondary, None);
-        let past_secondary =
-            primary_edge_entry(&mut gate, Edge::Right, (2500.0, 605.0), size, 501, Some(&multi));
+        let past_secondary = primary_edge_entry(
+            &mut gate,
+            Edge::Right,
+            (2500.0, 605.0),
+            size,
+            501,
+            Some(&multi),
+        );
         assert_eq!(past_secondary, None);
-        let exposed =
-            primary_edge_entry(&mut gate, Edge::Right, (1925.0, 700.0), size, 502, Some(&multi));
+        let exposed = primary_edge_entry(
+            &mut gate,
+            Edge::Right,
+            (1925.0, 700.0),
+            size,
+            502,
+            Some(&multi),
+        );
         assert!(exposed.is_some());
     }
 

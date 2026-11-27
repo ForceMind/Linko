@@ -1612,7 +1612,10 @@ mod tests {
         assert_eq!(route, local);
         assert_eq!(primary, None);
         assert_eq!((x, y), (f64::from(edge_point.x), f64::from(edge_point.y)));
-        assert_eq!((reported_w, reported_h), (f64::from(width), f64::from(height)));
+        assert_eq!(
+            (reported_w, reported_h),
+            (f64::from(width), f64::from(height))
+        );
 
         let overshoot = POINT {
             x: width + 5,
@@ -1625,7 +1628,10 @@ mod tests {
         assert_eq!(route, local);
         assert_eq!((x, y), (f64::from(overshoot.x), f64::from(overshoot.y)));
 
-        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, 0), 0);
+        assert_eq!(
+            deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, 0),
+            0
+        );
         assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, 0, TAG), 0);
         assert!(events.try_recv().is_err());
         assert_eq!(filtered_count(&diagnostics), 2);
@@ -1635,7 +1641,10 @@ mod tests {
         else {
             panic!("idle local capture must commit to remote");
         };
-        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, TAG), 0);
+        assert_eq!(
+            deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, TAG),
+            0
+        );
         assert!(events.try_recv().is_err());
         assert_eq!(filtered_count(&diagnostics), 3);
 
