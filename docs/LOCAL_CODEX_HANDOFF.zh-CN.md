@@ -1,5 +1,39 @@
 # 屏跃：本机 Codex 接手开发
 
+## 当前优先故障与公开候选（2026-11-27 晚）
+
+PR #312（`diag-held-and-peer-sync`，`e41e381`）已合入 PR #180（合并提交 `6f003fb58f9426b1515fe58bb74290f21ea95c26`），带来独立低优先级 QUIC 诊断流互看（ADR-0019）、任意一端一键「复制两端摘要」、本机说明行与 `KVM-HELD/1` 按住状态诊断，同时保留 `b94b4d4` 的外侧越界触边修复、原生鼠标回调回归及托管 Windows/macOS 双角色首包回归。[Actions 46033236090](https://github.com/ForceMind/Linko/actions/runs/46033236090) 三端包、升级回滚、GUI 内存诊断与配对上游检查 11/11 全部通过。
+
+官网 [linko-63e.pages.dev](https://linko-63e.pages.dev/#preview) 已上线 **0.1.12**（Cloudflare 生产部署 `2831d6cc`，源码 PR402 `3e9a20d`，Actions 产物 `15218037713`），公开下载已切换为同版 Windows x64 / macOS Apple 芯片验收候选 **`2026.11.28-0023`**（[Release v2026.11.28-0023](https://github.com/ForceMind/Linko/releases/tag/v2026.11.28-0023)，复用 Actions `46033236090` 原 ZIP，无二次打包）。线上 11 项文件哈希、安全头及 GitHub / `gh-proxy.org` 匿名下载均已核对；应用源码 `main` 未合并。
+
+C06 尚未通过，此前 `2026.11.20-1322` 现场卡点与 #10 历史根因仍未知。双机统一验收请两端使用同版 `2026.11.28-0023` 且均选「开启并诊断」；如遇跨屏受阻，只需在**任意一端**打开「设置 → 诊断与资料 → 高级诊断」点击**「复制两端摘要」**即可带出双方 `KVM-DIAG/5`、本机说明行与 `KVM-HELD/1`（同时可顺带确认 macOS Caps Lock 开启态与独立分段布局 `routed_source.rs`）。详见 `VALIDATION.md`。
+
+## 早期公开候选记录（2026-11-27）
+
+PR180 `b94b4d4`（含 `510ef8f`）修复了 `session.rs` `primary_edge_entry` 丢弃主屏外侧未裁剪越界坐标（如 Windows `WH_MOUSE_LL` 外推屏幕边界时返回的越界点）的问题，补齐 Windows `mouse_hook` 与 macOS `callback` 鼠标回调单元测试，并在托管 Windows 与 macOS（只读权限预检通过，`native=true`）双连接角色跑通精确触边 + 越界触边两轮首包与恢复回归。[Actions 45954302383](https://github.com/ForceMind/Linko/actions/runs/45954302383) 三端包、升级回滚、GUI 内存诊断与配对上游检查 11/11 通过。
+
+官网 [linko-63e.pages.dev](https://linko-63e.pages.dev/#preview) 已上线 **0.1.11**（Cloudflare 生产部署 `a58d85ed`，源码 PR402 `a6b3772`，Actions 产物 `15187881506`），公开下载已切换为同版 Windows x64 / macOS Apple 芯片验收候选 **`2026.11.27-1449`**（[Release v2026.11.27-1449](https://github.com/ForceMind/Linko/releases/tag/v2026.11.27-1449)，复用 Actions `45954302383` 原 ZIP，无二次打包）。线上 11 项文件哈希、安全头与匿名下载均已核对；应用源码 `main` 未合并。
+
+C06 尚未通过，此前 `2026.11.20-1322` 现场卡点与 #10 历史根因仍未知。双机统一验收请使用两端同版 `2026.11.27-1449` 并开启「开启并诊断」；若遇到跨屏受阻，保留连接状态与两端 `KVM-DIAG/5`（重点核对发送端 `edge_hit/blk_gate/acq_tx/grant/commit/deq/tx` 与接收端 `acq_rx/rx/apply/sdk_fail/first_rx_to`），并顺带核对 macOS Caps Lock 开启态与独立分段布局（`routed_source.rs`）。详见 `VALIDATION.md`。
+
+## 历史排查记录（2026-11-26）
+
+用户安装官网 `2026.11.20-1322` 后确认两个方向均无法跨屏。按固定提交的 Oink 机制修复了一处刚取权就意外回程的问题，[PR180](https://github.com/ForceMind/Linko/pull/180) 最新修复为 `983c169`，候选 `2026.11.27-0118` 的三端包、回归测试和升级回滚均有 [Actions 证据](https://github.com/ForceMind/Linko/actions/runs/45866678224)，详情见 `VALIDATION.md`。公开官网当前仍下载 `2026.11.20-1322`。
+
+C06 尚未通过，原失败会话是否已取权仍未知。若统一双机验收仍遇到跨屏故障，用当次连接状态和两端 KVM-DIAG/5 按顺序定位原生开启、触边、取权、回程和接收注入。诊断摘要按钮只在已有摘要时显示。继续复用原单一捕获和恢复生命周期，编译测试只在 Actions。
+
+PR180 `5a79351` 增加交换连接角色的首个移动测试。两种角色都通过取权并发送首个移动，Windows 托管桌面读回预期光标位置且无 `first_rx_to`，macOS 与 Ubuntu 验证到会话接收处理。发送端使用协议测试端，真实触边和 macOS 注入随 C06 验收。遇到故障先对照发送端 `acq_tx/grant/commit/tx` 和接收端 `acq_rx/rx/apply/sdk_fail/first_rx_to`，从第一个断点继续。详见 `VALIDATION.md`。[Actions](https://github.com/ForceMind/Linko/actions/runs/45874950570)
+
+PR180 `28d2ffa` 补上 Windows 托管桌面标准会话的发送端测试。两种连接角色均从模拟边缘位置经过真捕获提交和 QUIC 发送，首包及本地恢复通过。候选 `2026.11.27-0310` 三端升级回滚通过。后续 C06 使用同一候选核对真实触边以及两端首个阶段计数，分段布局和 macOS 原生路径仍待现场验证。[Actions](https://github.com/ForceMind/Linko/actions/runs/45881596535)
+
+## 当前官网发布接手（2026-11-25）
+
+官网 [linko-63e.pages.dev](https://linko-63e.pages.dev/#preview) 已上线 0.1.10，公开下载为 Windows x64/macOS Apple 芯片同版 `2026.11.20-1322`。[开发预览](https://github.com/ForceMind/Linko/releases/tag/v2026.11.20-1322) 已发布，用户可免登录下载四项核心功能验收包。原 ZIP 来自 PR180 `3790a804` 的 Actions，两端包内版本、构建来源、原随包摘要及 GitHub 服务端摘要已核对。完整证据见 VALIDATION.md 的「官网 0.1.10 与公开验收包」。
+
+官网源码在 PR402 `2ae5213`，准确提交的官网检查、三端 Rust CI 与依赖审计、配对上游检查通过。部署使用 Actions 产物，实际网站构建提交为 `d7d1f9d`，Cloudflare 正式部署 `b99ab8c2`。正式域名与独立部署域名的本次修改文件和构建清单均通过 HTTP 摘要核对，两端匿名下载端点可用。浏览器未验证，双机验收待用户统一完成。
+
+项目记忆保留本次单目标 Cloudflare Pages 授权，现有项目为 linko，正式分支标识为 main。应用源码主分支未合并。所有编译和测试继续在 Actions，本机不安装软件。Mac 来源的 Wrangler node_modules 无法在本机直接运行，本次使用已有会话和官方 API。后续更新下载时应同步 release.json、无 JS 下载链接、版本校验规则和原 ZIP 摘要。官网 sourceCommit 与 App sourceCommit 分别记录，禁止混用。远程窗口支线从 PR401 继续；它的实验结果不代表已进入本公开验收包。
+
 这是既有 Rust 工程的延续，不是重建项目。仓库 ForceMind/PeerGlide，main，MIT。
 先重新读取 GitHub 当前 main/PR/Issues/CI，不把本文件中的历史 SHA 当作最新状态。
 PR #27 的云端基础候选 6ebeda55b22a3edba159c8f88f34f09784134fa8 已通过三平台

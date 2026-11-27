@@ -1,5 +1,64 @@
 # Validation record
 
+## 官网 0.1.12 与含两端诊断互看的公开验收包 2026.11.28-0023（2026-11-27）
+
+- 将 [PR #312](https://github.com/ForceMind/Linko/pull/312)（`diag-held-and-peer-sync`，`e41e381`：ADR-0019 独立低优先级 QUIC 诊断流互看、「复制两端摘要」、本机说明行与只读 `KVM-HELD/1` 按住状态诊断）合入 [PR #180](https://github.com/ForceMind/Linko/pull/180)（合并提交 `6f003fb58f9426b1515fe58bb74290f21ea95c26`）。[Rust CI `46033236090`](https://github.com/ForceMind/Linko/actions/runs/46033236090)、[GUI 资源检查 `46033236124`](https://github.com/ForceMind/Linko/actions/runs/46033236124) 与 [配对上游检查 `46033236094`](https://github.com/ForceMind/Linko/actions/runs/46033236094) 全部 11/11 项通过，三端 `2026.11.28-0023` 升级与篡改回滚通过。[Windows](https://github.com/ForceMind/Linko/actions/runs/46033236090/artifacts/15217535022) · [macOS](https://github.com/ForceMind/Linko/actions/runs/46033236090/artifacts/15216442124) · [Linux](https://github.com/ForceMind/Linko/actions/runs/46033236090/artifacts/15216431127)
+- [Release v2026.11.28-0023](https://github.com/ForceMind/Linko/releases/tag/v2026.11.28-0023) 已公开且标记 prerelease（非 latest），复用 Actions `46033236090` 原始 Windows amd64、macOS arm64 ZIP（无二次打包）。两包 `review_commit` 为 `6f003fb58f9426b1515fe58bb74290f21ea95c26`，`checkout_commit` 为 `df208e22d1dc02dc955d977373945f2f09dfce23`，`checkout_tree` 为 `4d161723a7e0a1c6c538c8018b3c0f3244cee678`。
+- Windows ZIP 为 `44,008,672` 字节，SHA-256 `6cd4f3e276bb6df14a488223e05631089a1167e00f2e6e4a87ea268221246d20`；macOS ZIP 为 `43,483,501` 字节，SHA-256 `64efc146d14fa576c639bcbd90b9ece99cac5af25ddba7d2acf1fbd1ad1b22a8`。原随包 `.sha256`、本地校验、GitHub 服务端 digest 与匿名 HTTP HEAD（GitHub 原链与 `gh-proxy.org` 加速链）均精确匹配。
+- [PR #402](https://github.com/ForceMind/Linko/pull/402) 更新至 `3e9a20dad88131d964ecb4017d94dbead268dc2e`（官网 `0.1.12`）。[官网检查 `46038012979`](https://github.com/ForceMind/Linko/actions/runs/46038012979)（产物 `15218037713`，外层 SHA-256 `37eae1249a37873a14a781b7aa443566ffb3de81edbfe4afadcec1c2b52184d9`，`asset-manifest` PR 构建提交 `331de21814e339e291f7191157282214ec56e064`）与 [配对上游检查 `46038012776`](https://github.com/ForceMind/Linko/actions/runs/46038012776) 已通过。
+- 部署上述 Actions 静态包至 Cloudflare Pages `linko`（`main` 分支），生产部署 `2831d6cc-b9a2-41ca-92e1-65870936913a`。[正式站点](https://linko-63e.pages.dev/) 与 [独立部署](https://2831d6cc.linko-63e.pages.dev/) 全部 11 项线上文件 SHA-256、MIME、CSP、`nosniff` 与中文 404 核对通过。浏览器交互未验证，应用源码 `main` 未合并，真实双机验收（#3/C06）与两台真机上的两端诊断互看/复制待用户验证。
+
+## 官网 0.1.11 与公开验收包 2026.11.27-1449（2026-11-27）
+
+- 用户要求同步仓库、文档与官网以便两端下载验收。[Release v2026.11.27-1449](https://github.com/ForceMind/Linko/releases/tag/v2026.11.27-1449) 已公开且标记 prerelease（非 latest）。复用 Actions `45954302383` 原始 Windows amd64、macOS arm64 ZIP，未重新构建或打包。两包的 `review_commit` 均为 `b94b4d4b664075cb7bb123d63c8d223a841500c2`，`checkout_commit` 均为 `561ba03491ba338d2bb9b5dd0656858cf3e97bbb`，`checkout_tree` 均为 `3e3c12b1fd4e5e3364868f146b521ef541fbcb95`。
+- Windows ZIP 为 `43,947,725` 字节，SHA-256 `31e49682ebb109bc4132478d4eaa4fc5a8888ed8e255379e0a3721c3f6235191`。macOS ZIP 为 `43,425,391` 字节，SHA-256 `8f413e794bbb1d4b8319ee7f126d708e823aefecdfc9726d96aa188789c198e5`。原随包 `.sha256`、本地校验与 GitHub 上传后服务端 digest 一致。匿名 HTTP HEAD 跟随跳转后，两端 ZIP 与 `.sha256` 均返回 `200 OK` 且 `Content-Length` 匹配。
+- [PR #402](https://github.com/ForceMind/Linko/pull/402) 更新至提交 `a6b37721986a67fa7f0097e7a088b86e4d2cc82b`（官网 `0.1.11`），同步 `2026.11.27-1449` 版本、GitHub 与 `gh-proxy.org` 链接、摘要、Actions 链接与 FAQ。[官网检查](https://github.com/ForceMind/Linko/actions/runs/45977239628) 与 [配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45977239625) 已通过（[Rust CI](https://github.com/ForceMind/Linko/actions/runs/45977239742) 同提交触发）。
+- 部署复用上述官网检查生成的原始静态产物 `linko-official-site`（Artifact `15187881506`，外层 SHA-256 `af549faf63fdc53379de1a6ffb733567c85bccd2c7072a39ec0322b70c3b8b32`），`asset-manifest.json` 记录实际 PR 构建提交 `322db36067df686483b8ffe75aa6e7d9b28daf4a`。通过既有本机 `wrangler` OAuth 会话部署至 Cloudflare Pages 项目 `linko`（`main` 分支），生产部署 `a58d85ed-cb9e-47bd-9767-c17e34d79291`。[正式站点](https://linko-63e.pages.dev/) 与 [独立部署](https://a58d85ed.linko-63e.pages.dev/) 全部 11 项线上文件 SHA-256、MIME、CSP、`nosniff` 与中文 404 均与 Actions 产物一致。浏览器交互未验证，应用源码 `main` 未合并，真实双机验收（#3/C06）待用户完成。
+
+## 外侧越界触边修复、原生鼠标回调与托管 macOS 首包验证（2026-11-27）
+
+- [PR180 `510ef8f`](https://github.com/ForceMind/Linko/commit/510ef8f063733f03e284e439cc01e07028cfaa48) 与格式对齐提交 [`b94b4d4`](https://github.com/ForceMind/Linko/commit/b94b4d4b664075cb7bb123d63c8d223a841500c2) 修复 `session.rs` 的 `primary_edge_entry` 无条件丢弃主屏矩形外越界坐标的缺陷（如 Windows `WH_MOUSE_LL` 外推屏幕边界时返回的未裁剪 `MSLLHOOKSTRUCT.pt`）。仅在已知多屏布局时允许更靠近主屏的外侧越界点经裁剪后检查暴露主屏边，保持 `layout == None` 拒收、副屏隔离、不误重置 `EdgeGate` 与共享边拦截。
+- 新增回调级单元测试（不经过 OS 硬件投递）：Windows `mouse_hook_routes_local_edge_committed_motion_injected_echo_and_release`、macOS `modifier_release_allows_committed_source_motion_into_the_capture_queue` 扩展与 `unclipped_outer_edge_overshoot_crosses_exposed_primary_without_misrouting_secondary`，覆盖本机触边、越界坐标、注入来源/`TAG` 过滤、提交后 `Remote` 位移与释放恢复。
+- 在 `first_motion_tests.rs` 新增托管 macOS 只读权限预检（`accessibility=granted input_monitoring=granted input_desktop=not_required secure_input=inactive layout=true native_ready=true`）以及双轮精确边 + 外侧越界边首包验证。托管 Windows（[Job `140357110975`](https://github.com/ForceMind/Linko/actions/runs/45954302383/job/140357110975)）与托管 macOS（[Job `140357111055`](https://github.com/ForceMind/Linko/actions/runs/45954302383/job/140357111055)，`native=true`）双连接角色均通过：`outbound=true` 两轮均记录 `edge_hit=2 acq_tx=2 grant=2 commit=2 deq=2 tx=2 peer_rel=2`（Windows `filtered=4`，macOS `filtered=2`）；`outbound=false` 均记录 `acq_rx=1 rx=1 apply=1 sdk=2 sdk_fail=0 filtered=2` 且无 `first_rx_to`；Windows 64 轮压测通过。源端位置/位移仍由会话测试提交，未覆盖真实物理鼠标进入钩子/Event Tap。
+- [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45954302383)、[GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/45954303642) 与 [配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45954302192) 全部 11/11 项通过，三端 `2026.11.27-1449` 升级启动与篡改回滚通过。[Windows](https://github.com/ForceMind/Linko/actions/runs/45954302383/artifacts/15179305358) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45954302383/artifacts/15178428139) · [Linux](https://github.com/ForceMind/Linko/actions/runs/45954302383/artifacts/15178173522)
+- 源码排查待真机确认项：macOS Caps Lock（`kVK_CapsLock = 57`）在开启锁存态时 `CGEventSourceKeyState(0, 57)` 是否导致按键门控阻塞；独立分段路由 `session/routed_source.rs` 仍要求坐标在显示矩形内。[#3/C06](https://github.com/ForceMind/Linko/issues/3) 与 #10 历史根因仍保持未关闭/未确认。
+
+## Windows 发送端捕获提交与首个移动（2026-11-26）
+
+- [PR180 `28d2ffa`](https://github.com/ForceMind/Linko/commit/28d2ffafb78cf273d0a6b33921b977f2db73755b) 在 Windows 托管桌面运行标准双机会话的真实捕获生命周期。测试从会话消费端提交模拟边缘位置和移动，保留正式捕获门控、授权处理、QUIC 与释放。两个连接角色均验证授权前保持本地，授权后提交原生捕获，测试对端收到对应租约与方向的首个数据报，释放后还原本地捕获。[Windows 日志](https://github.com/ForceMind/Linko/actions/runs/45881596535/job/140122015826)
+- 两轮均记录 `edge_hit=1 acq_tx=1 grant=1 commit=1 tx=1 peer_rel=1`，没有请求超时或取消。未复现上述会话处理路径的发送故障。Windows 物理事件进入钩子、macOS 原生捕获、独立分段布局路由及实际双机链路仍需覆盖。[#3/C06](https://github.com/ForceMind/Linko/issues/3)
+- [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45881596535)、[GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/45881596529)及[配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45881596620)通过。三端 `2026.11.27-0310` 均成功从 `2026.11.27-0219` 升级启动、拒绝篡改回滚并恢复旧包。[Windows](https://github.com/ForceMind/Linko/actions/runs/45881596535/artifacts/15148790970) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45881596535/artifacts/15148106588) · [Linux](https://github.com/ForceMind/Linko/actions/runs/45881596535/artifacts/15148935649)
+
+## 双连接角色的首次移动（2026-11-26）
+
+- [PR180 `5a79351`](https://github.com/ForceMind/Linko/commit/5a79351e0618c99a707f5674e2d300d48111339c) 的三端工作区测试中，使用固定证书的本机 QUIC 连接，让发起方和监听方分别发送控制请求。测试等到接收端回应就绪，再发送 `Acquire`，收到匹配的 `Granted` 后才发送首个移动数据报，最后检查 `Release` 处理和退出。发送端使用协议测试端，接收端运行正式会话代码。[Rust CI](https://github.com/ForceMind/Linko/actions/runs/45874950570)
+- Windows 托管输入桌面两轮都读回了预期系统光标位置。接收端两轮各有 `acq_rx=1 rx=1 apply=1 sdk=2 sdk_fail=0 moved=1`，两个 SDK 提交分别对应入口定位和首个移动。日志未记录 `first_rx_to`，既有原生接收压力检查也通过。macOS 与 Ubuntu 验证到接收处理。Ubuntu 的独立 X11 来源测试验证等待授权后才发出首个移动数据报。[Windows 日志](https://github.com/ForceMind/Linko/actions/runs/45874950570/job/140099564140) · [Ubuntu 日志](https://github.com/ForceMind/Linko/actions/runs/45874950570/job/140099564338)
+- 本轮未复现首个移动失败或 Windows 原生接收超时。真实 Mac 和 Windows 双向触边、发送端捕获提交、macOS 原生注入属于用户的统一双机验收。[#3/C06](https://github.com/ForceMind/Linko/issues/3)
+- 候选 `2026.11.27-0219` 的三端包通过来源、架构和校验检查。升级演练从 `2026.11.27-0118` 启动新版工作进程，拒绝篡改回滚后成功恢复旧包。[Windows](https://github.com/ForceMind/Linko/actions/runs/45874950570/artifacts/15144923624) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45874950570/artifacts/15145840216) · [Linux](https://github.com/ForceMind/Linko/actions/runs/45874950570/artifacts/15144149388)
+
+## 跨屏回程修复（2026-11-26）
+
+- 从代码确认，旧版在接收边缘内侧入场，随后轻微反向移动就可能满足自动回程条件。参考固定提交的 Oink 边缘阻力，[PR #180](https://github.com/ForceMind/Linko/pull/180) `983c169` 在原生出站会话内累计越过接收边缘的位移。达到 8 个来源坐标单位才自动回程，向屏幕内移动抵消累计值。保留持键、持按钮和紧急恢复路径。参考依据见 PR180 的 `docs/REFERENCE_RESEARCH.md`。
+- 已验证 [Rust CI 45866678224](https://github.com/ForceMind/Linko/actions/runs/45866678224) 的三端 fmt、严格 Clippy、锁定测试和打包校验。四边轻微反向移动、异向边缘、持键或持按钮回程保护均有通过日志，Windows 托管输入桌面的原生接收检查通过。[GUI 资源检查](https://github.com/ForceMind/Linko/actions/runs/45866678353)及[配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45866678254)通过。
+- 候选 `2026.11.27-0118` 已生成 [Windows x64](https://github.com/ForceMind/Linko/actions/runs/45866678224/artifacts/15141143355)、[macOS Apple 芯片](https://github.com/ForceMind/Linko/actions/runs/45866678224/artifacts/15141039161) 和 [Linux x86_64](https://github.com/ForceMind/Linko/actions/runs/45866678224/artifacts/15141168613) 三端包。三端均从 `2026.11.20-1322` 成功升级并启动新版工作进程，拒绝篡改回滚后成功恢复原包。
+- 上述结果覆盖取权后瞬时回程。用户此前报告的双向故障是否达到取权阶段仍待确定，[#3/C06](https://github.com/ForceMind/Linko/issues/3) 仍待统一双机验收。
+
+## 双机验收反馈（2026-11-25）
+
+用户从官网安装两端验收候选后报告鼠标跨屏失败，进一步确认 Mac → Windows 和 Windows → Mac 两个方向均失败。此为用户真机反馈，当前未取得失败会话的状态原文和 KVM-DIAG/5，根因未定位。既有 CI 通过结论保留在其覆盖范围内，C06 尚未通过。
+
+排查首先核对原生键鼠会话是否开启及接收链路状态。工具当前可访问的 Windows 环境没有发现 Linko/PeerGlide 进程或标准应用数据目录，无法直接取得该次会话诊断；这项观察不能代表用户两端故障时的状态。已向用户先请求 Windows 端诊断摘要及当前连接状态或报错。若未使用「开启并诊断」，界面可能没有摘要复制按钮，应先取现有状态，避免凭缺失摘要推断原因。
+
+候选 `3790a804` 源码显示，连接检查和键鼠开启分别启动通信与原生会话。通信会话中可选择「确认并开启键鼠」，工作进程按顺序退出并切换。「开启并诊断」只在没有会话进程时可选。Windows 总览的状态原文可先区分「键鼠未开启」、启动等待和「本机控制（进程报告）」。已有诊断摘要位于「设置 → 诊断与资料 → 高级诊断」。这些是源码核对结果，现场会话状态待确认。
+
+## 官网 0.1.10 与公开验收包（2026-11-25）
+
+- 用户授权公开开发预览并部署现有 Cloudflare Pages 正式站点。[Release v2026.11.20-1322](https://github.com/ForceMind/Linko/releases/tag/v2026.11.20-1322) 已公开且标记 prerelease。复用 Actions `44680582417` 原始 Windows amd64、macOS arm64 ZIP，未重新构建或打包。两包的 review_commit 均为 `3790a80483dd5c739474e8f7ff0589c708d847a4`，checkout_commit 均为 `877c7ee409771354ba12725559e3102eea3dc2db`，源码树与候选一致。
+- Windows ZIP 为 43,947,293 字节，SHA-256 `56b75ebaef3083554df37e04b50020998f80b8fd0ecb2da857ba0fda674b02ed`。macOS ZIP 为 43,425,491 字节，SHA-256 `85933d5ad3ddbe2cc35ecfbbf9d5fbc12975b5d1497a8cf5781e77e1da9d4948`。原随包校验文件、本地原 ZIP 与 GitHub 上传后 digest 一致。匿名 HEAD 跟随跳转后，两端下载端点均成功并返回匹配 Content-Length。未重复完整下载公开端点的 ZIP。
+- [PR #402](https://github.com/ForceMind/Linko/pull/402) 最终提交 `2ae52137f36f5126ac2a6dd56eed224ee1d3602d`。官网 0.1.10 同步日期版本、公开链接、摘要及 FAQ。复用既有 rustix 1.1.6 锁文件修复后，[官网检查](https://github.com/ForceMind/Linko/actions/runs/45752371418)、[完整 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45752371345) 和 [配对上游检查](https://github.com/ForceMind/Linko/actions/runs/45752371315) 全部通过，审计继续拒绝全部告警。
+- 部署使用上述官网检查生成的原始静态产物，外层 artifact SHA-256 `650b60ff09dea2cb0c8a25017c555ffbb92dba759431e9be8a13f46bf6cbe58c`。asset-manifest 记录实际 PR 构建提交 `d7d1f9d97f13d26b2db7c690318d4b77e75e10ed`。Cloudflare `linko` 正式部署 `b99ab8c2-eead-4bed-98e0-fc022e032171` 状态 success。[正式站点](https://linko-63e.pages.dev/) 与 [独立部署](https://b99ab8c2.linko-63e.pages.dev/) 的首页、main.js、release.json SHA-256 和构建清单逐项匹配 Actions 产物，安全响应头通过。浏览器未验证。
+- 本机原 Wrangler 依赖为 macOS 版本，改用已有 OAuth 会话及 Cloudflare 官方 API 上传同一静态产物。没有安装软件。发布和部署保留独立授权边界，main 未合并。双机物理验收仍待用户完成，远程窗口实验尚未进入公开验收包。
+
 2026-10-22, isolated cloud Linux development environment. No user Mac/PC changes.
 
 | Check | Result |
@@ -430,3 +489,100 @@ Automatic Codex code review could not run: repository review usage limit reached
 No credits/purchases/review-gate bypass were requested. CI does not replace that
 review. Independent security review, native OS backends/network integration,
 persistent/global disk accounting and real Win/Mac acceptance remain open.
+
+## RW03 本机预览与 RW04 媒体实验（2026-11-23）
+
+以下证据对应各行的草稿候选提交。不同分支的实验结果不能合并当作一个发布版本的验证。
+
+| 范围 | 精确提交与证据 | 已验证 |
+| --- | --- | --- |
+| RW03 本机单窗口只读预览 | `b846ed0874d288e34aaf6c17d6fb3549e934f066` · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45103803193) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45103803166) | 两端原生构建通过。Windows 100 次启停无进程句柄或 GDI 对象增长，另通过 40 次采集、缩放、源关闭及清屏。macOS 在已有录屏许可的 runner 上通过实际窗口的采集、缩放、停止、重新选源和关闭。 |
+| RW04 Windows 系统 H.264 | `d364905ae1a258eb004954b63ce43a758aafdc3c` · [首轮](https://github.com/ForceMind/Linko/actions/runs/45102064419/job/137454936884) · [复跑](https://github.com/ForceMind/Linko/actions/runs/45102064419/job/137457855673) | 独立测试进程从 WGC 采集开始到 Media Foundation 停止保持 COM 生命周期。两台 runner 共通过 60 次实采窗口关闭和编解码，每次 24 帧且验证两种颜色。最大积压一帧。历史异常的执行地址未能识别具体模块。 |
+| RW04 macOS 原生回环 | `8701cdaf8e548c8abc1d64e549aa66e8403bb0d5` · [原生作业和测量产物](https://github.com/ForceMind/Linko/actions/runs/45087485463/artifacts/14781172077) | ScreenCaptureKit 捕获测试窗口，经本机 WebRTC UDP/DTLS H.264 回环在 AppKit 显示。覆盖颜色、缩放、撤权后拒绝旧帧、重开和关闭。100 次启停中，部分完整回环配置的 IOAccelerator 驻留页仍有增长。 |
+| RW04 进程替换与协调器 | `0cee2ee57d6462ccbf84e982adfbcdc30a409ee5` · [macOS 实际编码进程](https://github.com/ForceMind/Linko/actions/runs/45098986436/job/137445189037)<br>`b846ed0874d288e34aaf6c17d6fb3549e934f066` · [三端工作空间回归](https://github.com/ForceMind/Linko/actions/runs/45103803193) | macOS 子进程被终止后，新进程从零驻留映射开始并解码新素材。Windows、macOS、Linux 另用本机测试子进程验证协调器清空同一连接的两个视图、拒绝迟到的展示回执，并保留其他连接及原有释放和窗口恢复义务。协调器场景使用测试授权和像素。 |
+| RW04 macOS 本机媒体进程控制 | `090965ac1b805f0d4ba78f8e30c26727db393114` · [VideoToolbox 作业](https://github.com/ForceMind/Linko/actions/runs/45104951436/job/137463976144) | 实际硬件编解码子进程通过继承管道校验控制版本、消息类型和会话代次。正常停止在释放会话后回执。错误版本、截断、命令乱序、零代次及跨会话停止均被拒绝，强制退出后的新进程能重新解码。 |
+| RW04 双端实采和绘制确认 | `79361b0502cd8d49f8c6cdfeca6d3e9932f8500c` · [Windows 原生作业](https://github.com/ForceMind/Linko/actions/runs/45121283750/job/137515393765) · [macOS 原生作业](https://github.com/ForceMind/Linko/actions/runs/45121283750/job/137515394056) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45121283669) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45121283651) | 两端实际采集并编解码测试窗口缩放前、后的两帧。协调器取出第一帧，原生窗口绘制后回采核对九点才确认展示。进程强制退出后清空同一连接的两个视图、拒绝旧回执和迟到帧，保留另一连接和恢复义务。测试只显示一帧，协调器使用逻辑时钟。 |
+
+RW03 构建 `2026.11.23-1104` 的 Actions 产物为 [Windows 预览](https://github.com/ForceMind/Linko/actions/runs/45103803193/artifacts/14786178954) 和 [macOS 预览](https://github.com/ForceMind/Linko/actions/runs/45103803193/artifacts/14785619836)。它们是本机只读预览。应用的连接、键鼠和共享功能随各自候选另行验证。
+
+正式 RW04 仍需要 Windows 固定 WebRTC 工具链的 SDK `10.0.28000.0` 与通过评审的独立媒体协议。托管 Windows SDK 预检仍有缺项，局域网观看、正式媒体与用户授权接线、八小时连续资源验证仍待完成。[Windows 预检](https://github.com/ForceMind/Linko/actions/runs/45087485463/job/137409299532) · [媒体 ADR #333](https://github.com/ForceMind/Linko/pull/333)
+
+本节编译、测试及原生试验均在 GitHub Actions 运行。Windows/macOS 用户机器的系统权限、真实双机行为及 [#3/C06](https://github.com/ForceMind/Linko/issues/3) 仍待验收。
+
+## RW06 工作区资源调度（2026-11-23）
+
+- [PR #372](https://github.com/ForceMind/Linko/pull/372)，`45e6ffe2baac71f465b7253fa7d3a3c2f8173485`。四面板回归覆盖观看焦点、离屏、授权到期、尺寸更新、关闭和解码槽竞争。原输入票据仍只对原目标有效。[三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45123200722) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45123200689) · [双端原生回归](https://github.com/ForceMind/Linko/actions/runs/45123200688)
+- [PR #373](https://github.com/ForceMind/Linko/pull/373)，`8330e5431475f051f34627234e11eaa3a47f4a89`。单槽预算拒绝在旧工作进程确认退出前启动替换。Windows 与 macOS 的实际编解码进程回收后，新进程取得槽位并正常停止。离线回归验证同一来源旧票据及另一预算池的票据无法释放现有槽位。[Windows](https://github.com/ForceMind/Linko/actions/runs/45125279984/job/137528082503) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45125279984/job/137528082825) · [三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45125279941) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45125280004)
+
+- [PR #374](https://github.com/ForceMind/Linko/pull/374)，`f176c05645c409d5a0b15ac46480dd65ba53eaeb`。现有 eframe 工程的离线示例通过三端焦点、离屏、暂停和恢复回归。逐张核对 916×584 和 640×300 的 Linux 原生窗口截图。紧凑窗口按 4 后完整显示底部两张卡片，第四面板获得全画质分配。[截图](https://github.com/ForceMind/Linko/actions/runs/45128907777/artifacts/14797650518) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45128907777) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45128907770)
+
+- [PR #375](https://github.com/ForceMind/Linko/pull/375)，`5103f591c57d1ea00e694dc04c2df80742271182`。Windows 和 macOS 采集自建测试窗口并实际编码、解码。第一帧进入 eframe 面板，回读九点后确认展示。原生子进程退出后释放纹理并核对同一区域清屏。Windows 托管机的作业使用日志确认的 Direct3D 12 CPU 适配器。[Windows](https://github.com/ForceMind/Linko/actions/runs/45133563888/job/137558485891) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45133563888/job/137558485759) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45133563889) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45133563885)
+
+- [PR #376](https://github.com/ForceMind/Linko/pull/376)，`1adf55e842a3daf0743039fd30c08bab5f4519a4`。Windows 和 macOS 在同一次 eframe 回读中确认两个原生窗口分别显示各自的一帧。第一路退出后仅第一处清空，第二路退出后两处均已清空。macOS 依次回收采集进程，两个解码进程同时存活。首次运行的合成编解码步骤出现 `UnexpectedEof`，同一提交重跑通过。[Windows](https://github.com/ForceMind/Linko/actions/runs/45142539207/job/137595325702) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45142539207/job/137595325721) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45142539318) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45142539201)
+
+- [PR #377](https://github.com/ForceMind/Linko/pull/377)，`d366848ba596aebb4fda6f95968c59162d08441e`。macOS 在同一 AppKit 进程启动两个独立的 ScreenCaptureKit 窗口流，2.608 秒内核对四组不同画面。关闭第一路并清空其缓存后，第二路仍产生一帧新画面。关闭第二路后，两路均已释放。[macOS 双路采集](https://github.com/ForceMind/Linko/actions/runs/45147401168/job/137599990243)
+
+- [PR #378](https://github.com/ForceMind/Linko/pull/378)，`bc06123d8ecf4849df425efac7e996ed7aa954cc`。Windows 的两条 WGC 流和 macOS 的两条 ScreenCaptureKit 流各核对四组不同画面，跨度分别为 2.520 秒和 2.521 秒。两端均在关闭第一路后核对第二路新画面，随后关闭第二路并确认释放。Windows 首轮既有单窗口冒烟在缩放后以 `0xC0000005` 退出，同一提交重跑通过，原因待确认。[Windows](https://github.com/ForceMind/Linko/actions/runs/45148272846/job/137603706867) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45148272846/job/137603792605) · [Windows 首轮](https://github.com/ForceMind/Linko/actions/runs/45148272846/job/137602879465)
+
+- [PR #379](https://github.com/ForceMind/Linko/pull/379)，`8437c6b1c7cb966f2007576a9e68414221c42ea5`。两个 macOS 自建窗口的实采画面分别进入持续运行的 VideoToolbox 硬件编解码会话。每路最多一帧在途，按实解码时间戳、亮度、色度核对四组 128×96 画面，跨度 2.857 秒。第一路采集与编解码释放后，第二路通过第五帧核对，随后释放。[macOS 原生链路](https://github.com/ForceMind/Linko/actions/runs/45149653670/job/137607545071)
+
+- [PR #380](https://github.com/ForceMind/Linko/pull/380)，`c75b5f61326bb46007573e98bd911883098852ec`。两个 Windows 自建窗口分别将 WGC 实采帧交给持续运行的 Media Foundation 系统软件 H.264 编解码会话。2.564 秒内各核对四帧的时间戳、亮度和色度，全部在排空前解码。第一路采集与编解码释放后，第二路成功解出第五帧，随后释放。[Windows 原生链路](https://github.com/ForceMind/Linko/actions/runs/45152753692/job/137617983828)
+
+- [PR #381](https://github.com/ForceMind/Linko/pull/381)，`4b2938a3f66cefff3b9ba282037d8f991da27770`。macOS 两路 ScreenCaptureKit 实采画面由持续运行的 VideoToolbox 硬件编解码会话处理，经本机管道逐帧更新 eframe 纹理。在 2.976 秒内回读四组画面，每处九点均匹配后才发回来源和序号对应的展示回执。第一路释放后，回读第一处清空、第二处仍显示新第五帧。最后两处清空且原生子进程正常退出。[macOS 绘制](https://github.com/ForceMind/Linko/actions/runs/45154675015/job/137629943999)
+
+- [PR #382](https://github.com/ForceMind/Linko/pull/382)，`c16987c3b054c074edfa06edf91da9586e0b647a`。两个 Windows WGC 实采来源经 Media Foundation 系统软件 H.264 和本机有界管道进入 eframe，使用 Direct3D 12 CPU 适配器。四组双面板回读跨度 3.786 秒，同一提交的 macOS 对照为 2.998 秒。两端均在第一路释放后回读空面板与第二路第五帧，随后核对两处清空及原生进程正常退出。[Windows 绘制](https://github.com/ForceMind/Linko/actions/runs/45157971244/job/137641155337) · [macOS 绘制](https://github.com/ForceMind/Linko/actions/runs/45157971244/job/137641155368)
+
+- [PR #383](https://github.com/ForceMind/Linko/pull/383)，`f1202ad3b5904eb6ca9aa4a07936970108f0d642`。约每 200 ms 采样两端的查看器和原生采集编解码进程。四组双路回读保持各路原有纹理 ID，确认活动视频纹理按 2、1、0 个回收，像素数据字节分别为 98,304、49,152、0。[Windows 测量](https://github.com/ForceMind/Linko/actions/runs/45160974105/job/137652425714) · [macOS 测量](https://github.com/ForceMind/Linko/actions/runs/45160974105/job/137652425717) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45160974056)
+
+| 托管环境 | 查看器首个样本 / 采样峰值（字节） · 次数 / 跨度 | 原生进程首个样本 / 采样峰值（字节） · 次数 / 跨度 |
+| --- | --- | --- |
+| Windows Direct3D 12 CPU 适配器，系统工作集 | 4968448 / 241106944 · 33 次 / 7031 ms | 1794048 / 181534720 · 28 次 / 5953 ms |
+| macOS，系统 RSS | 7602176 / 119259136 · 27 次 / 6187 ms | 9093120 / 84246528 · 23 次 / 5345 ms |
+
+本批验证覆盖两端本机双路采集、编解码、实际绘制、工作集或 RSS 短时采样和应用视频纹理释放。首个样本来自进程启动窗口。后续验收包含长时间驻留、硬件 GPU 实测和跨设备观看。
+
+- [PR #384](https://github.com/ForceMind/Linko/pull/384)，`4962f946caa4e2d335271dc79969fcf7d986987a`。离线工作区使用 `--layout-dir <目录>` 启用四个示例面板的重排与显式保存。三端测试核对重开后顺序和焦点恢复、暂停的观看授权保持原样、无效文件及并发修改保留。Linux Xvfb 实际保存顺序 1、3、2、4 并重开应用，截图核对 3 号面板仍在右上且选中。文件保存模式版本、示例面板顺序和焦点偏好。[Linux 作业](https://github.com/ForceMind/Linko/actions/runs/45166056950/job/137663167173) · [原生截图](https://github.com/ForceMind/Linko/actions/runs/45166056950/artifacts/14814399680) · [三端 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45166056950)
+
+- [PR #385](https://github.com/ForceMind/Linko/pull/385)，`fef016bcc6eda6afa72529dff88c043aa1d3db2f`。两路原生来源在第二组展示确认后停发。查看器按各帧原始到达时间释放过期纹理，Windows 两路活动纹理分别在 2140、2139 ms 移除，macOS 分别在 2048、2046 ms 移除。两端均在九点回读确认两处清空后恢复发送，随后回读第三组实采画面。逐路结束、新第五帧、最终清屏和子进程退出的回归通过。[Windows 原生作业](https://github.com/ForceMind/Linko/actions/runs/45169194529/job/137679728131) · [macOS 原生作业](https://github.com/ForceMind/Linko/actions/runs/45169194529/job/137679728078) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45169194526) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45169194568)
+
+- [PR #386](https://github.com/ForceMind/Linko/pull/386)，`8f724f801d85e6917837071b5c1585c3a2f42a21`。Windows WGC 和 macOS ScreenCaptureKit 在本机测试视口间完成 A→B→A。旧来源离屏时释放已排队画面和待确认展示，收到对应停机回执且进程正常退出后才释放解码槽。切回 A 时拒绝旧帧，原观看授权期限不变。三端测试另核对输入释放义务、旧内容确认和新画面。[Windows 原生作业](https://github.com/ForceMind/Linko/actions/runs/45173383420/job/137688312246) · [macOS 原生作业](https://github.com/ForceMind/Linko/actions/runs/45173383420/job/137688312727) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45173383531) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45173383383)
+
+- [PR #387](https://github.com/ForceMind/Linko/pull/387)，`2b1cd3b3911fa918363430025af39f200640cffb`。640×300 的 eframe 工作区按实际滚动视口在上下两块面板之间切换。Windows 和 macOS 均通过 A→B→A 实采像素回读、对应进程正常退出后释放解码槽、重新进入使用新媒体代次和最终清屏。启动中发出停止的场景也在两端验证了原生进程能在交付帧前退出。验证环境为单机实验室。[Windows 窗口回读](https://github.com/ForceMind/Linko/actions/runs/45178146633/job/137713395581) · [macOS 窗口回读](https://github.com/ForceMind/Linko/actions/runs/45178146633/job/137713395549) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45178146613) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45178146617)
+
+- [PR #388](https://github.com/ForceMind/Linko/pull/388)，`b7769ada75a97cf1fa7df5a5f7fac6b2855a8b13`。640×300 工作区从面板 1 按 4 滚到面板 4，焦点随目标移动。Linux、Windows 和 macOS 验证 Tab→Enter 只暂停第 4 面板，保持其他面板的观看状态且无输入激活。双端原生显示与滚动回归通过。[三端 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45181401038) · [双端原生回归](https://github.com/ForceMind/Linko/actions/runs/45181401040)
+
+## RW02 来源控制租约（2026-11-23）
+
+- [PR #389](https://github.com/ForceMind/Linko/pull/389)，`a541159e8890c3ef6444843ccac66bec21f4cbe4`。Linux、Windows 和 macOS 的离线场景用两个独立 Coordinator 观看同一来源。来源只授予一个整机控制租约。争用和旧输入不能影响有效持有者。撤销、断开、精确到期、原生权限丢失和时钟倒退触发释放屏障。完成本地模拟清理后，下一位仍需独立授权。旧连接和其他实例的释放回执均被拒绝。实际注入与按键释放留待原生 owner 接线及双机验收。[三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45183081896) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45183081794)
+
+## A17 同一来源的本机只读镜像（2026-11-23）
+
+- [PR #390](https://github.com/ForceMind/Linko/pull/390)，`ff55c2ac6f0076e68168447a008e4797340273d6`。主面板和镜像共用授权、帧邮箱和一份解码分配。三端模型回归覆盖主面板或镜像单独可见、两处可见、两处离屏、撤权和重授、跨实例句柄、镜像移动和拆除。镜像单独的展示回执不续期主面板输入。[三端 Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45185814449)
+
+- [PR #391](https://github.com/ForceMind/Linko/pull/391)，`b715dea469dff39d8dc6731fd3d21f4049dd3ae7`。Windows WGC/Media Foundation 和 macOS ScreenCaptureKit/VideoToolbox 各用一个原生来源进程、一个解码分配和一份纹理。每次先完成九点像素回读、再让来源采下一组颜色。前后顺序是双区域显示、拆镜像后主区域更新且镜像为空、重挂后双区域显示第三组新帧。撤销本机观看后立即释放共享纹理，确认两处清屏、采集与编解码停止及进程正常退出。较早提交的 Windows 既有双路试验出现一次 `0x8000FFFF`，当前提交通过，根因待确认。[Windows 回读](https://github.com/ForceMind/Linko/actions/runs/45187152305/job/137742215572) · [macOS 回读](https://github.com/ForceMind/Linko/actions/runs/45187152305/job/137742215546) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45187152300) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45187152550) · [较早 Windows 作业](https://github.com/ForceMind/Linko/actions/runs/45186942899/job/137741406629)
+
+## RW09 来源窗口恢复账本（2026-11-23）
+
+- [PR #392](https://github.com/ForceMind/Linko/pull/392)，`12854b0a86eb68a05b482bf63b39f72c42acdd37`。三端 Actions 强制终止持有持久账本的工作进程。分别核对提交前、提交后尚未停放、模拟停放后、模拟恢复后未清账。独立模拟窗口拥有者保留事务结果，证实重启后只清账，不重复恢复或覆盖随后的位置变更。并发持有、恢复失败、错窗口、旧回执以及损坏和未来版本均保留当前记录。证据覆盖工作进程崩溃，断电耐久性待验证。[三端 Rust CI](https://github.com/ForceMind/Linko/actions/runs/45191977346)
+
+- [PR #393](https://github.com/ForceMind/Linko/pull/393)，`724fd051e73d966ebe14438594443fd1a628a44d`。独立 Windows 进程拥有自己的 Win32 测试窗口。账本工作进程强杀后，原窗口和所属进程均保留。恢复的可见性、位置和尺寸由 Win32 回读确认；恢复后未清账时再次强杀，重开只清账，原生恢复计数为 1。另强杀窗口所属进程，重建的新窗口保持原样，旧账本正本保留。[Windows 原生恢复作业](https://github.com/ForceMind/Linko/actions/runs/45194064632/job/137759699948) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45194063110)
+
+- [PR #394](https://github.com/ForceMind/Linko/pull/394)，`60c794959298b50c4dcf40e00499a0b5a22675c0`。macOS AppKit 和 Windows Win32 在同一提交下通过自有原生窗口恢复。两端都在账本进程强杀后回读同一窗口的可见性与原始矩形，在恢复后未清账时再次强杀并核对恢复仅执行一次。两个窗口所属进程退出场景保留旧正本、跳过替换窗口。验证范围为托管环境自有测试窗口。[macOS 原生恢复作业](https://github.com/ForceMind/Linko/actions/runs/45196085202/job/137766780515) · [Windows 原生恢复作业](https://github.com/ForceMind/Linko/actions/runs/45196085202/job/137766780712) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45196085444)
+
+- [PR #396](https://github.com/ForceMind/Linko/pull/396)，`35481172f38eb3f63339f9a51dcd022357f0b5a7`。Win32 与 AppKit 两端在账本已提交、停放命令尚未到达窗口所属进程时强杀账本进程。原窗口所属进程封存同一未执行事务，拒绝迟到的停放和跳号恢复。清账前再次强杀可重放同一回执，窗口可见性、矩形和实际恢复次数均保持原样。后续事务仍能执行原生恢复。干净账本可为新窗口所属进程提供递增基线，旧记录未清时拒绝替换窗口。验证范围为自有原生测试窗口。[Windows 原生恢复](https://github.com/ForceMind/Linko/actions/runs/45199983327/job/137780571174) · [macOS 原生恢复](https://github.com/ForceMind/Linko/actions/runs/45199983327/job/137780571075) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45199983357)
+
+## RW04 Windows 双路 H.264 诊断（2026-11-23）
+
+- [PR #395](https://github.com/ForceMind/Linko/pull/395)，`6a36d4c76a1cb9af859f4eac7c135e31489d20ae`。历史日志的 `0x8000FFFF` 来自实时测试的帧计数断言。新诊断在断言失败时记录具体来源及已提交、已编码、已解码数量。两次 Windows Actions 作业各启动八组新进程。16 组均通过画面、关闭、进程回收与内存采样，均未触发帧数诊断。历史根因待确认。[原始失败](https://github.com/ForceMind/Linko/actions/runs/45186942899/job/137741406629) · [首轮](https://github.com/ForceMind/Linko/actions/runs/45198791836/job/137783247268) · [独立复跑](https://github.com/ForceMind/Linko/actions/runs/45198791836/job/137787121310) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45198791938)
+
+## RW04 认证信令回环（2026-11-23）
+
+- [PR #401](https://github.com/ForceMind/Linko/pull/401)，`1f5d9e72b93d7da9a964012fabda00c768a1f344`，构建 `2026.11.24-1625`（北京时间）。Windows 系统 H.264 工厂经 PeerConnection 本机 ICE/DTLS 回环完成两次独立连接。每轮远端取得至少三帧符合尺寸和亮度的合成画面，共 6 帧编码、6 帧解码、2 个编码器和 2 个解码器释放。校验 constrained-baseline level 1.3 和 packetization-mode=1，旧连接关闭、重连新 ICE 凭据、篡改 SDP 拒绝均通过。独立 RTP 试验继续通过 12 帧及 34 个 FU-A 分片。macOS 原生 H.264 画面、缩放、关闭清屏和启停回归通过，三端 Rust CI 与 Workspace Lab 全绿。本轮亮度在每条连接内固定，Windows 同会话画面变化、动态码率、窗口实采接线和双机观看留待后续验证。[Windows](https://github.com/ForceMind/Linko/actions/runs/45356056218/job/138314033478) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45356056218/job/138314034088) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45356056305) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45356056227)
+
+- [PR #400](https://github.com/ForceMind/Linko/pull/400)，`4e8e5054583b41179cccef85d8475353622d44de`，构建 `2026.11.24-1512`（北京时间）。Windows 系统 Media Foundation H.264 编码经固定 WebRTC RTP 分包、解包和参数集跟踪器进入独立解码器。接收端从收到的访问单元取得 SPS/PPS。实测 12 帧编码、12 帧解码、48 个 RTP 包和 34 个 FU-A 分片。首帧 SPS/PPS/IDR、后续非 IDR 帧、尺寸、变化亮度和条纹、RTP 时间戳与序号回绕均通过。SPS 报告 profile_idc=66、constraints=192、level_idc=13。Windows VP8 回环与 macOS H.264 原生回归通过，三端 Rust CI 和 Workspace Lab 全绿。Windows H.264 接入 PeerConnection、真实双机观看待做。[Windows 日志](https://github.com/ForceMind/Linko/actions/runs/45346183965/job/138281692573) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45346183965/job/138281692207) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45346183974) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45346183956)
+
+- [PR #399](https://github.com/ForceMind/Linko/pull/399)，`9ead297c1870f2da14dd58f84d7d41c9e30bb369`，构建 `2026.11.24-1053`（北京时间）。Windows 在 `127.0.0.1` 用仅提供 VP8 的工厂建立 UDP/DTLS 回环，两次连接均解出尺寸和亮度匹配的合成帧。关闭后停止收帧，重连时 ICE 凭据更新。Windows 和 macOS 均在应用 offer/answer 之前拒绝替换指纹、ICE 凭据或方向、增加媒体段及空描述。macOS 的 ScreenCaptureKit、VideoToolbox H.264 加密回环与 AppKit 显示、缩放及关闭清屏均通过。三端 Rust CI 与 Workspace Lab 通过。Windows H.264 的 WebRTC 接线和真实双机观看待验证。[Windows](https://github.com/ForceMind/Linko/actions/runs/45315589592/job/138181546929) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45315589592/job/138181547293) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45315589551) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45315589570)
+
+- [PR #398](https://github.com/ForceMind/Linko/pull/398)，`0ec41060680b02219f4e816c254fe1c243efff52`，构建版本 `2026.11.24-0046`（北京时间）。用户授权后，Windows 临时 runner 安装与固定 Chromium 构建匹配的微软 SDK `10.0.28000.2270`，验签通过，安装返回 0，并核对 `10.0.28000.0` 下的头文件、链接库与资源编译器。Windows 编译并运行实际的 WebRTC VideoFrame 探针，确认 I420 尺寸及两个发生回绕的 RTP 值。macOS 的 offer 和 answer 均拒绝替换指纹、ICE 凭据或方向，以及额外媒体和空描述。正常回环通过加密 H.264 出帧、重连、窗口缩放、关闭、撤权重开和 100 次原生启停。三端 Rust CI 通过，Workspace Lab 同一提交重跑通过。正式 QUIC 信令接线和双机媒体验收待做。[Windows 作业](https://github.com/ForceMind/Linko/actions/runs/45220356795/job/137852604582) · [macOS 作业](https://github.com/ForceMind/Linko/actions/runs/45220356795/job/137852605213) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45220356825) · [Workspace Lab](https://github.com/ForceMind/Linko/actions/runs/45220356865)
+
+- [PR #397](https://github.com/ForceMind/Linko/pull/397)，`ac5de0b45177e2b4188c16c929b75470efa7877b`。Windows、macOS 和 Linux 使用真实的双向证书认证 QUIC 回环，分别验证已授权的观看描述交换、描述截断、媒体参数替换、撤权、同一对证书重连后重放旧描述，以及未配对证书和错误 ALPN。重连后的新描述可正常接收，观看授权不授予输入。三端均运行了新增的两条回归。验证范围为测试专用 ALPN 和模拟媒体描述，正式 WebRTC 协商及真实双机验收待做。[Windows](https://github.com/ForceMind/Linko/actions/runs/45205847630/job/137801250723) · [macOS](https://github.com/ForceMind/Linko/actions/runs/45205847630/job/137801250674) · [Linux](https://github.com/ForceMind/Linko/actions/runs/45205847630/job/137801250769) · [Rust CI](https://github.com/ForceMind/Linko/actions/runs/45205847630)
