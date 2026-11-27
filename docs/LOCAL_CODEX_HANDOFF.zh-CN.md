@@ -1,6 +1,14 @@
 # 屏跃：本机 Codex 接手开发
 
-## 当前优先故障（2026-11-26）
+## 当前优先故障与公开候选（2026-11-27）
+
+PR180 `b94b4d4`（含 `510ef8f`）修复了 `session.rs` `primary_edge_entry` 丢弃主屏外侧未裁剪越界坐标（如 Windows `WH_MOUSE_LL` 外推屏幕边界时返回的越界点）的问题，补齐 Windows `mouse_hook` 与 macOS `callback` 鼠标回调单元测试，并在托管 Windows 与 macOS（只读权限预检通过，`native=true`）双连接角色跑通精确触边 + 越界触边两轮首包与恢复回归。[Actions 45954302383](https://github.com/ForceMind/Linko/actions/runs/45954302383) 三端包、升级回滚、GUI 内存诊断与配对上游检查 11/11 通过。
+
+官网 [linko-63e.pages.dev](https://linko-63e.pages.dev/#preview) 已上线 **0.1.11**（Cloudflare 生产部署 `a58d85ed`，源码 PR402 `a6b3772`，Actions 产物 `15187881506`），公开下载已切换为同版 Windows x64 / macOS Apple 芯片验收候选 **`2026.11.27-1449`**（[Release v2026.11.27-1449](https://github.com/ForceMind/Linko/releases/tag/v2026.11.27-1449)，复用 Actions `45954302383` 原 ZIP，无二次打包）。线上 11 项文件哈希、安全头与匿名下载均已核对；应用源码 `main` 未合并。
+
+C06 尚未通过，此前 `2026.11.20-1322` 现场卡点与 #10 历史根因仍未知。双机统一验收请使用两端同版 `2026.11.27-1449` 并开启「开启并诊断」；若遇到跨屏受阻，保留连接状态与两端 `KVM-DIAG/5`（重点核对发送端 `edge_hit/blk_gate/acq_tx/grant/commit/deq/tx` 与接收端 `acq_rx/rx/apply/sdk_fail/first_rx_to`），并顺带核对 macOS Caps Lock 开启态与独立分段布局（`routed_source.rs`）。详见 `VALIDATION.md`。
+
+## 历史排查记录（2026-11-26）
 
 用户安装官网 `2026.11.20-1322` 后确认两个方向均无法跨屏。按固定提交的 Oink 机制修复了一处刚取权就意外回程的问题，[PR180](https://github.com/ForceMind/Linko/pull/180) 最新修复为 `983c169`，候选 `2026.11.27-0118` 的三端包、回归测试和升级回滚均有 [Actions 证据](https://github.com/ForceMind/Linko/actions/runs/45866678224)，详情见 `VALIDATION.md`。公开官网当前仍下载 `2026.11.20-1322`。
 
