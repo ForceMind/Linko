@@ -1,6 +1,14 @@
 # 屏跃：本机 Codex 接手开发
 
-## 当前优先故障与公开候选（2026-11-27）
+## 当前优先故障与公开候选（2026-11-27 晚）
+
+PR #312（`diag-held-and-peer-sync`，`e41e381`）已合入 PR #180（合并提交 `6f003fb58f9426b1515fe58bb74290f21ea95c26`），带来独立低优先级 QUIC 诊断流互看（ADR-0019）、任意一端一键「复制两端摘要」、本机说明行与 `KVM-HELD/1` 按住状态诊断，同时保留 `b94b4d4` 的外侧越界触边修复、原生鼠标回调回归及托管 Windows/macOS 双角色首包回归。[Actions 46033236090](https://github.com/ForceMind/Linko/actions/runs/46033236090) 三端包、升级回滚、GUI 内存诊断与配对上游检查 11/11 全部通过。
+
+官网 [linko-63e.pages.dev](https://linko-63e.pages.dev/#preview) 已上线 **0.1.12**（Cloudflare 生产部署 `2831d6cc`，源码 PR402 `3e9a20d`，Actions 产物 `15218037713`），公开下载已切换为同版 Windows x64 / macOS Apple 芯片验收候选 **`2026.11.28-0023`**（[Release v2026.11.28-0023](https://github.com/ForceMind/Linko/releases/tag/v2026.11.28-0023)，复用 Actions `46033236090` 原 ZIP，无二次打包）。线上 11 项文件哈希、安全头及 GitHub / `gh-proxy.org` 匿名下载均已核对；应用源码 `main` 未合并。
+
+C06 尚未通过，此前 `2026.11.20-1322` 现场卡点与 #10 历史根因仍未知。双机统一验收请两端使用同版 `2026.11.28-0023` 且均选「开启并诊断」；如遇跨屏受阻，只需在**任意一端**打开「设置 → 诊断与资料 → 高级诊断」点击**「复制两端摘要」**即可带出双方 `KVM-DIAG/5`、本机说明行与 `KVM-HELD/1`（同时可顺带确认 macOS Caps Lock 开启态与独立分段布局 `routed_source.rs`）。详见 `VALIDATION.md`。
+
+## 早期公开候选记录（2026-11-27）
 
 PR180 `b94b4d4`（含 `510ef8f`）修复了 `session.rs` `primary_edge_entry` 丢弃主屏外侧未裁剪越界坐标（如 Windows `WH_MOUSE_LL` 外推屏幕边界时返回的越界点）的问题，补齐 Windows `mouse_hook` 与 macOS `callback` 鼠标回调单元测试，并在托管 Windows 与 macOS（只读权限预检通过，`native=true`）双连接角色跑通精确触边 + 越界触边两轮首包与恢复回归。[Actions 45954302383](https://github.com/ForceMind/Linko/actions/runs/45954302383) 三端包、升级回滚、GUI 内存诊断与配对上游检查 11/11 通过。
 
