@@ -1137,33 +1137,112 @@ mod tests {
 
     #[test]
     fn modifier_release_allows_committed_source_motion_into_the_capture_queue() {
+        struct ResetState;
+        impl Drop for ResetState {
+            fn drop(&mut self) {
+                let _ = STATE.take();
+            }
+        }
+        fn filtered_count(diagnostics: &input_diagnostics::InputDiagnostics) -> u32 {
+            diagnostics
+                .snapshot(input_diagnostics::Phase::Sample)
+                .to_string()
+                .split_ascii_whitespace()
+                .find_map(|field| field.strip_prefix("filtered="))
+                .unwrap()
+                .parse()
+                .unwrap()
+        }
+        fn mouse_moved(point: Point, delta: (i64, i64), tagged: bool) -> bool {
+            // Deliver an unposted CoreGraphics move to the real callback on this test thread.
+            unsafe {
+                let raw = CGEventCreateMouseEvent(null_mut(), 5, point, 0);
+                let event = OwnedEvent::created(raw).unwrap();
+                CGEventSetIntegerValueField(event.0, 4, delta.0);
+                CGEventSetIntegerValueField(event.0, 5, delta.1);
+                CGEventSetIntegerValueField(event.0, 42, if tagged { TAG } else { 0 });
+                callback(null_mut(), 5, event.0, null_mut()).is_null()
+            }
+        }
+
         let (gate, mut events) = callback_gate();
+        let _reset = ResetState;
+        let diagnostics = Arc::new(input_diagnostics::InputDiagnostics::default());
+        assert!(gate.0.diagnostics.set(diagnostics.clone()).is_ok());
+
+        let local = gate.route().unwrap();
+        let CaptureRoute::Local(local_epoch) = local else {
+            panic!("expected local capture route");
+        };
         assert!(!flags_changed(0xe1, 0, false));
         assert!(matches!(
             events.try_recv().unwrap(),
             Captured::Input {
                 event: Input::Key { down: false, .. },
-                route: CaptureRoute::Local(_),
-            }
+                route: CaptureRoute::Local(epoch),
+            } if epoch == local_epoch
         ));
-        let token = gate.prepare_commit(gate.snapshot().epoch()).unwrap();
+
+        let bounds = unsafe { CGDisplayBounds(CGMainDisplayID()) };
+        let edge = Point {
+            x: bounds.origin.x + (bounds.size.width - 1.0).max(0.0),
+            y: bounds.origin.y + bounds.size.height * 0.5,
+        };
+        assert!(!mouse_moved(edge, (0, 0), false));
+        let Captured::Position {
+            x,
+            y,
+            width,
+            height,
+            route,
+            primary,
+        } = events.try_recv().unwrap()
+        else {
+            panic!("expected local edge position before commit");
+        };
+        assert_eq!(route, local);
+        assert_eq!(primary, None);
+        assert!((x - (edge.x - bounds.origin.x)).abs() <= 1.0);
+        assert!((y - (edge.y - bounds.origin.y)).abs() <= 1.0);
+        assert_eq!((width, height), (bounds.size.width, bounds.size.height));
+
+        assert!(!mouse_moved(edge, (5, -2), true));
+        assert!(events.try_recv().is_err());
+        assert_eq!(filtered_count(&diagnostics), 1);
+
+        let token = gate.prepare_commit(local_epoch).unwrap();
         let CaptureCommit::Committed(epoch) = gate.commit_from(token, u64::MAX, now_ms()) else {
             panic!("released source must admit the handoff");
         };
-        unsafe {
-            let point = Point { x: 0.0, y: 10.0 };
-            let raw = CGEventCreateMouseEvent(null_mut(), 5, point, 0);
-            let event = OwnedEvent::created(raw).unwrap();
-            CGEventSetIntegerValueField(event.0, 4, -12);
-            CGEventSetIntegerValueField(event.0, 5, 3);
-            assert!(callback(null_mut(), 5, event.0, null_mut()).is_null());
-        }
+        assert!(!mouse_moved(edge, (9, 4), true));
+        assert!(events.try_recv().is_err());
+        assert_eq!(filtered_count(&diagnostics), 2);
+
+        assert!(mouse_moved(Point { x: 0.0, y: 10.0 }, (-12, 3), false));
         let Captured::Motion { dx, dy, route } = events.try_recv().unwrap() else {
             panic!("expected remote motion after the handoff");
         };
         assert_eq!(route, CaptureRoute::Remote(epoch));
         assert_eq!((dx, dy), (-12.0, 3.0));
-        let _ = STATE.take();
+
+        gate.disable();
+        let restored = gate.route().unwrap();
+        let CaptureRoute::Local(restored_epoch) = restored else {
+            panic!("expected local route after release");
+        };
+        assert_ne!(restored_epoch, local_epoch);
+        assert_ne!(restored_epoch, epoch);
+        let interior = Point {
+            x: bounds.origin.x + bounds.size.width * 0.5,
+            y: bounds.origin.y + bounds.size.height * 0.5,
+        };
+        assert!(!mouse_moved(interior, (0, 0), false));
+        let Captured::Position { x, y, route, .. } = events.try_recv().unwrap() else {
+            panic!("expected local position after release");
+        };
+        assert_eq!(route, restored);
+        assert!((x - (interior.x - bounds.origin.x)).abs() <= 1.0);
+        assert!((y - (interior.y - bounds.origin.y)).abs() <= 1.0);
     }
 
     #[test]

@@ -1546,4 +1546,133 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn mouse_hook_routes_local_edge_committed_motion_injected_echo_and_release() {
+        struct ResetState;
+        impl Drop for ResetState {
+            fn drop(&mut self) {
+                let _ = STATE.take();
+            }
+        }
+        fn filtered_count(diagnostics: &input_diagnostics::InputDiagnostics) -> u32 {
+            diagnostics
+                .snapshot(input_diagnostics::Phase::Sample)
+                .to_string()
+                .split_ascii_whitespace()
+                .find_map(|field| field.strip_prefix("filtered="))
+                .unwrap()
+                .parse()
+                .unwrap()
+        }
+        fn deliver_mouse(message: u32, pt: POINT, flags: u32, extra: usize) -> LRESULT {
+            let event = MSLLHOOKSTRUCT {
+                pt,
+                mouseData: 0,
+                flags,
+                time: 0,
+                dwExtraInfo: extra,
+            };
+            // Deliver a synthetic hook payload directly to the real callback on
+            // this test thread; this exercises callback routing, never OS hooks.
+            let raw = std::ptr::from_ref(&event) as LPARAM;
+            unsafe { mouse_hook(0, message as WPARAM, raw) }
+        }
+
+        let _dpi = windows_display::PhysicalContext::enter();
+        let (state, mut events) = crate::hook_tests::state(32);
+        let gate = state.gate.clone();
+        let diagnostics = Arc::new(input_diagnostics::InputDiagnostics::default());
+        assert!(gate.0.diagnostics.set(diagnostics.clone()).is_ok());
+        STATE.set(Some(state));
+        let _reset = ResetState;
+
+        let local = gate.route().unwrap();
+        let CaptureRoute::Local(local_epoch) = local else {
+            panic!("expected local capture route");
+        };
+        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        let edge_point = POINT {
+            x: width.saturating_sub(1),
+            y: height / 2,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, 0, 0), 0);
+        let Captured::Position {
+            x,
+            y,
+            width: reported_w,
+            height: reported_h,
+            route,
+            primary,
+        } = events.try_recv().unwrap()
+        else {
+            panic!("expected local position from mouse_hook");
+        };
+        assert_eq!(route, local);
+        assert_eq!(primary, None);
+        assert_eq!((x, y), (f64::from(edge_point.x), f64::from(edge_point.y)));
+        assert_eq!((reported_w, reported_h), (f64::from(width), f64::from(height)));
+
+        let overshoot = POINT {
+            x: width + 5,
+            y: height / 2,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, overshoot, 0, 0), 0);
+        let Captured::Position { x, y, route, .. } = events.try_recv().unwrap() else {
+            panic!("expected unclipped local edge overshoot from mouse_hook");
+        };
+        assert_eq!(route, local);
+        assert_eq!((x, y), (f64::from(overshoot.x), f64::from(overshoot.y)));
+
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, 0), 0);
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, 0, TAG), 0);
+        assert!(events.try_recv().is_err());
+        assert_eq!(filtered_count(&diagnostics), 2);
+
+        let token = gate.prepare_commit(local_epoch).unwrap();
+        let CaptureCommit::Committed(remote_epoch) = gate.commit_from(token, u64::MAX, now_ms())
+        else {
+            panic!("idle local capture must commit to remote");
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, TAG), 0);
+        assert!(events.try_recv().is_err());
+        assert_eq!(filtered_count(&diagnostics), 3);
+
+        let before = diagnostic_cursor_position().unwrap_or((0, 0));
+        let moved = POINT {
+            x: before.0 + 17,
+            y: before.1 - 9,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, moved, 0, 0), 1);
+        let after = diagnostic_cursor_position().unwrap_or((0, 0));
+        let Captured::Motion { dx, dy, route } = events.try_recv().unwrap() else {
+            panic!("expected committed remote motion from mouse_hook");
+        };
+        assert_eq!(route, CaptureRoute::Remote(remote_epoch));
+        let dx_a = f64::from(moved.x - before.0);
+        let dx_b = f64::from(moved.x - after.0);
+        let dy_a = f64::from(moved.y - before.1);
+        let dy_b = f64::from(moved.y - after.1);
+        assert!((dx_a.min(dx_b)..=dx_a.max(dx_b)).contains(&dx));
+        assert!((dy_a.min(dy_b)..=dy_a.max(dy_b)).contains(&dy));
+
+        gate.disable();
+        let restored = gate.route().unwrap();
+        let CaptureRoute::Local(restored_epoch) = restored else {
+            panic!("expected local route after release");
+        };
+        assert_ne!(restored_epoch, local_epoch);
+        assert_ne!(restored_epoch, remote_epoch);
+        let interior = POINT {
+            x: width / 2,
+            y: height / 2,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, interior, 0, 0), 0);
+        let Captured::Position { x, y, route, .. } = events.try_recv().unwrap() else {
+            panic!("expected local position after release");
+        };
+        assert_eq!(route, restored);
+        assert_eq!((x, y), (f64::from(interior.x), f64::from(interior.y)));
+    }
 }

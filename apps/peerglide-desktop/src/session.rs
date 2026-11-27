@@ -1494,6 +1494,74 @@ fn exposed_primary_edge(
         .is_some_and(|anchor| anchor.display == primary)
 }
 
+fn bounds_distance_sq(bounds: platform::display_layout::Bounds, (x, y): (f64, f64)) -> f64 {
+    let dx = if x < bounds.left {
+        bounds.left - x
+    } else if x > bounds.right {
+        x - bounds.right
+    } else {
+        0.0
+    };
+    let dy = if y < bounds.top {
+        bounds.top - y
+    } else if y > bounds.bottom {
+        y - bounds.bottom
+    } else {
+        0.0
+    };
+    dx * dx + dy * dy
+}
+
+fn overshot_primary_edge(
+    layout: Option<&Layout>,
+    edge: Edge,
+    (x, y): (f64, f64),
+    (width, height): (f64, f64),
+) -> Option<(f64, f64)> {
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    let overshot = match edge {
+        Edge::Left => x < 0.0,
+        Edge::Right => x >= width,
+        Edge::Top => y < 0.0,
+        Edge::Bottom => y >= height,
+    };
+    if !overshot {
+        return None;
+    }
+    let layout = layout?;
+    let primary = layout.primary();
+    let display = layout
+        .displays()
+        .iter()
+        .find(|display| display.id == primary)?;
+    let bounds = display.bounds;
+    if (bounds.right - bounds.left - width).abs() > f64::EPSILON
+        || (bounds.bottom - bounds.top - height).abs() > f64::EPSILON
+    {
+        return None;
+    }
+    let desktop = (bounds.left + x, bounds.top + y);
+    if layout.display_at(desktop.0, desktop.1).is_some() {
+        return None;
+    }
+    let primary_distance = bounds_distance_sq(bounds, desktop);
+    if layout
+        .displays()
+        .iter()
+        .filter(|other| other.id != primary)
+        .any(|other| bounds_distance_sq(other.bounds, desktop) <= primary_distance)
+    {
+        return None;
+    }
+    let clamped = (
+        x.clamp(0.0, (width - 1.0).max(0.0)),
+        y.clamp(0.0, (height - 1.0).max(0.0)),
+    );
+    exposed_primary_edge(Some(layout), edge, clamped, (width, height)).then_some(clamped)
+}
+
 fn primary_edge_entry(
     gate: &mut EdgeGate,
     edge: Edge,
@@ -1503,10 +1571,13 @@ fn primary_edge_entry(
     layout: Option<&Layout>,
 ) -> Option<f64> {
     // A secondary display can produce coordinates beyond the primary rectangle.
-    // Only an observed position inside that rectangle can rearm the entry gate.
-    if !(0.0..width).contains(&x) || !(0.0..height).contains(&y) {
-        return None;
-    }
+    // Only an observed position inside that rectangle can rearm the entry gate,
+    // while unclipped outer-edge overshoot from the primary display still crosses.
+    let (x, y) = if (0.0..width).contains(&x) && (0.0..height).contains(&y) {
+        (x, y)
+    } else {
+        overshot_primary_edge(layout, edge, (x, y), (width, height))?
+    };
     let nx = (x / (width - 1.0).max(1.0)).min(1.0);
     let ny = (y / (height - 1.0).max(1.0)).min(1.0);
     let along = match edge {
@@ -2353,6 +2424,91 @@ mod tests {
             Some(&layout)
         )
         .is_none());
+    }
+
+    #[test]
+    fn unclipped_outer_edge_overshoot_crosses_exposed_primary_without_misrouting_secondary() {
+        use platform::display_layout::{Bounds, Display, DisplayId, Rotation};
+        let primary = Display {
+            id: DisplayId(1),
+            bounds: Bounds {
+                left: 0.0,
+                top: 0.0,
+                right: 1920.0,
+                bottom: 1080.0,
+            },
+            scale: 1.0,
+            rotation: Rotation::Upright,
+        };
+        let single = Layout::new(primary.id, vec![primary]).unwrap();
+        let size = (1920.0, 1080.0);
+        let interior = (959.5, 539.5);
+        for (edge, overshoot, wrong_side) in [
+            (Edge::Left, (-5.0, interior.1), (1925.0, interior.1)),
+            (Edge::Right, (1925.0, interior.1), (-5.0, interior.1)),
+            (Edge::Top, (interior.0, -5.0), (interior.0, 1085.0)),
+            (Edge::Bottom, (interior.0, 1085.0), (interior.0, -5.0)),
+        ] {
+            let mut gate = EdgeGate::default();
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, wrong_side, size, 499, Some(&single)),
+                None
+            );
+            let along =
+                primary_edge_entry(&mut gate, edge, overshoot, size, 500, Some(&single)).unwrap();
+            assert!((along - 0.5).abs() < 1e-6);
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, overshoot, size, 900, Some(&single)),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, wrong_side, size, 901, Some(&single)),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, overshoot, size, 902, Some(&single)),
+                None
+            );
+            assert_eq!(
+                primary_edge_entry(&mut gate, edge, interior, size, 903, Some(&single)),
+                None
+            );
+            assert!(
+                primary_edge_entry(&mut gate, edge, overshoot, size, 904, Some(&single)).is_some()
+            );
+        }
+        let mut corner_gate = EdgeGate::default();
+        let corner = primary_edge_entry(
+            &mut corner_gate,
+            Edge::Right,
+            (1925.0, -3.0),
+            size,
+            500,
+            Some(&single),
+        );
+        assert_eq!(corner, Some(0.0));
+
+        let right = Display {
+            id: DisplayId(2),
+            bounds: Bounds {
+                left: 1920.0,
+                top: 0.0,
+                right: 2920.0,
+                bottom: 600.0,
+            },
+            ..primary
+        };
+        let multi = Layout::new(primary.id, vec![primary, right]).unwrap();
+        let mut gate = EdgeGate::default();
+        let on_secondary =
+            primary_edge_entry(&mut gate, Edge::Right, (1925.0, 200.0), size, 500, Some(&multi));
+        assert_eq!(on_secondary, None);
+        let past_secondary =
+            primary_edge_entry(&mut gate, Edge::Right, (2500.0, 605.0), size, 501, Some(&multi));
+        assert_eq!(past_secondary, None);
+        let exposed =
+            primary_edge_entry(&mut gate, Edge::Right, (1925.0, 700.0), size, 502, Some(&multi));
+        assert!(exposed.is_some());
     }
 
     #[test]

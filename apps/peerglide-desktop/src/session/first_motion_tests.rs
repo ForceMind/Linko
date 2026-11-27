@@ -1,5 +1,6 @@
 use super::{monitor_layout, run_with_diagnostics, send, transport, Policy, SessionControls};
 use anyhow::{ensure, Context, Result};
+use peerglide_platform::context::{PermissionStatus, SecureInput};
 use peerglide_platform::input_diagnostics::{InputDiagnostics, Phase};
 use peerglide_platform::{now_ms, CaptureGate, CaptureRoute, Captured};
 use peerglide_protocol::{decode, encode, Edge, InputCapabilities, Message, Motion};
@@ -11,13 +12,48 @@ pub(crate) struct SourceCapture {
     pub(super) installed: oneshot::Sender<CaptureGate>,
 }
 
+fn hosted_native_ready() -> Result<bool> {
+    let hosted = std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+        && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted");
+    if !hosted {
+        return Ok(false);
+    }
+    if cfg!(windows) {
+        return Ok(true);
+    }
+    if cfg!(target_os = "macos") {
+        let report = peerglide_platform::context::permissions();
+        let has_layout = monitor_layout(true).is_some();
+        let ready = report.accessibility == PermissionStatus::Granted
+            && report.input_monitoring == PermissionStatus::Granted
+            && report.secure_input == SecureInput::Inactive
+            && has_layout;
+        writeln!(
+            std::io::stdout().lock(),
+            "macos hosted precheck: accessibility={} input_monitoring={} input_desktop={} secure_input={} layout={} native_ready={}",
+            report.accessibility.code(),
+            report.input_monitoring.code(),
+            report.input_desktop.code(),
+            report.secure_input.code(),
+            has_layout,
+            ready
+        )?;
+        if !ready {
+            writeln!(
+                std::io::stdout().lock(),
+                "macos hosted coverage gap: native event tap and injection skipped because OS permissions or display session are unavailable"
+            )?;
+        }
+        return Ok(ready);
+    }
+    Ok(false)
+}
+
 #[tokio::test]
 async fn first_motion_after_grant_in_both_connection_roles() -> Result<()> {
-    // The workspace test runs on every platform. Real injection is restricted
-    // to the disposable GitHub-hosted Windows input desktop.
-    let native = cfg!(windows)
-        && std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
-        && std::env::var("RUNNER_ENVIRONMENT").as_deref() == Ok("github-hosted");
+    // The workspace test runs on every platform. Real capture and injection are
+    // restricted to GitHub-hosted desktops whose read-only precheck passes.
+    let native = hosted_native_ready()?;
     for (source_dials, edge) in [(true, Edge::Right), (false, Edge::Left)] {
         exercise(source_dials, edge, native, false)
             .await
@@ -147,88 +183,107 @@ async fn probe_source(
     let width = bounds.right - bounds.left;
     let height = bounds.bottom - bounds.top;
     let right = edge == Edge::Right;
-    let local = match gate.route() {
-        Some(route @ CaptureRoute::Local(_)) => route,
-        _ => anyhow::bail!("source capture did not start Local"),
-    };
-    // EdgeGate starts with a zero timestamp. Keep the first edge sample out
-    // of the initial dwell interval without using up any Acquire budget.
-    tokio::time::sleep(Duration::from_millis(300u64.saturating_sub(now_ms()))).await;
-    events
-        .send(Captured::Position {
-            x: if right { width - 1.0 } else { 0.0 },
-            y: (height - 1.0) * 0.5,
-            width,
-            height,
-            route: local,
-            primary: None,
+    let boundary_x = if right { width - 1.0 } else { 0.0 };
+    let overshoot_x = if right { width + 5.0 } else { -5.0 };
+    for (round, edge_x) in [boundary_x, overshoot_x].into_iter().enumerate() {
+        let local = match gate.route() {
+            Some(route @ CaptureRoute::Local(_)) => route,
+            _ => anyhow::bail!("source capture did not start Local"),
+        };
+        if round == 0 {
+            // EdgeGate starts with a zero timestamp. Keep the first edge sample
+            // out of the initial dwell interval without using up Acquire budget.
+            tokio::time::sleep(Duration::from_millis(300u64.saturating_sub(now_ms()))).await;
+        } else {
+            events
+                .send(Captured::Position {
+                    x: width * 0.5,
+                    y: (height - 1.0) * 0.5,
+                    width,
+                    height,
+                    route: local,
+                    primary: None,
+                })
+                .await
+                .context("submit interior position to rearm EdgeGate")?;
+            tokio::time::sleep(Duration::from_millis(320)).await;
+        }
+        events
+            .send(Captured::Position {
+                x: edge_x,
+                y: (height - 1.0) * 0.5,
+                width,
+                height,
+                route: local,
+                primary: None,
+            })
+            .await
+            .context("submit source edge position")?;
+        let acquire = tokio::time::timeout(Duration::from_secs(2), transport::receive(rx))
+            .await
+            .context("edge did not produce Acquire")??;
+        let Message::Acquire {
+            lease,
+            edge: requested,
+            along,
+        } = acquire
+        else {
+            anyhow::bail!("expected Acquire after the edge position");
+        };
+        ensure!(
+            requested == edge && along == 0.5,
+            "unexpected Acquire route"
+        );
+        ensure!(gate.is_current(local), "source committed before Granted");
+        send(tx, &Message::Granted { lease })
+            .await
+            .context("send Granted to source")?;
+        let route = tokio::time::timeout(Duration::from_millis(800), async {
+            loop {
+                if let Some(route @ CaptureRoute::Remote(_)) = gate.route() {
+                    break route;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
         })
         .await
-        .context("submit source edge position")?;
-    let acquire = tokio::time::timeout(Duration::from_secs(2), transport::receive(rx))
-        .await
-        .context("edge did not produce Acquire")??;
-    let Message::Acquire {
-        lease,
-        edge: requested,
-        along,
-    } = acquire
-    else {
-        anyhow::bail!("expected Acquire after the edge position");
-    };
-    ensure!(
-        requested == edge && along == 0.5,
-        "unexpected Acquire route"
-    );
-    ensure!(gate.is_current(local), "source committed before Granted");
-    send(tx, &Message::Granted { lease })
-        .await
-        .context("send Granted to source")?;
-    let route = tokio::time::timeout(Duration::from_millis(800), async {
-        loop {
-            if let Some(route @ CaptureRoute::Remote(_)) = gate.route() {
-                break route;
+        .context("source capture remained Local after Granted")?;
+        let dx = if right { width * 0.1 } else { -width * 0.1 };
+        events
+            .send(Captured::Motion { dx, dy: 0.0, route })
+            .await
+            .context("submit first routed capture motion")?;
+        let bytes = tokio::time::timeout(Duration::from_millis(500), connection.read_datagram())
+            .await
+            .context("committed source did not send its first movement")??;
+        let motion: Motion = decode(&bytes).map_err(anyhow::Error::msg)?;
+        let expected_x = if right { 0.102 } else { 0.898 };
+        ensure!(
+            motion.lease == lease
+                && motion.sequence == 1
+                && (motion.x - expected_x).abs() < 1e-6
+                && motion.y == 0.5,
+            "first movement did not match the granted route"
+        );
+        send(
+            tx,
+            &Message::Release {
+                lease,
+                cursor: None,
+            },
+        )
+        .await?;
+        tokio::time::timeout(Duration::from_millis(800), async {
+            loop {
+                if matches!(gate.route(), Some(CaptureRoute::Local(_))) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(2)).await;
             }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .context("source capture remained Local after Granted")?;
-    let dx = if right { width * 0.1 } else { -width * 0.1 };
-    events
-        .send(Captured::Motion { dx, dy: 0.0, route })
+        })
         .await
-        .context("submit first routed capture motion")?;
-    let bytes = tokio::time::timeout(Duration::from_millis(500), connection.read_datagram())
-        .await
-        .context("committed source did not send its first movement")??;
-    let motion: Motion = decode(&bytes).map_err(anyhow::Error::msg)?;
-    let expected_x = if right { 0.102 } else { 0.898 };
-    ensure!(
-        motion.lease == lease
-            && motion.sequence == 1
-            && (motion.x - expected_x).abs() < 1e-6
-            && motion.y == 0.5,
-        "first movement did not match the granted route"
-    );
-    send(
-        tx,
-        &Message::Release {
-            lease,
-            cursor: None,
-        },
-    )
-    .await?;
-    tokio::time::timeout(Duration::from_millis(800), async {
-        loop {
-            if matches!(gate.route(), Some(CaptureRoute::Local(_))) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .context("peer Release did not restore local capture")?;
+        .context("peer Release did not restore local capture")?;
+    }
     Ok(())
 }
 
