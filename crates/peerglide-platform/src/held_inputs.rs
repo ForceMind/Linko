@@ -60,6 +60,25 @@ impl<T: Copy + Into<usize>, const WORDS: usize> HeldSet<T, WORDS> {
     pub(super) fn is_empty(&self) -> bool {
         self.count == 0
     }
+
+    /// Held values in `start..end`, counted from the fixed words only.
+    pub(super) fn count_range(&self, start: usize, end: usize) -> usize {
+        let end = end.min(WORDS * 64);
+        let mut index = start;
+        let mut total = 0;
+        while index < end {
+            let offset = index % 64;
+            let width = (64 - offset).min(end - index);
+            let mask = if width == 64 {
+                u64::MAX
+            } else {
+                ((1u64 << width) - 1) << offset
+            };
+            total += (self.words[index / 64] & mask).count_ones() as usize;
+            index += width;
+        }
+        total
+    }
 }
 
 impl<T: Copy + Into<usize>, const WORDS: usize> Extend<T> for HeldSet<T, WORDS> {
@@ -102,6 +121,22 @@ mod tests {
             assert!(buttons.remove(&32));
             assert!(!buttons.remove(&32));
             assert_eq!(buttons.len(), 2);
+        });
+        assert_eq!(allocated, 0);
+    }
+
+    #[test]
+    fn range_counts_split_categories_without_allocation() {
+        let keys: HeldKeys = [4, 0x3f, 0x40, 0xe0, 0xe7, 0x8004].into_iter().collect();
+        let buttons: HeldButtons = [1, 3, 15, 200].into_iter().collect();
+        let allocated = crate::allocation_checks::count(|| {
+            assert_eq!(keys.count_range(0, 0x100), 5);
+            assert_eq!(keys.count_range(0xe0, 0xe8), 2);
+            assert_eq!(keys.count_range(0x3f, 0x41), 2);
+            assert_eq!(keys.count_range(0x100, usize::MAX), 1);
+            assert_eq!(keys.count_range(5, 5), 0);
+            assert_eq!(buttons.count_range(0, 15), 2);
+            assert_eq!(buttons.count_range(15, 256), 2);
         });
         assert_eq!(allocated, 0);
     }

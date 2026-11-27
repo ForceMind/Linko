@@ -376,14 +376,17 @@ pub fn verify_peer(connection: &quinn::Connection, expected: &[u8]) -> Result<()
     Ok(())
 }
 pub async fn send(stream: &mut quinn::SendStream, msg: &Message) -> Result<()> {
-    let bytes = encode(msg)?;
+    send_frame(stream, &encode(msg)?).await
+}
+/// One length-prefixed frame whose schema the caller already chose.
+pub async fn send_frame(stream: &mut quinn::SendStream, bytes: &[u8]) -> Result<()> {
     if bytes.len() > MAX_FRAME {
         bail!("frame too large");
     }
     let mut frame = [0; 4 + MAX_FRAME];
     let used = &mut frame[..4 + bytes.len()];
     used[..4].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
-    used[4..].copy_from_slice(&bytes);
+    used[4..].copy_from_slice(bytes);
     stream.write_all(used).await?;
     Ok(())
 }
@@ -412,6 +415,18 @@ fn frame_read_error(error: std::io::Error) -> anyhow::Error {
     }
 }
 pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
+    let mut buffer = [0; MAX_FRAME];
+    decode_message(receive_frame(stream, &mut buffer).await?)
+}
+/// Decodes a v5 message with the same error class as `receive`.
+pub fn decode_message(frame: &[u8]) -> Result<Message> {
+    decode(frame).map_err(|error| anyhow::Error::msg(error).context(InvalidMessageFrame))
+}
+/// One length-prefixed frame body; the caller chooses its schema.
+pub async fn receive_frame<'a>(
+    stream: &mut quinn::RecvStream,
+    buffer: &'a mut [u8; MAX_FRAME],
+) -> Result<&'a [u8]> {
     let mut header = [0u8; 4];
     if AsyncReadExt::read(stream, &mut header[..1]).await? == 0 {
         return Err(MessageStreamEnded.into());
@@ -424,12 +439,11 @@ pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
     if size == 0 || size > MAX_FRAME {
         return Err(anyhow::anyhow!("frame length invalid").context(InvalidMessageFrame));
     }
-    let mut buffer = [0; MAX_FRAME];
     let body = &mut buffer[..size];
     AsyncReadExt::read_exact(stream, body)
         .await
         .map_err(frame_read_error)?;
-    decode(body).map_err(|error| anyhow::Error::msg(error).context(InvalidMessageFrame))
+    Ok(&buffer[..size])
 }
 
 #[cfg(test)]

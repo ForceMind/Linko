@@ -1309,8 +1309,9 @@ async fn run_inner(
     } else {
         InputCapabilities::default()
     };
-    let peer_capabilities = exchange_hello(&mut tx, &mut rx, local.clone()).await?;
-    Ok::<_, anyhow::Error>((c, tx, rx, local, peer_capabilities))
+    let offer = o.input_diagnostics && !probe;
+    let (peer_capabilities, peer_diagnostics) = exchange_hello_offer(&mut tx, &mut rx, local.clone(), offer).await?;
+    Ok::<_, anyhow::Error>((c, tx, rx, local, peer_capabilities, peer_diagnostics))
         } => Some(result),
     };
     let Some(connected) = connected else {
@@ -1318,7 +1319,7 @@ async fn run_inner(
         e.wait_idle().await;
         return Ok(());
     };
-    let (c, mut tx, mut rx, local, peer_capabilities) = connected?;
+    let (c, mut tx, mut rx, local, peer_capabilities, peer_diagnostics) = connected?;
     if *stop.borrow() {
         c.close(0u8.into(), b"supervisor stopped");
         e.wait_idle().await;
@@ -1358,6 +1359,14 @@ async fn run_inner(
         .input_diagnostics
         .then(input_diagnostics::DiagnosticWindow::start)
         .transpose()?;
+    if o.input_diagnostics {
+        let line = if peer_diagnostics {
+            "Peer diagnostics exchange is on for this session."
+        } else {
+            "The peer did not offer diagnostics for this session."
+        };
+        eprintln!("{line}");
+    }
     if let Some(peer) =
         WorkerPeerAddress::new(c.remote_address()).filter(|_| o.managed && address.is_none())
     {
@@ -1378,6 +1387,8 @@ async fn run_inner(
         input_status,
         session::SessionControls {
             diagnostics: diagnostics.as_ref().map(|window| &window.counters),
+            diagnostic_output: diagnostics.as_ref().map(|window| window.output()),
+            peer_diagnostics,
             layout: Some(&o.layout),
             file_drop: (o.managed && o.native).then_some(file_drop_control::Config {
                 controller: &o.file_drop,
@@ -1417,20 +1428,42 @@ async fn exchange_hello(
     rx: &mut quinn::RecvStream,
     local: InputCapabilities,
 ) -> Result<InputCapabilities> {
-    transport::send(
-        tx,
-        &Message::Hello {
-            version: VERSION,
-            capabilities: local,
-        },
-    )
-    .await?;
-    let hello = tokio::time::timeout(Duration::from_secs(3), transport::receive(rx)).await??;
+    let (capabilities, _) = exchange_hello_offer(tx, rx, local, false).await?;
+    Ok(capabilities)
+}
+
+/// `offer` adds the ADR-0019 diagnostics offer to Hello. Without it the
+/// bytes sent are the unchanged v5 Hello. The second result is true only
+/// when both sides offered.
+async fn exchange_hello_offer(
+    tx: &mut quinn::SendStream,
+    rx: &mut quinn::RecvStream,
+    local: InputCapabilities,
+    offer: bool,
+) -> Result<(InputCapabilities, bool)> {
+    if offer {
+        let frame = peerglide_protocol::peer_diagnostics::hello_with_offer(&local)?;
+        transport::send_frame(tx, &frame).await?;
+    } else {
+        transport::send(
+            tx,
+            &Message::Hello {
+                version: VERSION,
+                capabilities: local,
+            },
+        )
+        .await?;
+    }
+    let mut buffer = [0; peerglide_protocol::MAX_FRAME];
+    let receive = transport::receive_frame(rx, &mut buffer);
+    let frame = tokio::time::timeout(Duration::from_secs(3), receive).await??;
+    let hello = transport::decode_message(frame)?;
+    let offered = offer && peerglide_protocol::peer_diagnostics::hello_offers(frame);
     match hello {
         Message::Hello {
             version: VERSION,
             capabilities,
-        } if capabilities.valid() => Ok(capabilities),
+        } if capabilities.valid() => Ok((capabilities, offered)),
         _ => anyhow::bail!("unsupported protocol version or invalid input capabilities"),
     }
 }
@@ -1445,6 +1478,55 @@ async fn probe_roundtrip(tx: &mut quinn::SendStream, rx: &mut quinn::RecvStream)
         "probe response mismatch"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod hello_offer_tests {
+    use super::*;
+
+    type Negotiated = (InputCapabilities, bool);
+
+    async fn exchange(client: bool, server: bool) -> Result<(Negotiated, Negotiated)> {
+        let a = transport::Identity::generate()?;
+        let b = transport::Identity::generate()?;
+        let ea = transport::endpoint("127.0.0.1:0".parse()?, &a, &b.certificate)?;
+        let eb = transport::endpoint("127.0.0.1:0".parse()?, &b, &a.certificate)?;
+        let address = eb.local_addr()?;
+        let caps = InputCapabilities::new(&[4], true, 1, false).unwrap();
+        let accept = async {
+            let c = eb.accept().await.context("no incoming")?.await?;
+            let (mut tx, mut rx) = c.accept_bi().await?;
+            let hello = exchange_hello_offer(&mut tx, &mut rx, caps.clone(), server);
+            let result = hello.await?;
+            Ok::<_, anyhow::Error>((c, result))
+        };
+        let connect = async {
+            let c = ea.connect(address, "peerglide.local")?.await?;
+            let (mut tx, mut rx) = c.open_bi().await?;
+            let hello = exchange_hello_offer(&mut tx, &mut rx, caps.clone(), client);
+            let result = hello.await?;
+            Ok::<_, anyhow::Error>((c, result))
+        };
+        let both = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(connect, accept)
+        })
+        .await??;
+        let ((_client, connected), (_server, accepted)) = both;
+        Ok((connected, accepted))
+    }
+
+    /// A side that does not offer is byte-for-byte the existing v5 Hello and
+    /// still accepts an offering peer; only two offers enable the exchange.
+    #[tokio::test]
+    async fn diagnostics_offer_needs_both_hellos_and_keeps_plain_peers_working() -> Result<()> {
+        for (client, server) in [(true, true), (true, false), (false, true), (false, false)] {
+            let (connected, accepted) = exchange(client, server).await?;
+            assert!(connected.0.motion() && accepted.0.motion());
+            assert_eq!(connected.1, client && server);
+            assert_eq!(accepted.1, client && server);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

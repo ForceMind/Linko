@@ -16,6 +16,7 @@ mod desktop_state;
 mod desktop_style;
 mod desktop_ui;
 mod device_hardware;
+mod diagnostic_report;
 mod discovery_panel;
 #[cfg(any(windows, target_os = "macos"))]
 mod display_inventory;
@@ -531,18 +532,23 @@ fn bounded_diagnostic(line: &str) -> String {
 fn read_worker_diagnostics(
     mut reader: impl BufRead,
     diagnostics: mpsc::SyncSender<String>,
-    summary: &Mutex<Option<String>>,
+    summary: &Mutex<diagnostic_report::Latest>,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) {
+    use diagnostic_report::Seen;
     loop {
         let mut summary_updated = false;
         let line = match worker_output::read_line(&mut reader) {
             Ok(Some(worker_output::Line::Text(line))) => {
-                summary_updated = peerglide_platform::input_diagnostics::is_summary(&line)
-                    && summary
-                        .lock()
-                        .map(|mut latest| *latest = Some(line.clone()))
-                        .is_ok();
+                let seen = match summary.lock() {
+                    Ok(mut latest) => latest.observe(&line),
+                    Err(_) => Seen::Other,
+                };
+                summary_updated = seen != Seen::Other;
+                if seen == Seen::Quiet {
+                    wake();
+                    continue;
+                }
                 bounded_diagnostic(&line)
             }
             Ok(Some(worker_output::Line::Oversized)) => "工作进程诊断超过限制，已省略该行。".into(),
@@ -649,7 +655,7 @@ struct App {
     peer_wait_expired: bool,
     last_failure: bool,
     logs: VecDeque<String>,
-    input_summary: Arc<Mutex<Option<String>>>,
+    input_summary: Arc<Mutex<diagnostic_report::Latest>>,
     stopping: Option<Instant>,
     pairing_panel: pairing_panel::Panel,
     pairing_open: bool,
@@ -2615,9 +2621,32 @@ mod lifecycle_tests {
         read_worker_diagnostics(std::io::Cursor::new(stderr), tx, &summary, Arc::new(|| {}));
         assert_eq!(rx.try_recv()?, "normal line");
         assert_eq!(
-            summary.into_inner().unwrap().as_deref(),
+            summary.into_inner().unwrap().summary.as_deref(),
             Some(terminal.as_str())
         );
+        Ok(())
+    }
+
+    #[test]
+    fn per_second_and_peer_diagnostics_are_stored_without_filling_the_log() -> Result<()> {
+        use peerglide_platform::input_diagnostics::{HeldCause, InputDiagnostics, PEER_PREFIX};
+        let counters = InputDiagnostics::default();
+        let sample = counters.held_report(HeldCause::Sample, 0, false, false);
+        let event = counters.held_report(HeldCause::DenyBusy, 1, false, false);
+        let stderr = format!("{sample}\n{PEER_PREFIX}{sample}\n{event}\nnormal line\n");
+        let (tx, rx) = mpsc::sync_channel(4);
+        let summary = Mutex::default();
+        read_worker_diagnostics(std::io::Cursor::new(stderr), tx, &summary, Arc::new(|| {}));
+        assert_eq!(rx.try_recv()?, event.to_string());
+        assert_eq!(rx.try_recv()?, "normal line");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+        let latest = summary.into_inner().unwrap();
+        assert_eq!(latest.held, Some(sample.to_string()));
+        assert_eq!(latest.peer_held, Some(sample.to_string()));
+        assert_eq!(latest.events, [event.to_string()]);
         Ok(())
     }
 
@@ -2626,7 +2655,7 @@ mod lifecycle_tests {
         let fixture = super::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let previous = Arc::clone(&app.input_summary);
-        *previous.lock().unwrap() = Some("previous worker summary".into());
+        previous.lock().unwrap().summary = Some("previous worker summary".into());
 
         let mut command = Command::new(std::env::current_exe()?);
         command
@@ -2638,8 +2667,8 @@ mod lifecycle_tests {
             .env("PEERGLIDE_GUI_LIFECYCLE_HELPER", "1");
         app.spawn_session(command, SessionMode::Communication, false)?;
         // An earlier pipe reader may still hold its Arc when the next worker starts.
-        *previous.lock().unwrap() = Some("late previous worker summary".into());
-        let latest = app.input_summary.lock().unwrap().clone();
+        previous.lock().unwrap().summary = Some("late previous worker summary".into());
+        let latest = app.input_summary.lock().unwrap().summary.clone();
 
         let mut child = app.child.take().unwrap();
         drop(child.stdin.take());
