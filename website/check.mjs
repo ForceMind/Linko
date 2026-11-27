@@ -36,11 +36,12 @@ for (const name of files) {
 }
 const homepage = await readFile(join(root, 'index.html'), 'utf8');
 assert.equal([...homepage.matchAll(/<h1\b/g)].length, 1);
-assert(homepage.includes('0.3.23') && /开发|预览/.test(homepage));
+const release = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'));
+assert(homepage.includes(release.version) && /开发|预览/.test(homepage));
+assert.equal(manifest.appVersion, release.version);
 assert(/GitHub/.test(homepage));
 console.log(`PASS: ${files.length} public hashes, asset size, Chinese pages, local links/anchors, external targets and private-data checks`);
 
-const release = JSON.parse(await readFile(join(root, 'release.json'), 'utf8'));
 for (const download of release.downloads) {
   assert(homepage.includes(`href="https://gh-proxy.org/${download.url}"`), 'Proxy must prefix the exact public release URL');
   assert(homepage.includes(`href="${download.url}"`), 'Keep GitHub original download');

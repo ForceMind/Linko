@@ -30,3 +30,9 @@ jobs:
         run: npm run check
       - run: node --check src/main.js
       - run: node --check src/download-platform.js
+      - name: Upload checked public site
+        uses: actions/upload-artifact@v4
+        with:
+          name: linko-official-site
+          path: website/dist/
+          if-no-files-found: error
