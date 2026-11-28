@@ -1427,7 +1427,11 @@ impl App {
             let cmd = input.modifiers.command || input.modifiers.ctrl;
             if cmd && !input.modifiers.alt {
                 if input.key_pressed(egui::Key::Z) {
-                    return Some(if input.modifiers.shift { "redo" } else { "undo" });
+                    return Some(if input.modifiers.shift {
+                        "redo"
+                    } else {
+                        "undo"
+                    });
                 }
                 if !input.modifiers.shift && input.key_pressed(egui::Key::Y) {
                     return Some("redo");
