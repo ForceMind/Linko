@@ -124,7 +124,7 @@ impl App {
         painter.galley(text, galley, ink);
     }
 
-    /// Collapsible device list with the add entry and the bottom shortcut and settings icons.
+    /// Collapsible device list with inline capability cues, settings sub-nav and add entry.
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui, mix: f32) {
         let alpha = motion::sidebar_label_alpha(mix);
         let expanded = mix >= 0.5;
@@ -140,6 +140,16 @@ impl App {
             self.device_tab = DeviceTab::Device;
             self.navigate_to(Page::Displays);
         }
+        if row.secondary_clicked() {
+            self.workspace_peer_selected = false;
+            let at = row
+                .interact_pointer_pos()
+                .unwrap_or_else(|| row.rect.center());
+            self.open_context_menu(ContextMenuTarget::Local, at);
+        }
+        if expanded {
+            self.sidebar_local_capabilities(ui, alpha);
+        }
         if registered {
             let (status, tone) = if self.pairing_pending() {
                 ("核验尚未完成", Tone::Warning)
@@ -150,10 +160,21 @@ impl App {
             };
             let name = self.config.peer_name.clone();
             let selected = self.on_home() && self.workspace_peer_selected;
-            if device_row(ui, &name, status, tone, selected, alpha).clicked() {
+            let peer_row = device_row(ui, &name, status, tone, selected, alpha);
+            if peer_row.clicked() {
                 self.workspace_peer_selected = true;
                 self.device_tab = DeviceTab::Device;
                 self.navigate_to(Page::Displays);
+            }
+            if peer_row.secondary_clicked() {
+                self.workspace_peer_selected = true;
+                let at = peer_row
+                    .interact_pointer_pos()
+                    .unwrap_or_else(|| peer_row.rect.center());
+                self.open_context_menu(ContextMenuTarget::Peer, at);
+            }
+            if expanded {
+                self.sidebar_peer_capabilities(ui, alpha);
             }
         }
         ui.add_space(tokens::SPACE_SM);
@@ -182,6 +203,9 @@ impl App {
                 }
             }
         }
+        if expanded && self.page == Page::Settings {
+            self.sidebar_settings_sections(ui, alpha);
+        }
         let align = if expanded {
             egui::Align::LEFT
         } else {
@@ -200,6 +224,111 @@ impl App {
                 self.sidebar_entries(ui, false);
             }
         });
+    }
+
+    fn sidebar_local_capabilities(&mut self, ui: &mut egui::Ui, alpha: f32) {
+        let (input_short, input_tone) = self.input_short();
+        let input_tip = format!("本机键鼠：{}（点击查看下一步）", self.input_label());
+        let readiness = self.worker_permissions.readiness();
+        let (perm_word, perm_tone) = match readiness {
+            worker_permissions::Readiness::Ready => ("就绪", Tone::Good),
+            worker_permissions::Readiness::Checking => ("检查中", Tone::Accent),
+            worker_permissions::Readiness::Unchecked => ("权限", Tone::Accent),
+            _ => ("需处理", Tone::Warning),
+        };
+        let perm_tip = format!("本机系统权限：{}（点击前往设置）", readiness.detail());
+        let view_action = self.workspace_view().action;
+        ui.horizontal(|ui| {
+            ui.add_space(tokens::SPACE_MD);
+            if capability_chip(ui, Icon::Keyboard, input_short, input_tone, alpha)
+                .on_hover_text(input_tip)
+                .clicked()
+            {
+                self.workspace_peer_selected = false;
+                self.navigate_to(Page::Displays);
+                if matches!(
+                    view_action,
+                    desktop_state::Action::CheckPermissions
+                        | desktop_state::Action::StartInput
+                        | desktop_state::Action::Recovery
+                ) {
+                    self.workspace_action(view_action);
+                }
+            }
+            if capability_chip(ui, Icon::Shield, perm_word, perm_tone, alpha)
+                .on_hover_text(perm_tip)
+                .clicked()
+            {
+                self.connection_details_open = false;
+                self.navigate_to(Page::Settings);
+                self.settings_section = SettingsSection::Permissions;
+            }
+        });
+    }
+
+    fn sidebar_peer_capabilities(&mut self, ui: &mut egui::Ui, alpha: f32) {
+        let (input_word, input_tone) = self.input_short();
+        let input_tip = format!("另一台协同：{}（点击查看操作）", self.input_label());
+        let allowed = !self.routed_active && self.config.allow;
+        let (recv_word, recv_tone) = if allowed {
+            ("可接收", Tone::Accent)
+        } else {
+            ("禁接收", Tone::Neutral)
+        };
+        let recv_tip = if allowed {
+            "本机接收控制：已允许（点击调整）"
+        } else {
+            "本机接收控制：默认关闭（点击调整）"
+        };
+        let view_action = self.workspace_view().action;
+        ui.horizontal(|ui| {
+            ui.add_space(tokens::SPACE_MD);
+            if capability_chip(ui, Icon::Keyboard, input_word, input_tone, alpha)
+                .on_hover_text(input_tip)
+                .clicked()
+            {
+                self.workspace_peer_selected = true;
+                self.navigate_to(Page::Displays);
+                if self.child.is_none()
+                    && matches!(
+                        view_action,
+                        desktop_state::Action::CheckPermissions
+                            | desktop_state::Action::StartInput
+                            | desktop_state::Action::Connect
+                            | desktop_state::Action::Recovery
+                    )
+                {
+                    self.workspace_action(view_action);
+                } else {
+                    self.connection_details_open = true;
+                }
+            }
+            if capability_chip(ui, Icon::Lock, recv_word, recv_tone, alpha)
+                .on_hover_text(recv_tip)
+                .clicked()
+            {
+                self.workspace_peer_selected = true;
+                self.connection_details_open = false;
+                self.device_tab = DeviceTab::Permissions;
+                self.navigate_to(Page::Displays);
+            }
+        });
+    }
+
+    fn sidebar_settings_sections(&mut self, ui: &mut egui::Ui, alpha: f32) {
+        ui.add_space(tokens::SPACE_SM);
+        let muted = tokens::faded(tokens::muted_color(ui.visuals().dark_mode), alpha);
+        ui.label(RichText::new("设置分区").small().color(muted));
+        for (section, icon, label) in [
+            (SettingsSection::General, Icon::Sliders, "常规"),
+            (SettingsSection::Permissions, Icon::Shield, "系统权限"),
+            (SettingsSection::Advanced, Icon::Log, "诊断与资料"),
+        ] {
+            let selected = self.settings_section == section;
+            if icon_control(ui, icon, label, true, selected, false).clicked() {
+                self.settings_section = section;
+            }
+        }
     }
 
     fn sidebar_entries(&mut self, ui: &mut egui::Ui, expanded: bool) {
@@ -317,6 +446,47 @@ fn icon_control(
     } else {
         response.on_hover_text(label)
     }
+}
+
+/// Compact inline capability chip inside the expanded device sidebar.
+fn capability_chip(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    label: &str,
+    tone: Tone,
+    alpha: f32,
+) -> egui::Response {
+    let (fill, ink) = desktop_style::status_colors(ui.visuals().dark_mode, tone);
+    let ink = tokens::faded(ink, alpha);
+    let fill = tokens::faded(fill, alpha);
+    let font = egui::FontId::proportional(11.5);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, ink);
+    let width = galley.size().x + tokens::ICON_SMALL + 2.0 * tokens::SPACE_SM + 4.0;
+    let height = 22.0;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click());
+    let enabled = ui.is_enabled();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
+    if ui.is_rect_visible(rect) {
+        let hover = motion::hover_mix(
+            ui.ctx(),
+            response.id.with("chip-hover"),
+            response.hovered() && enabled,
+        );
+        let bg = mix(fill, ui.visuals().widgets.hovered.weak_bg_fill, hover);
+        ui.painter().rect_filled(rect, height / 2.0, bg);
+        let icon_center = egui::pos2(
+            rect.left() + tokens::SPACE_SM + tokens::ICON_SMALL * 0.4,
+            rect.center().y,
+        );
+        let icon_rect = egui::Rect::from_center_size(icon_center, Vec2::splat(13.0));
+        icon.paint(ui.painter(), icon_rect, ink);
+        let text = egui::pos2(
+            icon_rect.right() + 4.0,
+            rect.center().y - galley.size().y / 2.0,
+        );
+        ui.painter().galley(text, galley, ink);
+    }
+    response
 }
 
 /// One sidebar device: icon with a status badge, then name and status once labels show.
@@ -536,5 +706,28 @@ mod tests {
         assert_ne!(view_key(Page::Shortcuts), view_key(Page::Home));
         assert_eq!(view_alpha(0.0), MIN_FADE_ALPHA);
         assert_eq!(view_alpha(1.0), 1.0);
+    }
+
+    #[test]
+    fn expanded_sidebar_capabilities_and_settings_subnav_stay_safe() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.sidebar_open = true;
+        app.config.fingerprint = Some("presentation-only-not-authentication".into());
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        let mut time = 0.0;
+        run_frames(&mut app, &ctx, &mut time, 20);
+        app.navigate_to(Page::Settings);
+        app.settings_section = SettingsSection::Advanced;
+        run_frames(&mut app, &ctx, &mut time, 20);
+        assert!(app.page == Page::Settings && app.settings_section == SettingsSection::Advanced);
+        assert!(app.child.is_none() && !app.config.native && !app.config.allow);
+        assert!(
+            !fixture.path.join("identity").exists() && !fixture.path.join("settings.json").exists()
+        );
+        drop(app);
+        fixture.close()?;
+        Ok(())
     }
 }

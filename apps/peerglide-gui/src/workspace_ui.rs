@@ -66,7 +66,7 @@ impl App {
         self.workspace_device_detail(ui);
     }
 
-    /// Icon-only zoom buttons around the zoom level; each keeps its name for assistive use.
+    /// Icon-only zoom and layout history buttons; each keeps its name for assistive use.
     fn workspace_zoom_controls(&mut self, ui: &mut egui::Ui) {
         let idle = self.screen_drag.is_none();
         let zoom = self.workspace_zoom;
@@ -79,6 +79,28 @@ impl App {
         }
         if toolbar_button(ui, "zoom-fit", Icon::Fit, "适配视图", idle) {
             self.workspace_zoom = 1.0;
+        }
+        if self.config.fingerprint.is_some() {
+            ui.separator();
+            let editable = self.layout_editable() && idle;
+            if toolbar_button(
+                ui,
+                "layout-undo",
+                Icon::Arrow(Direction::Left),
+                "撤销布局 (Ctrl+Z)",
+                editable && !self.layout_undo.is_empty(),
+            ) {
+                self.undo_edge();
+            }
+            if toolbar_button(
+                ui,
+                "layout-redo",
+                Icon::Arrow(Direction::Right),
+                "重做布局 (Ctrl+Y)",
+                editable && !self.layout_redo.is_empty(),
+            ) {
+                self.redo_edge();
+            }
         }
     }
 
@@ -308,15 +330,24 @@ impl App {
             badge_scale: motion::badge_scale(state.local_badge.tick(&ctx)),
             spinner_head: head,
         };
-        if canvas_screen(ui, &devices, local_screen).clicked() {
+        let local_response = canvas_screen(ui, &devices, local_screen);
+        if local_response.clicked() {
             self.workspace_peer_selected = false;
+            self.context_menu = None;
+        }
+        if local_response.secondary_clicked() {
+            self.workspace_peer_selected = false;
+            let at = local_response
+                .interact_pointer_pos()
+                .unwrap_or_else(|| local_response.rect.center());
+            self.open_context_menu(ContextMenuTarget::Local, at);
         }
         if registered {
             let (badge, status) = self.peer_badge();
             state
                 .peer_badge
                 .observe_appearance(badge.has_emphasis(), now, pop);
-            let hint = editable.then_some("拖动屏幕或选择方向");
+            let hint = editable.then_some("拖动屏幕、方向键或右键调整");
             let peer_screen = ScreenView {
                 id: ui.scope_id().with("peer-screen"),
                 target: peer,
@@ -330,8 +361,17 @@ impl App {
                 badge_scale: motion::badge_scale(state.peer_badge.tick(&ctx)),
                 spinner_head: head,
             };
-            if canvas_screen(ui, &devices, peer_screen).clicked() {
+            let peer_response = canvas_screen(ui, &devices, peer_screen);
+            if peer_response.clicked() {
                 self.workspace_peer_selected = true;
+                self.context_menu = None;
+            }
+            if peer_response.secondary_clicked() {
+                self.workspace_peer_selected = true;
+                let at = peer_response
+                    .interact_pointer_pos()
+                    .unwrap_or_else(|| peer_response.rect.center());
+                self.open_context_menu(ContextMenuTarget::Peer, at);
             }
         } else {
             state.peer_badge.observe_appearance(false, now, pop);
@@ -693,7 +733,7 @@ impl App {
 
     /// Short word and tone of the input row, in the order of `input_label`, which stays
     /// the row's hover and accessible name.
-    fn input_short(&self) -> (&'static str, Tone) {
+    pub(super) fn input_short(&self) -> (&'static str, Tone) {
         if self.recovery_blocked {
             return ("恢复未确认", Tone::Danger);
         }
@@ -708,6 +748,169 @@ impl App {
             Some(WorkerInputState::Recovering) => ("正在恢复", Tone::Warning),
             Some(WorkerInputState::RecoveryUnconfirmed) => ("恢复未确认", Tone::Danger),
             Some(WorkerInputState::Unavailable) => ("归属未确认", Tone::Warning),
+        }
+    }
+
+    pub(super) fn open_context_menu(&mut self, target: ContextMenuTarget, pos: egui::Pos2) {
+        if self.dialog.is_some() || self.wizard.is_some() || self.pairing_panel.open {
+            self.context_menu = None;
+            return;
+        }
+        if target == ContextMenuTarget::Peer && self.config.fingerprint.is_none() {
+            self.context_menu = None;
+            return;
+        }
+        self.context_menu = Some(ContextMenu { target, pos });
+    }
+
+    /// Context menu shared by canvas screens and sidebar device rows; every action uses the
+    /// existing permission, consent, layout-lock and cooperative-stop gates.
+    pub(super) fn render_context_menu(&mut self, ctx: &egui::Context) {
+        let Some(menu) = self.context_menu else {
+            return;
+        };
+        if self.dialog.is_some()
+            || self.wizard.is_some()
+            || self.pairing_panel.open
+            || (menu.target == ContextMenuTarget::Peer && self.config.fingerprint.is_none())
+        {
+            self.context_menu = None;
+            return;
+        }
+        let viewport = ctx.viewport_rect();
+        let width = 256.0;
+        let max_x = (viewport.right() - width - 8.0).max(viewport.left() + 8.0);
+        let max_y = (viewport.bottom() - 220.0).max(viewport.top() + 8.0);
+        let origin = egui::pos2(
+            menu.pos.x.clamp(viewport.left() + 8.0, max_x),
+            menu.pos.y.clamp(viewport.top() + 8.0, max_y),
+        );
+        let mut close = false;
+        let area = egui::Area::new(egui::Id::unique("linko-context-menu"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(origin)
+            .show(ctx, |ui| {
+                card(ui).inner_margin(8.0).show(ui, |ui| {
+                    ui.set_width(width - 16.0);
+                    match menu.target {
+                        ContextMenuTarget::Local => {
+                            ui.strong(desktop_ui::local_device_name());
+                            ui.separator();
+                            if ui
+                                .add_enabled(
+                                    self.native_start_available(),
+                                    egui::Button::new("检查本机键鼠权限"),
+                                )
+                                .clicked()
+                            {
+                                self.workspace_action(desktop_state::Action::CheckPermissions);
+                                close = true;
+                            }
+                            if ui.button("系统权限设置").clicked() {
+                                self.connection_details_open = false;
+                                self.navigate_to(Page::Settings);
+                                self.settings_section = SettingsSection::Permissions;
+                                close = true;
+                            }
+                            if ui.button("诊断与资料（复制两端摘要）").clicked() {
+                                self.connection_details_open = false;
+                                self.navigate_to(Page::Settings);
+                                self.settings_section = SettingsSection::Advanced;
+                                close = true;
+                            }
+                            ui.separator();
+                            if ui.button("紧急恢复本机").clicked() {
+                                self.stop();
+                                self.gesture_lab.cancel();
+                                close = true;
+                            }
+                        }
+                        ContextMenuTarget::Peer => {
+                            ui.strong(&self.config.peer_name);
+                            ui.separator();
+                            let editable = self.layout_editable();
+                            ui.add_enabled_ui(editable, |ui| {
+                                ui.horizontal_wrapped(|ui| {
+                                    for (side, direction) in EDGES {
+                                        let word = edge_label(side);
+                                        let selected = self.displayed_edge() == side;
+                                        let id = egui::Id::unique(("linko-menu-edge", side));
+                                        let button = canvas_button(
+                                            ui,
+                                            id,
+                                            Icon::Arrow(direction),
+                                            word,
+                                            Some(word),
+                                            selected,
+                                        );
+                                        if button.clicked() {
+                                            self.try_set_edge(side);
+                                            close = true;
+                                        }
+                                    }
+                                });
+                            });
+                            ui.separator();
+                            let detail_label = if self.connection_details_open {
+                                "收起设备详情"
+                            } else {
+                                "打开设备详情"
+                            };
+                            if ui.button(detail_label).clicked() {
+                                self.workspace_peer_selected = true;
+                                self.navigate_to(Page::Displays);
+                                self.connection_details_open = !self.connection_details_open;
+                                close = true;
+                            }
+                            if ui
+                                .add_enabled(
+                                    self.native_start_available(),
+                                    egui::Button::new("开启键鼠协同…"),
+                                )
+                                .clicked()
+                            {
+                                self.workspace_action(desktop_state::Action::StartInput);
+                                close = true;
+                            }
+                            if ui
+                                .add_enabled(self.idle_writable(), egui::Button::new("仅通信连接"))
+                                .clicked()
+                            {
+                                self.workspace_action(desktop_state::Action::Connect);
+                                close = true;
+                            }
+                            if ui
+                                .add_enabled(self.child.is_some(), egui::Button::new("停止协同"))
+                                .clicked()
+                            {
+                                self.stop();
+                                close = true;
+                            }
+                            ui.separator();
+                            if ui
+                                .add_enabled(
+                                    self.idle_writable(),
+                                    egui::Button::new("重新核验设备"),
+                                )
+                                .clicked()
+                            {
+                                self.open_setup();
+                                close = true;
+                            }
+                        }
+                    }
+                });
+            });
+        let menu_rect = area.response.rect;
+        let clicked_outside = ctx.input(|input| {
+            input.pointer.primary_pressed()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_none_or(|pos| !menu_rect.contains(pos))
+        });
+        if close || clicked_outside {
+            self.context_menu = None;
         }
     }
 }
@@ -2506,6 +2709,112 @@ mod tests {
                 );
             }
         }
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn keyboard_arrows_and_undo_redo_follow_layout_locks() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.config.fingerprint = Some("presentation-only-not-authentication".into());
+        app.config.edge = "right".into();
+        let ctx = crate::tests::ui_context();
+        let press = |app: &mut App, key: egui::Key, modifiers: egui::Modifiers| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1280.0, 800.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            };
+            ctx.run_ui(input, |root| app.desktop(root))
+                .drop_without_applying_deltas();
+        };
+        let ctrl = egui::Modifiers {
+            ctrl: true,
+            ..egui::Modifiers::NONE
+        };
+        press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::NONE);
+        assert_eq!(app.config.edge, "left");
+        press(&mut app, egui::Key::ArrowUp, egui::Modifiers::NONE);
+        assert_eq!(app.config.edge, "top");
+        press(&mut app, egui::Key::Z, ctrl);
+        assert_eq!(app.config.edge, "left");
+        press(&mut app, egui::Key::Z, ctrl);
+        assert_eq!(app.config.edge, "right");
+        press(&mut app, egui::Key::Y, ctrl);
+        assert_eq!(app.config.edge, "left");
+
+        // Recovery lock blocks both arrow arrangement and undo/redo.
+        app.recovery_blocked = true;
+        press(&mut app, egui::Key::ArrowDown, egui::Modifiers::NONE);
+        assert_eq!(app.config.edge, "left");
+        assert!(!app.undo_edge());
+        assert!(!app.redo_edge());
+        app.recovery_blocked = false;
+
+        // Open details drawer blocks canvas arrows so text fields stay safe.
+        app.connection_details_open = true;
+        press(&mut app, egui::Key::ArrowDown, egui::Modifiers::NONE);
+        assert_eq!(app.config.edge, "left");
+        press(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(!app.connection_details_open);
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn context_menu_opens_on_right_click_and_closes_on_escape_without_grants() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let ctx = crate::tests::ui_context();
+        app.open_context_menu(ContextMenuTarget::Peer, egui::pos2(240.0, 200.0));
+        assert!(app.context_menu.is_none());
+        app.open_context_menu(ContextMenuTarget::Local, egui::pos2(240.0, 200.0));
+        assert!(app.context_menu.is_some());
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1280.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |root| app.desktop(root),
+        )
+        .drop_without_applying_deltas();
+        assert!(app.context_menu.is_some());
+        ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1280.0, 800.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |root| app.desktop(root),
+        )
+        .drop_without_applying_deltas();
+        assert!(app.context_menu.is_none());
+        assert!(app.child.is_none() && !app.config.native && !app.config.allow);
+        assert!(!fixture.path.join("identity").exists());
         drop(app);
         fixture.close()?;
         Ok(())

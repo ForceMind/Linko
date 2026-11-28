@@ -2,6 +2,16 @@
 use super::*;
 use desktop_style::tokens;
 use icons::Icon;
+const MAX_LAYOUT_HISTORY: usize = 16;
+
+fn push_layout_history(stack: &mut Vec<String>, edge: String) {
+    if stack.len() >= MAX_LAYOUT_HISTORY {
+        let excess = stack.len() + 1 - MAX_LAYOUT_HISTORY;
+        stack.drain(0..excess);
+    }
+    stack.push(edge);
+}
+
 impl App {
     pub(super) fn writable(&self) -> bool {
         !self.quit_check_mode
@@ -30,7 +40,7 @@ impl App {
             && self.wizard.is_none()
             && self.dialog.is_none()
     }
-    pub(super) fn try_set_edge(&mut self, edge: &str) -> bool {
+    fn apply_edge(&mut self, edge: &str) -> bool {
         if !self.layout_editable() || !matches!(edge, "left" | "right" | "top" | "bottom") {
             self.screen_drag = None;
             return false;
@@ -48,6 +58,60 @@ impl App {
             self.notice = format!("屏幕位置未保存：{error:#}");
             return false;
         }
+        true
+    }
+    pub(super) fn try_set_edge(&mut self, edge: &str) -> bool {
+        if !self.layout_editable() || !matches!(edge, "left" | "right" | "top" | "bottom") {
+            self.screen_drag = None;
+            return false;
+        }
+        let before = self.displayed_edge().to_owned();
+        if before == edge {
+            return true;
+        }
+        if !self.apply_edge(edge) {
+            return false;
+        }
+        push_layout_history(&mut self.layout_undo, before);
+        self.layout_redo.clear();
+        true
+    }
+    pub(super) fn undo_edge(&mut self) -> bool {
+        if !self.layout_editable() {
+            return false;
+        }
+        let Some(previous) = self.layout_undo.last().cloned() else {
+            return false;
+        };
+        let current = self.displayed_edge().to_owned();
+        if current == previous {
+            self.layout_undo.pop();
+            return true;
+        }
+        if !self.apply_edge(&previous) {
+            return false;
+        }
+        self.layout_undo.pop();
+        push_layout_history(&mut self.layout_redo, current);
+        true
+    }
+    pub(super) fn redo_edge(&mut self) -> bool {
+        if !self.layout_editable() {
+            return false;
+        }
+        let Some(next) = self.layout_redo.last().cloned() else {
+            return false;
+        };
+        let current = self.displayed_edge().to_owned();
+        if current == next {
+            self.layout_redo.pop();
+            return true;
+        }
+        if !self.apply_edge(&next) {
+            return false;
+        }
+        self.layout_redo.pop();
+        push_layout_history(&mut self.layout_undo, current);
         true
     }
     pub(super) fn input_label(&self) -> &'static str {
@@ -77,6 +141,7 @@ impl App {
         self.native_confirmation = false;
         self.pending_start = None;
         self.screen_drag = None;
+        self.context_menu = None;
         self.confirmed_fingerprint = None;
         self.wizard = None;
         self.dialog = None;
@@ -87,6 +152,7 @@ impl App {
     pub(super) fn open_advanced_setup(&mut self) {
         self.peer_wait_expired = false;
         self.screen_drag = None;
+        self.context_menu = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
             self.pending_routed = None;
@@ -1325,10 +1391,75 @@ impl App {
     pub(super) fn navigate_to(&mut self, page: Page) {
         self.page = page;
         self.screen_drag = None;
+        self.context_menu = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
             self.pending_routed = None;
             self.dialog = None;
+        }
+    }
+    pub(super) fn handle_workspace_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.dialog.is_some() || self.wizard.is_some() || self.pairing_panel.open {
+            return;
+        }
+        if (self.context_menu.is_some() || self.connection_details_open)
+            && ctx.input_mut(|input| {
+                input.modifiers == egui::Modifiers::NONE
+                    && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            })
+        {
+            if self.context_menu.take().is_none() {
+                self.connection_details_open = false;
+            }
+            return;
+        }
+        if !matches!(self.page, Page::Displays | Page::Devices)
+            || self.device_tab == DeviceTab::Permissions
+            || self.connection_details_open
+            || self.peer_address_edit.is_some()
+            || self.context_menu.is_some()
+            || self.screen_drag.is_some()
+            || !self.layout_editable()
+        {
+            return;
+        }
+        let action = ctx.input(|input| {
+            let cmd = input.modifiers.command || input.modifiers.ctrl;
+            if cmd && !input.modifiers.alt {
+                if input.key_pressed(egui::Key::Z) {
+                    return Some(if input.modifiers.shift { "redo" } else { "undo" });
+                }
+                if !input.modifiers.shift && input.key_pressed(egui::Key::Y) {
+                    return Some("redo");
+                }
+            }
+            if input.modifiers == egui::Modifiers::NONE {
+                if input.key_pressed(egui::Key::ArrowLeft) {
+                    return Some("left");
+                }
+                if input.key_pressed(egui::Key::ArrowRight) {
+                    return Some("right");
+                }
+                if input.key_pressed(egui::Key::ArrowUp) {
+                    return Some("top");
+                }
+                if input.key_pressed(egui::Key::ArrowDown) {
+                    return Some("bottom");
+                }
+            }
+            None
+        });
+        match action {
+            Some("undo") => {
+                self.undo_edge();
+            }
+            Some("redo") => {
+                self.redo_edge();
+            }
+            Some(edge) => {
+                self.try_set_edge(edge);
+            }
+            None => (),
         }
     }
     /// Laid out right to left: emergency recovery stays in the top-right corner.
@@ -1363,6 +1494,7 @@ impl App {
         }) {
             self.stop();
             self.gesture_lab.cancel();
+            self.context_menu = None;
         } else if (self.dialog.is_some() || self.wizard.is_some())
             && ctx.input_mut(|input| {
                 input.modifiers == egui::Modifiers::NONE
@@ -1376,6 +1508,9 @@ impl App {
                 self.wizard = None;
             }
             self.screen_drag = None;
+            self.context_menu = None;
+        } else {
+            self.handle_workspace_shortcuts(&ctx);
         }
         let window_width = ctx.viewport_rect().width();
         // The title bar spans the window, so the safety controls never move with the sidebar.
@@ -1477,6 +1612,7 @@ impl App {
                     ui.label(&self.notice);
                 });
         }
+        self.render_context_menu(&ctx);
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
         self.pairing_open = self.pairing_panel.blocks_actions();

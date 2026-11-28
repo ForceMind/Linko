@@ -314,6 +314,16 @@ enum SettingsSection {
     Permissions,
     Advanced,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContextMenuTarget {
+    Local,
+    Peer,
+}
+#[derive(Clone, Copy, Debug)]
+struct ContextMenu {
+    target: ContextMenuTarget,
+    pos: egui::Pos2,
+}
 /// Coalesced lifecycle state cannot be dropped by a full diagnostic queue.
 #[derive(Default)]
 struct WorkerSnapshot(
@@ -572,6 +582,9 @@ fn read_worker_diagnostics(
 struct App {
     workspace_peer_selected: bool,
     workspace_zoom: f32,
+    layout_undo: Vec<String>,
+    layout_redo: Vec<String>,
+    context_menu: Option<ContextMenu>,
     #[cfg(any(windows, target_os = "macos"))]
     display_inventory: display_inventory::Panel,
     #[cfg(any(windows, target_os = "macos"))]
@@ -727,6 +740,9 @@ impl App {
             layout_geometry: std::collections::BTreeMap::new(),
             workspace_peer_selected: false,
             workspace_zoom: 1.0,
+            layout_undo: Vec::new(),
+            layout_redo: Vec::new(),
+            context_menu: None,
             #[cfg(any(windows, target_os = "macos"))]
             display_inventory: display_inventory::Panel::default(),
             #[cfg(any(windows, target_os = "macos"))]
