@@ -14,7 +14,7 @@ const EDGES: [(&str, Direction); 4] = [
 /// Side of the square toolbar buttons and height of the direction buttons, in points.
 const CANVAS_BUTTON_SIDE: f32 = 32.0;
 /// Opacity of the screens while the layout cannot be edited.
-const LOCKED_OPACITY: f32 = 0.45;
+const LOCKED_OPACITY: f32 = 0.68;
 /// Radius of a screen status badge at full size, in points.
 const BADGE_RADIUS: f32 = 10.0;
 /// Height of the canvas chips and their distance from the canvas corner, in points.
@@ -28,6 +28,8 @@ const SIDE_BY_SIDE_W: f32 = 700.0;
 const STACKED_LAYOUT_H: f32 = 680.0;
 /// Offsets shorter than this snap instead of rebounding, so a plain click never animates.
 const REBOUND_MIN_PX: f32 = 0.5;
+/// The pointer must approach a valid landing position before it can snap.
+const SNAP_RADIUS: f32 = 28.0;
 /// Segments of the filled half of the pending badge.
 const HALF_DISC_STEPS: usize = 12;
 /// Shown under the direction buttons while the layout is locked without a session.
@@ -41,7 +43,7 @@ const CONTEXT_LABEL_W: f32 = 60.0;
 const STOP_WORD: &str = "断开";
 
 impl App {
-    /// Home view: the screen canvas with the device context column. The device list lives
+    /// Home view: the screen canvas with a compact action bar. The device list lives
     /// in the sidebar, so the former device and layout pages share this one view; the
     /// layout tab that pairing and setup still select opens this same canvas.
     pub(super) fn device_workspace(&mut self, ui: &mut egui::Ui) {
@@ -54,46 +56,14 @@ impl App {
             card(ui).show(ui, |ui| self.device_permissions(ui));
             return;
         }
-        let width = ui.available_width();
-        if width >= 600.0 {
-            let compact = width < 780.0;
-            let details = if compact {
-                228.0
-            } else {
-                (width * 0.32).clamp(290.0, 340.0)
-            };
-            let gap = if compact { 16.0 } else { 24.0 };
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                ui.vertical(|ui| {
-                    ui.set_width(width - details - gap);
-                    self.workspace_screen_card(ui);
-                });
-                ui.vertical(|ui| {
-                    ui.set_width(details);
-                    self.workspace_device_detail(ui);
-                });
-            });
-        } else {
-            self.workspace_screen_card(ui);
-            ui.add_space(12.0);
-            self.workspace_device_detail(ui);
-        }
-    }
-
-    fn workspace_screen_card(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.available_width() < 500.0;
-        let margin = if compact { 12.0 } else { 16.0 };
-        card(ui).inner_margin(margin).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            // The details switch is the context column's info button now.
-            ui.horizontal_wrapped(|ui| self.workspace_zoom_controls(ui));
-            self.workspace_canvas(ui);
+        ui.horizontal_wrapped(|ui| self.workspace_zoom_controls(ui));
+        self.workspace_canvas(ui);
+        ui.horizontal_wrapped(|ui| {
             self.workspace_direction_controls(ui);
-            // Explains the selector directly above, so it stays in the first viewport.
             ui.small(self.workspace_direction_note());
-            self.layout_hint_row(ui);
         });
+        self.layout_hint_row(ui);
+        self.workspace_device_detail(ui);
     }
 
     /// Icon-only zoom buttons around the zoom level; each keeps its name for assistive use.
@@ -118,7 +88,6 @@ impl App {
         let editable = self.layout_editable() && self.screen_drag.is_none();
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.small("另一台在本机");
                 for (side, direction) in EDGES {
                     let word = edge_label(side);
                     let name = format!("另一台在本机{word}");
@@ -202,11 +171,14 @@ impl App {
 
     fn workspace_canvas(&mut self, ui: &mut egui::Ui) {
         let registered = self.config.fingerprint.is_some();
-        let height = if ui.available_width() < 440.0 {
-            180.0
+        // The remaining viewport already accounts for any recovery banner above the canvas.
+        let footer_height = if self.workspace_attention().is_some() {
+            176.0
         } else {
-            280.0
+            124.0
         };
+        let visible_height = ui.clip_rect().bottom() - ui.cursor().min.y;
+        let height = (visible_height - footer_height).clamp(180.0, 600.0);
         let (canvas, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), height),
             egui::Sense::hover(),
@@ -249,6 +221,15 @@ impl App {
         let ended = before.is_some() && self.screen_drag.is_none();
         let released = if ended {
             released_center(before, &events)
+                .filter(|center| center.x.is_finite() && center.y.is_finite())
+        } else {
+            None
+        };
+        let preview =
+            |(_, center, _)| snap_preview(center, area, interaction_canvas, local, peer, zoom);
+        let snapped = self.screen_drag.and_then(preview);
+        let last_snap = if ended {
+            before.and_then(preview)
         } else {
             None
         };
@@ -261,13 +242,20 @@ impl App {
         let rest = || CanvasMotion::rest(layout, canvas.min, (local, peer));
         let stored = ctx.data(|data| data.get_temp::<CanvasMotion>(motion_id));
         let mut state = stored.unwrap_or_else(rest);
+        let released = if let Some((snap_local, snap_peer)) = last_snap {
+            state.local_drawn = snap_local.center() - canvas.min;
+            Some(snap_peer.center())
+        } else {
+            released
+        };
         state.retarget(layout, canvas.min, (local, peer), released, now);
         let remaining = state.remaining(&ctx);
-        let shown_local = local.translate(state.from_local * remaining);
-        let shown_peer = match self.screen_drag {
+        let resting_local = local.translate(state.from_local * remaining);
+        let resting_peer = match self.screen_drag {
             Some((_, center, _)) => egui::Rect::from_center_size(center, peer.size()),
             None => peer.translate(state.from_peer * remaining),
         };
+        let (shown_local, shown_peer) = snapped.unwrap_or((resting_local, resting_peer));
         state.local_drawn = shown_local.center() - canvas.min;
         state.peer_drawn = shown_peer.center() - canvas.min;
 
@@ -279,9 +267,21 @@ impl App {
             devices.multiply_opacity(LOCKED_OPACITY);
         }
         if registered {
-            let dot = ui.visuals().widgets.noninteractive.bg_stroke.color;
-            let stroke = egui::Stroke::new(1.0, dot);
+            let stroke = if snapped.is_some() {
+                let ink = desktop_style::status_colors(self.config.dark, Tone::Good).1;
+                egui::Stroke::new(2.5, ink)
+            } else {
+                ui.visuals().widgets.noninteractive.bg_stroke
+            };
             devices.line_segment([shown_local.center(), shown_peer.center()], stroke);
+            if snapped.is_some() {
+                devices.rect_stroke(
+                    shown_peer.expand(2.0),
+                    8.0,
+                    stroke,
+                    egui::StrokeKind::Outside,
+                );
+            }
         }
         let head = if self.activity_tick_active() {
             motion::spinner_head_for(ui.ctx(), now)
@@ -316,13 +316,7 @@ impl App {
             state
                 .peer_badge
                 .observe_appearance(badge.has_emphasis(), now, pop);
-            let hint = if !editable {
-                None
-            } else if self.child.is_some() {
-                Some("拖动屏幕或点方向按钮调整；新布局等待工作进程确认。")
-            } else {
-                Some("拖动屏幕或点方向按钮调整；位置用于下一次会话。")
-            };
+            let hint = editable.then_some("拖动屏幕或选择方向");
             let peer_screen = ScreenView {
                 id: ui.scope_id().with("peer-screen"),
                 target: peer,
@@ -341,9 +335,29 @@ impl App {
             }
         } else {
             state.peer_badge.observe_appearance(false, now, pop);
-            let add = egui::Rect::from_center_size(peer.center(), Vec2::new(peer.width(), 66.0));
+            let add = egui::Rect::from_center_size(
+                peer.center() - egui::vec2(0.0, peer.height() * 0.13),
+                Vec2::new(peer.width() * 0.92, peer.width() * 0.54),
+            );
+            let ink = tokens::accent_color(self.config.dark).gamma_multiply(0.58);
+            let stroke = egui::Stroke::new(1.5, ink);
+            let outline = [
+                add.left_top(),
+                add.right_top(),
+                add.right_bottom(),
+                add.left_bottom(),
+                add.left_top(),
+            ];
+            devices.extend(egui::Shape::dashed_line(&outline, stroke, 6.0, 5.0));
+            let stem = add.center_bottom();
+            let foot = stem + egui::vec2(0.0, add.height() * 0.13);
+            devices.line_segment([stem, foot], stroke);
+            devices.line_segment(
+                [foot - egui::vec2(20.0, 0.0), foot + egui::vec2(20.0, 0.0)],
+                stroke,
+            );
             ui.add_enabled_ui(self.idle_writable(), |ui| {
-                let response = ui.put(add, egui::Button::new("＋\n添加另一台电脑"));
+                let response = ui.put(add, egui::Button::new("＋\n添加另一台电脑").frame(false));
                 self.record_layout_control("add_device", &response, ui.clip_rect());
                 if response.clicked() {
                     self.open_setup();
@@ -368,62 +382,44 @@ impl App {
         }
     }
 
-    /// Context column: the selected device with the details switch, four status rows of an
-    /// icon and a short word, then the attention sentences and the one primary button.
-    /// Full sentences are each row's hover and accessible name; warning, consent,
-    /// permission and recovery sentences stay visible text.
+    /// Keep the main action and details entry in view without reserving columns below the canvas.
     fn workspace_device_detail(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.available_width() < 270.0;
-        let margin = if compact { 12.0 } else { 16.0 };
-        let gap = if compact { 8.0 } else { 12.0 };
-        card(ui).inner_margin(margin).show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.spacing_mut().item_spacing.x = tokens::SPACE_SM;
-            ui.spacing_mut().item_spacing.y = tokens::SPACE_XS;
-            self.context_header(ui);
-            ui.separator();
-            self.context_rows(ui);
-            self.context_attention(ui);
-            ui.add_space(tokens::SPACE_XS);
+        ui.add_space(4.0);
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
             self.context_primary(ui);
-        });
-        ui.add_space(gap);
-        if ui.small_button("文件与剪贴板").clicked() {
-            self.navigate_to(Page::Transfers);
-        }
-        self.details_drawer(ui, gap, margin);
-    }
-
-    /// Name of the selected device and the switch of the details drawer.
-    fn context_header(&mut self, ui: &mut egui::Ui) {
-        let name = if self.routed_active {
-            "分段键鼠".to_owned()
-        } else if self.workspace_peer_selected && self.config.fingerprint.is_some() {
-            self.config.peer_name.clone()
-        } else {
-            desktop_ui::local_device_name().to_owned()
-        };
-        let size = Vec2::new(ui.available_width(), CANVAS_BUTTON_SIDE);
-        let layout = egui::Layout::left_to_right(egui::Align::Center);
-        ui.allocate_ui_with_layout(size, layout, |ui| {
-            let icon_size = Vec2::splat(tokens::ICON_MEDIUM);
-            let (rect, _) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
-            Icon::Device.paint(ui.painter(), rect, ui.visuals().text_color());
-            let width = ui.available_width() - CANVAS_BUTTON_SIDE - tokens::SPACE_SM;
-            let title = desktop_style::semibold(&name, 16.0);
-            desktop_ui::left_text_slot(ui, width.max(1.0), CANVAS_BUTTON_SIDE, title)
-                .on_hover_text(format!("所选设备：{name}"));
             let open = self.connection_details_open;
             let label = if open {
                 "收起连接详情"
             } else {
                 "连接与身份详情"
             };
-            let id = context_control_id("details");
-            if canvas_button(ui, id, Icon::Info, label, None, open).clicked() {
+            let response = canvas_button(
+                ui,
+                context_control_id("details"),
+                Icon::Info,
+                label,
+                Some("设备详情"),
+                open,
+            );
+            self.record_layout_control("workspace_details", &response, ui.clip_rect());
+            if response.clicked() {
                 self.connection_details_open = !open;
             }
+            if ui.button("文件与剪贴板").clicked() {
+                self.connection_details_open = false;
+                self.navigate_to(Page::Transfers);
+            }
         });
+        if let Some(view) = self.workspace_attention() {
+            ui.label(desktop_style::status_text(
+                view.title,
+                self.config.dark,
+                view.tone,
+            ));
+            ui.label(view.detail);
+        }
+        self.details_drawer(ui);
     }
 
     /// Connection, input, receive control and local permission rows.
@@ -513,6 +509,7 @@ impl App {
             },
         );
         if receive_settings {
+            self.connection_details_open = false;
             self.device_tab = DeviceTab::Permissions;
         }
         let readiness = self.worker_permissions.readiness();
@@ -541,38 +538,24 @@ impl App {
             },
         );
         if permission_details {
+            self.connection_details_open = false;
             self.navigate_to(Page::Settings);
             self.settings_section = SettingsSection::Permissions;
         }
     }
 
-    /// Title and detail of states that need attention or offer no primary button, and the
-    /// consent boundary. These stay visible text, never only a hover.
-    fn context_attention(&mut self, ui: &mut egui::Ui) {
+    /// Reserve room beside the canvas for states whose explanation needs to stay visible.
+    fn workspace_attention(&self) -> Option<desktop_state::View> {
         let view = self.workspace_view();
         let needs_attention = matches!(view.tone, Tone::Warning | Tone::Danger)
             || view.action == desktop_state::Action::None
             || self.last_failure
             || self.peer_wait_expired
             || self.pairing_pending();
-        if needs_attention {
-            ui.separator();
-            ui.label(desktop_style::status_text(
-                view.title,
-                self.config.dark,
-                view.tone,
-            ));
-            ui.label(view.detail);
-        }
-        let consent = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
-            "另一台的接收许可由它单独设置；开启键鼠仍需本次明确确认。"
-        } else {
-            "开启键鼠仍需本次明确确认。"
-        };
-        ui.label(RichText::new(consent).small().weak());
+        needs_attention.then_some(view)
     }
 
-    /// The only primary button of the column. Gate, label, hover and action are unchanged.
+    /// The primary action remains guarded by the current workspace and session state.
     fn context_primary(&mut self, ui: &mut egui::Ui) {
         let view = self.workspace_view();
         let allowed = match view.action {
@@ -599,49 +582,79 @@ impl App {
         }
     }
 
-    /// Details drawer under the column: the former connection and identity card with
-    /// discovery. Opening and closing play one slide and fade of `EXPAND_SECS` (M4) on a
-    /// fixed id and then paint statically; closed, it paints nothing.
-    fn details_drawer(&mut self, ui: &mut egui::Ui, gap: f32, margin: f32) {
+    /// The inspector overlays the canvas so its status and controls stay reachable.
+    fn details_drawer(&mut self, ui: &mut egui::Ui) {
         let id = context_control_id("details-drawer");
         let open = self.connection_details_open;
         let amount = motion::expand_amount(ui.ctx(), id, open);
         if amount <= 0.0 {
             return;
         }
-        ui.add_space(gap + motion::lerp(tokens::VIEW_SLIDE_PX, 0.0, amount));
-        ui.scope(|ui| {
-            ui.multiply_opacity(amount);
-            card(ui).inner_margin(margin).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                self.selected_device_metadata(ui);
-                #[cfg(any(windows, target_os = "macos"))]
-                if !self.workspace_peer_selected {
-                    let enabled = open
-                        && !self.resource_check_mode
-                        && !self.quit_check_mode
-                        && self.layout_report.is_none();
-                    let can_choose = enabled
-                        && self.layout_editable()
-                        && self.active_mode != Some(SessionMode::Native)
-                        && self.pending_start != Some(SessionMode::Native);
-                    self.display_inventory
-                        .ui(ui, enabled, can_choose, &self.wake_ui);
-                    if enabled {
-                        let mut editor = std::mem::take(&mut self.route_plan);
-                        editor.ui(self, ui);
-                        self.route_plan = editor;
-                    }
-                }
-                ui.separator();
-                self.connection_details(ui);
-                if open {
-                    let mut profiles = std::mem::take(&mut self.layout_profiles);
-                    profiles.ui(self, ui);
-                    self.layout_profiles = profiles;
-                }
+        let clip = ui.clip_rect();
+        let width = (clip.width() - 28.0).clamp(1.0, 360.0);
+        let slide = motion::lerp(tokens::VIEW_SLIDE_PX, 0.0, amount);
+        let origin = egui::pos2(clip.right() - width - 12.0 + slide, clip.top() + 48.0);
+        egui::Area::new(id.with("inspector"))
+            .order(egui::Order::Middle)
+            .fixed_pos(origin)
+            .show(ui.ctx(), |ui| {
+                ui.multiply_opacity(amount);
+                ui.add_enabled_ui(open, |ui| {
+                    card(ui).inner_margin(12.0).show(ui, |ui| {
+                        ui.set_width((width - 24.0).max(1.0));
+                        ui.strong("连接与身份详情");
+                        egui::ScrollArea::vertical()
+                            .max_height((clip.height() * 0.5).min(350.0))
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| self.inspector_body(ui, open));
+                    });
+                });
             });
-        });
+    }
+
+    fn inspector_body(&mut self, ui: &mut egui::Ui, open: bool) {
+        let name = if self.routed_active {
+            "分段键鼠"
+        } else if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+            &self.config.peer_name
+        } else {
+            desktop_ui::local_device_name()
+        };
+        ui.strong(name);
+        self.selected_device_metadata(ui);
+        ui.separator();
+        self.context_rows(ui);
+        let consent = if self.workspace_peer_selected && self.config.fingerprint.is_some() {
+            "另一台的接收许可由它单独设置；开启键鼠仍需本次明确确认。"
+        } else {
+            "开启键鼠仍需本次明确确认。"
+        };
+        ui.label(RichText::new(consent).small().weak());
+        #[cfg(any(windows, target_os = "macos"))]
+        if !self.workspace_peer_selected {
+            let enabled = open
+                && !self.resource_check_mode
+                && !self.quit_check_mode
+                && self.layout_report.is_none();
+            let can_choose = enabled
+                && self.layout_editable()
+                && self.active_mode != Some(SessionMode::Native)
+                && self.pending_start != Some(SessionMode::Native);
+            self.display_inventory
+                .ui(ui, enabled, can_choose, &self.wake_ui);
+            if enabled {
+                let mut editor = std::mem::take(&mut self.route_plan);
+                editor.ui(self, ui);
+                self.route_plan = editor;
+            }
+        }
+        ui.separator();
+        self.connection_details(ui);
+        if open {
+            let mut profiles = std::mem::take(&mut self.layout_profiles);
+            profiles.ui(self, ui);
+            self.layout_profiles = profiles;
+        }
     }
 
     fn selected_device_metadata(&self, ui: &mut egui::Ui) {
@@ -726,27 +739,31 @@ fn generic_device_symbol(
     surface: egui::Color32,
 ) {
     let size = rect.size();
-    let stroke = egui::Stroke::new((size.y * 0.014).clamp(1.2, 2.0), ink);
-    let first = egui::Rect::from_min_size(
-        rect.min + egui::vec2(size.x * 0.12, size.y * 0.18),
-        egui::vec2(size.x * 0.50, size.y * 0.44),
-    );
-    let second = egui::Rect::from_min_size(
-        rect.min + egui::vec2(size.x * 0.38, size.y * 0.40),
-        egui::vec2(size.x * 0.50, size.y * 0.44),
-    );
-    let radius = (size.y * 0.04).clamp(1.0, 5.0);
-    painter.rect_filled(first, radius, surface);
-    painter.rect_stroke(first, radius, stroke, egui::StrokeKind::Inside);
-    painter.rect_filled(second, radius, surface);
-    painter.rect_stroke(second, radius, stroke, egui::StrokeKind::Inside);
-    painter.line_segment(
-        [
-            rect.min + egui::vec2(size.x * 0.34, size.y * 0.69),
-            rect.min + egui::vec2(size.x * 0.65, size.y * 0.34),
+    let stroke = egui::Stroke::new((size.y * 0.018).clamp(1.0, 3.0), ink);
+    let screen_size = egui::vec2(size.x * 0.83, size.y * 0.68);
+    let rear = egui::Rect::from_min_size(rect.min + size * 0.035, screen_size);
+    let front = egui::Rect::from_min_size(rect.min + size * 0.15, screen_size);
+    let radius = (size.y * 0.035).clamp(1.0, 6.0);
+    painter.rect_filled(rear, radius, surface);
+    painter.rect_stroke(rear, radius, stroke, egui::StrokeKind::Inside);
+    painter.rect_filled(front, radius, ink);
+
+    let panel = front.shrink(stroke.width * 1.7);
+    if !panel.is_positive() {
+        return;
+    }
+    let sky = egui::Color32::from_rgb(190, 204, 245);
+    let ridge = egui::Color32::from_rgb(129, 150, 212);
+    painter.rect_filled(panel, (radius - stroke.width).max(0.0), sky);
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            panel.left_bottom(),
+            egui::pos2(panel.center().x, panel.top() + panel.height() * 0.24),
+            panel.right_bottom(),
         ],
-        stroke,
-    );
+        ridge,
+        egui::Stroke::NONE,
+    ));
 }
 
 fn card_metadata(ui: &mut egui::Ui, label: &str, value: &str) {
@@ -1213,7 +1230,7 @@ fn draw_workspace_device(
     let illustration_scale = match kind {
         visual_assets::DeviceKind::Laptop => 0.70,
         visual_assets::DeviceKind::Desktop => 1.0,
-        visual_assets::DeviceKind::Unknown => 0.85,
+        visual_assets::DeviceKind::Unknown => 0.94,
     };
     let width = image_area.width().min(image_area.height() * aspect) * illustration_scale;
     let size = Vec2::new(width, width / aspect);
@@ -1221,7 +1238,7 @@ fn draw_workspace_device(
         egui::pos2(image_area.center().x, image_area.max.y - size.y / 2.0),
         size,
     );
-    let selected_frame = if kind == visual_assets::DeviceKind::Unknown {
+    let selected_frame = if artwork.is_none() {
         image_rect.shrink(5.0)
     } else if kind == visual_assets::DeviceKind::Desktop {
         egui::Rect::from_min_max(
@@ -1253,7 +1270,7 @@ fn draw_workspace_device(
             egui::Color32::WHITE,
         );
     } else {
-        // A generic pair of outlines is a symbol, not an identified chassis.
+        // A stand-free silhouette shows display placement without claiming a device type.
         generic_device_symbol(
             painter,
             image_rect.shrink(4.0),
@@ -1323,9 +1340,87 @@ fn workspace_rects(
     )
 }
 
+/// Preview the same edge the drop handler would accept. A narrow canvas can use the
+/// compact layout for that edge if the dragged screen would otherwise be clipped.
+fn snap_preview(
+    center: egui::Pos2,
+    area: egui::Rect,
+    canvas: egui::Rect,
+    local: egui::Rect,
+    peer: egui::Rect,
+    zoom: f32,
+) -> Option<(egui::Rect, egui::Rect)> {
+    if !canvas.contains(center) || center.distance(peer.center()) <= REBOUND_MIN_PX {
+        return None;
+    }
+    let edge = desktop_ui::dropped_edge(center, local)?;
+    let (compact_local, compact_peer) = workspace_rects(area, edge, true, zoom);
+    if compact_peer.width() <= f32::EPSILON {
+        return None;
+    }
+    let step = compact_peer.center() - compact_local.center();
+    let rest = local.center() + step * (peer.width() / compact_peer.width());
+    let bounds = canvas.shrink(4.0);
+    if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+        return None;
+    }
+    let reach = egui::pos2(
+        rest.x.clamp(bounds.left(), bounds.right()),
+        rest.y.clamp(bounds.top(), bounds.bottom()),
+    );
+    if center.distance(reach) > SNAP_RADIUS {
+        return None;
+    }
+    let placed = egui::Rect::from_center_size(rest, peer.size());
+    if canvas.contains_rect(placed) {
+        Some((local, placed))
+    } else if canvas.contains_rect(compact_local) && canvas.contains_rect(compact_peer) {
+        Some((compact_local, compact_peer))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_preview_aligns_four_edges_without_escaping_the_canvas() {
+        let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(620.0, 280.0));
+        let area = canvas.shrink(20.0);
+        let (local, peer) = workspace_rects(area, "right", true, 1.0);
+        for (pointer, direction) in [
+            (
+                egui::pos2(16.0, local.center().y + 5.0),
+                egui::vec2(-1.0, 0.0),
+            ),
+            (peer.center() + egui::vec2(10.0, 8.0), egui::vec2(1.0, 0.0)),
+            (
+                egui::pos2(local.center().x + 5.0, 10.0),
+                egui::vec2(0.0, -1.0),
+            ),
+            (
+                egui::pos2(local.center().x + 5.0, 270.0),
+                egui::vec2(0.0, 1.0),
+            ),
+        ] {
+            let (first, second) =
+                snap_preview(pointer, area, canvas, local, peer, 1.0).expect("snap preview");
+            assert!(canvas.contains_rect(first) && canvas.contains_rect(second));
+            assert!(!first.intersects(second));
+            let offset = second.center() - first.center();
+            assert!((offset.normalized() - direction).length() < 0.01);
+        }
+        for pointer in [
+            peer.center(),
+            local.center(),
+            peer.center() + egui::vec2(0.0, 50.0),
+        ] {
+            assert!(snap_preview(pointer, area, canvas, local, peer, 1.0).is_none());
+        }
+    }
+
     #[test]
     fn essential_context_and_connection_details_fit_the_supported_first_viewport() -> Result<()> {
         fn text_rect(shape: &egui::epaint::Shape, label: &str) -> Option<egui::Rect> {
@@ -1349,7 +1444,7 @@ mod tests {
                 Vec2::new(1180.0, 820.0),
                 Vec2::new(1280.0, 800.0),
             ] {
-                // The details switch is an icon now; its fixed id is read inside the pass.
+                // Read the details control by ID inside the pass.
                 let mut details = None;
                 let output = ctx.run_ui(
                     egui::RawInput {
@@ -1362,10 +1457,7 @@ mod tests {
                     },
                 );
                 let controls: Vec<_> = [
-                    "连接",
-                    "键鼠",
-                    "接收控制",
-                    "本机权限",
+                    "设备详情",
                     "文件与剪贴板",
                     "两台主屏的相对方向；另一端需设置相反方向。",
                 ]
@@ -1392,7 +1484,16 @@ mod tests {
                     .shapes
                     .iter()
                     .find_map(|s| text_rect(&s.shape, "100%"));
-                for label in ["系统", "登记", "设备", "会话"] {
+                for label in [
+                    "系统",
+                    "登记",
+                    "设备",
+                    "会话",
+                    "连接",
+                    "键鼠",
+                    "接收控制",
+                    "本机权限",
+                ] {
                     assert!(
                         !painted(&output, label),
                         "{label} should stay in the closed details drawer at {size:?}"
@@ -1432,6 +1533,10 @@ mod tests {
                 assert!(
                     viewport.contains_rect(details.rect),
                     "details switch left the first viewport at {size:?}"
+                );
+                assert!(
+                    details.rect.center().y - toolbar.center().y >= size.y * 0.65,
+                    "the canvas and its direction controls should dominate the first viewport"
                 );
                 assert!(app.child.is_none() && !app.config.native && !app.config.allow);
             }
@@ -1697,7 +1802,8 @@ mod tests {
             time += FRAME_SECS;
         }
         let start = label_at(&mut app, &ctx, time, "B")?;
-        let end = start - Vec2::new(260.0, 0.0);
+        let local = label_at(&mut app, &ctx, time, desktop_ui::local_device_name())?;
+        let end = egui::pos2(local.x - (start.x - local.x) * 0.65, start.y);
         time += FRAME_SECS;
         let press = vec![egui::Event::PointerMoved(start), pointer(start, true)];
         step(&mut app, &ctx, time, press);
@@ -1707,6 +1813,8 @@ mod tests {
             app.screen_drag.is_some(),
             "drag did not acquire the peer screen"
         );
+        assert_eq!(app.config.edge, "right", "preview committed before release");
+        assert!(!app.dir.join("settings.json").exists());
         let requests = std::sync::Arc::new(AtomicUsize::new(0));
         let observed = std::sync::Arc::clone(&requests);
         ctx.set_request_repaint_callback(move |request| {
@@ -1812,12 +1920,13 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn context_rows_pair_each_icon_with_its_label_and_value() -> Result<()> {
+    fn opened_device_details_pairs_each_status_icon_with_its_label_and_value() -> Result<()> {
         use egui::epaint::Shape;
         let fixture = crate::tests::Fixture::new()?;
         let mut app = App::load(fixture.path.clone());
         let original = app.config.clone();
         let ctx = crate::tests::ui_context();
+        app.connection_details_open = true;
         app.theme(&ctx);
         let rows = [
             ("connection", "连接"),
@@ -1827,6 +1936,10 @@ mod tests {
         ];
         for paired in [false, true] {
             app.config.fingerprint = paired.then(|| "context-rows-presentation-only".into());
+            // The floating area and its scroll clip need a layout pass before inspection.
+            for _ in 0..2 {
+                frame(&mut app, &ctx, vec![]).drop_without_applying_deltas();
+            }
             let mut found = Vec::new();
             let output = ctx.run_ui(wide_input(), |root| {
                 app.desktop(root);
@@ -1959,7 +2072,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn context_column_paints_one_primary_button_and_keeps_its_gate() -> Result<()> {
+    fn workspace_bar_paints_one_primary_button_and_keeps_its_gate() -> Result<()> {
         use crate::desktop_state::Action;
         let labels = [
             Action::AddDevice,
@@ -2098,6 +2211,8 @@ mod tests {
         for key in [
             "nav_sidebar",
             "nav_layout",
+            "nav_sharing",
+            "nav_gestures",
             "nav_shortcuts",
             "nav_settings",
             "add_device",
@@ -2131,6 +2246,8 @@ mod tests {
         let mut app = App::load(fixture.path.clone());
         let ctx = crate::tests::ui_context();
         app.theme(&ctx);
+        // Exercise the labelled, expanded rail; compact controls retain these accessible names.
+        app.sidebar_open = true;
         // Sidebar entries, subpage back arrows and in-page links, in the order a person
         // could click them; together they reach every page of the shell.
         for (page, label) in [
@@ -2248,9 +2365,10 @@ mod tests {
         app.config.fingerprint = Some("presentation-only-not-authentication".into());
         let original = app.config.clone();
         app.page = Page::Devices;
+        app.sidebar_open = true;
         let ctx = crate::tests::ui_context();
         let output = frame(&mut app, &ctx, vec![]);
-        // The roster now lives in the sidebar: the peer name painted inside its column.
+        // The roster lives in the expanded rail: the peer name painted inside its column.
         let label = app.config.peer_name.clone();
         let at = output
             .shapes

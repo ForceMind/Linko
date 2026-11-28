@@ -43,6 +43,7 @@ impl Source {
 struct Job {
     child: Child,
     pin: data_access::Pin,
+    mode: Mode,
     stop_deadline: Option<Instant>,
     forced: bool,
 }
@@ -298,6 +299,7 @@ impl Panel {
         self.job = Some(Job {
             child: command.spawn()?,
             pin,
+            mode,
             stop_deadline: None,
             forced: false,
         });
@@ -306,22 +308,38 @@ impl Panel {
     }
 
     pub(super) fn ui(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        let running = self.is_active();
+        let paired = data_access::ready(app);
+        ui.add_enabled_ui(paired && !running, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.selectable_value(&mut self.source, Source::System, "系统音频");
+                ui.selectable_value(&mut self.source, Source::Microphone, "麦克风");
+            });
+        });
+        super::visual_assets::handoff_art(ui, super::icons::Icon::Audio);
         ui.label(self.status);
-        if self.is_active() {
+        if running {
+            let playback = self
+                .job
+                .as_ref()
+                .is_some_and(|job| matches!(job.mode, Mode::Playback));
+            if playback {
+                let ratio = f32::from(self.volume) / 100.0;
+                let meter =
+                    egui::ProgressBar::new(ratio).text(format!("播放音量 {}%", self.volume));
+                ui.add(meter);
+            }
             if ui.button("停止音频").clicked() {
                 self.stop();
             }
             return;
         }
-        if !data_access::ready(app) {
+        if !paired {
             ui.label("完成配对后可开启音频共享。");
             return;
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(&mut self.source, Source::System, "系统音频");
-            ui.selectable_value(&mut self.source, Source::Microphone, "麦克风");
-        });
-        ui.label("先在播放端开启接收。每次会话最长 10 分钟。");
+        ui.strong("本机播放");
+        ui.label("播放端先接收 · 每次最长 10 分钟");
         ui.add(
             egui::Slider::new(&mut self.volume, 0..=100)
                 .suffix("%")
@@ -335,6 +353,7 @@ impl Panel {
             app.feedback(result, "已请求启动音频接收。");
         }
         ui.separator();
+        ui.strong("从本机发送");
         ui.label("接收端 IP 地址和端口");
         let (target, button) = match self.source {
             Source::System => (&mut self.system_address, "发送本机系统音频"),

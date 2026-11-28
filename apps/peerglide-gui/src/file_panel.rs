@@ -531,7 +531,18 @@ impl Panel {
         let paired = data_access::ready(app);
         let ready = paired && !self.handoff_active();
         if !paired {
-            ui.weak("请先完成设备配对并打开可写窗口。");
+            ui.vertical_centered(|ui| {
+                super::visual_assets::handoff_art(ui, super::icons::Icon::Folder);
+                ui.add_space(10.0);
+                ui.label("文件共享需要已配对的电脑及可写窗口。");
+                let action = app.workspace_view().action;
+                if action == super::desktop_state::Action::AddDevice
+                    && ui.add(super::desktop_style::primary("添加电脑")).clicked()
+                {
+                    app.workspace_action(action);
+                }
+                ui.add_space(12.0);
+            });
         }
         if ready && self.active.is_none() && !self.edge_active() {
             let dropped = ui.input(|input| {
@@ -545,64 +556,100 @@ impl Panel {
                 self.source = path;
             }
         }
-        ui.add_enabled_ui(
-            ready && self.active.is_none() && !self.edge_active(),
-            |ui| {
-                ui.strong("发送文件");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.source)
-                        .hint_text("源文件绝对路径，可拖入单个本机文件"),
-                );
-                let hint = data_access::default_target(app, PORT)
-                    .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
-                ui.label("接收端地址");
-                ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.resume)
-                        .hint_text("续传编号，首次发送留空"),
-                );
-                if ui.button("发送选定文件").clicked() {
-                    let result = self.start(app, true, false);
-                    if let Err(error) = result {
-                        self.notice = error.to_string();
-                    }
+        let idle_result = self.active.is_none()
+            && self.paused.is_none()
+            && (self.progress.is_some() || !self.notice.is_empty());
+        if idle_result {
+            super::desktop_style::card(ui).show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.strong("传输结果");
+                if let Some(progress) = self.progress {
+                    progress_meter(ui, progress, false);
                 }
-                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-                if ui
-                    .add_enabled(
-                        source_context(app, ui.ctx()),
-                        egui::Button::new("发送并准备跨机拖动"),
-                    )
-                    .clicked()
-                {
-                    if let Err(error) = self.start(app, true, true) {
-                        self.notice = error.to_string();
-                    }
+                if !self.notice.is_empty() {
+                    ui.label(&self.notice);
                 }
-                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
-                if ui
-                    .add_enabled(!self.export.active(), egui::Button::new("开启一次边沿发送"))
-                    .clicked()
-                {
-                    if let Err(error) = self.arm_edge(app, ui.ctx()) {
-                        self.notice = error.to_string();
-                    }
+            });
+            ui.add_space(12.0);
+        }
+        if paired && self.active.is_none() && self.paused.is_none() {
+            self.file_request_controls(app, ui, ready);
+        }
+        self.transfer_controls(app, ui, ready, idle_result);
+        if paired && self.active.is_none() && self.paused.is_some() {
+            ui.collapsing("其他文件任务", |ui| {
+                self.file_request_controls(app, ui, ready)
+            });
+        }
+    }
+
+    fn file_request_controls(&mut self, app: &mut App, ui: &mut egui::Ui, ready: bool) {
+        ui.add_enabled_ui(ready && !self.edge_active(), |ui| {
+            ui.strong("发送文件");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.source)
+                    .hint_text("源文件绝对路径，可拖入单个本机文件"),
+            );
+            let hint = data_access::default_target(app, PORT)
+                .map_or_else(|| format!("IP:{PORT}"), |address| address.to_string());
+            ui.label("接收端地址");
+            ui.add(egui::TextEdit::singleline(&mut self.target).hint_text(hint));
+            ui.collapsing("手动续传", |ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.resume).hint_text("续传编号"));
+            });
+            if ui
+                .add(super::desktop_style::primary("发送选定文件"))
+                .clicked()
+            {
+                let result = self.start(app, true, false);
+                if let Err(error) = result {
+                    self.notice = error.to_string();
                 }
-                ui.add_space(8.0);
-                ui.strong("接收文件");
-                ui.label("本机监听地址");
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.bind)
-                        .hint_text(format!("留空自动监听 IPv4 / IPv6，端口 {PORT}")),
-                );
-                if ui.button("等待文件请求").clicked() {
-                    let result = self.start(app, false, false);
-                    if let Err(error) = result {
-                        self.notice = error.to_string();
-                    }
+            }
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            if ui
+                .add_enabled(
+                    source_context(app, ui.ctx()),
+                    egui::Button::new("发送并准备跨机拖动"),
+                )
+                .clicked()
+            {
+                if let Err(error) = self.start(app, true, true) {
+                    self.notice = error.to_string();
                 }
-            },
-        );
+            }
+            #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+            if ui
+                .add_enabled(!self.export.active(), egui::Button::new("开启一次边沿发送"))
+                .clicked()
+            {
+                if let Err(error) = self.arm_edge(app, ui.ctx()) {
+                    self.notice = error.to_string();
+                }
+            }
+            ui.add_space(8.0);
+            ui.strong("接收文件");
+            ui.label("本机监听地址");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.bind)
+                    .hint_text(format!("留空自动监听 IPv4 / IPv6，端口 {PORT}")),
+            );
+            if ui.button("等待文件请求").clicked() {
+                let result = self.start(app, false, false);
+                if let Err(error) = result {
+                    self.notice = error.to_string();
+                }
+            }
+        });
+    }
+
+    fn transfer_controls(
+        &mut self,
+        app: &mut App,
+        ui: &mut egui::Ui,
+        ready: bool,
+        idle_result: bool,
+    ) {
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         if let Some(offer) = &self.edge {
             if ui.button("取消边沿发送").clicked() {
@@ -614,25 +661,29 @@ impl Panel {
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
         self.source_handoff_ui(app, ui);
-        if self.active.is_none() && self.paused.is_some() {
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .add_enabled(
-                        ready && !self.edge_active(),
-                        egui::Button::new("继续已暂停的传输"),
-                    )
-                    .clicked()
-                {
+        if let Some(paused) = self.paused.as_ref().filter(|_| self.active.is_none()) {
+            let name = task_label(&paused.request).to_owned();
+            super::desktop_style::card(ui).show(ui, |ui| {
+                let enable_resume = ready && !self.edge_active();
+                let resume =
+                    task_header(ui, &name, super::icons::Icon::Play, "继续", enable_resume);
+                if resume {
                     if let Err(error) = self.resume_paused(app) {
                         self.notice = error.to_string();
                     }
                 }
-                if ui.button("结束暂停任务").clicked() {
-                    self.paused = None;
-                    self.notice = "已结束暂停任务，接收端已暂存的数据保留。".into();
+                if let Some(progress) = self.progress {
+                    progress_meter(ui, progress, true);
                 }
+                ui.horizontal_wrapped(|ui| {
+                    super::desktop_style::pill(ui, "已暂停", super::desktop_style::Tone::Neutral);
+                    if ui.button("结束暂停任务").clicked() {
+                        self.paused = None;
+                        self.notice = "已结束暂停任务，接收端已暂存的数据保留。".into();
+                    }
+                });
+                ui.weak("接收端须重新等待请求。有暂存记录时选择恢复。退出应用会清除暂停记录。");
             });
-            ui.weak("接收端须重新等待请求。有暂存记录时选择恢复。退出应用会清除暂停记录。");
         }
         if let Some(id) = self.prepared_id {
             ui.horizontal_wrapped(|ui| {
@@ -643,25 +694,9 @@ impl Panel {
             });
         }
         if self.active.is_some() {
-            self.active_ui(app, ui);
+            super::desktop_style::card(ui).show(ui, |ui| self.active_ui(app, ui));
         }
-        if let Some(progress) = self.progress {
-            let ratio = if progress.total == 0 {
-                1.0
-            } else {
-                progress.bytes as f32 / progress.total as f32
-            };
-            let label = if progress.verified_locally {
-                "本机已校验"
-            } else {
-                "已排队发送或匹配续传"
-            };
-            ui.add(egui::ProgressBar::new(ratio).text(format!(
-                "{label} {} / {} 字节",
-                progress.bytes, progress.total
-            )));
-        }
-        if !self.notice.is_empty() {
+        if !idle_result && !self.notice.is_empty() {
             ui.label(&self.notice);
         }
         #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
@@ -732,9 +767,17 @@ impl Panel {
         };
         let stopping = active.stopping;
         let can_pause = self.can_pause();
+        let name = active
+            .offer
+            .as_ref()
+            .map_or_else(|| task_label(&active.request), |offer| offer.name.as_str());
+        let pause = task_header(ui, name, super::icons::Icon::Pause, "暂停", can_pause);
+        if let Some(progress) = self.progress {
+            progress_meter(ui, progress, false);
+        }
         if let Some(offer) = &active.offer {
             ui.separator();
-            ui.label(format!("{} · {} 字节", offer.name, offer.size));
+            ui.label(format!("{} 字节", offer.size));
             ui.label(format!("续传编号 {}", encode_id(offer.id)));
             ui.weak("每个接收目录累计配额 8 GiB。已存在的文件会保留。");
             ui.add(
@@ -756,10 +799,7 @@ impl Panel {
                 }
             });
         }
-        if ui
-            .add_enabled(can_pause, egui::Button::new("暂停文件传输"))
-            .clicked()
-        {
+        if pause {
             self.pause(app);
         }
         if ui
@@ -769,6 +809,74 @@ impl Panel {
             self.stop(app);
         }
     }
+}
+
+fn task_label(request: &Request) -> &str {
+    match request {
+        Request::Send { source, .. } => source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("发送文件"),
+        Request::Receive { .. } => "接收文件",
+    }
+}
+
+fn task_header(
+    ui: &mut egui::Ui,
+    name: &str,
+    action: super::icons::Icon,
+    label: &str,
+    enabled: bool,
+) -> bool {
+    let size = egui::vec2(ui.available_width(), 42.0);
+    ui.allocate_ui_with_layout(
+        size,
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(38.0), egui::Sense::hover());
+            let (fill, ink) = super::desktop_style::selection_colors(ui);
+            ui.painter().rect_filled(rect, 8.0, fill);
+            super::icons::Icon::Log.paint(ui.painter(), rect.shrink(8.0), ink);
+            let title_width = (ui.available_width() - 72.0).max(1.0);
+            super::desktop_ui::left_text_slot(
+                ui,
+                title_width,
+                38.0,
+                super::desktop_style::semibold(name, 18.0),
+            )
+            .on_hover_text(name);
+            ui.add_enabled_ui(enabled, |ui| {
+                super::shell_ui::icon_button(ui, action, label, true)
+            })
+            .inner
+            .clicked()
+        },
+    )
+    .inner
+}
+
+fn progress_meter(ui: &mut egui::Ui, progress: Progress, paused: bool) {
+    let ratio = if progress.total == 0 {
+        1.0
+    } else {
+        (progress.bytes as f32 / progress.total as f32).clamp(0.0, 1.0)
+    };
+    let mut bar = egui::ProgressBar::new(ratio).show_percentage();
+    if paused {
+        bar = bar.fill(super::desktop_style::tokens::muted_color(
+            ui.visuals().dark_mode,
+        ));
+    }
+    ui.add(bar);
+    let label = if progress.verified_locally {
+        "本机已校验"
+    } else {
+        "已排队发送或匹配续传"
+    };
+    ui.weak(format!(
+        "{label} {} / {} 字节",
+        progress.bytes, progress.total
+    ));
 }
 
 impl HistorySearch {
@@ -869,6 +977,8 @@ fn outcome_label(outcome: FileOutcome, receiving: bool) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    mod captures;
     use super::*;
     use std::time::{Duration, Instant};
     use transport::data::ReceiveBind;

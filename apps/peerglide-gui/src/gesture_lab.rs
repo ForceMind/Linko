@@ -1,6 +1,6 @@
 //! Explicit, window-local drawing only. Never installs hooks or dispatches actions.
 use anyhow::{Context, Result};
-use eframe::egui::{self, Color32, Event, PointerButton, Rect, Sense, Stroke as PaintStroke};
+use eframe::egui::{self, Event, PointerButton, Rect, Sense, Stroke as PaintStroke};
 use peerglide_gestures::{
     starter_templates, Config, Match, Point, Recognizer, Rejection, Sample, Stroke,
 };
@@ -232,9 +232,8 @@ impl GestureLab {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, worker_running: bool) -> Option<Rect> {
         self.inspection = None;
-        ui.strong("录制与本窗口测试");
-        ui.label("按住右键在画布内绘制，Esc 取消。");
-        ui.weak("仅限此画布，不捕获全局输入、不执行动作。只有点击保存才会写入文件。");
+        ui.label("按住右键试画 · Esc 取消");
+        ui.small("全局捕获与动作关闭");
         if worker_running {
             self.cancel();
             ui.label("设备会话运行期间暂停画布录制。请先停止设备会话，再进行窗口内测试。");
@@ -255,12 +254,46 @@ impl GestureLab {
                 }
             }
         }
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width().max(1.), 260.),
-            Sense::click_and_drag(),
-        );
-        ui.painter()
-            .rect_filled(rect, 8, ui.visuals().extreme_bg_color);
+        let height = if self.export_open {
+            260.0
+        } else {
+            (ui.ctx().viewport_rect().height() * 0.49).clamp(240.0, 450.0)
+        };
+        let (rect, response) = ui
+            .horizontal_top(|ui| {
+                let canvas = ui.allocate_exact_size(
+                    egui::vec2((ui.available_width() - 64.0).max(1.0), height),
+                    Sense::click_and_drag(),
+                );
+                ui.vertical(|ui| {
+                    let clear = super::shell_ui::icon_button(
+                        ui,
+                        super::icons::Icon::Recover,
+                        "清空画布",
+                        false,
+                    );
+                    if clear.clicked() {
+                        self.cancel();
+                        self.samples.clear();
+                        self.result = None;
+                        self.completed = false;
+                        self.saved = false;
+                    }
+                    if super::shell_ui::icon_button(
+                        ui,
+                        super::icons::Icon::Folder,
+                        "样本标注与导出",
+                        false,
+                    )
+                    .clicked()
+                    {
+                        self.set_export_open(!self.export_open);
+                    }
+                });
+                canvas
+            })
+            .inner;
+        crate::desktop_style::canvas_wash(ui.painter(), rect, ui.visuals().dark_mode);
         let (time, focused, escape, events) = ui.ctx().input(|i| {
             (
                 i.time,
@@ -317,12 +350,44 @@ impl GestureLab {
             }
         }
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        let position = |s: &Sample| rect.min + egui::vec2(s.point.x as f32, s.point.y as f32);
+        let ink = crate::desktop_style::tokens::accent_color(ui.visuals().dark_mode);
+        let line = crate::desktop_style::tokens::line_color(ui.visuals().dark_mode);
+        painter.rect_stroke(
+            rect,
+            9.0,
+            PaintStroke::new(1.0, line),
+            egui::StrokeKind::Inside,
+        );
+        if let Some(first) = self.samples.first() {
+            painter.circle_filled(position(first), 5.0, ink);
+        }
         for pair in self.samples.windows(2) {
-            let position = |s: &Sample| rect.min + egui::vec2(s.point.x as f32, s.point.y as f32);
             painter.line_segment(
                 [position(&pair[0]), position(&pair[1])],
-                PaintStroke::new(2.5_f32, Color32::from_rgb(80, 175, 230)),
+                PaintStroke::new(4.0, ink),
             );
+        }
+        if self.completed {
+            if let Some(last) = self.samples.last() {
+                let end = position(last);
+                if let Some(delta) = self
+                    .samples
+                    .iter()
+                    .rev()
+                    .map(|sample| end - position(sample))
+                    .find(|delta| delta.length_sq() >= 64.0)
+                {
+                    let direction = delta.normalized();
+                    let base = end - direction * 14.0;
+                    let side = egui::vec2(-direction.y, direction.x) * 7.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![end, base + side, base - side],
+                        ink,
+                        PaintStroke::NONE,
+                    ));
+                }
+            }
         }
         if self.active.is_some() {
             ui.ctx().request_repaint();
@@ -345,16 +410,7 @@ impl GestureLab {
                 });
             }
         }
-        ui.horizontal(|ui| {
-            if ui.button("清空画布").clicked() {
-                self.cancel();
-                self.samples.clear();
-                self.result = None;
-                self.completed = false;
-                self.saved = false;
-            }
-            ui.weak("绘制后到规则页选择轨迹、范围与动作；保存规则不会启用全局手势。");
-        });
+
         let mut save_rect = None;
         let export = egui::CollapsingHeader::new("样本标注与导出 · 可选")
             .open(Some(self.export_open))
@@ -394,7 +450,6 @@ impl GestureLab {
         {
             self.inspection = save_rect.map(|save| (rect, save));
         }
-        ui.weak("窗口内轨迹不能证明原生鼠标采样率、全局手势或动作执行已经验收。");
         if !self.feedback.is_empty() {
             ui.label(&self.feedback);
         }
