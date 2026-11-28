@@ -7,9 +7,25 @@ use quinn::{
     Endpoint,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
-use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::{
+    io,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
+use tokio::io::AsyncReadExt;
 
+pub mod audio;
+pub mod clipboard_worker;
+pub mod data;
+mod data_frames;
+mod data_session;
+pub mod file_drop_link;
+pub mod file_transfer;
+pub mod file_worker;
+pub mod layout_binding;
+pub mod layout_reservation;
 pub mod pairing;
 pub mod trusted_listener;
 
@@ -225,7 +241,7 @@ pub fn validate_certificate(certificate: &[u8]) -> Result<()> {
     roots(certificate)?;
     Ok(())
 }
-fn transport() -> Arc<quinn::TransportConfig> {
+fn transport(alpn: &[u8]) -> Arc<quinn::TransportConfig> {
     let mut t = quinn::TransportConfig::default();
     t.max_concurrent_bidi_streams(1u8.into())
         .max_concurrent_uni_streams(0u8.into());
@@ -233,10 +249,19 @@ fn transport() -> Arc<quinn::TransportConfig> {
         Duration::from_secs(4).try_into().expect("constant timeout"),
     ));
     t.keep_alive_interval(Some(Duration::from_millis(400)));
-    t.datagram_receive_buffer_size(Some(64 * 1024));
-    // Motion carries an absolute cursor position. Bound the queue so a
-    // stalled link discards older positions before accumulating a backlog.
-    t.datagram_send_buffer_size(16 * 1024);
+    if alpn == audio::ALPN || alpn == audio::MICROPHONE_ALPN {
+        let frame = peerglide_protocol::audio::FRAME_BYTES;
+        t.datagram_receive_buffer_size(Some(16 * frame));
+        t.datagram_send_buffer_size(4 * frame);
+    } else if alpn == data::ALPN || alpn == layout_reservation::ALPN {
+        t.datagram_receive_buffer_size(None);
+        t.datagram_send_buffer_size(0);
+    } else {
+        t.datagram_receive_buffer_size(Some(64 * 1024));
+        // Motion carries an absolute cursor position. Bound the queue so a
+        // stalled link discards older positions before accumulating a backlog.
+        t.datagram_send_buffer_size(16 * 1024);
+    }
     t.receive_window((64 * 1024u32).into());
     t.stream_receive_window((16 * 1024u32).into());
     Arc::new(t)
@@ -244,11 +269,58 @@ fn transport() -> Arc<quinn::TransportConfig> {
 pub fn endpoint(addr: SocketAddr, identity: &Identity, peer: &[u8]) -> Result<Endpoint> {
     endpoint_alpn(addr, identity, peer, peerglide_protocol::ALPN)
 }
+/// Prefer a single socket accepting IPv4 and IPv6. Hosts without dual-stack
+/// support keep the ordinary IPv4 listener.
+pub fn endpoint_dual_stack(port: u16, identity: &Identity, peer: &[u8]) -> Result<Endpoint> {
+    endpoint_alpn_dual_stack(port, identity, peer, peerglide_protocol::ALPN)
+}
+
+fn endpoint_alpn_dual_stack(
+    port: u16,
+    identity: &Identity,
+    peer: &[u8],
+    alpn: &[u8],
+) -> Result<Endpoint> {
+    endpoint_with(identity, peer, alpn, |server| {
+        match dual_stack_socket(port) {
+            Ok(socket) => Endpoint::new(
+                quinn::EndpointConfig::default(),
+                Some(server),
+                socket,
+                Arc::new(quinn::TokioRuntime),
+            ),
+            Err(_) => Endpoint::server(server, (Ipv4Addr::UNSPECIFIED, port).into()),
+        }
+    })
+}
+
+fn dual_stack_socket(port: u16) -> io::Result<UdpSocket> {
+    let socket = socket2::Socket::new(
+        socket2::Domain::IPV6,
+        socket2::Type::DGRAM,
+        Some(socket2::Protocol::UDP),
+    )?;
+    socket.set_only_v6(false)?;
+    socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into())?;
+    Ok(socket.into())
+}
+
 fn endpoint_alpn(
     addr: SocketAddr,
     identity: &Identity,
     peer: &[u8],
     alpn: &[u8],
+) -> Result<Endpoint> {
+    endpoint_with(identity, peer, alpn, |server| {
+        Endpoint::server(server, addr)
+    })
+}
+
+fn endpoint_with(
+    identity: &Identity,
+    peer: &[u8],
+    alpn: &[u8],
+    bind: impl FnOnce(quinn::ServerConfig) -> io::Result<Endpoint>,
 ) -> Result<Endpoint> {
     let server = server_config(identity, roots(peer)?, alpn)?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -258,8 +330,8 @@ fn endpoint_alpn(
         .with_client_auth_cert(vec![identity.cert()], identity.key())?;
     client.alpn_protocols = vec![alpn.to_vec()];
     let mut c = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(client)?));
-    c.transport_config(transport());
-    let mut e = Endpoint::server(server, addr)?;
+    c.transport_config(transport(alpn));
+    let mut e = bind(server)?;
     e.set_default_client_config(c);
     Ok(e)
 }
@@ -281,7 +353,7 @@ fn server_config(
     server.alpn_protocols = vec![alpn.to_vec()];
     let mut config =
         quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(server)?));
-    config.transport_config(transport());
+    config.transport_config(transport(alpn));
     Ok(config)
 }
 
@@ -304,12 +376,18 @@ pub fn verify_peer(connection: &quinn::Connection, expected: &[u8]) -> Result<()
     Ok(())
 }
 pub async fn send(stream: &mut quinn::SendStream, msg: &Message) -> Result<()> {
-    let bytes = encode(msg)?;
+    send_frame(stream, &encode(msg)?).await
+}
+/// One length-prefixed frame whose schema the caller already chose.
+pub async fn send_frame(stream: &mut quinn::SendStream, bytes: &[u8]) -> Result<()> {
     if bytes.len() > MAX_FRAME {
         bail!("frame too large");
     }
-    stream.write_u32(bytes.len() as u32).await?;
-    stream.write_all(&bytes).await?;
+    let mut frame = [0; 4 + MAX_FRAME];
+    let used = &mut frame[..4 + bytes.len()];
+    used[..4].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
+    used[4..].copy_from_slice(bytes);
+    stream.write_all(used).await?;
     Ok(())
 }
 #[derive(Debug)]
@@ -337,6 +415,18 @@ fn frame_read_error(error: std::io::Error) -> anyhow::Error {
     }
 }
 pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
+    let mut buffer = [0; MAX_FRAME];
+    decode_message(receive_frame(stream, &mut buffer).await?)
+}
+/// Decodes a v5 message with the same error class as `receive`.
+pub fn decode_message(frame: &[u8]) -> Result<Message> {
+    decode(frame).map_err(|error| anyhow::Error::msg(error).context(InvalidMessageFrame))
+}
+/// One length-prefixed frame body; the caller chooses its schema.
+pub async fn receive_frame<'a>(
+    stream: &mut quinn::RecvStream,
+    buffer: &'a mut [u8; MAX_FRAME],
+) -> Result<&'a [u8]> {
     let mut header = [0u8; 4];
     if AsyncReadExt::read(stream, &mut header[..1]).await? == 0 {
         return Err(MessageStreamEnded.into());
@@ -349,16 +439,17 @@ pub async fn receive(stream: &mut quinn::RecvStream) -> Result<Message> {
     if size == 0 || size > MAX_FRAME {
         return Err(anyhow::anyhow!("frame length invalid").context(InvalidMessageFrame));
     }
-    let mut bytes = vec![0; size];
-    AsyncReadExt::read_exact(stream, &mut bytes)
+    let body = &mut buffer[..size];
+    AsyncReadExt::read_exact(stream, body)
         .await
         .map_err(frame_read_error)?;
-    decode(&bytes).map_err(|error| anyhow::Error::msg(error).context(InvalidMessageFrame))
+    Ok(&buffer[..size])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[tokio::test]
     async fn legacy_protocol_peers_are_rejected_before_input_session() -> Result<()> {
         for alpn in [b"peerglide/3".as_slice(), b"peerglide/4".as_slice()] {
@@ -573,7 +664,7 @@ mod negative_tests {
         let client = async {
             let c = ea.connect(eb.local_addr()?, "peerglide.local")?.await?;
             let (mut tx, mut rx) = c.open_bi().await?;
-            tx.write_u32(u32::MAX).await?;
+            tx.write_all(&u32::MAX.to_be_bytes()).await?;
             assert!(matches!(
                 receive(&mut rx).await?,
                 Message::Denied { lease: 0 }

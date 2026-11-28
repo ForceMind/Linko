@@ -238,3 +238,9 @@ PeerGlide 现有 Engine/Backend 结构内独立实现（`crates/peerglide-platfo
   "队列空且在途调用已返回"，超过 1000 ms 走既有 FAILED/RecoveryRequired，不新增协议字段。
 - Oink 注入线程可暂停/恢复重建；PeerGlide 的注入线程随单一 capture 生命周期创建与停止，
   不单独恢复。
+
+## Oink：回程边缘留出位移余量
+
+查阅固定提交的 [边缘路由](https://github.com/oinkvm/oink/blob/3ca82127e61f9d7106a70574a82cc63566d7a572/crates/oink-routing/src/router/edge.rs) 和 [边缘阻力](https://github.com/oinkvm/oink/blob/3ca82127e61f9d7106a70574a82cc63566d7a572/crates/oink-routing/src/router/resistance.rs)。Oink 保留撞到边缘后沿法线继续移动的距离，向屏幕内移动会抵消这段距离。沿边移动不推动切换。
+
+Linko 在现有出站租约内独立实现回程余量，累计接收边缘外的位移达到 8 个来源坐标单位才请求恢复。可见光标仍限制在显示区域内。只在当前租约累计，释放仍通过现有持键保护和恢复检查。此批保留 v5 协议，未移植 Oink 文件。旧版可在刚入场的小幅反向移动后立即触发回程，用户报告的双机现象尚待会话证据确认。

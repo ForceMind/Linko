@@ -1,8 +1,10 @@
 use super::*;
 use anyhow::ensure;
+use input_diagnostics::ReceiveLoopPhase;
 use std::{cell::RefCell, mem::size_of, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::*,
+    Graphics::Gdi::{GetMonitorInfoW, HMONITOR, MONITORINFO},
     System::Threading::GetCurrentThreadId,
     UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*},
 };
@@ -239,9 +241,16 @@ fn capture_impl(
             let _ = ready.send(true);
             let mut msg: MSG = std::mem::zeroed();
             let mut last_turn = std::time::Instant::now();
+            let receive_diagnostics = receive.as_ref().and(receive_gate.0.diagnostics.get());
+            let mark_receive = |phase| {
+                if let Some(diagnostics) = receive_diagnostics {
+                    diagnostics.set_receive_phase(phase);
+                }
+            };
             let unexpected = loop {
                 super::note_loop_gap(&receive_gate, &mut last_turn);
                 if receive.is_some() {
+                    mark_receive(ReceiveLoopPhase::Desktop);
                     let debt = STATE
                         .with_borrow(|state| state.as_ref().is_some_and(|s| s.pairs.debt != 0))
                         || receive_gate.receiving_epoch().is_some();
@@ -249,6 +258,7 @@ fn capture_impl(
                 }
                 // Native effects may synchronously reenter our hooks. This
                 // engine and its backend live outside the STATE RefCell borrow.
+                mark_receive(ReceiveLoopPhase::Pump);
                 let immediate = receive.as_mut().is_some_and(|(engine, _)| {
                     engine.pump(&mut receive_backend, now_ms(), stop.load(Ordering::Acquire))
                 });
@@ -291,6 +301,7 @@ fn capture_impl(
                 if !receive_gate.0.healthy.load(Ordering::Acquire) {
                     break true;
                 }
+                mark_receive(ReceiveLoopPhase::Messages);
                 let has_message = PeekMessageW(&mut msg, null_mut(), 0, 0, PM_REMOVE) != 0;
                 if has_message {
                     if msg.message == WM_QUIT {
@@ -307,6 +318,7 @@ fn capture_impl(
                     }
                 });
                 if !has_message && !immediate {
+                    mark_receive(ReceiveLoopPhase::Wait);
                     // Input/typed commands wake immediately; the timeout bounds cooperative shutdown.
                     if MsgWaitForMultipleObjectsEx(
                         0,
@@ -320,6 +332,7 @@ fn capture_impl(
                     }
                 }
             };
+            mark_receive(ReceiveLoopPhase::Shutdown);
             STATE.with_borrow_mut(|state| {
                 if let Some(s) = state {
                     s.gate.disable();
@@ -501,6 +514,7 @@ unsafe extern "system" fn mouse_hook(code: i32, w: WPARAM, l: LPARAM) -> LRESULT
                                 width: GetSystemMetrics(SM_CXSCREEN) as f64,
                                 height: GetSystemMetrics(SM_CYSCREEN) as f64,
                                 route,
+                                primary: s.gate.primary_for_position(route),
                             }
                         };
                         s.movement(event, route)
@@ -713,6 +727,52 @@ pub(super) fn receive_pointer(
     input.Anonymous.mi.dy = (y * 65535.0).round() as i32;
     submit_inputs(&[input])
 }
+pub(super) fn receive_on_display(
+    expected: display_layout::Display,
+    desktop: display_layout::Bounds,
+    placement: display_layout::Placement,
+) -> std::result::Result<(), peerglide_actions::execution::NativeFailure> {
+    use peerglide_actions::execution::NativeFailure;
+    let handle = expected.id.0 as usize as HMONITOR;
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..MONITORINFO::default()
+    };
+    // SAFETY: monitor information is written into a live struct on the
+    // existing DPI-aware worker. Stale handles fail the documented query.
+    if unsafe { GetMonitorInfoW(handle, &mut info) } == 0 {
+        return Err(NativeFailure::TargetLost);
+    }
+    let rect = info.rcMonitor;
+    let actual = display_layout::Bounds {
+        left: f64::from(rect.left),
+        top: f64::from(rect.top),
+        right: f64::from(rect.right),
+        bottom: f64::from(rect.bottom),
+    };
+    // SAFETY: these read only documented metrics, in the same DPI context.
+    let current_desktop = unsafe {
+        let left = f64::from(GetSystemMetrics(SM_XVIRTUALSCREEN));
+        let top = f64::from(GetSystemMetrics(SM_YVIRTUALSCREEN));
+        display_layout::Bounds {
+            left,
+            top,
+            right: left + f64::from(GetSystemMetrics(SM_CXVIRTUALSCREEN)),
+            bottom: top + f64::from(GetSystemMetrics(SM_CYVIRTUALSCREEN)),
+        }
+    };
+    if actual != expected.bounds || current_desktop != desktop {
+        return Err(NativeFailure::TargetLost);
+    }
+    let mut input = mouse_packet(
+        MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+        0,
+    );
+    input.Anonymous.mi.dx = placement.virtual_absolute[0];
+    input.Anonymous.mi.dy = placement.virtual_absolute[1];
+    submit_inputs(&[input])
+}
+
 // Set-1 physical scan positions; E0 distinguishes keypad/navigation and modifiers.
 const KEYS: &[(u16, u16, bool)] = &[
     (0x04, 0x1e, false),
@@ -808,6 +868,18 @@ const KEYS: &[(u16, u16, bool)] = &[
     (0x62, 0x52, false),
     (0x63, 0x53, false),
     (0x64, 0x56, false),
+    (0x68, 0x64, false),
+    (0x69, 0x65, false),
+    (0x6a, 0x66, false),
+    (0x6b, 0x67, false),
+    (0x6c, 0x68, false),
+    (0x6d, 0x69, false),
+    (0x6e, 0x6a, false),
+    (0x6f, 0x6b, false),
+    (0x70, 0x6c, false),
+    (0x71, 0x6d, false),
+    (0x72, 0x6e, false),
+    (0x73, 0x76, false),
     (0xe0, 0x1d, false),
     (0xe1, 0x2a, false),
     (0xe2, 0x38, false),
@@ -828,6 +900,17 @@ fn from_scan(scan: u16, extended: bool) -> Option<u16> {
         .find(|k| k.1 == scan && k.2 == extended)
         .map(|k| k.0)
 }
+fn captured_usage(vk: u16, scan: u16, extended: bool) -> Option<u16> {
+    if vk == VK_PAUSE || vk == VK_SNAPSHOT {
+        None
+    } else if vk == VK_NUMLOCK {
+        Some(0x53)
+    } else {
+        // Scan 0x76 is also documented for the Japanese LANG5 usage.
+        from_scan(scan, extended).filter(|usage| *usage != 0x73 || vk == VK_F24)
+    }
+}
+
 const STARTUP_VK: u16 = 0x4000;
 #[cfg(test)]
 fn physical_key(s: &mut HookState, vk: u16, scan: u16, extended: bool, down: bool) -> bool {
@@ -842,13 +925,7 @@ fn physical_key_routed(
     down: bool,
     route: CaptureRoute,
 ) -> bool {
-    let usage = if vk == VK_PAUSE || vk == VK_SNAPSHOT {
-        None
-    } else if vk == VK_NUMLOCK {
-        Some(0x53)
-    } else {
-        from_scan(scan, extended)
-    };
+    let usage = captured_usage(vk, scan, extended);
     if let Some(broker) = s.local_gestures.as_mut() {
         broker.clear_startup_key(STARTUP_VK | vk);
         // HookState's G1 branches use only the broker's fixed key bitset.
@@ -914,6 +991,270 @@ unsafe fn initial_buttons() -> std::collections::BTreeSet<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
+    use std::time::Duration;
+
+    async fn await_retired(driver: &ReceiveDriver, epoch: CaptureEpoch) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match driver.snapshot(epoch) {
+                    ReceiveSnapshot::Retired => return Ok(()),
+                    ReceiveSnapshot::RecoveryRequired => {
+                        anyhow::bail!("native cleanup remains unconfirmed")
+                    }
+                    _ => tokio::time::sleep(Duration::from_millis(1)).await,
+                }
+            }
+        })
+        .await
+        .context("receive cleanup fence")?
+    }
+
+    fn native_test_holds() -> (bool, bool) {
+        unsafe {
+            (
+                GetAsyncKeyState(i32::from(VK_RSHIFT)) < 0,
+                GetAsyncKeyState(i32::from(VK_LBUTTON)) < 0,
+            )
+        }
+    }
+
+    async fn await_native_test_holds(expected: (bool, bool)) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while native_test_holds() != expected {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .context("wait for native key and button state")?;
+        ensure!(
+            context::capture_source_available(),
+            "test desktop unavailable"
+        );
+        Ok(())
+    }
+
+    struct WheelTarget(HWND);
+
+    impl Drop for WheelTarget {
+        fn drop(&mut self) {
+            // The current-thread test creates and destroys this window.
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    fn wheel_target() -> WheelTarget {
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+
+        unsafe {
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let module = GetModuleHandleW(std::ptr::null());
+            let class = windows_sys::w!("LinkoHostedWheelTarget");
+            let class_info = WNDCLASSW {
+                lpfnWndProc: Some(DefWindowProcW),
+                hInstance: module,
+                lpszClassName: class,
+                ..WNDCLASSW::default()
+            };
+            assert_ne!(RegisterClassW(&class_info), 0, "register wheel test window");
+
+            let midpoint = POINT {
+                x: GetSystemMetrics(SM_CXSCREEN) / 2,
+                y: GetSystemMetrics(SM_CYSCREEN) / 2,
+            };
+            let hwnd = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                class,
+                class,
+                WS_POPUP | WS_VISIBLE,
+                midpoint.x - 128,
+                midpoint.y - 128,
+                256,
+                256,
+                null_mut(),
+                null_mut(),
+                module,
+                std::ptr::null(),
+            );
+            assert!(!hwnd.is_null(), "create wheel test window");
+            let target = WheelTarget(hwnd);
+            SetForegroundWindow(hwnd);
+            assert_eq!(GetForegroundWindow(), hwnd, "focus wheel test window");
+            assert_eq!(
+                WindowFromPoint(midpoint),
+                hwnd,
+                "wheel test window at center"
+            );
+            assert_ne!(SetCursorPos(midpoint.x, midpoint.y), 0, "place test cursor");
+            target
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "uses the input desktop and Win32 injection on a GitHub-hosted runner"]
+    async fn hosted_windows_native_receive_reports_command_deadlines() {
+        use input_diagnostics::{InputDiagnostics, Phase};
+        use std::time::Instant;
+
+        assert_eq!(
+            std::env::var("LINKO_TEST_WINDOWS_RECEIVE").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        assert_eq!(
+            std::env::var("RUNNER_ENVIRONMENT").as_deref(),
+            Ok("github-hosted")
+        );
+        assert!(context::capture_source_available());
+        let target = wheel_target();
+
+        for pressure in [false, true] {
+            let diagnostics = Arc::new(InputDiagnostics::default());
+            let display = if pressure {
+                Some(Arc::new(ReceiveDisplay::select((0.0, 0.0)).unwrap()))
+            } else {
+                None
+            };
+            let (events, _received) = capture_event_channel();
+            let mut session = capture_with_receive_display(
+                events,
+                input_capabilities(),
+                Some(diagnostics.clone()),
+                display,
+            )
+            .unwrap();
+            let mut driver = session.take_receive_driver().unwrap().unwrap();
+            let control = driver.control();
+            let burst = pressure.then(|| {
+                tokio::spawn(async move {
+                    loop {
+                        for _ in 0..16 {
+                            control.wake_loop();
+                        }
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                    }
+                })
+            });
+
+            let point = ReceivePoint { x: 0.5, y: 0.5 };
+            let mut rounds = 0;
+            let mut longest = Duration::ZERO;
+            let result: Result<()> = async {
+                for _ in 0..64 {
+                    let started = Instant::now();
+                    let epoch = driver.begin().await.context("receive begin")?;
+                    longest = longest.max(started.elapsed());
+                    let started = Instant::now();
+                    let ack = driver
+                        .pointer(epoch, point)
+                        .await
+                        .context("receive pointer")?;
+                    ensure!(ack == ReceiveAck::Submitted, "pointer was not submitted");
+                    longest = longest.max(started.elapsed());
+                    ensure!(
+                        unsafe { GetForegroundWindow() } == target.0,
+                        "wheel test window lost focus"
+                    );
+                    let started = Instant::now();
+                    let ack = driver
+                        .input(epoch, Input::Scroll { x: 0, y: 1 }, point)
+                        .await
+                        .context("receive wheel")?;
+                    ensure!(ack == ReceiveAck::Submitted, "wheel was not submitted");
+                    longest = longest.max(started.elapsed());
+                    let started = Instant::now();
+                    let ack = driver
+                        .release(epoch, None)
+                        .await
+                        .context("receive release")?;
+                    ensure!(
+                        ack != ReceiveAck::RecoveryRequired,
+                        "release requires recovery"
+                    );
+                    longest = longest.max(started.elapsed());
+                    await_retired(&driver, epoch).await?;
+                    // Keep the test window's messages bounded during the probe.
+                    let mut msg: MSG = unsafe { std::mem::zeroed() };
+                    unsafe {
+                        while PeekMessageW(&mut msg, target.0, 0, 0, PM_REMOVE) != 0 {
+                            DispatchMessageW(&msg);
+                        }
+                    }
+                    rounds += 1;
+                    // Exercise the message wait and the periodic desktop check.
+                    tokio::time::sleep(Duration::from_millis(12)).await;
+                }
+
+                ensure!(
+                    unsafe { GetForegroundWindow() } == target.0,
+                    "receive test window lost focus"
+                );
+                ensure!(
+                    native_test_holds() == (false, false),
+                    "test input already held"
+                );
+                let epoch = driver.begin().await?;
+                for event in [
+                    Input::Key {
+                        usage: 0xe5,
+                        down: true,
+                    },
+                    Input::Button {
+                        button: 1,
+                        down: true,
+                    },
+                ] {
+                    let ack = driver.input(epoch, event, point).await?;
+                    ensure!(ack == ReceiveAck::Submitted, "held input was not submitted");
+                }
+                await_native_test_holds((true, true)).await?;
+                if pressure {
+                    let recovery = driver.control();
+                    recovery.request_recovery(epoch);
+                    recovery.wake_loop();
+                } else {
+                    let ack = driver.release(epoch, None).await?;
+                    ensure!(
+                        ack != ReceiveAck::RecoveryRequired,
+                        "release requires recovery"
+                    );
+                }
+                await_retired(&driver, epoch).await?;
+                await_native_test_holds((false, false)).await?;
+                println!(
+                    "Windows native recovery: pressure={pressure} key_released=true button_released=true"
+                );
+                Ok(())
+            }
+            .await;
+            if let Some(burst) = burst {
+                burst.abort();
+            }
+            let summary = diagnostics.snapshot(Phase::End).to_string();
+            println!(
+                "Windows native receive: pressure={pressure} rounds={rounds} max_command_us={}",
+                longest.as_micros()
+            );
+            println!("{summary}");
+            drop(driver);
+            let shutdown = session.shutdown();
+            result.unwrap();
+            shutdown.unwrap();
+            assert!(input_diagnostics::is_summary(&summary));
+            assert!(!summary.contains(" sdk=0 "));
+            let wheels = summary
+                .split_ascii_whitespace()
+                .find_map(|field| field.strip_prefix("wh_inj="))
+                .unwrap()
+                .parse::<u32>()
+                .unwrap();
+            assert!(
+                wheels >= rounds,
+                "wheel packets must reach the existing hook"
+            );
+            assert!(!summary.contains("first_rx_to="));
+        }
+    }
 
     #[test]
     fn recovery_inputs_are_only_a_tagged_right_pair_or_one_right_up() {
@@ -1102,6 +1443,27 @@ mod tests {
         assert_eq!(from_scan(0x1d, true), Some(0xe4));
     }
     #[test]
+    fn extended_function_keys_keep_scan_identity_and_balanced_release() {
+        let scans = [
+            0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x76,
+        ];
+        assert_eq!(captured_usage(VK_F24, 0x76, false), Some(0x73));
+        assert_eq!(captured_usage(VK_KANA, 0x76, false), None);
+        for (usage, scan) in (0x68..=0x73).zip(scans) {
+            assert_eq!(to_scan(usage), Some((scan, false)));
+            assert_eq!(from_scan(scan, false), Some(usage));
+            for down in [true, false] {
+                let (packets, count) = input_packets(Input::Key { usage, down }).unwrap();
+                assert_eq!(count, 1);
+                // SAFETY: the test supplied a keyboard input.
+                let key = unsafe { packets[0].Anonymous.ki };
+                assert_eq!(key.wScan, scan);
+                assert_eq!(key.dwFlags & KEYEVENTF_KEYUP != 0, !down);
+            }
+        }
+    }
+
+    #[test]
     fn startup_side_button_hold_blocks_receiving_until_its_local_up() {
         for (button, vk) in [(4, VK_XBUTTON1), (5, VK_XBUTTON2)] {
             let (tx, mut rx) = capture_events::channel(8).unwrap();
@@ -1183,5 +1545,143 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn mouse_hook_routes_local_edge_committed_motion_injected_echo_and_release() {
+        struct ResetState;
+        impl Drop for ResetState {
+            fn drop(&mut self) {
+                let _ = STATE.take();
+            }
+        }
+        fn filtered_count(diagnostics: &input_diagnostics::InputDiagnostics) -> u32 {
+            diagnostics
+                .snapshot(input_diagnostics::Phase::Sample)
+                .to_string()
+                .split_ascii_whitespace()
+                .find_map(|field| field.strip_prefix("filtered="))
+                .unwrap()
+                .parse()
+                .unwrap()
+        }
+        fn deliver_mouse(message: u32, pt: POINT, flags: u32, extra: usize) -> LRESULT {
+            let event = MSLLHOOKSTRUCT {
+                pt,
+                mouseData: 0,
+                flags,
+                time: 0,
+                dwExtraInfo: extra,
+            };
+            // Deliver a synthetic hook payload directly to the real callback on
+            // this test thread; this exercises callback routing, never OS hooks.
+            let raw = std::ptr::from_ref(&event) as LPARAM;
+            unsafe { mouse_hook(0, message as WPARAM, raw) }
+        }
+
+        let _dpi = windows_display::PhysicalContext::enter();
+        let (state, mut events) = crate::hook_tests::state(32);
+        let gate = state.gate.clone();
+        let diagnostics = Arc::new(input_diagnostics::InputDiagnostics::default());
+        assert!(gate.0.diagnostics.set(diagnostics.clone()).is_ok());
+        STATE.set(Some(state));
+        let _reset = ResetState;
+
+        let local = gate.route().unwrap();
+        let CaptureRoute::Local(local_epoch) = local else {
+            panic!("expected local capture route");
+        };
+        let width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        let edge_point = POINT {
+            x: width.saturating_sub(1),
+            y: height / 2,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, 0, 0), 0);
+        let Captured::Position {
+            x,
+            y,
+            width: reported_w,
+            height: reported_h,
+            route,
+            primary,
+        } = events.try_recv().unwrap()
+        else {
+            panic!("expected local position from mouse_hook");
+        };
+        assert_eq!(route, local);
+        assert_eq!(primary, None);
+        assert_eq!((x, y), (f64::from(edge_point.x), f64::from(edge_point.y)));
+        assert_eq!(
+            (reported_w, reported_h),
+            (f64::from(width), f64::from(height))
+        );
+
+        let overshoot = POINT {
+            x: width + 5,
+            y: height / 2,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, overshoot, 0, 0), 0);
+        let Captured::Position { x, y, route, .. } = events.try_recv().unwrap() else {
+            panic!("expected unclipped local edge overshoot from mouse_hook");
+        };
+        assert_eq!(route, local);
+        assert_eq!((x, y), (f64::from(overshoot.x), f64::from(overshoot.y)));
+
+        assert_eq!(
+            deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, 0),
+            0
+        );
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, edge_point, 0, TAG), 0);
+        assert!(events.try_recv().is_err());
+        assert_eq!(filtered_count(&diagnostics), 2);
+
+        let token = gate.prepare_commit(local_epoch).unwrap();
+        let CaptureCommit::Committed(remote_epoch) = gate.commit_from(token, u64::MAX, now_ms())
+        else {
+            panic!("idle local capture must commit to remote");
+        };
+        assert_eq!(
+            deliver_mouse(WM_MOUSEMOVE, edge_point, LLMHF_INJECTED, TAG),
+            0
+        );
+        assert!(events.try_recv().is_err());
+        assert_eq!(filtered_count(&diagnostics), 3);
+
+        let before = diagnostic_cursor_position().unwrap_or((0, 0));
+        let moved = POINT {
+            x: before.0 + 17,
+            y: before.1 - 9,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, moved, 0, 0), 1);
+        let after = diagnostic_cursor_position().unwrap_or((0, 0));
+        let Captured::Motion { dx, dy, route } = events.try_recv().unwrap() else {
+            panic!("expected committed remote motion from mouse_hook");
+        };
+        assert_eq!(route, CaptureRoute::Remote(remote_epoch));
+        let dx_a = f64::from(moved.x - before.0);
+        let dx_b = f64::from(moved.x - after.0);
+        let dy_a = f64::from(moved.y - before.1);
+        let dy_b = f64::from(moved.y - after.1);
+        assert!((dx_a.min(dx_b)..=dx_a.max(dx_b)).contains(&dx));
+        assert!((dy_a.min(dy_b)..=dy_a.max(dy_b)).contains(&dy));
+
+        gate.disable();
+        let restored = gate.route().unwrap();
+        let CaptureRoute::Local(restored_epoch) = restored else {
+            panic!("expected local route after release");
+        };
+        assert_ne!(restored_epoch, local_epoch);
+        assert_ne!(restored_epoch, remote_epoch);
+        let interior = POINT {
+            x: width / 2,
+            y: height / 2,
+        };
+        assert_eq!(deliver_mouse(WM_MOUSEMOVE, interior, 0, 0), 0);
+        let Captured::Position { x, y, route, .. } = events.try_recv().unwrap() else {
+            panic!("expected local position after release");
+        };
+        assert_eq!(route, restored);
+        assert_eq!((x, y), (f64::from(interior.x), f64::from(interior.y)));
     }
 }

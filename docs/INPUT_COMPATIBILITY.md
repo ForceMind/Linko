@@ -58,3 +58,14 @@ the old remote lease is released. The receiver independently enforces its map.
 Both peers must update to v5. See ADR-0004; full OEM/media and real layout/IME
 acceptance still remain pending. Capability negotiation does not create support
 for keys absent from the backend tables.
+
+## Extended function key coverage
+
+Windows maps F13–F24 using the documented Set 1 scan codes. Capture requires
+VK_F24 for the scan code that also represents Japanese LANG5. macOS maps
+F13–F20, with virtual key constants checked against the active HIToolbox SDK.
+The v5 bitmap advertises only the keys present in that receiver. Physical
+keyboard coverage and cross-host behavior remain C06 acceptance items.
+
+- [Microsoft scan-code table](https://learn.microsoft.com/en-us/windows/win32/inputdev/about-keyboard-input#scan-codes)
+- [Apple HID usage table](https://developer.apple.com/library/archive/technotes/tn2450/)

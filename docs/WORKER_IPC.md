@@ -180,3 +180,15 @@ terminal records remain separate. GUI child exit/EOF may overtake its first poll
 so the final snapshot is also inspected for expiry before discarding that child.
 A new attempt/configuration clears old expiry presentation. Matching packages
 remain required; no input-network protocol change or remote command is added.
+
+## Held-state and peer diagnostic lines (stderr)
+
+Diagnostic sessions add two stderr line kinds beside `KVM-DIAG/5`. `KVM-HELD/1` reports
+category counts of what the capture callback tracks as held (modifiers, other keys, unknown
+keys, a button bit mask, protected/extra holds) plus the gate count, change count and session
+times. It never carries key codes or input content. `sample` lines are written once per second
+and the GUI keeps only the newest; `blk_gate`/`deny_busy` lines are capped at five per session.
+`KVM-PEER ` followed by a validated `KVM-DIAG/5` or `KVM-HELD/1` line repeats what the other
+computer sent under ADR-0019. The GUI validates every line again, shows peer lines as plain text
+under "另一台的诊断", and does not save, upload or publish them. Old GUIs log these lines as
+ordinary diagnostics. Lifecycle state still comes only from stdout records.

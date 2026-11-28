@@ -2,6 +2,16 @@
 use super::*;
 use desktop_style::tokens;
 use icons::Icon;
+const MAX_LAYOUT_HISTORY: usize = 16;
+
+fn push_layout_history(stack: &mut Vec<String>, edge: String) {
+    if stack.len() >= MAX_LAYOUT_HISTORY {
+        let excess = stack.len() + 1 - MAX_LAYOUT_HISTORY;
+        stack.drain(0..excess);
+    }
+    stack.push(edge);
+}
+
 impl App {
     pub(super) fn writable(&self) -> bool {
         !self.quit_check_mode
@@ -15,6 +25,7 @@ impl App {
     }
     pub(super) fn layout_editable(&self) -> bool {
         self.writable()
+            && !self.routed_active
             && self.stopping.is_none()
             && self.layout_request.is_none()
             && (self.child.is_none()
@@ -29,7 +40,7 @@ impl App {
             && self.wizard.is_none()
             && self.dialog.is_none()
     }
-    pub(super) fn try_set_edge(&mut self, edge: &str) -> bool {
+    fn apply_edge(&mut self, edge: &str) -> bool {
         if !self.layout_editable() || !matches!(edge, "left" | "right" | "top" | "bottom") {
             self.screen_drag = None;
             return false;
@@ -47,6 +58,60 @@ impl App {
             self.notice = format!("屏幕位置未保存：{error:#}");
             return false;
         }
+        true
+    }
+    pub(super) fn try_set_edge(&mut self, edge: &str) -> bool {
+        if !self.layout_editable() || !matches!(edge, "left" | "right" | "top" | "bottom") {
+            self.screen_drag = None;
+            return false;
+        }
+        let before = self.displayed_edge().to_owned();
+        if before == edge {
+            return true;
+        }
+        if !self.apply_edge(edge) {
+            return false;
+        }
+        push_layout_history(&mut self.layout_undo, before);
+        self.layout_redo.clear();
+        true
+    }
+    pub(super) fn undo_edge(&mut self) -> bool {
+        if !self.layout_editable() {
+            return false;
+        }
+        let Some(previous) = self.layout_undo.last().cloned() else {
+            return false;
+        };
+        let current = self.displayed_edge().to_owned();
+        if current == previous {
+            self.layout_undo.pop();
+            return true;
+        }
+        if !self.apply_edge(&previous) {
+            return false;
+        }
+        self.layout_undo.pop();
+        push_layout_history(&mut self.layout_redo, current);
+        true
+    }
+    pub(super) fn redo_edge(&mut self) -> bool {
+        if !self.layout_editable() {
+            return false;
+        }
+        let Some(next) = self.layout_redo.last().cloned() else {
+            return false;
+        };
+        let current = self.displayed_edge().to_owned();
+        if current == next {
+            self.layout_redo.pop();
+            return true;
+        }
+        if !self.apply_edge(&next) {
+            return false;
+        }
+        self.layout_redo.pop();
+        push_layout_history(&mut self.layout_undo, current);
         true
     }
     pub(super) fn input_label(&self) -> &'static str {
@@ -71,23 +136,12 @@ impl App {
             None => "尚未开启键鼠会话",
         }
     }
-    fn unavailable(ui: &mut egui::Ui, title: &str, sentences: &[&str]) {
-        egui::Frame::group(ui.style())
-            .inner_margin(18.0)
-            .show(ui, |ui| {
-                ui.strong(title);
-                ui.add_space(7.0);
-                for sentence in sentences {
-                    ui.label(*sentence);
-                }
-                ui.weak("功能准备好后，会在这里提供独立的授权与操作入口。");
-            });
-    }
     pub(super) fn open_setup(&mut self) {
         self.peer_wait_expired = false;
         self.native_confirmation = false;
         self.pending_start = None;
         self.screen_drag = None;
+        self.context_menu = None;
         self.confirmed_fingerprint = None;
         self.wizard = None;
         self.dialog = None;
@@ -98,8 +152,10 @@ impl App {
     pub(super) fn open_advanced_setup(&mut self) {
         self.peer_wait_expired = false;
         self.screen_drag = None;
+        self.context_menu = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
+            self.pending_routed = None;
             self.dialog = None;
         }
         self.wizard_name = self.config.peer_name.clone();
@@ -125,6 +181,7 @@ impl App {
                 && self.instance_lock.is_some()
                 && self.config_store.is_some(),
             running: self.child.is_some(),
+            routed: self.routed_active,
             connected: self.connected,
             failed: self.last_failure,
             stopping: self.stopping.is_some(),
@@ -152,6 +209,17 @@ impl App {
             && self.dialog.is_none()
             && (self.child.is_none() || self.active_mode == Some(SessionMode::Communication))
     }
+    pub(super) fn routed_start_available(&self) -> bool {
+        cfg!(any(windows, target_os = "macos"))
+            && self.native_exit_protected()
+            && self.idle_writable()
+            && !self.recovery_blocked
+            && !self.enrollment_blocked
+            && !self.pairing_pending()
+            && !self.close_requested
+            && !self.exit_confirmed
+            && self.wizard.is_none()
+    }
     pub(super) fn workspace_action(&mut self, action: desktop_state::Action) {
         match action {
             desktop_state::Action::CheckPermissions if self.native_start_available() => {
@@ -161,6 +229,7 @@ impl App {
             desktop_state::Action::AddDevice if self.idle_writable() => self.open_setup(),
             desktop_state::Action::StartInput if self.native_start_available() => {
                 self.native_confirmation = false;
+                self.pending_routed = None;
                 self.dialog = Some(Dialog::NativeStart);
             }
             desktop_state::Action::Connect if self.idle_writable() => {
@@ -262,7 +331,6 @@ impl App {
     }
     /// Body of the details drawer: the former connection and identity card, discovery included.
     pub(super) fn connection_details(&mut self, ui: &mut egui::Ui) {
-        ui.strong("连接与身份详情");
         ui.label(format!("连接详情：{}", self.status));
         ui.label(if self.config.listen {
             "连接方式：等待另一台电脑"
@@ -363,8 +431,10 @@ impl App {
         ui.add_space(16.0);
         ui.separator();
         ui.strong("更多协作方式");
-        ui.label("文字、图片和文件尚未接通，当前不会读取或同步这些内容。");
-        ui.weak("后续逐项开放，并分别询问你的同意，不包含在键鼠许可里。");
+        ui.label("文件和剪贴板共享需要两端各自确认。");
+        if ui.button("打开文件与剪贴板").clicked() {
+            self.navigate_to(Page::Transfers);
+        }
     }
     fn mouse(&mut self, ui: &mut egui::Ui) {
         if self.recording_mode {
@@ -374,25 +444,11 @@ impl App {
             self.use_recorded_gesture(ui);
             return;
         }
-        ui.weak("离线配置：录制、测试并保存规则，不执行系统动作。");
-        ui.add_space(14.0);
-        egui::Frame::group(ui.style())
-            .inner_margin(14.0)
-            .show(ui, |ui| {
-                let mut enabled = false;
-                ui.add_enabled(
-                    false,
-                    egui::Checkbox::new(&mut enabled, "全局鼠标手势 · 开发与实机验收中"),
-                );
-                ui.weak(
-                    "默认关闭。当前平台没有可在本GUI启用的全局手势，保存规则不授予捕获或动作权限。",
-                );
-            });
-        ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.mouse_tab, MouseTab::Rules, "规则与应用");
-            ui.selectable_value(&mut self.mouse_tab, MouseTab::Practice, "录制与本窗口测试");
-        });
+        let tabs = [
+            (MouseTab::Practice, Icon::Gesture, "练习"),
+            (MouseTab::Rules, Icon::Sliders, "规则与应用"),
+        ];
+        segmented(ui, &mut self.mouse_tab, &tabs);
         ui.add_space(14.0);
         let writable = self.idle_writable();
         match self.mouse_tab {
@@ -459,18 +515,21 @@ impl App {
     fn collaboration(&mut self, ui: &mut egui::Ui) {
         self.collaboration_tab = if self.page == Page::Clipboard {
             CollaborationTab::Clipboard
+        } else if self.page == Page::Audio {
+            CollaborationTab::Audio
         } else {
             CollaborationTab::Files
         };
-        self.subpage_header(ui, "文件与剪贴板", Page::Displays);
-        ui.horizontal(|ui| {
-            for (page, label) in [(Page::Transfers, "文件传输"), (Page::Clipboard, "剪贴板")]
-            {
-                if ui.selectable_label(self.page == page, label).clicked() {
-                    self.navigate_to(page);
-                }
-            }
-        });
+        self.subpage_header(ui, "共享", Page::Displays);
+        let mut page = self.page;
+        let tabs = [
+            (Page::Clipboard, Icon::Log, "剪贴板"),
+            (Page::Transfers, Icon::Folder, "文件传输"),
+            (Page::Audio, Icon::Audio, "音频"),
+        ];
+        if segmented(ui, &mut page, &tabs) {
+            self.navigate_to(page);
+        }
         let muted = tokens::muted_color(ui.visuals().dark_mode);
         icon_row(
             ui,
@@ -480,31 +539,33 @@ impl App {
             },
         );
         ui.add_space(14.0);
-        desktop_style::card(ui).show(ui, |ui| {
-            desktop_style::pill(ui, "尚未接通", desktop_style::Tone::Neutral);
-            ui.add_space(12.0);
-            match self.collaboration_tab {
-                CollaborationTab::Clipboard => Self::unavailable(
-                    ui,
-                    "系统剪贴板尚未接通",
-                    &[
-                        "目前不会读取、写入或共享系统剪贴板。",
-                        "后续按设备、方向和手动／自动方式分别授权。",
-                    ],
-                ),
-                CollaborationTab::Files => Self::unavailable(
-                    ui,
-                    "文件发送与接收尚未接通",
-                    &[
-                        "当前不会读取或传送文件，也未提供原生跨屏拖拽。",
-                        "不会展示模拟传输进度。",
-                    ],
-                ),
+        desktop_style::card(ui).show(ui, |ui| match self.collaboration_tab {
+            CollaborationTab::Clipboard => {
+                #[cfg(any(windows, target_os = "macos"))]
+                {
+                    let mut clipboard = std::mem::take(&mut self.clipboard_panel);
+                    clipboard.ui(self, ui);
+                    self.clipboard_panel = clipboard;
+                }
+                #[cfg(not(any(windows, target_os = "macos")))]
+                ui.strong("当前平台暂不支持系统剪贴板共享");
+            }
+            CollaborationTab::Audio => {
+                #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+                {
+                    let mut audio = std::mem::take(&mut self.audio_panel);
+                    audio.ui(self, ui);
+                    self.audio_panel = audio;
+                }
+                #[cfg(not(any(all(windows, target_env = "msvc"), target_os = "macos")))]
+                ui.strong("系统音频共享目前可在 Windows 和 macOS 使用");
+            }
+            CollaborationTab::Files => {
+                let mut files = std::mem::take(&mut self.file_panel);
+                files.ui(self, ui);
+                self.file_panel = files;
             }
         });
-        ui.add_space(18.0);
-        ui.weak("连接成功不包含内容共享许可。");
-        ui.weak("离线数据模块不是已可用的系统共享功能。");
     }
     pub(super) fn settings(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         self.subpage_header(ui, "设置", Page::Displays);
@@ -545,23 +606,59 @@ impl App {
             SettingsSection::General => {
                 desktop_style::card(ui).show(ui, |ui| {
                     ui.set_min_width(ui.available_width().min(680.0));
-                    ui.strong("外观与连接");
+                    ui.add_space(10.0);
                     ui.add_enabled_ui(self.writable(), |ui| {
                         let mut dark = self.config.dark;
-                        ui.horizontal(|ui| {
-                            ui.label("外观");
-                            segmented(ui, &mut dark, &APPEARANCES);
-                        });
+                        appearance_choices(ui, &mut dark);
                         if dark != self.config.dark {
                             self.config.dark = dark;
                             self.theme(ctx);
                             self.save();
                         }
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("界面语言");
-                            ui.weak("简体中文");
-                        });
                     });
+                    ui.add_space(12.0);
+                    ui.add_enabled_ui(self.writable() && self.desktop_store.is_some(), |ui| {
+                        let mut preferences = self.desktop_preferences;
+                        if motion_switch(ui, &mut preferences.reduce_motion).changed() {
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            self.feedback(result, "已保存界面动效偏好。");
+                        }
+                        if cursor_overlay::SUPPORTED
+                            && ui
+                                .add_enabled(
+                                    !self.desktop_preferences.reduce_motion,
+                                    egui::Checkbox::new(&mut preferences.cursor_trail, "光标拖尾"),
+                                )
+                                .changed()
+                        {
+                            let result = self.set_desktop_preferences(ctx, preferences);
+                            if result.is_ok() {
+                                self.cursor_overlay.reenable();
+                            }
+                            self.feedback(result, "已保存光标拖尾偏好。");
+                        }
+                    });
+                    if cursor_overlay::SUPPORTED
+                        && ui
+                            .add_enabled(
+                                self.cursor_overlay_available(),
+                                egui::Button::new("定位光标"),
+                            )
+                            .clicked()
+                    {
+                        self.cursor_overlay.locate(Instant::now());
+                    }
+                    ui.separator();
+                    ui.horizontal_wrapped(|ui| {
+                        if shell_ui::icon_button(ui, Icon::Shield, "恢复快捷键", true).clicked()
+                        {
+                            self.navigate_to(Page::Shortcuts);
+                        }
+                        for key in SHORTCUTS[1].keys {
+                            keycap(ui, key);
+                        }
+                    });
+                    ui.separator();
                     ui.add_enabled_ui(self.idle_writable() && !self.pairing_pending(), |ui| {
                         if ui
                             .checkbox(&mut self.config.reconnect, "断开后自动重连已记住的电脑")
@@ -656,10 +753,8 @@ impl App {
             }
         }
     }
-    /// Advanced diagnostics, collapsed by default. The summary keeps its source: the newest
-    /// log line that `input_diagnostics::is_summary` accepts. Only the layout lives here.
+    /// Advanced diagnostics, collapsed by default.
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
-        use peerglide_platform::input_diagnostics::is_summary;
         ui.strong("本GUI进程的系统权限");
         ui.weak("只在点击时读取，不申请或修改权限。实际输入进程会独立复查。");
         if ui.button("检查当前系统权限").clicked() {
@@ -691,11 +786,33 @@ impl App {
         ui.weak("Windows UAC与安全桌面不绕过。GUI快照不等于真实输入可用。");
         ui.separator();
         ui.strong("会话记录 · 不含按键内容");
-        let summary = self.logs.iter().rev().find(|line| is_summary(line));
-        if let Some(summary) = summary {
+        let latest = match self.input_summary.lock() {
+            Ok(latest) => latest.clone(),
+            Err(_) => Default::default(),
+        };
+        if let Some(summary) = &latest.summary {
             if ui.button("复制本机输入诊断摘要").clicked() {
-                ui.ctx().copy_text(summary.clone());
+                let header = diagnostic_report::header(&self.diagnostic_facts());
+                let text = diagnostic_report::local_text(&header, &latest);
+                ui.ctx().copy_text(text);
             }
+            if !self.logs.contains(summary) {
+                ui.monospace(summary.as_str());
+            }
+        }
+        ui.strong("另一台的诊断");
+        let peer = latest.peer_lines();
+        if peer.is_empty() {
+            ui.weak(diagnostic_report::NO_PEER);
+        }
+        for line in &peer {
+            ui.monospace(*line);
+        }
+        let copyable = latest.summary.is_some() || !peer.is_empty();
+        if copyable && ui.button("复制两端摘要").clicked() {
+            let header = diagnostic_report::header(&self.diagnostic_facts());
+            let text = diagnostic_report::both_text(&header, &latest);
+            ui.ctx().copy_text(text);
         }
         for line in &self.logs {
             ui.monospace(line);
@@ -997,7 +1114,12 @@ impl App {
             580.0f32.min((viewport.width() - 48.0).max(1.0)),
             540.0f32.min((viewport.height() - 48.0).max(1.0)),
         );
-        egui::Window::new("开启键鼠协同")
+        let title = if self.pending_routed.is_some() {
+            "开启分段键鼠"
+        } else {
+            "开启键鼠协同"
+        };
+        egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .resizable(false)
@@ -1007,6 +1129,7 @@ impl App {
             .show(ctx, |ui| self.native_start_contents(ui));
         if !open {
             self.native_confirmation = false;
+            self.pending_routed = None;
             self.dialog = None;
         }
     }
@@ -1014,6 +1137,7 @@ impl App {
     fn native_start_contents(&mut self, ui: &mut egui::Ui) {
         const HEADER_HEIGHT: f32 = 112.0;
         const FOOTER_HEIGHT: f32 = 104.0;
+        let routed = self.pending_routed.is_some();
         let permission_idle =
             self.child.is_none() || self.active_mode == Some(SessionMode::Communication);
         ui.allocate_ui_with_layout(
@@ -1037,11 +1161,15 @@ impl App {
             .show(ui, |ui| {
                 self.worker_permissions.native_start_details(ui);
                 ui.separator();
-                let points = native_start_points(
-                    self.config.allow,
-                    !self.config.listen && !self.config.reconnect,
-                    self.child.is_some(),
-                );
+                let points = if routed {
+                    routed_start_points()
+                } else {
+                    native_start_points(
+                        self.config.allow,
+                        !self.config.listen && !self.config.reconnect,
+                        self.child.is_some(),
+                    )
+                };
                 for point in points {
                     safety_point(ui, point);
                 }
@@ -1081,17 +1209,20 @@ impl App {
                                 == worker_permissions::Readiness::Ready
                             && self.native_confirmation
                             && self.stopping.is_none()
-                            && !self.recovery_blocked;
+                            && !self.recovery_blocked
+                            && (!routed
+                                || self.pending_routed.is_some() && self.routed_start_available());
                         let start = ui
                             .add_enabled(ready, egui::Button::new("确认并开启键鼠"))
                             .clicked();
-                        let diagnose = ui
-                            .add_enabled(
-                                ready && self.child.is_none(),
-                                egui::Button::new("开启并诊断"),
-                            )
-                            .on_hover_text("统计本机输入链路 120 秒，可复制不含输入内容的摘要")
-                            .clicked();
+                        let diagnose = !routed
+                            && ui
+                                .add_enabled(
+                                    ready && self.child.is_none(),
+                                    egui::Button::new("开启并诊断"),
+                                )
+                                .on_hover_text("统计本机输入链路 120 秒，可复制不含输入内容的摘要")
+                                .clicked();
                         if start || diagnose {
                             let result = if diagnose {
                                 self.request_native_with_diagnostics(true)
@@ -1126,13 +1257,16 @@ impl App {
             Dialog::ForceStop => "强制停止工作进程",
             Dialog::Recovery => "停止与恢复状态",
         };
-        egui::Window::new(title)
+        let mut window = egui::Window::new(title)
             .open(&mut open)
             .collapsible(false)
             .default_width(580.0)
             .default_height(540.0)
-            .vscroll(true)
-            .show(ctx, |ui| self.dialog_contents(ui, dialog));
+            .vscroll(true);
+        if dialog == Dialog::Recovery {
+            window = window.anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO);
+        }
+        window.show(ctx, |ui| self.dialog_contents(ui, dialog));
         if !open {
             self.dialog = None;
         }
@@ -1140,13 +1274,31 @@ impl App {
 
     /// W4: the stop control first, then icon points, then the one explicit action.
     fn dialog_contents(&mut self, ui: &mut egui::Ui, dialog: Dialog) {
-        if ui.button("立即停止并恢复本机").clicked() {
+        if dialog == Dialog::Recovery {
+            ui.vertical_centered(|ui| {
+                let (icon, _) = ui.allocate_exact_size(Vec2::splat(48.0), egui::Sense::hover());
+                Icon::Shield.paint(ui.painter(), icon, tokens::accent_color(self.config.dark));
+                ui.heading(self.input_label());
+                ui.allocate_ui_with_layout(
+                    Vec2::new(160.0, 36.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        for key in ["Ctrl", "Alt", "Esc"] {
+                            keycap(ui, key);
+                        }
+                    },
+                );
+                if ui
+                    .add(desktop_style::primary("立即停止并恢复本机"))
+                    .clicked()
+                {
+                    self.stop();
+                }
+            });
+        } else if ui.button("立即停止并恢复本机").clicked() {
             self.stop();
         }
         ui.separator();
-        if dialog == Dialog::Recovery {
-            ui.strong(self.input_label());
-        }
         for point in dialog_points(dialog) {
             safety_point(ui, *point);
         }
@@ -1239,9 +1391,79 @@ impl App {
     pub(super) fn navigate_to(&mut self, page: Page) {
         self.page = page;
         self.screen_drag = None;
+        self.context_menu = None;
         self.native_confirmation = false;
         if self.dialog == Some(Dialog::NativeStart) {
+            self.pending_routed = None;
             self.dialog = None;
+        }
+    }
+    pub(super) fn handle_workspace_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.dialog.is_some() || self.wizard.is_some() || self.pairing_panel.open {
+            return;
+        }
+        if (self.context_menu.is_some() || self.connection_details_open)
+            && ctx.input_mut(|input| {
+                input.modifiers == egui::Modifiers::NONE
+                    && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            })
+        {
+            if self.context_menu.take().is_none() {
+                self.connection_details_open = false;
+            }
+            return;
+        }
+        if !matches!(self.page, Page::Displays | Page::Devices)
+            || self.device_tab == DeviceTab::Permissions
+            || self.connection_details_open
+            || self.peer_address_edit.is_some()
+            || self.context_menu.is_some()
+            || self.screen_drag.is_some()
+            || !self.layout_editable()
+        {
+            return;
+        }
+        let action = ctx.input(|input| {
+            let cmd = input.modifiers.command || input.modifiers.ctrl;
+            if cmd && !input.modifiers.alt {
+                if input.key_pressed(egui::Key::Z) {
+                    return Some(if input.modifiers.shift {
+                        "redo"
+                    } else {
+                        "undo"
+                    });
+                }
+                if !input.modifiers.shift && input.key_pressed(egui::Key::Y) {
+                    return Some("redo");
+                }
+            }
+            if input.modifiers == egui::Modifiers::NONE {
+                if input.key_pressed(egui::Key::ArrowLeft) {
+                    return Some("left");
+                }
+                if input.key_pressed(egui::Key::ArrowRight) {
+                    return Some("right");
+                }
+                if input.key_pressed(egui::Key::ArrowUp) {
+                    return Some("top");
+                }
+                if input.key_pressed(egui::Key::ArrowDown) {
+                    return Some("bottom");
+                }
+            }
+            None
+        });
+        match action {
+            Some("undo") => {
+                self.undo_edge();
+            }
+            Some("redo") => {
+                self.redo_edge();
+            }
+            Some(edge) => {
+                self.try_set_edge(edge);
+            }
+            None => (),
         }
     }
     /// Laid out right to left: emergency recovery stays in the top-right corner.
@@ -1276,6 +1498,23 @@ impl App {
         }) {
             self.stop();
             self.gesture_lab.cancel();
+            self.context_menu = None;
+        } else if (self.dialog.is_some() || self.wizard.is_some())
+            && ctx.input_mut(|input| {
+                input.modifiers == egui::Modifiers::NONE
+                    && input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+            })
+        {
+            if self.dialog.take().is_some() {
+                self.native_confirmation = false;
+                self.pending_routed = None;
+            } else {
+                self.wizard = None;
+            }
+            self.screen_drag = None;
+            self.context_menu = None;
+        } else {
+            self.handle_workspace_shortcuts(&ctx);
         }
         let window_width = ctx.viewport_rect().width();
         // The title bar spans the window, so the safety controls never move with the sidebar.
@@ -1305,17 +1544,22 @@ impl App {
                 }
             });
         });
-        let expanded = self.sidebar_expanded(window_width);
+        let expanded = self.sidebar_open;
         let sidebar_mix = motion::sidebar_mix(&ctx, egui::Id::unique("linko-sidebar"), expanded);
         egui::Panel::left("navigation")
             .exact_size(motion::sidebar_width_for(sidebar_mix))
             .resizable(false)
             .frame(
                 egui::Frame::NONE
-                    .fill(root.visuals().panel_fill)
+                    .fill(egui::Color32::from_rgb(42, 44, 73))
                     .inner_margin(egui::Margin::symmetric(shell_ui::SIDEBAR_MARGIN, 8)),
             )
-            .show(root, |ui| self.sidebar(ui, sidebar_mix));
+            .show(root, |ui| {
+                let rail = &mut ui.style_mut().visuals;
+                *rail = egui::Visuals::dark();
+                rail.override_text_color = Some(egui::Color32::from_rgb(231, 232, 247));
+                ui.add_enabled_ui(!self.pairing_panel.open, |ui| self.sidebar(ui, sidebar_mix));
+            });
         if self.page != Page::GestureLab && self.page != Page::GestureRules
             || self.child.is_some()
             || self.mouse_tab != MouseTab::Practice
@@ -1342,8 +1586,15 @@ impl App {
             )
             .show(root, |ui| {
                 ui.multiply_opacity(shell_ui::view_alpha(progress));
+                if self.pairing_panel.open {
+                    let mut pairing = std::mem::take(&mut self.pairing_panel);
+                    pairing.ui(self, ui);
+                    self.pairing_open = pairing.blocks_actions();
+                    self.pairing_panel = pairing;
+                    return;
+                }
                 if matches!(self.page, Page::GestureLab | Page::GestureRules) {
-                    self.subpage_header(ui, "本机鼠标", Page::Shortcuts);
+                    self.subpage_header(ui, "手势", Page::Shortcuts);
                 }
                 egui::ScrollArea::vertical()
                     .id_salt(shell_ui::view_key(self.page))
@@ -1353,7 +1604,7 @@ impl App {
                         Page::Displays => self.devices(ui),
                         Page::Settings => self.settings(ui, &ctx),
                         Page::GestureLab | Page::GestureRules => self.mouse(ui),
-                        Page::Transfers | Page::Clipboard => self.collaboration(ui),
+                        Page::Transfers | Page::Clipboard | Page::Audio => self.collaboration(ui),
                         Page::Shortcuts => self.shortcuts(ui),
                     });
             });
@@ -1365,12 +1616,10 @@ impl App {
                     ui.label(&self.notice);
                 });
         }
+        self.render_context_menu(&ctx);
         self.setup_window(&ctx);
         self.dialog_window(&ctx);
-        let mut pairing = std::mem::take(&mut self.pairing_panel);
-        pairing.ui(self, &ctx);
-        self.pairing_open = pairing.blocks_actions();
-        self.pairing_panel = pairing;
+        self.pairing_open = self.pairing_panel.blocks_actions();
         // Report ordinary geometry only while the sidebar rests, so scripted clicks land on
         // controls that keep their place.
         let report = if self.layout_report.is_none() {
@@ -1498,9 +1747,113 @@ const SETTINGS_SECTIONS: [(SettingsSection, Icon, &str); 3] = [
     (SettingsSection::Permissions, Icon::Lock, "系统权限"),
     (SettingsSection::Advanced, Icon::Log, "诊断与资料"),
 ];
-/// Appearance choices; the value is the stored dark mode flag.
-const APPEARANCES: [(bool, Icon, &str); 2] =
-    [(false, Icon::Sun, "浅色"), (true, Icon::Moon, "深色")];
+/// Selectable miniature windows use the same foreground and surface tokens as the app.
+fn motion_switch(ui: &mut egui::Ui, enabled: &mut bool) -> egui::Response {
+    let label = "减少界面动效";
+    let (row, mut response) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 36.0), egui::Sense::click());
+    if response.clicked() {
+        *enabled = !*enabled;
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *enabled, label)
+    });
+    let painter = ui.painter();
+    let dark = ui.visuals().dark_mode;
+    let center = egui::pos2(row.right() - 24.0, row.center().y);
+    let track = egui::Rect::from_center_size(center, egui::vec2(42.0, 22.0));
+    let fill = if *enabled {
+        tokens::accent_color(dark)
+    } else {
+        tokens::line_color(dark)
+    };
+    painter.rect_filled(track, 11.0, fill);
+    painter.circle_filled(
+        center + egui::vec2(if *enabled { 10.0 } else { -10.0 }, 0.0),
+        8.0,
+        egui::Color32::WHITE,
+    );
+    if response.has_focus() {
+        let stroke = egui::Stroke::new(1.5, tokens::accent_color(dark));
+        painter.rect_stroke(track.expand(3.0), 13.0, stroke, egui::StrokeKind::Outside);
+    }
+    painter.text(
+        row.left_center(),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(15.0),
+        ui.visuals().text_color(),
+    );
+    response
+}
+
+fn appearance_choices(ui: &mut egui::Ui, current: &mut bool) {
+    ui.horizontal(|ui| {
+        let gap = 14.0;
+        let width = ((ui.available_width() - gap) * 0.5).clamp(1.0, 294.0);
+        let leading = (ui.available_width() - gap - 2.0 * width) * 0.5;
+        ui.spacing_mut().item_spacing.x = gap;
+        if leading > 0.0 {
+            ui.add_space(leading);
+        }
+        for (dark, label) in [(false, "浅色"), (true, "深色")] {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(width, width * 0.55), egui::Sense::click());
+            let selected = *current == dark;
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::Role::RadioButton,
+                    ui.is_enabled(),
+                    selected,
+                    label,
+                )
+            });
+            let painter = ui.painter();
+            let ink = tokens::text_color(dark);
+            painter.rect_filled(rect, 8.0, tokens::surface_color(dark));
+            let mut rail = rect.shrink(5.0);
+            rail.set_width(width * 0.14);
+            painter.rect_filled(rail, 4.0, egui::Color32::from_rgb(54, 54, 94));
+            let start = rect.min + egui::vec2(width * 0.2, 16.0);
+            let content = egui::Rect::from_min_max(
+                start + egui::vec2(0.0, 30.0),
+                rect.right_bottom() - egui::vec2(12.0, 34.0),
+            );
+            painter.rect_filled(content, 5.0, tokens::line_color(dark));
+            for (dy, fraction) in [(0.0, 0.46), (10.0, 0.33)] {
+                let row = egui::Rect::from_min_size(
+                    start + egui::vec2(0.0, dy),
+                    egui::vec2(width * fraction, 4.0),
+                );
+                painter.rect_filled(row, 2.0, tokens::line_color(dark));
+            }
+            let at = egui::pos2(start.x, rect.bottom() - 9.0);
+            painter.text(
+                at,
+                egui::Align2::LEFT_BOTTOM,
+                label,
+                egui::FontId::proportional(14.0),
+                ink,
+            );
+            let accent = tokens::accent_color(ui.visuals().dark_mode);
+            let stroke = if selected || response.has_focus() || response.hovered() {
+                egui::Stroke::new(2.0, accent)
+            } else {
+                egui::Stroke::new(1.0, tokens::line_color(ui.visuals().dark_mode))
+            };
+            painter.rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Inside);
+            if selected {
+                let center = rect.right_top() + egui::vec2(-14.0, 14.0);
+                let check = egui::Rect::from_center_size(center, egui::Vec2::splat(16.0));
+                Icon::Check.paint(painter, check, ink);
+            }
+            if response.clicked() {
+                *current = dark;
+            }
+        }
+    });
+}
 
 /// Segmented control. Every segment shows its icon and its label, and the label is its
 /// accessible name, so an icon never stands alone. Returns true when a click changed
@@ -1742,6 +2095,39 @@ pub(super) fn native_start_points(
     points
 }
 
+fn routed_start_points() -> Vec<SafetyPoint> {
+    vec![
+        SafetyPoint {
+            icon: Icon::Keyboard,
+            text: "本次开启真实原生键鼠发送。",
+        },
+        SafetyPoint {
+            icon: Icon::Link,
+            text: "按已确认的分段布局选择核验过的目标。",
+        },
+        SafetyPoint {
+            icon: Icon::Lock,
+            text: "各目标电脑单独决定是否接收。",
+        },
+        SafetyPoint {
+            icon: Icon::Recover,
+            text: "上一台确认清理后才可切到下一台。",
+        },
+        SafetyPoint {
+            icon: Icon::Keyboard,
+            text: "Ctrl+Alt+Right 返回本机。",
+        },
+        SafetyPoint {
+            icon: Icon::Recover,
+            text: "Ctrl+Alt+Esc 停止并恢复。",
+        },
+        SafetyPoint {
+            icon: Icon::Warning,
+            text: "多机键鼠、DPI 与恢复仍待真机验收。",
+        },
+    ]
+}
+
 static REVOKE_POINTS: [SafetyPoint; 2] = [
     SafetyPoint {
         icon: Icon::Stop,
@@ -1843,7 +2229,7 @@ pub(super) fn local_device_name() -> &'static str {
         "这台电脑"
     }
 }
-fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
+pub(super) fn dropped_edge(center: egui::Pos2, local: egui::Rect) -> Option<&'static str> {
     if !center.x.is_finite() || !center.y.is_finite() || local.expand(10.0).contains(center) {
         return None;
     }
@@ -2109,6 +2495,84 @@ pub(super) mod safety_dialog_tests {
         ctx.run_ui(input, run)
     }
 
+    fn press_escape(app: &mut App, ctx: &egui::Context, modifiers: egui::Modifiers) {
+        let input = egui::RawInput {
+            events: vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: false,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |root| app.desktop(root))
+            .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn escape_dismisses_safety_dialog_without_closing_pairing_or_releasing_recovery() -> Result<()>
+    {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let before = app.config.clone();
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.pairing_panel.open("测试电脑", "");
+        app.dialog = Some(Dialog::NativeStart);
+        app.native_confirmation = true;
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.dialog.is_none() && !app.native_confirmation && app.pairing_open);
+        assert!(app.child.is_none() && app.pending_start.is_none());
+
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(!app.pairing_open);
+        app.recovery_blocked = true;
+        app.dialog = Some(Dialog::Recovery);
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.dialog.is_none() && app.recovery_blocked && !app.exit_confirmed);
+
+        app.wizard = Some(SetupStep::Identity);
+        press_escape(&mut app, &ctx, egui::Modifiers::NONE);
+        assert!(app.wizard.is_none());
+        assert!(app.config == before && !app.dir.join("settings.json").exists());
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn emergency_escape_stops_pending_input_instead_of_dismissing_dialog() -> Result<()> {
+        let fixture = crate::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let ctx = crate::tests::ui_context();
+        app.theme(&ctx);
+        app.dialog = Some(Dialog::Recovery);
+        app.recovery_blocked = true;
+        app.pending_start = Some(SessionMode::Native);
+        let emergency = egui::Modifiers {
+            ctrl: true,
+            alt: true,
+            ..egui::Modifiers::NONE
+        };
+        press_escape(&mut app, &ctx, emergency);
+        assert!(app.pending_start.is_none() && app.recovery_blocked);
+        assert_eq!(app.dialog, Some(Dialog::Recovery));
+        drop(app);
+        fixture.close()?;
+        Ok(())
+    }
+
     #[test]
     fn every_safety_point_keeps_a_short_sentence_and_its_conditions() {
         for allow in [false, true] {
@@ -2299,9 +2763,14 @@ mod subpage_tests {
         assert!(app.config.dark);
         let stored: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         assert_eq!(stored["data"]["dark"], true);
+        click_text(&mut app, &ctx, "减少界面动效")?;
+        assert!(app.desktop_preferences.reduce_motion);
         assert!(!app.config.native && !app.config.allow && !app.config.reconnect);
         assert!(app.config.fingerprint.is_none() && app.child.is_none());
         drop(app);
+        let reopened = App::load(fixture.path.clone());
+        assert!(reopened.desktop_preferences.reduce_motion);
+        drop(reopened);
         fixture.close()?;
         Ok(())
     }

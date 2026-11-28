@@ -3,7 +3,7 @@ use crate::{peer_certificate, server_config, Identity, MAX_CERTIFICATE_BYTES};
 use anyhow::{ensure, Context, Result};
 use quinn::{Connection, Endpoint};
 use rustls::{pki_types::CertificateDer, RootCertStore};
-use std::{collections::BTreeMap, net::SocketAddr};
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 pub const MAX_TRUSTED_PEERS: usize = 16;
 pub type Fingerprint = [u8; 32];
@@ -30,6 +30,15 @@ impl Listener {
     /// A frozen set from locally trusted settings. Callers replace the listener
     /// and close revoked connections when trust changes.
     pub fn bind(address: SocketAddr, local: &Identity, peers: Vec<Vec<u8>>) -> Result<Self> {
+        Self::bind_alpn(address, local, peers, peerglide_protocol::ALPN)
+    }
+
+    pub(crate) fn bind_alpn(
+        address: SocketAddr,
+        local: &Identity,
+        peers: Vec<Vec<u8>>,
+        alpn: &[u8],
+    ) -> Result<Self> {
         ensure!(
             (1..=MAX_TRUSTED_PEERS).contains(&peers.len()),
             "trusted peer count outside listener limits"
@@ -50,7 +59,7 @@ impl Listener {
                 "duplicate trusted listener certificate"
             );
         }
-        let server = server_config(local, roots, peerglide_protocol::ALPN)?;
+        let server = server_config(local, roots, alpn)?;
         let endpoint = Endpoint::server(server, address)?;
         Ok(Self { endpoint, pins })
     }
@@ -65,7 +74,9 @@ impl Listener {
             .accept()
             .await
             .context("input listener closed")?;
-        let connection = incoming.await?;
+        let connection = tokio::time::timeout(Duration::from_secs(5), incoming)
+            .await
+            .context("trusted input handshake timed out")??;
         match self.exact_pin(&connection) {
             Ok(peer) => Ok(TrustedConnection { connection, peer }),
             Err(error) => {
@@ -79,11 +90,15 @@ impl Listener {
         self.endpoint.close(0u8.into(), b"trusted listener stopped");
     }
 
+    pub(crate) fn certificate(&self, fingerprint: Fingerprint) -> Option<&[u8]> {
+        self.pins.get(&fingerprint).map(Vec::as_slice)
+    }
+
     fn exact_pin(&self, connection: &Connection) -> Result<Fingerprint> {
         let certificate = peer_certificate(connection)?;
         let digest = *blake3::hash(certificate.as_ref()).as_bytes();
         ensure!(
-            self.pins.get(&digest).map(Vec::as_slice) == Some(certificate.as_ref()),
+            self.certificate(digest) == Some(certificate.as_ref()),
             "peer certificate differs from enrolled identities"
         );
         Ok(digest)

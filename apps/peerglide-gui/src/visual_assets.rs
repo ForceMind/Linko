@@ -1,6 +1,5 @@
 //! Fixed, local presentation assets. No screen capture, network or native input.
 use eframe::egui::{self, ColorImage, Rect, TextureHandle};
-use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DeviceKind {
@@ -14,13 +13,17 @@ pub(super) fn local_device_kind() -> DeviceKind {
 }
 
 struct DecodedDevice {
-    image: Arc<ColorImage>,
+    image: ColorImage,
     uv: Rect,
     aspect: f32,
 }
 
-static LAPTOP: OnceLock<Option<DecodedDevice>> = OnceLock::new();
-static MONITOR: OnceLock<Option<DecodedDevice>> = OnceLock::new();
+#[derive(Clone)]
+pub(super) struct DeviceArt {
+    pub texture: TextureHandle,
+    pub uv: Rect,
+    pub aspect: f32,
+}
 
 fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
     let icon = eframe::icon_data::from_png_bytes(bytes).ok()?;
@@ -55,56 +58,66 @@ fn decode(bytes: &[u8]) -> Option<DecodedDevice> {
         ),
     );
     Some(DecodedDevice {
-        image: Arc::new(ColorImage::from_rgba_unmultiplied(
-            [width, height],
-            &icon.rgba,
-        )),
+        image: ColorImage::from_rgba_unmultiplied([width, height], &icon.rgba),
         uv,
         aspect: (maximum[0] - minimum[0]) as f32 / (maximum[1] - minimum[1]) as f32,
     })
 }
 
-fn decoded(kind: DeviceKind) -> Option<&'static DecodedDevice> {
+/// Illustrates the two ends of a handoff. Runtime state is reported by the caller.
+pub(super) fn handoff_art(ui: &mut egui::Ui, symbol: super::icons::Icon) {
+    handoff_art_with_height(ui, symbol, 194.0);
+}
+
+pub(super) fn handoff_art_with_height(ui: &mut egui::Ui, symbol: super::icons::Icon, max: f32) {
+    let width = ui.available_width();
+    let height = (width * 0.27).max(88.0).min(max);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let center = rect.center();
+    let offset = (rect.width() * 0.26).min(190.0);
+    let painter = ui.painter_at(rect);
+    for (x, kind) in [(-offset, DeviceKind::Laptop), (offset, DeviceKind::Desktop)] {
+        if let Some(art) = device_art(ui.ctx(), kind) {
+            let height = (rect.height() * 0.84).min(offset * 1.62 / art.aspect);
+            let size = egui::vec2(height * art.aspect, height);
+            let bounds = Rect::from_center_size(center + egui::vec2(x, 0.0), size);
+            painter.image(art.texture.id(), bounds, art.uv, egui::Color32::WHITE);
+        }
+    }
+    let icon = Rect::from_center_size(center, egui::Vec2::splat(36.0));
+    let ink = super::desktop_style::tokens::accent_color(ui.visuals().dark_mode);
+    symbol.paint(&painter, icon, ink);
+}
+
+fn asset(kind: DeviceKind) -> Option<(&'static str, &'static [u8])> {
     match kind {
-        DeviceKind::Laptop => {
-            LAPTOP.get_or_init(|| decode(include_bytes!("../assets/devices/local-laptop.png")))
-        }
-        DeviceKind::Desktop => {
-            MONITOR.get_or_init(|| decode(include_bytes!("../assets/devices/desktop-monitor.png")))
-        }
-        DeviceKind::Unknown => return None,
+        DeviceKind::Laptop => Some((
+            "linko-laptop-device-art",
+            include_bytes!("../assets/devices/local-laptop.png"),
+        )),
+        DeviceKind::Desktop => Some((
+            "linko-desktop-device-art",
+            include_bytes!("../assets/devices/desktop-monitor.png"),
+        )),
+        DeviceKind::Unknown => None,
     }
-    .as_ref()
 }
 
-pub(super) fn device_texture(ctx: &egui::Context, kind: DeviceKind) -> Option<TextureHandle> {
-    let name = match kind {
-        DeviceKind::Laptop => "linko-laptop-device-art",
-        DeviceKind::Desktop => "linko-desktop-device-art",
-        DeviceKind::Unknown => return None,
-    };
+pub(super) fn device_art(ctx: &egui::Context, kind: DeviceKind) -> Option<DeviceArt> {
+    let (name, bytes) = asset(kind)?;
     let key = egui::Id::unique(name);
-    if let Some(texture) = ctx.data(|memory| memory.get_temp::<TextureHandle>(key)) {
-        return Some(texture);
+    if let Some(cached) = ctx.data(|memory| memory.get_temp::<Option<DeviceArt>>(key)) {
+        return cached;
     }
-    // Decode once per process, then upload once per context. Do not hold the
-    // context data lock while loading a texture or re-decode on every repaint.
-    let source = decoded(kind)?;
-    let texture = ctx.load_texture(name, (*source.image).clone(), egui::TextureOptions::LINEAR);
-    ctx.data_mut(|memory| memory.insert_temp(key, texture.clone()));
-    Some(texture)
-}
-
-pub(super) fn device_uv(kind: DeviceKind) -> Rect {
-    decoded(kind).map_or(
-        Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-        |source| source.uv,
-    )
-}
-
-pub(super) fn device_aspect(kind: DeviceKind) -> f32 {
-    // Decorative generic-computer proportions, never measured display geometry.
-    decoded(kind).map_or(4.0 / 3.0, |source| source.aspect)
+    // Texture upload consumes the decoded pixels. Only the handle and artwork
+    // geometry remain in application state, once per egui context.
+    let art = decode(bytes).map(|decoded| DeviceArt {
+        texture: ctx.load_texture(name, decoded.image, egui::TextureOptions::LINEAR),
+        uv: decoded.uv,
+        aspect: decoded.aspect,
+    });
+    ctx.data_mut(|memory| memory.insert_temp(key, art.clone()));
+    art
 }
 
 #[cfg(test)]
@@ -114,7 +127,8 @@ mod tests {
     #[test]
     fn fixed_device_assets_decode_to_bounded_transparent_images() {
         for kind in [DeviceKind::Laptop, DeviceKind::Desktop] {
-            let source = decoded(kind).expect("bundled device image must decode");
+            let (_, bytes) = asset(kind).unwrap();
+            let source = decode(bytes).expect("bundled device image must decode");
             assert!(source.image.width() <= 2048 && source.image.height() <= 2048);
             assert!(source.image.pixels.iter().any(|pixel| pixel.a() == 0));
             assert!(source.aspect.is_finite() && source.aspect > 0.5 && source.aspect < 3.0);
@@ -131,16 +145,16 @@ mod tests {
         let mut previous = None;
         for _ in 0..3 {
             let output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let first = device_texture(ui.ctx(), DeviceKind::Laptop).unwrap();
-                let second = device_texture(ui.ctx(), DeviceKind::Laptop).unwrap();
-                let desktop = device_texture(ui.ctx(), DeviceKind::Desktop).unwrap();
-                assert_eq!(first.id(), second.id());
-                assert_ne!(first.id(), desktop.id());
-                assert!(device_texture(ui.ctx(), DeviceKind::Unknown).is_none());
+                let first = device_art(ui.ctx(), DeviceKind::Laptop).unwrap();
+                let second = device_art(ui.ctx(), DeviceKind::Laptop).unwrap();
+                let desktop = device_art(ui.ctx(), DeviceKind::Desktop).unwrap();
+                assert_eq!(first.texture.id(), second.texture.id());
+                assert_ne!(first.texture.id(), desktop.texture.id());
+                assert!(device_art(ui.ctx(), DeviceKind::Unknown).is_none());
                 if let Some(id) = previous {
-                    assert_eq!(first.id(), id);
+                    assert_eq!(first.texture.id(), id);
                 }
-                previous = Some(first.id());
+                previous = Some(first.texture.id());
             });
             output.drop_without_applying_deltas();
         }
@@ -148,11 +162,7 @@ mod tests {
 
     #[test]
     fn unknown_type_never_decodes_or_uploads_a_desktop_or_laptop_asset() {
-        assert!(decoded(DeviceKind::Unknown).is_none());
-        assert_eq!(device_aspect(DeviceKind::Unknown), 4.0 / 3.0);
-        assert_eq!(
-            device_uv(DeviceKind::Unknown),
-            Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0))
-        );
+        assert!(asset(DeviceKind::Unknown).is_none());
+        assert!(device_art(&crate::tests::ui_context(), DeviceKind::Unknown).is_none());
     }
 }

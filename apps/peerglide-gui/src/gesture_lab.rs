@@ -1,6 +1,6 @@
 //! Explicit, window-local drawing only. Never installs hooks or dispatches actions.
 use anyhow::{Context, Result};
-use eframe::egui::{self, Color32, Event, PointerButton, Rect, Sense, Stroke as PaintStroke};
+use eframe::egui::{self, Event, PointerButton, Rect, Sense, Stroke as PaintStroke};
 use peerglide_gestures::{
     starter_templates, Config, Match, Point, Recognizer, Rejection, Sample, Stroke,
 };
@@ -43,8 +43,52 @@ struct Active {
     time: f64,
     rect: Rect,
 }
+
+#[cfg(any(target_os = "macos", test))]
+#[derive(Default)]
+struct TrackpadEvents {
+    pinch: bool,
+    rotation: bool,
+    horizontal: bool,
+    vertical: bool,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl TrackpadEvents {
+    fn observe(&mut self, events: &[Event]) -> bool {
+        let mut scrolled = false;
+        for event in events {
+            match event {
+                Event::Zoom(scale) if scale.is_finite() && *scale > 0.0 && *scale != 1.0 => {
+                    self.pinch = true;
+                }
+                Event::Rotate(angle) if angle.is_finite() && *angle != 0.0 => {
+                    self.rotation = true;
+                }
+                Event::MouseWheel {
+                    delta,
+                    source: egui::MouseWheelSource::Trackpad,
+                    ..
+                } => {
+                    self.horizontal |= delta.x.is_finite() && delta.x != 0.0;
+                    self.vertical |= delta.y.is_finite() && delta.y != 0.0;
+                    scrolled = true;
+                }
+                Event::MouseWheel {
+                    source: egui::MouseWheelSource::Momentum,
+                    ..
+                } => scrolled = true,
+                _ => (),
+            }
+        }
+        scrolled
+    }
+}
+
 pub struct GestureLab {
     active: Option<Active>,
+    #[cfg(target_os = "macos")]
+    trackpad: Option<TrackpadEvents>,
     samples: Vec<Sample>,
     result: Option<std::result::Result<Match, Rejection>>,
     completed: bool,
@@ -60,6 +104,8 @@ impl GestureLab {
     pub fn new(dir: &Path) -> Self {
         Self {
             active: None,
+            #[cfg(target_os = "macos")]
+            trackpad: None,
             samples: Vec::new(),
             result: None,
             completed: false,
@@ -90,6 +136,10 @@ impl GestureLab {
             .map(|m| m.id.0)
     }
     pub fn cancel(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            self.trackpad = None;
+        }
         if self.active.take().is_some() {
             self.result = Some(Err(Rejection::Cancelled));
             self.completed = false;
@@ -182,24 +232,76 @@ impl GestureLab {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui, worker_running: bool) -> Option<Rect> {
         self.inspection = None;
-        ui.strong("录制与本窗口测试");
-        ui.label("按住右键在画布内绘制，Esc 取消。");
-        ui.weak("仅限此画布，不捕获全局输入、不执行动作。只有点击保存才会写入文件。");
+        ui.label("按住右键试画 · Esc 取消");
+        ui.small("全局捕获与动作关闭");
         if worker_running {
             self.cancel();
             ui.label("设备会话运行期间暂停画布录制。请先停止设备会话，再进行窗口内测试。");
             return None;
         }
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width().max(1.), 260.),
-            Sense::click_and_drag(),
-        );
-        ui.painter()
-            .rect_filled(rect, 8, ui.visuals().extreme_bg_color);
+        #[cfg(target_os = "macos")]
+        {
+            let label = if self.trackpad.is_some() {
+                "结束触控板检测"
+            } else {
+                "开始触控板检测"
+            };
+            if ui.button(label).clicked() {
+                let start = self.trackpad.is_none();
+                self.cancel();
+                if start {
+                    self.trackpad = Some(TrackpadEvents::default());
+                }
+            }
+        }
+        let height = if self.export_open {
+            260.0
+        } else {
+            (ui.ctx().viewport_rect().height() * 0.49).clamp(240.0, 450.0)
+        };
+        let (rect, response) = ui
+            .horizontal_top(|ui| {
+                let canvas = ui.allocate_exact_size(
+                    egui::vec2((ui.available_width() - 64.0).max(1.0), height),
+                    Sense::click_and_drag(),
+                );
+                ui.vertical(|ui| {
+                    let clear = super::shell_ui::icon_button(
+                        ui,
+                        super::icons::Icon::Recover,
+                        "清空画布",
+                        false,
+                    );
+                    if clear.clicked() {
+                        self.cancel();
+                        self.samples.clear();
+                        self.result = None;
+                        self.completed = false;
+                        self.saved = false;
+                    }
+                    if super::shell_ui::icon_button(
+                        ui,
+                        super::icons::Icon::Folder,
+                        "样本标注与导出",
+                        false,
+                    )
+                    .clicked()
+                    {
+                        self.set_export_open(!self.export_open);
+                    }
+                });
+                canvas
+            })
+            .inner;
+        crate::desktop_style::canvas_wash(ui.painter(), rect, ui.visuals().dark_mode);
         let (time, focused, escape, events) = ui.ctx().input(|i| {
             (
                 i.time,
-                i.focused,
+                i.focused
+                    && !i
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, Event::WindowFocused(false))),
                 i.key_pressed(egui::Key::Escape),
                 i.events.clone(),
             )
@@ -207,7 +309,11 @@ impl GestureLab {
         if !focused || escape || self.active.as_ref().is_some_and(|a| a.rect != rect) {
             self.cancel();
         }
-        if focused && !escape {
+        #[cfg(target_os = "macos")]
+        let probing = self.probe_trackpad(ui, &response);
+        #[cfg(not(target_os = "macos"))]
+        let probing = false;
+        if focused && !escape && !probing {
             for event in events {
                 match event {
                     Event::PointerButton {
@@ -244,12 +350,44 @@ impl GestureLab {
             }
         }
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        let position = |s: &Sample| rect.min + egui::vec2(s.point.x as f32, s.point.y as f32);
+        let ink = crate::desktop_style::tokens::accent_color(ui.visuals().dark_mode);
+        let line = crate::desktop_style::tokens::line_color(ui.visuals().dark_mode);
+        painter.rect_stroke(
+            rect,
+            9.0,
+            PaintStroke::new(1.0, line),
+            egui::StrokeKind::Inside,
+        );
+        if let Some(first) = self.samples.first() {
+            painter.circle_filled(position(first), 5.0, ink);
+        }
         for pair in self.samples.windows(2) {
-            let position = |s: &Sample| rect.min + egui::vec2(s.point.x as f32, s.point.y as f32);
             painter.line_segment(
                 [position(&pair[0]), position(&pair[1])],
-                PaintStroke::new(2.5_f32, Color32::from_rgb(80, 175, 230)),
+                PaintStroke::new(4.0, ink),
             );
+        }
+        if self.completed {
+            if let Some(last) = self.samples.last() {
+                let end = position(last);
+                if let Some(delta) = self
+                    .samples
+                    .iter()
+                    .rev()
+                    .map(|sample| end - position(sample))
+                    .find(|delta| delta.length_sq() >= 64.0)
+                {
+                    let direction = delta.normalized();
+                    let base = end - direction * 14.0;
+                    let side = egui::vec2(-direction.y, direction.x) * 7.0;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![end, base + side, base - side],
+                        ink,
+                        PaintStroke::NONE,
+                    ));
+                }
+            }
         }
         if self.active.is_some() {
             ui.ctx().request_repaint();
@@ -272,16 +410,7 @@ impl GestureLab {
                 });
             }
         }
-        ui.horizontal(|ui| {
-            if ui.button("清空画布").clicked() {
-                self.cancel();
-                self.samples.clear();
-                self.result = None;
-                self.completed = false;
-                self.saved = false;
-            }
-            ui.weak("绘制后到规则页选择轨迹、范围与动作；保存规则不会启用全局手势。");
-        });
+
         let mut save_rect = None;
         let export = egui::CollapsingHeader::new("样本标注与导出 · 可选")
             .open(Some(self.export_open))
@@ -321,11 +450,35 @@ impl GestureLab {
         {
             self.inspection = save_rect.map(|save| (rect, save));
         }
-        ui.weak("窗口内轨迹不能证明原生鼠标采样率、全局手势或动作执行已经验收。");
         if !self.feedback.is_empty() {
             ui.label(&self.feedback);
         }
         Some(rect)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn probe_trackpad(&mut self, ui: &mut egui::Ui, canvas: &egui::Response) -> bool {
+        let Some(observed) = self.trackpad.as_mut() else {
+            return false;
+        };
+        ui.ctx().input_mut(|input| {
+            if canvas.hovered() && observed.observe(&input.raw.events) {
+                input.smooth_scroll_delta = egui::Vec2::ZERO;
+            }
+        });
+        ui.label("将指针留在画布内，试做缩放、旋转和双轴滚动。");
+        ui.horizontal_wrapped(|ui| {
+            for (label, seen) in [
+                ("缩放", observed.pinch),
+                ("旋转", observed.rotation),
+                ("横向滚动", observed.horizontal),
+                ("纵向滚动", observed.vertical),
+            ] {
+                let status = if seen { "已收到" } else { "等待输入" };
+                ui.label(format!("{label} {status}"));
+            }
+        });
+        true
     }
 }
 
@@ -374,6 +527,64 @@ mod tests {
             pressed,
             modifiers: Default::default(),
         }
+    }
+
+    fn scroll(source: egui::MouseWheelSource, x: f32, y: f32) -> Event {
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(x, y),
+            phase: egui::TouchPhase::Move,
+            source,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn trackpad_evidence_excludes_wheel_momentum_and_empty_gesture_updates() {
+        use egui::MouseWheelSource;
+        let mut observed = TrackpadEvents::default();
+        assert!(!observed.observe(&[
+            scroll(MouseWheelSource::Wheel, 5.0, 5.0),
+            scroll(MouseWheelSource::Unknown, 5.0, 5.0),
+            Event::Zoom(1.0),
+            Event::Rotate(0.0),
+            Event::Rotate(f32::NAN),
+        ]));
+        assert!(observed.observe(&[scroll(MouseWheelSource::Momentum, 5.0, 5.0)]));
+        assert!(!observed.pinch && !observed.rotation);
+        assert!(!observed.horizontal && !observed.vertical);
+        assert!(observed.observe(&[
+            Event::Zoom(0.9),
+            Event::Rotate(-0.1),
+            scroll(MouseWheelSource::Trackpad, 5.0, 0.0),
+        ]));
+        assert!(observed.pinch && observed.rotation);
+        assert!(observed.horizontal && !observed.vertical);
+        assert!(observed.observe(&[scroll(MouseWheelSource::Trackpad, 0.0, 5.0)]));
+        assert!(observed.vertical);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn trackpad_probe_ends_on_focus_loss_or_worker_start() {
+        let mut lab = GestureLab::new(Path::new("unused"));
+        let ctx = crate::tests::ui_context();
+        lab.trackpad = Some(TrackpadEvents::default());
+        frame(&mut lab, &ctx, 0.0, vec![], false, false);
+        assert!(lab.trackpad.is_none());
+        lab.trackpad = Some(TrackpadEvents::default());
+        frame(&mut lab, &ctx, 0.1, vec![], true, true);
+        assert!(lab.trackpad.is_none());
+        lab.trackpad = Some(TrackpadEvents::default());
+        frame(
+            &mut lab,
+            &ctx,
+            0.2,
+            vec![Event::WindowFocused(false), Event::WindowFocused(true)],
+            true,
+            false,
+        );
+        assert!(lab.trackpad.is_none());
     }
     #[test]
     fn post_ui_stroke_starts_its_clock_and_occlusion_cancels_without_execution() -> Result<()> {

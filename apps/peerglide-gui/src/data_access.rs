@@ -1,0 +1,247 @@
+//! Local authorization and address checks shared by explicit data jobs.
+use super::{transport, App, Identity};
+use anyhow::{Context, Result};
+use peerglide_protocol::peer_destination;
+use peerglide_transport::data::ReceiveBind;
+use std::net::{IpAddr, SocketAddr};
+
+pub(super) fn ready(app: &App) -> bool {
+    app.writable()
+        && !app.enrollment_blocked
+        && !app.pairing_pending()
+        && !app.close_requested
+        && !app.exit_confirmed
+        && app.config.fingerprint.is_some()
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct Pin {
+    local: String,
+    peer: String,
+}
+
+impl Pin {
+    #[cfg(any(windows, target_os = "macos"))]
+    pub(super) fn matches_copy(
+        &self,
+        receipt: &transport::file_drop_link::ClipboardReceipt,
+    ) -> bool {
+        receipt.matches_peer(&self.peer)
+    }
+
+    pub(super) fn matches(&self, app: &App) -> bool {
+        ready(app) && app.config.fingerprint.as_deref() == Some(self.peer.as_str())
+    }
+
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos", test))]
+    pub(super) fn recheck(&self, app: &App) -> Result<()> {
+        let (current, _, _) = Self::load(app)?;
+        anyhow::ensure!(&current == self, "本机或已登记的身份发生变化");
+        Ok(())
+    }
+
+    #[cfg(any(all(windows, target_env = "msvc"), target_os = "macos"))]
+    pub(super) fn authenticates(&self, origin: transport::file_transfer::DropOrigin) -> bool {
+        origin.matches_peer(&self.peer)
+    }
+
+    pub(super) fn load(app: &App) -> Result<(Self, Identity, Vec<u8>)> {
+        anyhow::ensure!(ready(app), "请先完成设备配对并打开可写窗口");
+        app.ensure_pairing_ready().context("请先完成设备配对核验")?;
+        let identity = Identity::load(&app.identity_dir()).context("无法读取本机身份")?;
+        let peer = transport::read_certificate(&app.dir.join("trusted-peer.crt.der"))
+            .context("无法读取已登记的证书")?;
+        let fingerprint = transport::fingerprint(&peer);
+        anyhow::ensure!(
+            app.config.fingerprint.as_deref() == Some(fingerprint.as_str()),
+            "已登记证书发生变化，请重新核验"
+        );
+        Ok((
+            Self {
+                local: identity.fingerprint(),
+                peer: fingerprint,
+            },
+            identity,
+            peer,
+        ))
+    }
+}
+
+pub(super) fn parse_address(text: &str) -> Result<SocketAddr> {
+    let address: SocketAddr = text.trim().parse()?;
+    anyhow::ensure!(
+        address.port() != 0 && !address.ip().is_multicast() && !is_broadcast(address.ip()),
+        "需要有效的单播地址和非零端口"
+    );
+    Ok(address)
+}
+
+fn is_broadcast(address: IpAddr) -> bool {
+    matches!(address, IpAddr::V4(ip) if ip.is_broadcast())
+}
+
+pub(super) fn saved_target(saved: &str, port: u16) -> Option<SocketAddr> {
+    let mut address = peer_destination(saved.trim().parse().ok()?)?;
+    address.set_port(port);
+    Some(address)
+}
+
+fn connected_peer(app: &App) -> Option<SocketAddr> {
+    if !app.connected || app.routed_active || app.stopping.is_some() {
+        return None;
+    }
+    app.worker_state.as_ref()?.peer_address()
+}
+
+pub(super) fn default_target(app: &App, port: u16) -> Option<SocketAddr> {
+    saved_target(&app.config.address, port).or_else(|| {
+        let mut address = connected_peer(app)?;
+        address.set_port(port);
+        Some(address)
+    })
+}
+
+pub(super) fn receive_bind(text: &str, port: u16) -> Result<ReceiveBind> {
+    if text.trim().is_empty() {
+        Ok(ReceiveBind::Automatic(port))
+    } else {
+        parse_address(text)
+            .map(ReceiveBind::Explicit)
+            .context("请输入本机监听地址和 UDP 端口")
+    }
+}
+
+pub(super) fn send_address(text: &str, fallback: Option<SocketAddr>) -> Result<SocketAddr> {
+    let address = if text.trim().is_empty() {
+        fallback.context("请输入接收端 IP 地址和 UDP 端口")?
+    } else {
+        text.trim()
+            .parse()
+            .context("请输入接收端 IP 地址和 UDP 端口")?
+    };
+    peer_destination(address)
+        .context("请输入接收端单播地址和有效端口，链路本地 IPv6 地址须含本机接口编号")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_pin_checks_real_certificates_without_granting_input() -> Result<()> {
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        let local = Identity::create(&app.identity_dir())?;
+        let peer = Identity::generate()?;
+        let peer_path = app.dir.join("trusted-peer.crt.der");
+        std::fs::write(&peer_path, &peer.certificate)?;
+        assert!(Pin::load(&app).is_err());
+
+        app.config.fingerprint = Some(peer.fingerprint());
+        let (pin, _, _) = Pin::load(&app)?;
+        assert_eq!(pin.local, local.fingerprint());
+        assert_eq!(pin.peer, peer.fingerprint());
+        assert!(!app.config.allow && !app.config.native);
+
+        std::fs::write(&peer_path, Identity::generate()?.certificate)?;
+        assert!(Pin::load(&app).is_err());
+        assert!(pin.recheck(&app).is_err());
+
+        std::fs::write(peer_path, &peer.certificate)?;
+        pin.recheck(&app)?;
+        std::fs::rename(app.identity_dir(), fixture.path.join("retired-identity"))?;
+        Identity::create(&app.identity_dir())?;
+        assert!(pin.matches(&app));
+        assert!(pin.recheck(&app).is_err());
+        drop(app);
+        fixture.close()
+    }
+
+    #[test]
+    fn listener_sends_to_the_current_peer_on_the_data_port_until_disconnect() -> Result<()> {
+        use peerglide_protocol::worker::WorkerState;
+        use std::sync::Arc;
+
+        let fixture = super::super::tests::Fixture::new()?;
+        let mut app = App::load(fixture.path.clone());
+        app.config.listen = true;
+        app.config.address.clear();
+        app.connected = true;
+        let worker = Arc::new(super::super::WorkerSnapshot::default());
+        worker.set_peer_address(Some("[fe80::2%4]:53901".parse()?));
+        app.worker_state = Some(Arc::clone(&worker));
+
+        assert_eq!(
+            default_target(&app, 24872),
+            Some("[fe80::2%4]:24872".parse()?)
+        );
+        assert_eq!(
+            default_target(&app, 24873),
+            Some("[fe80::2%4]:24873".parse()?)
+        );
+        assert_eq!(
+            send_address("192.0.2.7:9000", default_target(&app, 24872))?,
+            "192.0.2.7:9000".parse()?
+        );
+        app.config.address = "192.0.2.8:24870".into();
+        assert_eq!(
+            default_target(&app, 24872),
+            Some("192.0.2.8:24872".parse()?)
+        );
+        app.config.address.clear();
+        worker.publish(WorkerState::Disconnected);
+        assert!(default_target(&app, 24872).is_none());
+        app.config.address = "[2001:db8::2]:24870".into();
+        assert_eq!(
+            default_target(&app, 24873),
+            Some("[2001:db8::2]:24873".parse()?)
+        );
+        drop(app);
+        fixture.close()
+    }
+
+    #[test]
+    fn empty_receive_address_selects_automatic_and_explicit_binds_are_preserved() -> Result<()> {
+        assert_eq!(receive_bind(" ", 24872)?, ReceiveBind::Automatic(24872));
+        for address in ["127.0.0.1:9000", "[::]:24873", "[fe80::2%4]:24873"] {
+            assert_eq!(
+                receive_bind(address, 24872)?,
+                ReceiveBind::Explicit(address.parse()?)
+            );
+        }
+        assert!(receive_bind("[::]:0", 24872).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_target_and_saved_address_use_distinct_data_port_rules() -> Result<()> {
+        assert_eq!(
+            send_address("", saved_target("[2001:db8::2]:24871", 24872))?,
+            "[2001:db8::2]:24872".parse()?
+        );
+        assert_eq!(
+            send_address("192.0.2.1:9000", None)?,
+            "192.0.2.1:9000".parse()?
+        );
+        assert!(send_address("", saved_target("0.0.0.0:24871", 24872)).is_err());
+        assert!(send_address("[::]:24872", None).is_err());
+        assert!(send_address("224.0.0.1:24872", None).is_err());
+        assert!(send_address("[::ffff:224.0.0.1]:24872", None).is_err());
+        assert!(send_address("[::ffff:0.0.0.0]:24872", None).is_err());
+        assert!(send_address("[fe80::2]:24872", None).is_err());
+        assert!(saved_target("[fe80::2]:24870", 24872).is_none());
+        assert_eq!(
+            send_address("[fe80::2%4]:24872", None)?,
+            "[fe80::2%4]:24872".parse()?
+        );
+        assert_eq!(
+            send_address("[::ffff:192.0.2.1]:24873", None)?,
+            "192.0.2.1:24873".parse()?
+        );
+        assert_eq!(
+            saved_target("[::ffff:192.0.2.1]:24870", 24873),
+            Some("192.0.2.1:24873".parse()?)
+        );
+        Ok(())
+    }
+}

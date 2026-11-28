@@ -1,5 +1,6 @@
 //! Local supervisor IPC only; independent of the authenticated network protocol.
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkerState {
     Listening,
@@ -17,6 +18,33 @@ pub enum WorkerState {
 pub struct WorkerEvent {
     version: u16,
     pub state: WorkerState,
+}
+
+/// The managed worker's authenticated peer endpoint, local IPC only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkerPeerAddress(SocketAddr);
+
+impl WorkerPeerAddress {
+    pub const PREFIX: &'static str = "LINKO-PEER-ADDRESS/1 ";
+
+    pub fn new(address: SocketAddr) -> Option<Self> {
+        crate::peer_destination(address).map(Self)
+    }
+
+    pub fn address(self) -> SocketAddr {
+        self.0
+    }
+
+    pub fn parse(line: &str) -> Option<Self> {
+        if line.len() > 128 {
+            return None;
+        }
+        Self::new(line.strip_prefix(Self::PREFIX)?.parse().ok()?)
+    }
+
+    pub fn line(self) -> String {
+        format!("{}{}", Self::PREFIX, self.0)
+    }
 }
 
 /// Local switch-attempt observations, never peer permission or authority.
@@ -157,6 +185,27 @@ impl WorkerInputEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn peer_address_ipc_validates_scope_and_normalizes_mapped_ipv4() {
+        let peer = WorkerPeerAddress::new("[fe80::24%7]:59320".parse().unwrap()).unwrap();
+        assert_eq!(WorkerPeerAddress::parse(&peer.line()), Some(peer));
+        let mapped = WorkerPeerAddress::new("[::ffff:192.0.2.4]:42000".parse().unwrap()).unwrap();
+        assert_eq!(mapped.address(), "192.0.2.4:42000".parse().unwrap());
+        for invalid in [
+            "[fe80::24]:24870",
+            "0.0.0.0:24870",
+            "224.0.0.1:24870",
+            "255.255.255.255:24870",
+            "192.0.2.4:0",
+        ] {
+            assert!(
+                WorkerPeerAddress::parse(&format!("{}{}", WorkerPeerAddress::PREFIX, invalid))
+                    .is_none()
+            );
+        }
+        assert!(WorkerPeerAddress::parse(&format!("{}{}", peer.line(), "x".repeat(128))).is_none());
+    }
+
     #[test]
     fn switch_observations_are_closed_bounded_and_contain_no_authority_or_input() {
         for state in [

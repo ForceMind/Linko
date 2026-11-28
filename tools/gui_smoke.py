@@ -19,8 +19,27 @@ def run_external(arguments, **options):
     options.setdefault("timeout", 10)
     return subprocess.run(arguments, **options)
 
-def main():
+def wait_for_display():
+    """Probe the existing isolated X server without opening an application."""
     require_isolated_x11()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            probe = run_external(
+                ["xdotool", "getdisplaygeometry"], capture_output=True, timeout=1
+            )
+            dimensions = probe.stdout.split()
+            if (probe.returncode == 0 and len(dimensions) == 2
+                    and all(value.isdigit() and int(value) > 0 for value in dimensions)):
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(0.1)
+    raise RuntimeError("isolated X11 display did not respond to geometry queries")
+
+
+def main():
+    wait_for_display()
     root = pathlib.Path(__file__).resolve().parent.parent
     with tempfile.TemporaryDirectory(prefix="peerglide-gui-ci-") as temporary:
         profile = pathlib.Path(temporary) / "explicit-profile"
@@ -110,6 +129,17 @@ def main():
                         assert report["false_matches"] == 1 and not report["human_acceptance"]
                         print("PASS: synthetic canvas drawing stayed in memory, then explicit Save exported one labelled sample")
                         print("PASS: offline evaluator preserves the independent negative label and reports its false match")
+                        sketch_x = int(cx + cw * 0.27)
+                        sketch_y = int(cy + ch * 0.80)
+                        run_external(["xdotool", "mousemove", "--window", window,
+                                      str(sketch_x), str(sketch_y), "mousedown", "3"], check=True)
+                        for dx, dy in ((0, -35), (0, -80), (0, -120), (35, -120), (80, -120), (120, -120)):
+                            run_external(["xdotool", "mousemove", "--window", window,
+                                          str(sketch_x + dx), str(sketch_y + dy)], check=True)
+                            time.sleep(0.06)
+                        run_external(["xdotool", "mouseup", "3"], check=True)
+                        capture_workspace(gui, root / "dist" / "peerglide-gesture-stroke.png")
+                        assert len(list(folder.glob("*.json"))) == 1, "new gesture must not autosave"
                         time.sleep(0.2)
                     dest = root / "dist"
                     dest.mkdir(exist_ok=True)
@@ -133,6 +163,16 @@ def main():
                             x, y, width, height = rect
                             run_external(["xdotool", "mousemove", "--window", window,
                                           str(round(x + width / 2)), str(round(y + height / 2)), "click", "1"], check=True)
+                        click_control("workspace_details")
+                        capture_workspace(gui, dest / "peerglide-workspace-details.png")
+                        assert not (profile / "identity").exists(), "viewing details must not create identity"
+                        click_control("workspace_details")
+                        click_control("nav_sharing")
+                        time.sleep(0.4)
+                        capture_workspace(gui, dest / "peerglide-sharing-files.png")
+                        click_control("nav_gestures")
+                        time.sleep(0.4)
+                        capture_workspace(gui, dest / "peerglide-gesture-practice.png")
                         click_control("nav_settings")
                         # Keep the pointer away from the appearance control in both captures.
                         run_external(["xdotool", "mousemove", "--window", window, "2", "54"], check=True)
@@ -175,6 +215,25 @@ def main():
                         raise RuntimeError("isolated GUI cleanup did not finish") from cleanup_error
         capture([], "home")
         capture(["--gesture-lab"], "gesture-lab")
+        # Both peers use the exact release CLI and disposable loopback identities.
+        # Only the empty eight-cell input and the post-authentication views are captured.
+        capture_env = {
+            **env,
+            "PEERGLIDE_PAIRING_TEST_WORKER": str(root / "target/release/peerglide"),
+            "LINKO_UI_CAPTURE_DIR": str(root / "dist"),
+        }
+        for name in (
+            "pairing_panel::tests::captures::capture_real_pairing_views",
+            "file_panel::tests::captures::capture_file_settings_and_recovery_review",
+        ):
+            result = run_external([
+                "cargo", "test", "-p", "peerglide-gui", "--locked", name,
+                "--", "--exact", "--ignored",
+            ], cwd=root, env=capture_env, timeout=90, capture_output=True, text=True)
+            print(result.stdout, end="")
+            print(result.stderr, end="", file=sys.stderr)
+            if result.returncode or "1 passed; 0 failed; 0 ignored" not in result.stdout:
+                raise RuntimeError(f"native capture did not run exactly once: {name}")
     return 0
 
 
